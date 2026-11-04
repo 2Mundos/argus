@@ -1937,7 +1937,7 @@ describe("task-scoped repository auth", () => {
     expect(h.inbound).toHaveLength(0);
   });
 
-  const repoWorld = () =>
+  const repoWorld = (claimed: object = repoTask()) =>
     world({
       leases: [
         lease("engine", "dummy-engine-key"),
@@ -1947,7 +1947,7 @@ describe("task-scoped repository auth", () => {
           credential: { username: "service-user", token: "dummy-gitea-token" },
         }),
       ],
-      tasks: [repoTask()],
+      tasks: [claimed],
     });
 
   it("blocks a task whose project has no repository before any model work", async () => {
@@ -2016,6 +2016,162 @@ describe("task-scoped repository auth", () => {
         injected: 0,
       },
     ]);
+  });
+
+  describe("repository claimed with the task (project record)", () => {
+    const CLAIMED = "https://git.example.test/acme/api";
+    const claimedWorld = (claimed: string | null | undefined, project = "acme") => {
+      return repoWorld({ ...repoTask(), project, project_repository: claimed });
+    };
+    const onecliSecrets = (w: ReturnType<typeof world>) =>
+      w.calls.filter(
+        (c) =>
+          c.who === "onecli" &&
+          c.path.startsWith("/secrets") &&
+          c.method !== "GET" &&
+          String(c.body?.name).includes("repository"),
+      );
+    const repositoryLeases = (w: ReturnType<typeof world>) =>
+      w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "repository");
+    const blocked = (w: ReturnType<typeof world>) =>
+      w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)?.body;
+    const hostEnv = process.env.ARGUS_REPOSITORIES_JSON;
+    afterEach(() => {
+      if (hostEnv === undefined) delete process.env.ARGUS_REPOSITORIES_JSON;
+      else process.env.ARGUS_REPOSITORIES_JSON = hostEnv;
+    });
+
+    it("uses the claimed repository with an empty pool map, and only that one is allowed", async () => {
+      const w = claimedWorld(CLAIMED);
+      const seen: Array<{ url: string; allowlist: readonly string[]; helperEnv: string }> = [];
+      const h = harness(
+        w,
+        true,
+        { repositories: {} },
+        {
+          probeRepository: async (url, allowlist) => {
+            seen.push({ url, allowlist, helperEnv: process.env.ARGUS_REPOSITORIES_JSON! });
+          },
+        },
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      expect(seen).toEqual([
+        {
+          url: `${CLAIMED}.git`,
+          allowlist: [CLAIMED],
+          helperEnv: JSON.stringify({ acme: CLAIMED }),
+        },
+      ]);
+      expect(h.inbound[0].content.text).toContain(`${CLAIMED}.git`);
+    });
+
+    it("never broadens to other projects' repositories, in OneCLI or for the helpers", async () => {
+      const OTHER = "https://git.example.test/secret/other";
+      const w = claimedWorld(CLAIMED);
+      const seen: Array<{ allowlist: readonly string[]; helperEnv: string }> = [];
+      const h = harness(
+        w,
+        true,
+        { repositories: { other: OTHER } },
+        {
+          probeRepository: async (_url, allowlist) => {
+            seen.push({ allowlist, helperEnv: process.env.ARGUS_REPOSITORIES_JSON! });
+          },
+        },
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      // OneCLI secrets name this task's repository and no other.
+      const secrets = JSON.stringify(onecliSecrets(w));
+      expect(secrets).toContain("/acme/api");
+      expect(secrets).not.toContain("secret/other");
+      expect(seen[0]!.allowlist).toEqual([CLAIMED]);
+      // The helpers see the pool map plus this task's repository, nothing arbitrary.
+      expect(JSON.parse(seen[0]!.helperEnv)).toEqual({ other: OTHER, acme: CLAIMED });
+    });
+
+    it("lets the claimed repository win over the pool map for its own project only", async () => {
+      const w = claimedWorld(CLAIMED);
+      const seen: string[] = [];
+      const h = harness(
+        w,
+        true,
+        { repositories: { acme: "https://git.example.test/old/api" } },
+        { probeRepository: async (url) => void seen.push(url) },
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      expect(seen).toEqual([`${CLAIMED}.git`]);
+    });
+
+    it("falls back to the pool map when the claim names none (older or unknown project)", async () => {
+      const w = claimedWorld(null);
+      const seen: string[] = [];
+      const h = harness(
+        w,
+        true,
+        { repositories: { acme: "https://git.example.test/old/api" } },
+        { probeRepository: async (url) => void seen.push(url) },
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      expect(seen).toEqual(["https://git.example.test/old/api.git"]);
+    });
+
+    it("does not guess: no claim and no map entry for the project blocks a write task", async () => {
+      const w = claimedWorld(undefined);
+      const h = harness(w, true, { repositories: { other: "https://git.example.test/o/o" } });
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => blocked(w) !== undefined);
+      expect(blocked(w)).toMatchObject({
+        reason: "env_repository_unconfigured",
+        error: "no repository is configured for project acme",
+      });
+      expect(repositoryLeases(w)).toEqual([]);
+      expect(onecliSecrets(w)).toEqual([]);
+    });
+
+    it.each([
+      ["plain http", "http://git.example.test/acme/api"],
+      ["embedded credentials", "https://user:tok@git.example.test/acme/api"],
+      ["a query", "https://git.example.test/acme/api?x=1"],
+      ["a sibling path", "https://git.example.test/acme/api/extra"],
+      ["a single segment", "https://git.example.test/acme"],
+      ["not a URL", "git@git.example.test:acme/api.git"],
+    ])(
+      "refuses an untrusted claimed URL (%s) before any credential is applied",
+      async (_n, bad) => {
+        const w = claimedWorld(bad);
+        const probeRepository = vi.fn(async () => {});
+        const h = harness(w, true, { repositories: {} }, { probeRepository });
+        live.push(h.adapter);
+        await h.adapter.setup(h.setup);
+        await until(() => blocked(w) !== undefined);
+        expect(blocked(w)).toMatchObject({ reason: "env_repository_unavailable" });
+        expect(onecliSecrets(w)).toEqual([]);
+        expect(probeRepository).not.toHaveBeenCalled();
+        expect(JSON.stringify(w.calls)).not.toContain("tok@");
+        expect(h.inbound).toHaveLength(0);
+        // The helpers' view goes back to the pool map.
+        expect(process.env.ARGUS_REPOSITORIES_JSON).toBe("{}");
+      },
+    );
+
+    it("ignores a claimed repository for a read-only task on global (knowledge scope)", async () => {
+      const w = repoWorld({ ...task(), id: REPO_ID, project_repository: CLAIMED });
+      const h = harness(w, true, { repositories: {} });
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      expect(repositoryLeases(w)).toEqual([]);
+      expect(onecliSecrets(w)).toEqual([]);
+    });
   });
 
   it("fails closed when no preflight session is configured", async () => {

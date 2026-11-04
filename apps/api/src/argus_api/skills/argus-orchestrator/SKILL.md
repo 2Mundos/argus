@@ -55,7 +55,7 @@ You **must not**:
   you were not told to set.
 
 Admin-only tools (`update_pool`, `set_model_policy`, `reset_model_policy`,
-`set_project_runtime`, `rebuild_project_runtime`) are listed only to admin
+`set_project_runtime`, `rebuild_project_runtime`, `set_project_repository`) are listed only to admin
 tokens. With an orchestrator token, ask a human admin for those changes.
 
 ## The loop

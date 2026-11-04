@@ -4,11 +4,13 @@ export const GATEWAY_NOTE =
   "Ready means the host can start and register with Argus. Task execution also requires a running OneCLI gateway and configured model credentials; these are not verified by this catalog.";
 
 const check = (name: string, ok: boolean | null, detail = name) => ({ name, ok, detail });
-const defaults = (name: string) => ({
+// What the API's catalog returns for a NanoClaw worker template (NANOCLAW_WORKER_CAPABILITIES).
+const NANOCLAW_CAPABILITIES = ["repository:write", "task-inputs"];
+const defaults = (name: string, capabilities: string[] = []) => ({
   name,
   quantity: 1,
   max_replicas: 3,
-  capabilities: [],
+  capabilities,
   extra_hosts: ["host.docker.internal:host-gateway"],
 });
 
@@ -50,7 +52,7 @@ export function catalog(
         notes: ["Isolated.", GATEWAY_NOTE],
         warning: null,
         setup: ["Install the sandbox runtime"],
-        defaults: defaults("nanoclaw-sandbox"),
+        defaults: defaults("nanoclaw-sandbox", NANOCLAW_CAPABILITIES),
         ready: nc,
         readiness: [
           {
@@ -76,7 +78,7 @@ export function catalog(
         notes: [GATEWAY_NOTE],
         warning: "Not sandboxed: root-equivalent on this Docker host.",
         setup: ["Opt in"],
-        defaults: defaults("nanoclaw-socket"),
+        defaults: defaults("nanoclaw-socket", NANOCLAW_CAPABILITIES),
         ready: sock,
         readiness: [
           {

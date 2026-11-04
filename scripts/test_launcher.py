@@ -7,6 +7,7 @@ start. A version that fails exits at once, so readiness never waits.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import shutil
@@ -14,9 +15,11 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from _pytest.outcomes import Failed
 
 ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = ROOT / "deploy" / "argus"
@@ -268,14 +271,144 @@ NOTES = {
     "2026-11-02.v0-8-0.ref.md": "# v0.8.0\n\n## Upgrading\n\nMigrations 0069\n\n## Features\n- y\n",
 }
 
+# deploy/argus: worker nc_root is $ARGUS_DATA_HOME/nanoclaw; must be <= 54 characters.
+_NANOCLAW_UNDER_DATA_HOME = "/argus/nanoclaw"
+_MAX_DATA_HOME_LEN = 54 - len(_NANOCLAW_UNDER_DATA_HOME)
+_LAUNCHER_OWNED = ".launcher-test-owned"
+_LT_DIR = "lt"
+_DH_DIR = "dh"
+
+
+@contextmanager
+def _launcher_data_home_lock() -> Generator[None]:
+    """Serialize claims when several workers share one max-length TMPDIR."""
+    scratch = _scratch_dir()
+    lock = scratch / ".launcher-data.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with lock.open("a+", encoding="utf-8") as fp:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+
+
+def _scratch_dir() -> Path:
+    raw = os.environ.get("TMPDIR")
+    if not raw:
+        pytest.fail("TMPDIR must be set when running launcher tests")
+    return Path(raw).resolve()
+
+
+def _pick_data_home_path(scratch: Path, tag: str) -> Path | None:
+    for suffix in (f"{_DH_DIR}/{tag[:8]}", f"{_DH_DIR}/{tag[:4]}", ""):
+        data_home = scratch if not suffix else scratch / suffix
+        if len(str(data_home)) <= _MAX_DATA_HOME_LEN:
+            return data_home
+    return None
+
+
+def _path_within_scratch(path: Path, scratch: Path) -> bool:
+    try:
+        path.resolve().relative_to(scratch.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _occupied_argus(argus: Path) -> str | None:
+    """Why `argus` cannot be claimed, or None when the directory is absent."""
+    if not argus.exists():
+        return None
+    marker = argus / _LAUNCHER_OWNED
+    if not marker.is_file():
+        return f"{argus} already exists without a launcher test marker"
+    return f"{argus} is already occupied"
+
+
+def _resolved_data_home_for_tag(tag: str) -> Path:
+    """Same path choice as `_acquire_data_home` (without creating anything)."""
+    scratch = _scratch_dir()
+    data_home = _pick_data_home_path(scratch, tag)
+    if data_home is None:
+        pytest.fail(
+            f"TMPDIR {scratch} ({len(str(scratch))} chars) is too long for worker setup;"
+            f" need data home length <= {_MAX_DATA_HOME_LEN}"
+        )
+    return data_home
+
+
+def _acquire_data_home(tag: str) -> tuple[Path, Path, bool]:
+    """Claim a data home under TMPDIR; return (data_home, argus_dir, owned)."""
+    scratch = _scratch_dir()
+    data_home = _resolved_data_home_for_tag(tag)
+    if not _path_within_scratch(data_home, scratch):
+        pytest.fail(f"data home escapes TMPDIR: {data_home}")
+    data_home.mkdir(parents=True, exist_ok=True)
+    argus = data_home / "argus"
+    why = _occupied_argus(argus)
+    if why:
+        pytest.fail(why)
+    try:
+        argus.mkdir(mode=0o700)
+    except FileExistsError:
+        pytest.fail(_occupied_argus(argus) or f"{argus} exists")
+    (argus / _LAUNCHER_OWNED).write_text(f"{tag}\n", encoding="utf-8")
+    return data_home, argus, True
+
+
+def _release_data_home(argus: Path, tag: str, owned: bool) -> None:
+    if not owned or not argus.exists():
+        return
+    marker = argus / _LAUNCHER_OWNED
+    if not marker.is_file():
+        return
+    if marker.read_text(encoding="utf-8").strip() != tag:
+        return
+    scratch = _scratch_dir()
+    if not _path_within_scratch(argus, scratch):
+        return
+    shutil.rmtree(argus, ignore_errors=True)
+
+
+def _allocate_tmp_sandbox(request: pytest.FixtureRequest) -> Path:
+    scratch = _scratch_dir()
+    base = scratch / _LT_DIR
+    for attempt in range(16):
+        leaf = (
+            f"{os.getpid():x}{abs(hash((request.node.nodeid, attempt))) % 0xFFFF:04x}"
+        )
+        root = base / leaf
+        if not _path_within_scratch(root, scratch):
+            pytest.fail(f"tmp sandbox escapes TMPDIR: {root}")
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return root
+    pytest.fail("could not allocate a unique launcher tmp sandbox under TMPDIR")
+
+
+@pytest.fixture
+def tmp_path(request: pytest.FixtureRequest) -> Generator[Path]:
+    """Short sandboxes under TMPDIR only; always removed in finally."""
+    scratch = _scratch_dir()
+    root = _allocate_tmp_sandbox(request)
+    try:
+        yield root
+    finally:
+        if _path_within_scratch(root, scratch):
+            shutil.rmtree(root, ignore_errors=True)
+
 
 class Env:
-    def __init__(self, tmp: Path) -> None:
+    def __init__(self, tmp: Path, data_home: Path, tag: str) -> None:
         self.tmp = tmp
+        self.tag = tag
         self.state_path = tmp / "state.json"
         self.home = tmp / "home"
-        # A short data home: the NanoClaw instances root is capped at 56 characters.
-        self.data_home = Path(tempfile.mkdtemp(prefix="argus-t"))
+        self.data_home = data_home
+        self.argus_dir = data_home / "argus"
         self.bin = tmp / "bin"
         self.bin.mkdir()
         fakes = tmp / "fakes"
@@ -382,10 +515,18 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path: Path) -> Generator[Env]:
-    e = Env(tmp_path)
-    yield e
-    shutil.rmtree(e.data_home, ignore_errors=True)
+def env(tmp_path: Path, request: pytest.FixtureRequest) -> Generator[Env]:
+    tag = f"{os.getpid():x}{abs(hash(request.node.nodeid)) % 0xFFFFFF:06x}"
+    data_home: Path | None = None
+    argus: Path | None = None
+    owned = False
+    with _launcher_data_home_lock():
+        data_home, argus, owned = _acquire_data_home(tag)
+        try:
+            yield Env(tmp_path, data_home, tag)
+        finally:
+            if argus is not None:
+                _release_data_home(argus, tag, owned)
 
 
 def test_first_install_creates_config_key_and_prints_token(env: Env) -> None:
@@ -943,3 +1084,142 @@ def test_uninstall_without_a_yes_removes_nothing(env: Env, answer: str | None) -
         for c in env.state["calls"]
     )
     assert env.launcher.exists() and env.state["containers"]["argus"]["running"]
+
+
+# -- fixture safety (TMPDIR / argus tree) ---------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _launcher_test_tmpdir_root() -> Generator[Path]:
+    """Keep all launcher test I/O under one TMPDIR (never hard-coded /tmp or $HOME)."""
+    raw = os.environ.get("TMPDIR")
+    created = False
+    if raw:
+        root = Path(raw).resolve()
+    else:
+        root = Path(tempfile.mkdtemp(prefix="argus-lt-"))
+        os.environ["TMPDIR"] = str(root)
+        created = True
+    root.mkdir(parents=True, exist_ok=True)
+    yield root
+    if created:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def outer_tmpdir(_launcher_test_tmpdir_root: Path) -> Path:
+    return _launcher_test_tmpdir_root
+
+
+@pytest.fixture
+def isolated_tmpdir(
+    outer_tmpdir: Path,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[Path]:
+    """Real scratch under outer TMPDIR; monkeypatched for the test only."""
+    uid = f"{os.getpid():x}{abs(hash(request.node.nodeid)) % 0xFFFF:04x}"
+    candidate = outer_tmpdir / _LT_DIR / uid
+    if _pick_data_home_path(candidate, "deadbeef") is not None:
+        candidate.mkdir(parents=True, exist_ok=True)
+        scratch = candidate
+        remove_after = True
+    else:
+        scratch = outer_tmpdir
+        remove_after = False
+    monkeypatch.setenv("TMPDIR", str(scratch))
+    try:
+        yield scratch
+    finally:
+        if remove_after and _path_within_scratch(candidate, outer_tmpdir):
+            shutil.rmtree(candidate, ignore_errors=True)
+
+
+def _expect_foreign_argus_path(scratch: Path, tag: str) -> Path:
+    assert _scratch_dir() == scratch.resolve()
+    data_home = _resolved_data_home_for_tag(tag)
+    assert _path_within_scratch(data_home, scratch)
+    return data_home / "argus"
+
+
+@pytest.mark.parametrize(
+    ("tmpdir", "tag", "expected_rel"),
+    [
+        ("/ab", "deadbeef", f"{_DH_DIR}/deadbeef"),
+        ("/" + "a" * 29, "deadbeef", f"{_DH_DIR}/dead"),
+        ("/" + "a" * 32, "deadbeef", ""),
+        ("/xy", "release-check", f"{_DH_DIR}/release-"),
+        ("/" + "b" * 32, "release-check", ""),
+    ],
+)
+def test_resolved_data_home_for_hypothetical_tmpdir(
+    monkeypatch: pytest.MonkeyPatch, tmpdir: str, tag: str, expected_rel: str
+) -> None:
+    monkeypatch.setenv("TMPDIR", tmpdir)
+    scratch = Path(tmpdir)
+    got = _resolved_data_home_for_tag(tag)
+    if expected_rel == "":
+        assert got == scratch
+    else:
+        assert got == scratch / expected_rel
+
+
+def _remove_foreign_argus(argus: Path, keep: Path, *, owned_marker: bool) -> None:
+    keep.unlink(missing_ok=True)
+    if owned_marker:
+        (argus / _LAUNCHER_OWNED).unlink(missing_ok=True)
+    if argus.is_dir() and not any(argus.iterdir()):
+        argus.rmdir()
+    elif argus.is_dir():
+        pytest.fail(f"foreign argus tree not clean: {list(argus.iterdir())}")
+
+
+@pytest.mark.parametrize("tag", ["deadbeef"])
+def test_preexisting_argus_under_tmpdir_is_not_removed(
+    isolated_tmpdir: Path, tag: str
+) -> None:
+    with _launcher_data_home_lock():
+        argus = _expect_foreign_argus_path(isolated_tmpdir, tag)
+        if argus.exists():
+            pytest.fail(f"unexpected pre-existing {argus}")
+        argus.mkdir(parents=True, exist_ok=True)
+        keep = argus / "sentinel-do-not-delete"
+        keep.write_text("precious", encoding="utf-8")
+        try:
+            with pytest.raises(Failed, match="launcher test marker"):
+                _acquire_data_home(tag)
+            assert keep.read_text(encoding="utf-8") == "precious"
+        finally:
+            _remove_foreign_argus(argus, keep, owned_marker=False)
+
+
+@pytest.mark.parametrize("tag", ["deadbeef"])
+def test_release_does_not_remove_a_foreign_owned_argus_tree(
+    isolated_tmpdir: Path, tag: str
+) -> None:
+    with _launcher_data_home_lock():
+        argus = _expect_foreign_argus_path(isolated_tmpdir, tag)
+        if argus.exists():
+            pytest.fail(f"unexpected pre-existing {argus}")
+        argus.mkdir(parents=True, exist_ok=True)
+        (argus / _LAUNCHER_OWNED).write_text("other-tag\n", encoding="utf-8")
+        keep = argus / "sentinel-do-not-delete"
+        keep.write_text("precious", encoding="utf-8")
+        try:
+            _release_data_home(argus, "my-tag", owned=True)
+            assert keep.read_text(encoding="utf-8") == "precious"
+        finally:
+            _remove_foreign_argus(argus, keep, owned_marker=True)
+
+
+def test_owned_argus_tree_is_removed_on_release(isolated_tmpdir: Path) -> None:
+    tag = "release-check"
+    with _launcher_data_home_lock():
+        _expect_foreign_argus_path(isolated_tmpdir, tag)
+        _data_home, argus, owned = _acquire_data_home(tag)
+        assert owned
+        probe = argus / "nanoclaw" / "probe"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("x", encoding="utf-8")
+        _release_data_home(argus, tag, owned)
+        assert not argus.exists()

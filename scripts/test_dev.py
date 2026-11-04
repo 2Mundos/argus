@@ -19,7 +19,10 @@ def build_source(path: Path) -> None:
     for m in load_migrations():
         conn.executescript(m.sql)
     conn.execute(f"PRAGMA user_version = {len(load_migrations())}")
-    conn.execute("INSERT INTO projects VALUES ('p', 'P', 'd', ?, ?)", (T0, T0))
+    conn.execute(
+        "INSERT INTO projects (slug, name, description, created_at, updated_at) VALUES ('p', 'P', 'd', ?, ?)",
+        (T0, T0),
+    )
     states = ["succeeded", "failed", "succeeded", "ready", "pending", "in_review"]
     for n, state in enumerate(states):  # created_at ascends with n
         conn.execute(

@@ -186,7 +186,17 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   and an unknown template or image is rejected (`unknown_template`,
   `unknown_image`). Defaults (quantity 1, cap `max(quantity, 3)`, extra
   host `host.docker.internal:host-gateway`, template capabilities) come from the
-  catalog and are the same for UI and MCP. The catalog also *suggests* a free
+  catalog and are the same for UI and MCP. **Default capabilities.** A NanoClaw
+  worker template (not the orchestrator, not `argus-worker`) defaults to
+  `repository:write` and `task-inputs`, the two things the NanoClaw channel is
+  built to do, so a new worker claims eligible coding tasks with nothing listed.
+  A capability only makes a task claimable: the repository lease, preflight,
+  credential scope and isolation stay per task. `advanced.capabilities` replaces
+  the default (an empty list means none); `argus-worker` keeps its image label;
+  existing pools are never rewritten. A project's repository is not on the pool:
+  the worker resolves it at each claim ([knowledge](knowledge.spec.md) 3.1). The two
+  defaults are every capability the code checks (`repository:write` in the channel,
+  `task-inputs` in the API); a test fails if a new one is added without them. The catalog also *suggests* a free
   pool name, which the dashboard fills in (editable); the server never picks one
   itself. The suggestion uses the same mythology/constellation word list as
   worker display names (about 170 entries: `atlas`, `nyx`, `lyra`, `orion`,

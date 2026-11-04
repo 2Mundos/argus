@@ -165,6 +165,26 @@ describe("the two NanoClaw choices", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("shows a NanoClaw worker's default capabilities and sends none unless edited", async () => {
+    const onCreate = vi.fn(async (_: CreateWorkerRequest) => {});
+    render(
+      <GuidedWorkerForm catalog={catalog({ worker: false, socket: true })} onCreate={onCreate} />,
+    );
+    await userEvent.click(screen.getByLabelText(/NanoClaw, host Docker socket/));
+    await userEvent.click(screen.getByLabelText(/I understand and accept/));
+    await userEvent.click(screen.getByText("Advanced"));
+    expect((screen.getByLabelText(/Capabilities/) as HTMLInputElement).value).toBe(
+      "repository:write, task-inputs",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create 1 worker" }));
+    // The server applies its defaults, so the request carries no capabilities.
+    expect(onCreate.mock.calls[0]?.[0].advanced).toBeUndefined();
+    // An explicit empty list is an explicit override and is sent as such.
+    await userEvent.clear(screen.getByLabelText(/Capabilities/));
+    await userEvent.click(screen.getByRole("button", { name: "Create 1 worker" }));
+    expect(onCreate.mock.calls[1]?.[0].advanced).toEqual({ capabilities: [] });
+  });
+
   it("shows the warning before submit and needs it accepted; sandbox stays blocked", async () => {
     const onCreate = vi.fn(async (_: CreateWorkerRequest) => {});
     render(

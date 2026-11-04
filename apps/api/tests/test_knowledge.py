@@ -1,3 +1,4 @@
+import json
 from collections.abc import Generator
 from datetime import timedelta
 from pathlib import Path
@@ -415,3 +416,300 @@ async def test_kind_pins_merge_with_task_pins(db: Database, clock: FakeClock) ->
             await kinds.upsert_kind(
                 tx, "bad", TaskKindUpsert(default_knowledge=["nope"]), "admin:test"
             )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://git.example/acme/api",
+        "https://user:tok@git.example/acme/api",
+        "https://git.example/acme",
+        "https://git.example/acme/api?x=1",
+        "git@git.example:acme/api.git",
+    ],
+)
+def test_project_repository_must_be_a_credential_free_https_owner_repo(
+    url: str,
+) -> None:
+    with pytest.raises(ValueError):
+        ProjectUpsert(name="P", repository_url=url)
+
+
+async def test_project_repository_is_kept_unless_set_or_cleared(
+    db: Database,
+) -> None:
+    async def put(**kw) -> object:
+        async with db.write() as tx:
+            return await kn.upsert_project(
+                tx, "p", ProjectUpsert(name="P", **kw), "t", admin=True
+            )
+
+    url = "https://git.example/acme/api"
+    assert (await put(repository_url=url)).repository_url == url
+    assert (await put(description="renamed")).repository_url == url  # omitted: kept
+    assert (await put(repository_url=None)).repository_url is None  # explicit: cleared
+
+
+async def test_non_admin_json_null_on_update_does_not_clear_repository(
+    db: Database,
+) -> None:
+    url = "https://git.example/acme/api"
+    async with db.write() as tx:
+        await kn.upsert_project(
+            tx, "p", ProjectUpsert(name="P", repository_url=url), "t", admin=True
+        )
+        kept = await kn.upsert_project(
+            tx, "p", ProjectUpsert(name="P 2", repository_url=None), "t", admin=False
+        )
+    assert kept.repository_url == url
+    assert kept.name == "P 2"
+
+
+async def test_0071_inherits_only_repositories_the_pools_agree_on(
+    tmp_path: Path,
+) -> None:
+    from argus_api.tasks import delivery
+
+    path, migrations = tmp_path / "argus.db", load_migrations()
+    db = await Database.open(path, migrations=migrations[:70])
+    spell_canonical = "https://git.example/a/spell"
+    t0 = "2026-10-01T00:00:00+00:00"
+    repos = {
+        "p1": {
+            "agreed": "https://git.example/a/agreed",
+            "split": "https://git.example/a/x",
+        },
+        "p2": {
+            "agreed": "https://git.example/a/agreed",
+            "split": "https://git.example/a/y",
+        },
+        "p3": {
+            "global": "https://git.example/a/knowledge",
+            "solo": "https://git.example/a/solo",
+        },
+        "p4": None,  # not a NanoClaw pool
+        "p5": {"spell": "https://Git.example/A/Spell.git"},
+        "p6": {"spell": "https://git.example/a/spell"},
+    }
+    async with db.write() as tx:
+        for slug in (
+            "agreed",
+            "split",
+            "solo",
+            "unnamed",
+            "global",
+            "spell",
+        ):
+            await tx.conn.execute(
+                "INSERT OR IGNORE INTO projects (slug, name, description, created_at, updated_at)"
+                " VALUES (?, ?, '', 'now', 'now')",
+                (slug, slug),
+            )
+        for name, mapping in repos.items():
+            if mapping is None:
+                await tx.conn.execute(
+                    "INSERT INTO pools (name, target, runtime, image, capabilities,"
+                    " agents_per_instance, desired_replicas, max_replicas, config,"
+                    " created_at, updated_at) VALUES (?, 'docker', 'plain', 'i', '[]',"
+                    " 1, 0, 1, '{}', ?, ?)",
+                    (name, t0, t0),
+                )
+                continue
+            config = {
+                "nanoclaw": {
+                    "install_dir": "/a",
+                    "instances_root": "/b",
+                    "agent_image": "x",
+                    "repositories": mapping,
+                }
+            }
+            await tx.conn.execute(
+                "INSERT INTO pools (name, target, runtime, image, capabilities,"
+                " agents_per_instance, desired_replicas, max_replicas, config,"
+                " created_at, updated_at) VALUES (?, 'docker', 'nanoclaw', 'i', '[]',"
+                " 1, 0, 1, ?, ?, ?)",
+                (name, json.dumps(config), t0, t0),
+            )
+    await db.close()
+    db = await Database.open(path, migrations=migrations)
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT slug, repository_url FROM projects") as cur,
+    ):
+        got = dict(await cur.fetchall())
+        for slug, url in got.items():
+            if url is None:
+                continue
+            assert url == delivery.canonical_repository_url(url)
+            assert url == await delivery.pool_repository(conn, slug)
+    await db.close()
+    assert got == {
+        "agreed": "https://git.example/a/agreed",
+        "solo": "https://git.example/a/solo",
+        "spell": spell_canonical,
+        "split": None,  # the pools disagree: not guessed
+        "unnamed": None,
+        "global": None,  # knowledge scope never gets a code repository
+    }
+
+
+async def test_0071_skips_invalid_legacy_pool_urls(tmp_path: Path) -> None:
+    path, migrations = tmp_path / "argus.db", load_migrations()
+    t0 = "2026-10-01T00:00:00+00:00"
+    db = await Database.open(path, migrations=migrations[:70])
+    async with db.write() as tx:
+        for slug in ("invalid", "creds"):
+            await tx.conn.execute(
+                "INSERT OR IGNORE INTO projects (slug, name, description, created_at, updated_at)"
+                " VALUES (?, ?, '', ?, ?)",
+                (slug, slug, t0, t0),
+            )
+        for name, mapping in (
+            ("bad-scheme", {"invalid": "http://git.example/a/b"}),
+            ("bad-creds", {"creds": "https://user:tok@git.example/a/b"}),
+        ):
+            config = json.dumps(
+                {
+                    "nanoclaw": {
+                        "install_dir": "/a",
+                        "instances_root": "/b",
+                        "agent_image": "x",
+                        "repositories": mapping,
+                    }
+                }
+            )
+            await tx.conn.execute(
+                "INSERT INTO pools (name, target, runtime, image, capabilities,"
+                " agents_per_instance, desired_replicas, max_replicas, config,"
+                " created_at, updated_at) VALUES (?, 'docker', 'nanoclaw', 'i', '[]',"
+                " 1, 0, 1, ?, ?, ?)",
+                (name, config, t0, t0),
+            )
+    await db.close()
+    db = await Database.open(path, migrations=migrations)
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT slug, repository_url FROM projects WHERE slug IN ('invalid', 'creds')"
+        ) as cur,
+    ):
+        got = dict(await cur.fetchall())
+    await db.close()
+    assert got == {"invalid": None, "creds": None}
+
+
+async def test_0071_semantic_spellings_agree_but_raw_distinct_would_not(
+    tmp_path: Path,
+) -> None:
+    """Regression: raw COUNT(DISTINCT url) treats .git suffix as conflict."""
+    from argus_api.tasks import delivery
+
+    path, migrations = tmp_path / "argus.db", load_migrations()
+    t0 = "2026-10-01T00:00:00+00:00"
+    db = await Database.open(path, migrations=migrations[:70])
+    bare = "https://git.example/a/spell"
+    suffixed = f"{bare}.git"
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT OR IGNORE INTO projects (slug, name, description, created_at, updated_at)"
+            " VALUES ('spell', 'spell', '', ?, ?)",
+            (t0, t0),
+        )
+        for name, url in (("one", bare), ("two", suffixed)):
+            config = json.dumps(
+                {
+                    "nanoclaw": {
+                        "install_dir": "/a",
+                        "instances_root": "/b",
+                        "agent_image": "x",
+                        "repositories": {"spell": url},
+                    }
+                }
+            )
+            await tx.conn.execute(
+                "INSERT INTO pools (name, target, runtime, image, capabilities,"
+                " agents_per_instance, desired_replicas, max_replicas, config,"
+                " created_at, updated_at) VALUES (?, 'docker', 'nanoclaw', 'i', '[]',"
+                " 1, 0, 1, ?, ?, ?)",
+                (name, config, t0, t0),
+            )
+    await db.close()
+    db = await Database.open(path, migrations=migrations)
+    async with db.read() as conn:
+        async with conn.execute(
+            "SELECT repository_url FROM projects WHERE slug = 'spell'"
+        ) as cur:
+            (url,) = await cur.fetchone()
+        assert url == bare
+        assert url == await delivery.pool_repository(conn, "spell")
+    await db.close()
+
+
+async def test_a_new_project_inherits_the_pools_agreed_repository_but_never_guesses(
+    db: Database,
+) -> None:
+    from argus_api.fleet import service as fleet
+    from argus_core.fleet import NanoclawOptions, PoolUpsert
+
+    def pool(repos: dict[str, str]) -> PoolUpsert:
+        return PoolUpsert(
+            runtime="nanoclaw",
+            image="i",
+            max_replicas=1,
+            nanoclaw=NanoclawOptions(
+                install_dir="/a",
+                instances_root="/b",
+                agent_image="x",
+                repositories=repos,
+            ),
+        )
+
+    async with db.write() as tx:
+        await fleet.upsert_pool(
+            tx,
+            "one",
+            pool(
+                {
+                    "web": "https://git.example/a/web",
+                    "ops": "https://git.example/a/ops",
+                    "boot": "https://git.example/a/boot",
+                    "legacy": "https://git.example/a/legacy",
+                }
+            ),
+            "t",
+        )
+        await fleet.upsert_pool(
+            tx, "two", pool({"ops": "https://git.example/b/ops"}), "t"
+        )
+        web = await kn.upsert_project(tx, "web", ProjectUpsert(name="Web"), "t")
+        ops = await kn.upsert_project(tx, "ops", ProjectUpsert(name="Ops"), "t")
+        none = await kn.upsert_project(tx, "docs", ProjectUpsert(name="Docs"), "t")
+        # Explicit null on create bootstraps like an omitted URL; only an admin can
+        # opt out on create or clear a stored URL on update.
+        boot = await kn.upsert_project(
+            tx,
+            "boot",
+            ProjectUpsert(name="Boot", repository_url=None),
+            "t",
+            admin=False,
+        )
+        opted = await kn.upsert_project(
+            tx,
+            "legacy",
+            ProjectUpsert(name="Legacy", repository_url=None),
+            "t",
+            admin=True,
+        )
+        cleared = await kn.upsert_project(
+            tx,
+            "web",
+            ProjectUpsert(name="Web", repository_url=None),
+            "t",
+            admin=True,
+        )
+    assert web.repository_url == "https://git.example/a/web"
+    assert ops.repository_url is None  # pools disagree
+    assert none.repository_url is None
+    assert boot.repository_url == "https://git.example/a/boot"
+    assert opted.repository_url is None
+    assert cleared.repository_url is None

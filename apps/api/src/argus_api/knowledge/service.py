@@ -56,14 +56,35 @@ async def get_project(conn: aiosqlite.Connection, slug: str) -> Project:
     return Project.model_validate(dict(row))
 
 
-async def upsert_project(tx: Tx, slug: str, body: ProjectUpsert, actor: str) -> Project:
+async def upsert_project(
+    tx: Tx, slug: str, body: ProjectUpsert, actor: str, *, admin: bool = False
+) -> Project:
     now = ts(tx.now)
+    # An omitted repository is kept; an admin's explicit null clears it. On create,
+    # a missing URL inherits the single URL every pool allowlist agrees on (migration
+    # 0071 parity). JSON null from a non-admin is treated as omitted on update so
+    # generated clients do not clear a stored URL by round-tripping null.
+    set_repo = "repository_url" in body.model_fields_set
+    # Lazy: the delivery module imports the fleet, which imports the task service.
+    from argus_api.tasks import delivery
+
+    async with tx.conn.execute("SELECT 1 FROM projects WHERE slug = ?", (slug,)) as cur:
+        exists = await cur.fetchone() is not None
+    if exists and set_repo and body.repository_url is None and not admin:
+        set_repo = False
+    if not exists and body.repository_url is None and not (set_repo and admin):
+        body = body.model_copy(
+            update={"repository_url": await delivery.pool_repository(tx.conn, slug)}
+        )
     await tx.conn.execute(
-        "INSERT INTO projects (slug, name, description, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?) ON CONFLICT (slug) DO UPDATE SET"
+        "INSERT INTO projects (slug, name, description, repository_url,"
+        " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT (slug) DO UPDATE SET"
         " name = excluded.name, description = excluded.description,"
+        " repository_url = CASE WHEN ? THEN excluded.repository_url"
+        " ELSE projects.repository_url END,"
         " updated_at = excluded.updated_at",
-        (slug, body.name, body.description, now, now),
+        (slug, body.name, body.description, body.repository_url, now, now, set_repo),
     )
     await record(tx, actor, "project", slug, "project.upserted")
     return await get_project(tx.conn, slug)

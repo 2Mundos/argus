@@ -6,10 +6,11 @@ Orchestrators should not spend turns wiring every implementation task with
 `repository:write` just so a worker can read the project's tree. Today, checkout
 only runs when the task lists that capability; tasks created with empty
 capabilities arrive in a container with an empty `/workspace/group` and no git
-tree, even when the project's repository is configured on the pool.
+tree, even when the project's repository is configured.
 
 **Project code availability** is automatic: any task whose **project** has a
-repository URL in the pool's `nanoclaw.repositories` map gets that repository
+repository URL (its `repository_url`, else the pool's `nanoclaw.repositories` map,
+resolved by Argus at claim) gets that repository
 prepared before the model runs, without the orchestrator naming a capability.
 Push, forge mutation, checkpoints, and deliverable rules that need write evidence
 stay gated on `repository:write` and on branch/pr deliverables ([task
@@ -42,7 +43,7 @@ workspace specs.
 
 | Condition | Channel behaviour |
 | --- | --- |
-| Project has no entry in the pool repositories map | Unchanged: no repository lease, no workspace, no `task.repository_url`. |
+| Project has no repository (no record URL, no pool entry) | Unchanged: no repository lease, no workspace, no `task.repository_url`. |
 | Project has a configured repository | Before injection: resolve URL, take the task-scoped **`repository` lease**, apply OneCLI secrets, confirm both are assigned to the agent (OneCLI admin reads), run repository preflight ([failure classes 3.3.1](failure-classes.spec.md)), prepare the [task workspace](task-workspace.spec.md), set `task.repository_url`, include workspace and read rules in the trusted prompt. |
 | Same, and task lists **`repository:write`** | Preflight requires **write** (`permissions.push` on the forge GET, as today). Worker may fetch, commit, push, and use forge helpers for mutation. Checkpoints and publish paths unchanged. |
 | Same, and task does **not** list **`repository:write`** | Preflight requires **read** (repository GET with pull/admin/push on the forge permissions object; on a public repository this does not prove the credential was attached, and the evidence says `authentication: unknown`). Workspace is the same path and branch naming; prompt states **read-only**: no push, no publishing commits, no opening PRs; it lists only the forge helper's read commands and grants no merge. `argus-delegate` and forge helpers that mutate the remote remain unavailable without write. |

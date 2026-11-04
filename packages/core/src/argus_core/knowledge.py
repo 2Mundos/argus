@@ -4,7 +4,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from argus_core.fleet import validate_repository_url
 
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
 
@@ -12,6 +14,14 @@ SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
 class ProjectUpsert(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = ""
+    # The project's code, as an HTTPS owner/repository URL (not a secret). Left out
+    # of a PUT it is kept; null clears it. Workers resolve it at claim.
+    repository_url: str | None = None
+
+    @field_validator("repository_url")
+    @classmethod
+    def repository_url_shape(cls, value: str | None) -> str | None:
+        return None if value is None else validate_repository_url(value)
 
 
 class Project(ProjectUpsert):

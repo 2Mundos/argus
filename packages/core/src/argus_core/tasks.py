@@ -623,6 +623,9 @@ class ClaimedTask(Task):
     # Steers the previous attempt was sent but never confirmed (task steering spec
     # 3.3): they may or may not have been applied. A count only, never the text.
     steer_unknown: int = 0
+    # The project's repository as Argus resolves it at claim (project record, else
+    # the pools' agreed allowlist); null when unknown or for `global`.
+    project_repository: str | None = None
     # The previous attempt's quota-paused native session, not yet taken (quota
     # resume spec 3.3). The channel resumes it or reports why it did not.
     quota_resume: QuotaResume | None = None

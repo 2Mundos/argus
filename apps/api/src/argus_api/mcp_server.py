@@ -2061,6 +2061,32 @@ async def run_local(
     )
 
 
+@tool(ADMINS)
+async def set_project_repository(
+    ctx: Context, project: str, repository_url: str | None
+) -> dict:
+    """Admin only: it decides which host a repository credential is sent to. Set (or
+    clear with null) the project's repository: an HTTPS
+    https://host/owner/repository URL, no credentials. Workers resolve it at their
+    next claim, so no worker or pool needs editing. It is a pointer, not access: a
+    task still needs a registered repository account (Settings > Accounts) and gets
+    a task-scoped lease. A project name that does not exist is unknown_project."""
+    projects = await _call(ctx, "GET", "/projects")
+    current = next((p for p in projects if p["slug"] == project), None)
+    if current is None:
+        raise ToolError(f"unknown project: {project}")
+    return await _call(
+        ctx,
+        "PUT",
+        f"/projects/{project}",
+        json={
+            "name": current["name"],
+            "description": current["description"],
+            "repository_url": repository_url,
+        },
+    )
+
+
 @tool(ANYONE)
 async def get_project_runtime(ctx: Context, project: str) -> dict:
     """A project's declared runtime (approved components, test services), the gaps

@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import httpx2 as httpx
 import pytest
+from argus_api.db import Database
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import delivery
@@ -101,6 +102,109 @@ def test_repository_url_parsing() -> None:
     )
     assert delivery.parse_repository("http://x/a/b") is None
     assert delivery.parse_repository("https://x/a") is None
+    bare = f"https://{HOST}/{OWNER}/{REPO}"
+    assert delivery.canonical_repository_url(f"{bare}.git") == bare
+    assert delivery.canonical_repository_url("http://evil/a/b") is None
+    assert (
+        delivery.canonical_repository_url("https://user:tok@git.example/acme/api")
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_repositories_omits_global_even_when_configured(db: Database) -> None:
+    from argus_api.fleet import service as fleet_svc
+    from argus_core.fleet import NanoclawOptions, PoolUpsert
+
+    demo = f"https://{HOST}/{OWNER}/{REPO}"
+    global_url = f"https://{HOST}/team/knowledge"
+    opts = NanoclawOptions(
+        install_dir="/a",
+        instances_root="/b",
+        agent_image="x",
+        repositories={"global": global_url, "demo": demo},
+    )
+    async with db.write() as tx:
+        await fleet_svc.upsert_pool(
+            tx,
+            "map",
+            PoolUpsert(runtime="nanoclaw", image="i", max_replicas=1, nanoclaw=opts),
+            "t",
+        )
+        await tx.conn.execute(
+            "UPDATE projects SET repository_url = ? WHERE slug = 'global'",
+            (global_url,),
+        )
+    async with db.read() as conn:
+        repos = await delivery.repositories(conn)
+    assert "global" not in repos
+    assert repos["demo"] == (HOST, OWNER, REPO)
+
+
+@pytest.mark.asyncio
+async def test_pool_repository_agrees_on_equivalent_url_spellings(db: Database) -> None:
+    from argus_api.fleet import service as fleet_svc
+    from argus_core.fleet import NanoclawOptions, PoolUpsert
+
+    bare = f"https://{HOST}/{OWNER}/{REPO}"
+    suffixed = f"{bare}.git"
+
+    def nc(repos: dict[str, str]) -> NanoclawOptions:
+        return NanoclawOptions(
+            install_dir="/a", instances_root="/b", agent_image="x", repositories=repos
+        )
+
+    base = {"runtime": "nanoclaw", "image": "i", "max_replicas": 1}
+    async with db.write() as tx:
+        await fleet_svc.upsert_pool(
+            tx,
+            "one",
+            PoolUpsert(**base, nanoclaw=nc({"acme": bare})),
+            "t",
+        )
+        await fleet_svc.upsert_pool(
+            tx,
+            "two",
+            PoolUpsert(**base, nanoclaw=nc({"acme": suffixed})),
+            "t",
+        )
+    async with db.read() as conn:
+        assert await delivery.pool_repository(conn, "acme") == bare
+
+
+@pytest.mark.asyncio
+async def test_project_repository_url_rejects_malformed_record_and_falls_back(
+    db: Database,
+) -> None:
+    from argus_api.fleet import service as fleet_svc
+    from argus_core.fleet import NanoclawOptions, PoolUpsert
+
+    good = f"https://{HOST}/{OWNER}/{REPO}"
+    async with db.write() as tx:
+        await fleet_svc.upsert_pool(
+            tx,
+            "one",
+            PoolUpsert(
+                runtime="nanoclaw",
+                image="i",
+                max_replicas=1,
+                nanoclaw=NanoclawOptions(
+                    install_dir="/a",
+                    instances_root="/b",
+                    agent_image="x",
+                    repositories={"acme": good},
+                ),
+            ),
+            "t",
+        )
+        await tx.conn.execute(
+            "INSERT INTO projects (slug, name, description, repository_url, created_at, updated_at)"
+            " VALUES ('acme', 'Acme', '', 'http://legacy.invalid/acme/api', 'now', 'now')"
+            " ON CONFLICT(slug) DO UPDATE SET repository_url = excluded.repository_url"
+        )
+    async with db.read() as conn:
+        assert await delivery.project_repository_url(conn, "acme") == good
+        assert await delivery.project_repository_url(conn, "global") is None
 
 
 def test_combine_checks_priority() -> None:

@@ -4581,6 +4581,8 @@ export interface components {
             progress_percent: number | null;
             /** Project */
             project: string;
+            /** Project Repository */
+            project_repository?: string | null;
             prompt_trust: components["schemas"]["PromptTrust"];
             quota_resume?: components["schemas"]["QuotaResume"] | null;
             /** Refill At */
@@ -8416,6 +8418,8 @@ export interface components {
             description?: string;
             /** Name */
             name: string;
+            /** Repository Url */
+            repository_url?: string | null;
             /** Slug */
             slug: string;
             /**
@@ -8471,6 +8475,8 @@ export interface components {
             description?: string;
             /** Name */
             name: string;
+            /** Repository Url */
+            repository_url?: string | null;
         };
         /**
          * PromptTrust

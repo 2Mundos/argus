@@ -109,6 +109,7 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
         "set_setting",
         "reset_setting",
         "set_project_runtime",
+        "set_project_repository",
         "rebuild_project_runtime",
         "archive_agents",
     }

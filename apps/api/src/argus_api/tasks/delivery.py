@@ -43,6 +43,7 @@ from argus_core.delivery import (
     RequiredGates,
     ShaFact,
 )
+from argus_core.fleet import validate_repository_url
 from argus_core.tasks import Task, TaskState
 
 from argus_api.db import utcnow
@@ -138,6 +139,22 @@ def parse_repository(url: str) -> tuple[str, str, str] | None:
     return parts.hostname.lower(), segs[0].lower(), repo.lower()
 
 
+def canonical_repository_url(raw: str) -> str | None:
+    """The HTTPS owner/repository URL for a proven identity; None for legacy garbage."""
+    parts = urlsplit(raw)
+    if parts.username or parts.password:
+        return None
+    if not (repo := parse_repository(raw)):
+        return None
+    host, owner, name = repo
+    url = f"https://{host}/{owner}/{name}"
+    try:
+        validate_repository_url(url)
+    except ValueError:
+        return None
+    return url
+
+
 def _from_url(text: str, allowed: set[tuple[str, str, str]]) -> list[PrRef]:
     out = []
     for m in _URL.finditer(text):
@@ -188,16 +205,62 @@ def _strings(value: Any) -> list[str]:
 
 
 async def repositories(conn: aiosqlite.Connection) -> dict[str, tuple[str, str, str]]:
-    """project -> repository, from the pools' explicit allowlist. A project the pools
-    disagree on is dropped: the repository is not proven."""
+    """project -> repository. A project's own record is authoritative; otherwise the
+    pools' explicit allowlist, where a project the pools disagree on is dropped:
+    the repository is not proven."""
     found: dict[str, set[tuple[str, str, str]]] = {}
     for pool in await fleet.list_pools(conn):
         if pool.nanoclaw is None:
             continue
         for project, url in pool.nanoclaw.repositories.items():
+            if project == "global":
+                continue
             if repo := parse_repository(url):
                 found.setdefault(project, set()).add(repo)
-    return {p: next(iter(r)) for p, r in found.items() if len(r) == 1}
+    proven = {p: next(iter(r)) for p, r in found.items() if len(r) == 1}
+    async with conn.execute(
+        "SELECT slug, repository_url FROM projects WHERE repository_url IS NOT NULL"
+    ) as cur:
+        for slug, url in await cur.fetchall():
+            if slug == "global":
+                continue
+            if repo := parse_repository(url):
+                proven[slug] = repo
+    return proven
+
+
+async def project_repository_url(
+    conn: aiosqlite.Connection, project: str
+) -> str | None:
+    """The URL a worker clones for `project`: its record, else the one URL every
+    pool allowlist agrees on. None when unknown, and always for `global`."""
+    if project == "global":
+        return None
+    async with conn.execute(
+        "SELECT repository_url FROM projects WHERE slug = ?", (project,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row and row[0] and (url := canonical_repository_url(row[0])):
+        return url
+    return await pool_repository(conn, project)
+
+
+async def pool_repository(conn: aiosqlite.Connection, project: str) -> str | None:
+    """The one URL every pool allowlist that names `project` agrees on, else None."""
+    if project == "global":
+        return None
+    repos: set[tuple[str, str, str]] = set()
+    for pool in await fleet.list_pools(conn):
+        if (
+            pool.nanoclaw
+            and project in pool.nanoclaw.repositories
+            and (repo := parse_repository(pool.nanoclaw.repositories[project]))
+        ):
+            repos.add(repo)
+    if len(repos) != 1:
+        return None
+    host, owner, name = next(iter(repos))
+    return f"https://{host}/{owner}/{name}"
 
 
 async def reference(conn: aiosqlite.Connection, task: Task) -> PrRef | None:
