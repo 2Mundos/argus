@@ -86,6 +86,7 @@ def container_spec(
     model_policy: str | None = None,
     *,
     worker_name: str | None = None,
+    git_identity: tuple[str, str] | None = None,
 ) -> ContainerSpec:
     """Build the container for one instance.
 
@@ -93,7 +94,8 @@ def container_spec(
     `nanoclaw`: the image runs a NanoClaw host (with the Argus channel) from a
     prepared checkout on the Docker host, which spawns its own agent containers.
     `model_policy` (canonical JSON) becomes its ARGUS_MODEL_POLICY, fixed for the
-    life of the container.
+    life of the container. `git_identity` (name, email) becomes the pinned
+    ARGUS_GIT_AUTHOR_NAME/EMAIL; unset, the worker's git refuses to commit.
     """
     env = {
         **pool.env,
@@ -136,6 +138,8 @@ def container_spec(
             env["ARGUS_NANOCLAW_NETWORK"] = pool.docker.network
         if model_policy is not None:
             env["ARGUS_MODEL_POLICY"] = model_policy
+        if git_identity is not None:
+            env["ARGUS_GIT_AUTHOR_NAME"], env["ARGUS_GIT_AUTHOR_EMAIL"] = git_identity
         workdir = f"{nc.instances_root.rstrip('/')}/{instance_id}"
         sandboxed = pool.docker.runtime is not None
         mounts = [

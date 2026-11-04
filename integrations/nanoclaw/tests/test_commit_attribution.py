@@ -36,6 +36,8 @@ REAL = "/usr/bin/git" if Path("/usr/bin/git").exists() else shutil.which("git")
 def _env() -> dict[str, str]:
     return {
         **os.environ,
+        "ARGUS_GIT_AUTHOR_NAME": "Test Author",
+        "ARGUS_GIT_AUTHOR_EMAIL": "test@example.invalid",
         "ARGUS_ATTRIBUTION_TEST_HOOKS": "1",
         "ARGUS_GIT_REAL": REAL,
         "ARGUS_COMMIT_ATTRIBUTION_PY": str(MODULE),
@@ -560,3 +562,33 @@ def test_wrapper_pins_configured_identity(tmp_path: Path) -> None:
     )
     who = "Configured Author|configured@example.invalid"
     assert log.stdout.strip() == f"{who}|{who}"
+
+
+def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> None:
+    if not REAL:
+        pytest.skip("git not installed")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run([REAL, "init", "-q"], cwd=repo, check=True)
+    (repo / "a").write_text("1\n")
+    subprocess.run([REAL, "add", "a"], cwd=repo, check=True)
+    env = {
+        k: v
+        for k, v in _env().items()
+        if not k.startswith(("GIT_", "ARGUS_GIT_AUTHOR"))
+    }
+    env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+    res = _run_git(repo, env, "-C", ".", "commit", "-m", "msg")
+    assert res.returncode == 1
+    assert "no git author identity is configured" in res.stderr
+    assert "git.identity" in res.stderr
+    assert (
+        subprocess.run(
+            [REAL, "rev-parse", "-q", "--verify", "HEAD"],
+            cwd=repo,
+            env=env,
+            check=False,
+        ).returncode
+        != 0
+    )
+    assert _run_git(repo, env, "status", "--short").returncode == 0

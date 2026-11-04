@@ -152,6 +152,20 @@ wins over the store when set, reported as `source: env` like `models`. The
 Settings tab edits the map; claim sends the effective chain for the task's
 difficulty as `difficulty_executors`.
 
+## 3.8 Git identity
+
+Key `git.identity`, scopes `global` and `project`. Value: `{name, email}`, both
+required and non-empty (`email` must look like an address, no spaces). Default
+`{}` means not configured. It is the author and committer of worker commits. A
+project value takes precedence over the global one
+(`effective_git_identity`); with neither set it fails closed, naming
+`git.identity`. There is no built-in default and the agent name is never used.
+The global value is passed to each pool container at start as
+`ARGUS_GIT_AUTHOR_NAME`/`ARGUS_GIT_AUTHOR_EMAIL`; the worker's git refuses to
+commit or push without them ([worker lifecycle](worker-lifecycle.spec.md)).
+Containers are per pool, so a project override is not delivered to a running
+worker yet; it needs delivery at task claim.
+
 # 4. Open Questions
 
 - Should orchestrators be allowed to write project overrides? Phase 1 says admin

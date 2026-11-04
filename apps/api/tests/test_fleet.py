@@ -478,6 +478,23 @@ def test_nanoclaw_host_env_carries_assigned_worker_name() -> None:
     assert legacy.env["ARGUS_AGENT_NAME"] == "sbx-deadbeef"
 
 
+def test_nanoclaw_host_env_carries_git_identity_only_when_given() -> None:
+    from argus_api.fleet.runtimes import container_spec
+
+    pool = _pool_from_upsert("sbx", _sandboxed_pool(agent_image_archive="/srv/a.tar"))
+    given = container_spec(
+        pool,
+        "i-1",
+        ["argus_boot_x"],
+        "http://argus",
+        git_identity=("Ada", "ada@example.invalid"),
+    )
+    assert given.env["ARGUS_GIT_AUTHOR_NAME"] == "Ada"
+    assert given.env["ARGUS_GIT_AUTHOR_EMAIL"] == "ada@example.invalid"
+    bare = container_spec(pool, "i-1", ["argus_boot_x"], "http://argus")
+    assert not [k for k in bare.env if k.startswith("ARGUS_GIT_AUTHOR")]
+
+
 async def test_two_workers_get_distinct_mythology_names(
     db: Database, registry: TargetRegistry, target: FakeTarget
 ) -> None:

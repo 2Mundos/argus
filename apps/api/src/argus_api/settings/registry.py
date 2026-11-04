@@ -64,6 +64,20 @@ _DIFFICULTY_EXECUTORS_SCHEMA: dict[str, Any] = {
     },
 }
 
+_GIT_IDENTITY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["name", "email"],
+    "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "email": {
+            "type": "string",
+            "maxLength": 320,
+            "pattern": r"^[^\s@]+@[^\s@]+$",
+        },
+    },
+}
+
 REVIEW_DEFAULT = IndependentReviewSetting().model_dump()
 
 REGISTRY: dict[str, SettingDefinition] = {
@@ -82,6 +96,16 @@ REGISTRY: dict[str, SettingDefinition] = {
         description=(
             "Ordered executor CLIs per task difficulty; empty or [none] means the "
             "harness does the work with no delegated executor."
+        ),
+    ),
+    "git.identity": SettingDefinition(
+        key="git.identity",
+        schema=_GIT_IDENTITY_SCHEMA,
+        default={},
+        scopes=["global", "project"],
+        description=(
+            "Git author and committer {name, email} for worker commits; a project "
+            "value overrides the global one. Unset means workers cannot commit."
         ),
     ),
     "review.independent": SettingDefinition(
