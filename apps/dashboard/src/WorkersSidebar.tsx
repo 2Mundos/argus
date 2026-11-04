@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { type Agent, api, call } from "./api";
-import { useLiveData } from "./live";
-import { workerEvent } from "./liveEvents";
+import type { Agent } from "./api";
 import { useNow } from "./views/Activity";
 import { WorkerChip } from "./WorkerChip";
+import { useWorkerPanel } from "./WorkerPanel";
 
 const ENDED_LIMIT = 8;
 const RAIL_KEY = "argus.workers-rail";
@@ -60,11 +59,7 @@ function RailChevron({ collapsed }: { collapsed: boolean }) {
 export function WorkersSidebar({ selectedId }: { selectedId: string | null }) {
   const now = useNow(5000);
   const [collapsed, setCollapsed] = useState(storedCollapsed);
-  const { data: agents, error } = useLiveData(
-    (signal) => call(api.GET("/api/agents", { signal })),
-    [],
-    { accepts: workerEvent },
-  );
+  const { agents, agentsError: error } = useWorkerPanel();
   const workers = liveWorkers(agents);
   const ended = recentlyEnded(agents);
   const busy = workers.filter((a) => a.claimed_tasks > 0).length;

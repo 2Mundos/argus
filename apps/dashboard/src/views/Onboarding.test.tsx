@@ -27,6 +27,7 @@ const mock = vi.hoisted(() => ({
     dismissed: false,
   } as OnboardingStatus,
   catalog: undefined as unknown as TemplateCatalog,
+  reads: [] as string[],
   put: vi.fn(async () => ({ key: "onboarding.dismissed", value: true, source: "global" })),
 }));
 
@@ -36,6 +37,7 @@ vi.mock("../api", () => ({
     PUT: () => "/api/settings/{key}",
   },
   call: async (path: string) => {
+    mock.reads.push(path);
     if (path === "/api/onboarding") return { ...mock.status };
     if (path === "/api/settings/{key}") return mock.put();
     if (path === "/api/fleet/templates") {
@@ -150,6 +152,13 @@ describe("orchestratorBlockers", () => {
 });
 
 describe("OnboardingWizard", () => {
+  it("reads nothing while closed", async () => {
+    mock.reads.length = 0;
+    render(<OnboardingWizard open={false} onClose={() => {}} />);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(mock.reads).toEqual([]);
+  });
+
   it("shows account actions and opens Claude form", async () => {
     render(<OnboardingWizard open onClose={() => {}} />);
     expect(await screen.findByRole("dialog", { name: "Set up Argus" })).toBeTruthy();

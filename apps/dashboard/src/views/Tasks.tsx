@@ -3,8 +3,10 @@ import { ActionButton, useAction } from "../ActionButton";
 import {
   type ArgusEvent,
   api,
+  boardTasks,
   call,
-  newestTasks,
+  ENDED_STATES,
+  type TaskBoard,
   type TaskKind,
   type TaskState,
   type TaskSummary,
@@ -37,12 +39,13 @@ const COLUMNS: { title: string; states: TaskState[] }[] = [
 
 type BoardSection =
   | { type: "column"; title: string; items: TaskSummary[] }
-  | { type: "chip"; columns: { title: string; count: number }[] };
+  | { type: "chip"; columns: { title: string; count: number | "…" }[] };
 
 /** Empty columns and user-collapsed ones share a vertical chip stack. */
 function boardSections(
   tasks: TaskSummary[] | undefined,
   collapsed: ReadonlySet<string>,
+  loading: boolean,
 ): BoardSection[] {
   const sections: BoardSection[] = [];
   for (const column of COLUMNS) {
@@ -50,7 +53,11 @@ function boardSections(
     const asChip = items.length === 0 || collapsed.has(column.title);
     if (asChip) {
       const last = sections[sections.length - 1];
-      const entry = { title: column.title, count: items.length };
+      // Nothing is known before the first page, and ended tasks arrive after the active ones.
+      const unknown =
+        tasks === undefined ||
+        (loading && column.states.every((state) => ENDED_STATES.includes(state)));
+      const entry = { title: column.title, count: unknown ? ("…" as const) : items.length };
       if (last?.type === "chip") last.columns.push(entry);
       else sections.push({ type: "chip", columns: [entry] });
     } else {
@@ -60,7 +67,7 @@ function boardSections(
   return sections;
 }
 
-type BoardData = { items: TaskSummary[]; total: number };
+type BoardData = TaskBoard;
 
 const boardEvent = (event: ArgusEvent) => event.subject_type === "task";
 
@@ -72,7 +79,7 @@ async function updateBoard(
 ): Promise<BoardData> {
   const ids = [...new Set(events.map((event) => event.subject_id))];
   const known = new Set(data.items.map((task) => task.id));
-  if (ids.some((id) => !known.has(id))) return newestTasks(5, archived, { signal });
+  if (ids.some((id) => !known.has(id))) return boardTasks(archived, { signal });
   const batches = [];
   for (let i = 0; i < ids.length; i += 50) {
     batches.push(
@@ -90,7 +97,7 @@ async function updateBoard(
     changed.length !== ids.length ||
     changed.some((task) => Boolean(task.archived_at) !== archived)
   ) {
-    return newestTasks(5, archived, { signal });
+    return boardTasks(archived, { signal });
   }
   const replacements = new Map(changed.map((task) => [task.id, task]));
   return { ...data, items: data.items.map((task) => replacements.get(task.id) ?? task) };
@@ -106,7 +113,7 @@ export function Tasks() {
   const [archived, setArchived] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const { data, error } = useLiveData(
-    (signal) => newestTasks(5, archived, { signal, onPage: (page) => reportPage(signal, page) }),
+    (signal) => boardTasks(archived, { signal, onPage: (page) => reportPage(signal, page) }),
     [archived],
     {
       accepts: boardEvent,
@@ -165,13 +172,13 @@ export function Tasks() {
       </PageHeader>
       {archived && <p className="muted small">Showing archived tasks only.</p>}
       {error && <p className="error">{error.message}</p>}
-      {data && data.total > data.items.length && (
+      {data && !data.loading && data.total > data.items.length && (
         <p className="muted small">
           Showing the newest {data.items.length} of {data.total} tasks.
         </p>
       )}
       <div className="board">
-        {boardSections(tasks, collapsed).map((section) =>
+        {boardSections(tasks, collapsed, data?.loading === true).map((section) =>
           section.type === "chip" ? (
             <div key={section.columns.map((c) => c.title).join("|")} className="column-empty-stack">
               {section.columns.map((column) => (
@@ -183,7 +190,7 @@ export function Tasks() {
                   <span className="column-chip-label">
                     {column.title} <span className="count">{column.count}</span>
                   </span>
-                  {column.count > 0 && (
+                  {typeof column.count === "number" && column.count > 0 && (
                     <button
                       type="button"
                       className="column-toggle"

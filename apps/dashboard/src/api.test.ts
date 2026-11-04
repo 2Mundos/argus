@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, loadToken, newestTasks, saveToken, setToken } from "./api";
+import { api, boardTasks, loadToken, newestTasks, saveToken, setToken } from "./api";
 
 const TOKEN_KEY = "argus.token";
 
@@ -86,5 +86,53 @@ describe("newestTasks", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(seen).toEqual([1]);
     expect(n).toBe(2);
+  });
+});
+
+describe("boardTasks", () => {
+  // One page per state group. The `held` group answers only once released.
+  function serve(held: "active" | "ended") {
+    const order: string[] = [];
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.spyOn(api, "GET").mockImplementation((async (...args: unknown[]) => {
+      const init = args[1] as { params: { query: { state: string[] } } };
+      const group = init.params.query.state.includes("succeeded") ? "ended" : "active";
+      order.push(group);
+      if (group === held) await gate;
+      const page = (id: string, total: number) => ({
+        data: { items: [{ id }], total, has_more: false, next_cursor: null, omitted: [] },
+        response: new Response(null, { status: 200 }),
+      });
+      return group === "active" ? page("a", 1) : page("e", 239);
+    }) as typeof api.GET);
+    return { order, release };
+  }
+
+  it("starts both chains at once and reports the merged board once", async () => {
+    const { order, release } = serve("active");
+    const seen: { ids: string[]; total: number; loading?: boolean }[] = [];
+    const done = boardTasks(false, {
+      onPage: (b) =>
+        seen.push({ ids: b.items.map((t) => t.id), total: b.total, loading: b.loading }),
+    });
+    expect(order).toEqual(["active", "ended"]); // neither waits for the other
+    release();
+    const board = await done;
+    // The ended page was ready first, but nothing painted before the active one.
+    expect(seen).toEqual([{ ids: ["a", "e"], total: 240, loading: false }]);
+    expect(board).toEqual({ items: [{ id: "a" }, { id: "e" }], total: 240, loading: false });
+  });
+
+  it("reports the active tasks alone while the ended ones are loading", async () => {
+    const { release } = serve("ended");
+    let painted: (ids: string[]) => void = () => {};
+    const first = new Promise<string[]>((resolve) => (painted = resolve));
+    const done = boardTasks(false, {
+      onPage: (b) => painted(b.items.map((t) => `${t.id}:${b.loading}`)),
+    });
+    expect(await first).toEqual(["a:true"]);
+    release();
+    await done;
   });
 });

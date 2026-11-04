@@ -134,13 +134,15 @@ export async function call<T>(
 
 /**
  * The newest tasks, following the API's cursor for up to `pages` pages of 100.
- * Archived tasks are left out unless `archived` asks for exactly those.
+ * Archived tasks are left out unless `archived` asks for exactly those. `states`
+ * keeps only tasks in those states.
  */
 export async function newestTasks(
   pages = 5,
   archived = false,
   opts?: {
     signal?: AbortSignal;
+    states?: TaskState[];
     onPage?: (page: { items: TaskSummary[]; total: number }) => void;
   },
 ): Promise<{ items: TaskSummary[]; total: number }> {
@@ -150,7 +152,7 @@ export async function newestTasks(
   for (let n = 0; n < pages; n++) {
     const page = await call(
       api.GET("/api/tasks", {
-        params: { query: { limit: 100, cursor, archived } },
+        params: { query: { limit: 100, cursor, archived, state: opts?.states } },
         signal: opts?.signal,
       }),
     );
@@ -161,6 +163,58 @@ export async function newestTasks(
     cursor = page.next_cursor;
   }
   return { items, total };
+}
+
+/** States a task leaves only by finishing; the rest still need someone's attention. */
+export const ENDED_STATES: TaskState[] = ["succeeded", "failed", "cancelled"];
+const ACTIVE_STATES: TaskState[] = [
+  "awaiting_approval",
+  "pending",
+  "blocked",
+  "ready",
+  "claimed",
+  "in_review",
+];
+
+/** `loading` while the ended tasks have not arrived: their totals are not known yet. */
+export type TaskBoard = { items: TaskSummary[]; total: number; loading?: boolean };
+
+/**
+ * The tasks board: the newest tasks of the active and of the ended states, read as two
+ * cursor chains in parallel. `onPage` first fires once the active tasks (few, and the
+ * ones that matter) are in, so the board paints after one round trip rather than
+ * after the first page of everything.
+ */
+export async function boardTasks(
+  archived = false,
+  opts?: { signal?: AbortSignal; onPage?: (board: TaskBoard) => void },
+): Promise<TaskBoard> {
+  type Loaded = { items: TaskSummary[]; total: number };
+  let active: Loaded | undefined;
+  let ended: Loaded | undefined;
+  const merged = (): TaskBoard => ({
+    items: [...(active?.items ?? []), ...(ended?.items ?? [])],
+    total: (active?.total ?? 0) + (ended?.total ?? 0),
+    loading: ended === undefined,
+  });
+  const chain = (states: TaskState[], keep: (page: Loaded) => void) =>
+    newestTasks(5, archived, {
+      signal: opts?.signal,
+      states,
+      onPage: (page) => {
+        keep(page);
+        if (active) opts?.onPage?.(merged());
+      },
+    });
+  await Promise.all([
+    chain(ACTIVE_STATES, (page) => {
+      active = page;
+    }),
+    chain(ENDED_STATES, (page) => {
+      ended = page;
+    }),
+  ]);
+  return { ...merged(), loading: false };
 }
 
 /** Fetch an authenticated file (artifacts) and trigger a download. */

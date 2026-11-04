@@ -345,7 +345,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
   const { data: system } = useLiveData((signal) => call(api.GET("/api/system", { signal })), [], {
     accepts: systemEvent,
   });
-  const { data: onboarding } = useLiveData(
+  const { data: onboarding, reload: reloadOnboarding } = useLiveData(
     (signal) => call(api.GET("/api/onboarding", { signal })),
     [],
     { accepts: onboardingEvent },
@@ -469,6 +469,8 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
         <WorkersSidebar selectedId={selectedWorker} />
         <LiveStatusBar />
         <OnboardingHost
+          status={onboarding}
+          reload={reloadOnboarding}
           requestOpen={onboardingStep}
           onRequestHandled={() => setOnboardingStep(null)}
         />

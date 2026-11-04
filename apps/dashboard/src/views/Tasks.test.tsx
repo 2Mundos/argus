@@ -3,11 +3,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Tasks } from "./Tasks";
 
-const mock = vi.hoisted(() => ({ items: [] as unknown[] }));
+const mock = vi.hoisted(() => ({ items: [] as unknown[], loading: false }));
 vi.mock("../api", () => ({
   api: { GET: () => ({}), POST: () => ({}) },
   call: async () => ({}),
-  newestTasks: async () => ({ items: mock.items, total: mock.items.length }),
+  ENDED_STATES: ["succeeded", "failed", "cancelled"],
+  boardTasks: async () => ({ items: mock.items, total: mock.items.length, loading: mock.loading }),
 }));
 vi.mock("../live", async () => {
   const React = await import("react");
@@ -27,6 +28,7 @@ vi.mock("./ArchiveTasks", () => ({ ArchiveTasks: () => null }));
 afterEach(() => {
   cleanup();
   mock.items = [];
+  mock.loading = false;
 });
 
 describe("Tasks model chips", () => {
@@ -73,5 +75,29 @@ describe("Tasks model chips", () => {
     expect(screen.getByLabelText("Anthropic")).toBeTruthy();
     const card = screen.getByRole("button", { name: /No model/ });
     expect(card.querySelector('[aria-label="Models used"]')).toBeNull();
+  });
+});
+
+describe("Tasks board while the ended tasks load", () => {
+  it("shows ended columns as unknown, not empty, and hides the totals notice", async () => {
+    mock.loading = true;
+    mock.items = [
+      {
+        id: "1",
+        title: "Active",
+        project: "global",
+        state: "ready",
+        kind: "generic",
+        priority: 0,
+        attempt: 1,
+      },
+    ];
+    render(<Tasks />);
+    expect(await screen.findByRole("button", { name: /Active/ })).toBeTruthy();
+    expect(screen.getByLabelText("Done: …")).toBeTruthy();
+    expect(screen.getByLabelText("Failed / cancelled: …")).toBeTruthy();
+    // Active columns are real: an empty one is a plain zero.
+    expect(screen.getByLabelText("Running: 0")).toBeTruthy();
+    expect(screen.queryByText(/Showing the newest/)).toBeNull();
   });
 });

@@ -47,14 +47,17 @@ export function OnboardingWizard({
   initialStep?: Step;
   onClose: () => void;
 }) {
+  // The closed wizard reads nothing: the shell already holds the status, and the
+  // template catalog is only needed once a person reaches the dialog.
   const { data: status, reload } = useLiveData(
-    (signal) => call(api.GET("/api/onboarding", { signal })),
-    [],
+    (signal) => (open ? call(api.GET("/api/onboarding", { signal })) : Promise.resolve(undefined)),
+    [open],
     { accepts: onboardingEvent },
   );
   const { data: catalog } = useLiveData(
-    (signal) => call(api.GET("/api/fleet/templates", { signal })),
-    [],
+    (signal) =>
+      open ? call(api.GET("/api/fleet/templates", { signal })) : Promise.resolve(undefined),
+    [open],
   );
   const [step, setStep] = useState<Step>(initialStep ?? 1);
   const [addingClaude, setAddingClaude] = useState(false);
@@ -371,19 +374,18 @@ function OrchestratorStep(props: {
   );
 }
 
-/** Hosts auto-open and the Set up entry points. */
+/** Hosts auto-open and the Set up entry points; `status` is the shell's own read. */
 export function OnboardingHost({
+  status,
+  reload,
   requestOpen,
   onRequestHandled,
 }: {
+  status: OnboardingStatus | undefined;
+  reload: () => void;
   requestOpen: Step | null;
   onRequestHandled: () => void;
 }) {
-  const { data: status, reload } = useLiveData(
-    (signal) => call(api.GET("/api/onboarding", { signal })),
-    [],
-    { accepts: onboardingEvent },
-  );
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step | undefined>();
   const [autoTried, setAutoTried] = useState(false);

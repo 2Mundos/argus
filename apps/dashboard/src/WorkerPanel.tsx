@@ -23,6 +23,7 @@ type WorkerPanelContextValue = {
   openWorker: (agentId: string) => void;
   selectedId: string | null;
   agents: Agent[] | undefined;
+  agentsError: Error | undefined;
 };
 
 const WorkerPanelContext = createContext<WorkerPanelContextValue | null>(null);
@@ -36,11 +37,13 @@ export function WorkerPanelProvider({
   openWorker: (agentId: string) => void;
   children: ReactNode;
 }) {
-  const { data: agents } = useLiveData((signal) => call(api.GET("/api/agents", { signal })), [], {
-    accepts: workerEvent,
-  });
+  const { data: agents, error: agentsError } = useLiveData(
+    (signal) => call(api.GET("/api/agents", { signal })),
+    [],
+    { accepts: workerEvent },
+  );
   return (
-    <WorkerPanelContext.Provider value={{ openWorker, selectedId, agents }}>
+    <WorkerPanelContext.Provider value={{ openWorker, selectedId, agents, agentsError }}>
       {children}
     </WorkerPanelContext.Provider>
   );
