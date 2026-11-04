@@ -101,6 +101,43 @@ In every execution mode the channel records a PR URL of exactly the task's
 repository named in a reply as `pr_opened` before forwarding the completion
 ([progress milestones](progress-milestones.spec.md) 3.3).
 
+**Automatic binding (PR levels).** A worker can open a PR through the forge
+gateway with no way to write `pr_opened` itself. So before refusing a `pr_open`,
+`pr_green` or `pr_merged` completion that has no PR artifact, Argus makes one
+binding attempt from what it holds. The caller (`complete_task`) does it before
+the write, with `PrChecker`, never inside the transaction (`pr_binding.find_pr`),
+and hands the result to `complete`. It runs only for the current assignee, and
+never when the task already holds a PR artifact: an explicit worker report comes
+first and the forge is not read.
+
+- **Candidates.** One forge read: the recent pull requests of the project's
+  repository (3.3), any state, newest first, at most 50 (`per_page` on GitHub,
+  `limit` on Gitea), read once with the repository's own credential. Argus filters
+  the list itself; text the worker wrote never nominates a PR, so a worker that does
+  not name its PR is found too. No other forge read is made. A list that cannot be
+  read (no credential, an error status, a body that is not a list) binds nothing and
+  the advice says the search could not be completed.
+- **Attributable.** A candidate counts when it is readable (not `unknown`, with a
+  head), not `closed`, and either its head branch is the task's branch
+  (`argus/task-<first 8 characters of the task id>`) or its head is a commit the
+  task pushed (continuation commit and branch artifacts, `wip`). When the task
+  pushed commits, the PR head must be one of them, so a moved head is refused as in
+  3.7. Another task's branch never counts.
+- **Exactly one.** One match is bound. None, or more than one, is not guessed: the
+  completion is refused as above, and the advice adds what was searched (the
+  repository, the branch and pushed heads) and what was found (how many PRs
+  were read, and each PR on the branch or at a pushed head with why it did not
+  count). It carries refs and
+  counts only, never a credential.
+- **Recorded as host-derived.** The PR artifact has provenance `argus_event`, not
+  `worker_reported`, and the event `task.pr_reconciled` (the one 3.7 writes) carries
+  `source: "completion"`, so an audit tells the two apart. A later explicit report
+  of the same PR that adds no state or head, or an explicit `reconcile-pr` of the
+  same PR and head, is a no-op. Replays find the artifact and change nothing.
+- **Evidence only.** The bind waives nothing: the PR state and checks still decide
+  the closure gate (3.5), and a bound `pr_green` or `pr_merged` goes to
+  `in_review` with `deliverable_pending` like a reported one.
+
 `pr_green` and `pr_merged` depend on facts that change after the worker is done.
 A completion with an open PR artifact for either goes to `in_review` (a review
 decision for the orchestrator is opened even when `review` is `none`) with
@@ -138,7 +175,9 @@ rules of 3.3 run on the resulting capabilities and deliverable, so removing
 ## 3.7 Binding an unreported pull request
 
 A worker can open a PR and end without reporting `pr_opened` (task `cdd08585`
-failed `deliverable_missing` while its PR was open, and the PR later merged).
+failed `deliverable_missing` while its PR was open, and the PR later merged). The
+completion gate binds such a PR itself when it is unambiguously the attempt's
+(3.4); this explicit request covers the rest.
 `POST /api/tasks/{id}/reconcile-pr` (orchestrator or admin) binds such a PR to
 the task as its PR artifact, given `repository` (`https://host/owner/repo`),
 `number`, the exact 40-character lowercase `head_sha` and a `reason`.

@@ -3,6 +3,7 @@ completion gate, the forge-read accept gate and editing. The forge is a mock tra
 
 import asyncio
 from collections.abc import Callable, Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx2 as httpx
@@ -12,6 +13,13 @@ from argus_api.db import Database
 from argus_api.main import app
 from argus_api.tasks import independent_review as indep
 from argus_api.tasks import pr_binding, service
+from argus_api.tasks.continuation import upsert_artifact
+from argus_core.continuation import (
+    ArtifactKind,
+    ArtifactState,
+    ContinuationArtifact,
+    ContinuationProvenance,
+)
 from argus_core.delivery import DeliveryReconciliation
 from argus_core.settings import IndependentReviewSetting
 from argus_core.tasks import CODE_DELIVERABLES, Deliverable, TaskCreate, TaskResult
@@ -1064,3 +1072,139 @@ def test_reconciling_leaves_other_states_alone(client: TestClient, other: str) -
     assert (res.status_code, code(res)) == (409, "task_not_failed")
     assert state(client, task_id) == other
     assert events(client, task_id, "task.delivery_reconciled") == []
+
+
+# -- the automatic binding before a completion is refused (3.4) ----------------------
+
+OTHER_REPO_URL = f"https://{HOST}/team/other/pulls/12"
+
+
+def pushed(client: TestClient, w: dict[str, str], t: dict, sha: str) -> None:
+    res = client.post(
+        f"/api/tasks/{t['id']}/progress",
+        json={
+            "attempt": t["attempt"],
+            "message": "pushed",
+            "kind": "commit_created",
+            "data": {"branch": f"argus/task-{t['id'][:8]}", "sha": sha},
+        },
+        headers=w,
+    )
+    assert res.status_code in (200, 201), res.text
+
+
+# (summary, head pushed by the attempt, the repository's recent pulls as
+#  (number, head ref (None: task branch), pull) or None for an unreadable list, outcome)
+ON_BRANCH = [(12, None, open_pr())]
+SEARCHES = [
+    ("Opened it, no link.", None, ON_BRANCH, "bound"),  # found by branch alone
+    (f"Opened {URL}", None, ON_BRANCH, "bound"),
+    ("Opened it.", HEAD, [(12, "feat", open_pr())], "bound"),  # by a pushed head
+    ("Opened it.", None, [(12, None, merged_pr())], "bound"),
+    ("Opened it.", None, [(12, None, open_pr()), (44, None, open_pr())], "ambiguous"),
+    ("Opened it.", None, [], "zero"),
+    ("Opened it.", None, [(12, "feat", open_pr())], "zero"),  # another branch
+    (
+        "Opened it.",
+        None,
+        [(12, "argus/task-deadbeef", open_pr())],
+        "zero",
+    ),  # another task
+    (f"Opened {OTHER_REPO_URL}", None, [], "zero"),  # naming another repository
+    ("Opened it.", OTHER, ON_BRANCH, "moved head"),
+    ("Opened it.", None, [(12, None, CLOSED)], "closed"),
+    ("Opened it.", None, None, "unreadable list"),
+]
+
+
+@pytest.mark.parametrize(("summary", "pushed_head", "pulls", "outcome"), SEARCHES)
+def test_completion_binds_the_one_pr_of_the_attempt_or_refuses(
+    client: TestClient,
+    summary: str,
+    pushed_head: str | None,
+    pulls: list[tuple[int, str | None, dict]] | None,
+    outcome: str,
+) -> None:
+    w = worker(client)
+    task_id = create(client, "pr_green").json()["id"]
+    claimed = claim(client, w)
+    if pushed_head:
+        pushed(client, w, claimed, pushed_head)
+    branch_name = f"argus/task-{task_id[:8]}"
+    client.app.state.pr_checker._cache.clear()  # ty: ignore[unresolved-attribute]
+    db: Database = client.app.state.db  # ty: ignore[unresolved-attribute]
+    reads: list[str] = []
+    serve = full_forge(ON_BRANCH[0][2], statuses=CI_OK)
+    listing = [
+        {**pull, "number": number, "head": {**pull["head"], "ref": ref or branch_name}}
+        for number, ref, pull in pulls or []
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert not db.writing(), "forge read inside a write transaction"
+        reads.append(request.url.path)
+        if request.url.path.endswith("/pulls"):
+            return (
+                httpx.Response(200, json=listing)
+                if pulls is not None
+                else (httpx.Response(500))
+            )
+        return serve(request)
+
+    forge(client, handler)
+    res = complete(client, w, claimed, summary=summary)
+    # One read finds the PR: the list of the project's repository, nothing per PR.
+    assert reads == [f"/api/v1/repos/{OWNER}/{REPO}/pulls"]
+    if outcome != "bound":
+        assert (res.status_code, code(res)) == (422, "deliverable_missing")
+        message = res.json()["detail"]["details"][0]
+        assert f"searched {PROJECT_REPOSITORY_URL} for a pull request from" in message
+        assert branch_name in message
+        assert ("could not be completed" in message) is (outcome == "unreadable list")
+        assert ("More than one" in message) is (outcome == "ambiguous")
+        assert state(client, task_id) == "claimed"
+        assert bindings(client, task_id) == []
+        return
+    assert res.status_code == 200, res.text
+    task = res.json()
+    assert task["state"] == "in_review"
+    [pr] = [a for a in task["continuation"]["artifacts"] if a["kind"] == "pr"]
+    assert (pr["ref"], pr["head_sha"], pr["provenance"]) == ("12", HEAD, "argus_event")
+    [event] = bindings(client, task_id)
+    assert event["data"]["source"] == "completion"
+    assert event["data"]["repository"] == REPOSITORY
+    # The bind is evidence only: the forge still decides the accept.
+    [decision] = client.get("/api/decisions", params={"subject_id": task_id}).json()[
+        "items"
+    ]
+    if pulls[0][2]["state"] == "open":
+        watched_forge(client, open_pr(), statuses=[])
+        accept = {"choice": "accept", "text": ""}
+        got = client.post(f"/api/decisions/{decision['id']}/answer", json=accept)
+        assert code(got) == "deliverable_unverified"
+    # An explicit binding of the same PR and head is a no-op, not a conflict.
+    reads = watched_forge(client, open_pr())
+    again = bind(client, task_id)
+    assert again.status_code == 200, again.text
+    assert reads == []
+    assert len(bindings(client, task_id)) == 1
+
+
+def test_a_worker_report_of_the_bound_pr_leaves_the_binding() -> None:
+    def pr(provenance: ContinuationProvenance, minute: int, **extra):
+        return ContinuationArtifact(
+            kind=ArtifactKind.PR,
+            ref="12",
+            state=ArtifactState.OPEN,
+            provenance=provenance,
+            observed_at=datetime(2026, 11, 4, 10, minute, tzinfo=UTC),
+            **extra,
+        )
+
+    bound = pr(ContinuationProvenance.ARGUS, 0, head_sha=HEAD)
+    report = pr(ContinuationProvenance.WORKER, 1, url=URL)
+    assert upsert_artifact([bound], report) == [bound]
+    moved = pr(ContinuationProvenance.WORKER, 2, head_sha=OTHER)
+    assert upsert_artifact([bound], moved)[0].provenance is (
+        ContinuationProvenance.WORKER
+    )

@@ -58,6 +58,7 @@ CACHE_S = 15.0
 TEXT_CAP = 20_000
 CHECK_CAP = 50
 REVIEW_CAP = 20
+LIST_CAP = 50  # PRs of one repository read to find a task's own
 DESC_CAP = 200
 PENDING_IDS_CAP = 20
 
@@ -568,6 +569,57 @@ class PrChecker:
             return ForgeSnapshot(
                 pr_state=PrState.UNKNOWN, merged_at=None, checked_at=checked_at
             )
+
+    async def list_recent(
+        self, conn: aiosqlite.Connection, repo: tuple[str, str, str]
+    ) -> list[tuple[PrRef, ForgeSnapshot]] | None:
+        """The one forge read that finds a task's PR (task deliverable spec 3.4): the
+        repository's most recent PRs of any state, newest first, as PR facts without
+        checks. The caller filters by head. None when the list could not be read."""
+        ref = PrRef(*repo, 0)
+        login = await self.login(conn, ref.provider)
+        if login is None:
+            return None
+        base, headers, basic = self._client(ref, login)
+        page = (
+            f"per_page={LIST_CAP}" if ref.provider == "github" else f"limit={LIST_CAP}"
+        )
+        checked_at = utcnow()
+        try:
+            async with httpx.AsyncClient(
+                transport=self.transport, timeout=TIMEOUT_S, follow_redirects=False
+            ) as client:
+                res = await self._get(
+                    client,
+                    f"{base}/pulls?state=all&sort=newest&{page}&page=1",
+                    headers,
+                    basic,
+                    time.monotonic() + OVERALL_BUDGET_S,
+                )
+            if res is None or res.status_code != 200:
+                return None
+            items = res.json()
+            if not isinstance(items, list):
+                return None
+            found: list[tuple[PrRef, ForgeSnapshot]] = []
+            for item in items:
+                if not isinstance(item, dict) or not isinstance(
+                    item.get("number"), int
+                ):
+                    continue
+                # GitHub's list has no `merged` flag, only `merged_at`.
+                if item.get("merged") is None and item.get("merged_at"):
+                    item = {**item, "merged": True}
+                found.append(
+                    (
+                        PrRef(*repo, item["number"]),
+                        self._parse_pr(item, checked_at),
+                    )
+                )
+            return found
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+            log.info("pr list unavailable for %s/%s/%s", *repo)
+            return None
 
     def _parse_pr(self, body: dict[str, Any], checked_at: datetime) -> ForgeSnapshot:
         merged_at = None

@@ -1059,6 +1059,7 @@ async def complete(
     result: TaskResult,
     *,
     model_policy_path: Path | None = None,
+    pr_search: deliverable.PrSearch | None = None,
 ) -> Task:
     """Complete with the result envelope; `data` must match the kind's result
     schema and every listed artifact must belong to this task (3.11).
@@ -1077,8 +1078,9 @@ async def complete(
     have = cont.load(row)
     # The deliverable's evidence comes first: the worker still holds its claim and can
     # fix the gap in this attempt (task deliverable spec 3.4).
+    have = await deliverable.bind_found(tx, row, have, pr_search, f"agent:{agent_id}")
     awaits_forge = await deliverable.check_complete(
-        tx.conn, row, agent_id, result, have
+        tx.conn, row, agent_id, result, have, pr_search
     )
     held = merge_acceptance(have.checklist, json.loads(row["acceptance"]))
     # A report naming an item this task does not hold came from another task's work

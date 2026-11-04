@@ -15,6 +15,8 @@ from argus_core.continuation import (
     ArtifactKind,
     ArtifactState,
     Continuation,
+    ContinuationArtifact,
+    ContinuationProvenance,
 )
 from argus_core.delivery import CheckState, Delivery, PrState
 from argus_core.tasks import (
@@ -24,9 +26,17 @@ from argus_core.tasks import (
     TaskResult,
 )
 
+from argus_api.db import Tx
 from argus_api.errors import ConflictError, ValidationFailedError
+from argus_api.events import record
+from argus_api.tasks import continuation as cont
 
 REPOSITORY_WRITE = "repository:write"
+# Also what an explicit binding (pr_binding.bind) records, so each sees the other's.
+BOUND_EVENT = "task.pr_reconciled"
+PR_DELIVERABLES = frozenset(
+    {Deliverable.PR_OPEN, Deliverable.PR_GREEN, Deliverable.PR_MERGED}
+)
 _PUSHED = (ArtifactState.OPEN, ArtifactState.MERGED)
 
 
@@ -36,6 +46,27 @@ class ForgeRead:
     when the task names no unambiguous PR."""
 
     delivery: Delivery | None
+
+
+@dataclass(frozen=True)
+class PrMatch:
+    """The one PR the forge showed to be this attempt's."""
+
+    repository: str  # https://host/owner/repo
+    number: int
+    url: str
+    head_sha: str
+    state: PrState
+
+
+@dataclass(frozen=True)
+class PrSearch:
+    """The caller's one automatic search for the PR a completion did not report
+    (3.4). `match` is set only when exactly one PR is attributable to the attempt;
+    `report` says what was searched and found, for the refusal."""
+
+    match: PrMatch | None
+    report: str
 
 
 async def check_creatable(
@@ -72,12 +103,13 @@ async def check_complete(
     row: aiosqlite.Row,
     agent_id: str,
     result: TaskResult,
-    cont: Continuation,
+    have: Continuation,
+    search: PrSearch | None = None,
 ) -> bool:
     """Refuse a completion without the evidence Argus holds (3.4). True when the
     deliverable also depends on the forge, so the task must wait for review."""
     level = Deliverable(row["deliverable"])
-    if advice := await _missing(conn, row, agent_id, result, cont, level):
+    if advice := await _missing(conn, row, agent_id, result, have, level, search):
         raise ValidationFailedError(
             f"deliverable {level} is not met: {advice}",
             code="deliverable_missing",
@@ -86,8 +118,74 @@ async def check_complete(
     return level in FORGE_DELIVERABLES
 
 
-def _has_artifact(cont: Continuation, kind: ArtifactKind) -> bool:
-    return any(a.kind is kind and a.state in _PUSHED for a in cont.artifacts)
+def _has_artifact(have: Continuation, kind: ArtifactKind) -> bool:
+    return any(a.kind is kind and a.state in _PUSHED for a in have.artifacts)
+
+
+def has_pr(have: Continuation) -> bool:
+    return _has_artifact(have, ArtifactKind.PR)
+
+
+async def bind_found(
+    tx: Tx,
+    row: aiosqlite.Row,
+    have: Continuation,
+    search: PrSearch | None,
+    actor: str,
+) -> Continuation:
+    """Record the PR the caller's search matched as host-derived evidence, unless the
+    worker already reported one (an explicit report comes first). Evidence only: the
+    forge state and checks still decide the gate. A replay finds the artifact and
+    changes nothing."""
+    if (
+        search is None
+        or search.match is None
+        or Deliverable(row["deliverable"]) not in PR_DELIVERABLES
+        or has_pr(have)
+    ):
+        return have
+    pr = search.match
+    artifact = ContinuationArtifact(
+        kind=ArtifactKind.PR,
+        ref=str(pr.number),
+        url=pr.url,
+        head_sha=pr.head_sha,
+        state=ArtifactState(pr.state.value),
+        provenance=ContinuationProvenance.ARGUS,
+        observed_at=tx.now,
+        attempt=row["attempt"],
+        note="bound by Argus from a forge read at completion; not reported by the worker",
+    )
+    after = await cont.store(
+        tx,
+        row["id"],
+        have,
+        have.model_copy(
+            update={"artifacts": cont.upsert_artifact(have.artifacts, artifact)}
+        ),
+        actor,
+        BOUND_EVENT,
+        audit=False,  # the event below says who and why
+    )
+    await record(
+        tx,
+        actor,
+        "task",
+        row["id"],
+        BOUND_EVENT,
+        {
+            "reason": "bound at completion from a forge read; the worker reported no PR",
+            "source": "completion",
+            "repository": pr.repository,
+            "number": pr.number,
+            "url": pr.url,
+            "head_sha": pr.head_sha,
+            "pr_state": pr.state.value,
+            "task_state": row["state"],
+            "revision": after.revision,
+        },
+    )
+    return after
 
 
 async def _missing(
@@ -95,8 +193,9 @@ async def _missing(
     row: aiosqlite.Row,
     agent_id: str,
     result: TaskResult,
-    cont: Continuation,
+    have: Continuation,
     level: Deliverable,
+    search: PrSearch | None,
 ) -> str | None:
     """What to do, or None when the evidence is there."""
     match level:
@@ -119,8 +218,8 @@ async def _missing(
                     return None
             return "create at least one subtask before completing"
         case Deliverable.BRANCH:
-            if _has_artifact(cont, ArtifactKind.BRANCH) or _has_artifact(
-                cont, ArtifactKind.PR
+            if _has_artifact(have, ArtifactKind.BRANCH) or _has_artifact(
+                have, ArtifactKind.PR
             ):
                 return None
             return (
@@ -128,12 +227,13 @@ async def _missing(
                 " kind branch, state open)"
             )
         case _:  # pr_open, pr_green, pr_merged
-            if _has_artifact(cont, ArtifactKind.PR):
+            if _has_artifact(have, ArtifactKind.PR):
                 return None
-            return (
+            advice = (
                 "open a pull request and report it (progress kind pr_opened, or"
                 " report_observations) before completing"
             )
+            return f"{advice}. {search.report}" if search else advice
 
 
 async def _wrote_knowledge(
