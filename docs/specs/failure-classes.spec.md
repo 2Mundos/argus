@@ -412,6 +412,26 @@ as `worker_env` with `<why>` as `error`, instead of failing it. The task prompt
 says to use it only when the workspace, tools or credentials are missing, not
 when the work is hard. Any other `FAIL:` is `worker_fail`.
 
+## 3.5 Text-classifier evidence rule
+
+**A failure class is attributed from evidence the work cannot write: a
+structured field, an exit status, or a runner line anchored at the start of
+the error.  A wrapper keeps the class it receives and never replaces it with
+its own nearest generic category.**
+
+Each classifier that turns engine or process output into a failure class,
+provider failure, or stall cause is listed here with the evidence it accepts
+and whether the model's or the work's own output can forge it.
+
+| Classifier | Source | Anchoring | Exit code | Forgeable? |
+| --- | --- | --- | --- | --- |
+| `quota.py classify_quota()` — quota / auth | Provider-level error text; structured JSON `codexErrorInfo`/`code`/`type`; `auth_expired` notices | `_PREFIX` stripped then patterns anchored at `^` via `_fold` → `_PREFIX.sub` + `body` start | No | No — anchored at start after runner prefix |
+| `quota.py failure_class()` — network | Runner's own error head after `_PREFIX`, `_CHANNEL_STEP`, `_JS_ERROR` stripped | `NETWORK_NOTICES.match(head)` — `^` anchored | No | No — only the runner's first line classifies |
+| `overlays/claude-rate-limit.ts classifyRateLimit()` | SDK `RateLimitError` mark or one exact whole-line notice | Pattern anchored at `^` after prefix strip | No | No — SDK mark or exact runner line |
+| `overlays/codex-usage-limit.ts codexUsageLimitFailure()` | Structured `codexErrorInfo`/`code`/`type` field, or runner-prefixed text | `LIMIT_TEXT` anchored at `^` after `NOTICE_PREFIX` strip; structured path bypasses text match | No | No — anchored after prefix strip |
+| `argus.ts` stall causes (`argus-stall-causes.test.ts`) | Channel's own stall detection logic | Channel-side, not from model output | No | No — channel-internal |
+| `argus-oom` OOM classification | Container runtime `docker inspect` structured data: `OOMKilled`, `ExitCode 137`, `Name` | Structured field (3.2.1) | Yes (137 required) | No — only container runtime data |
+
 # 4. Open Questions
 
 - Should one `env_repository_*` block hold the project's other ready tasks until
