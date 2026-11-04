@@ -33,6 +33,9 @@ the page. On a narrow screen the menu moves to a bar across the top.
   below 960 px only icons show, each keeping its text as its accessible name. The
   server status box is not shown there.
 - Every entry has its own icon.
+- **The wordmark in the menu is a link home**: `#chat` with the orchestrator on,
+  `#dashboard` without it, the same page the app opens on. The login screen's stays
+  plain text.
 
 # 4. Open Questions
 

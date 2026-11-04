@@ -55,6 +55,8 @@ type ActionButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick"
   pending?: boolean;
   /** Replaces children while pending; default keeps children. */
   pendingLabel?: ReactNode;
+  /** An icon-only button: the spinner replaces the icon instead of sitting beside it. */
+  iconOnly?: boolean;
   onClick?: ButtonHTMLAttributes<HTMLButtonElement>["onClick"];
 };
 
@@ -66,6 +68,7 @@ export function ActionButton({
   action,
   pending: pendingProp,
   pendingLabel,
+  iconOnly,
   children,
   className,
   disabled,
@@ -116,7 +119,9 @@ export function ActionButton({
       aria-busy={pending || undefined}
       onClick={action || onClick ? handleClick : onClick}
     >
-      {pending ? (
+      {pending && iconOnly ? (
+        <Spinner />
+      ) : pending ? (
         <span className="btn-pending">
           <span className="btn-pending-sizer" aria-hidden="true">
             <Spinner />

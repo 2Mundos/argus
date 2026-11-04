@@ -115,6 +115,25 @@ def test_archive_and_rename(client: TestClient) -> None:
         for c in client.get("/api/conversations", headers=ADMIN).json()["items"]
     )
 
+    # The way back: still listed on request, closed to new messages, restorable.
+    listed = client.get("/api/conversations?archived=true", headers=ADMIN).json()
+    assert [
+        c["archived_at"] is not None for c in listed["items"] if c["id"] == conv["id"]
+    ] == [True]
+    posted = client.post(
+        f"/api/conversations/{conv['id']}/messages", json={"body": "hi"}, headers=ADMIN
+    )
+    assert posted.status_code == 409
+    assert posted.json()["detail"]["code"] == "archived"
+    restored = client.post(
+        f"/api/conversations/{conv['id']}/unarchive", headers=ADMIN
+    ).json()
+    assert restored["archived_at"] is None
+    assert any(
+        c["id"] == conv["id"]
+        for c in client.get("/api/conversations", headers=ADMIN).json()["items"]
+    )
+
 
 # -- service-level: claiming, spend cap, task origin ----------------------------------
 

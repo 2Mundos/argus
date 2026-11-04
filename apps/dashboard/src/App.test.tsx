@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaultHash, isCurrent, parseRoute } from "./App";
+import { defaultHash, homeHash, isCurrent, parseRoute } from "./App";
 
 describe("defaultHash", () => {
   it("rewrites an empty or invalid hash by the default route rule", () => {
@@ -18,6 +18,12 @@ describe("defaultHash", () => {
 });
 
 describe("menu", () => {
+  it("links the brand to the page the app opens on", () => {
+    expect(homeHash(true)).toBe("#chat");
+    expect(homeHash(false)).toBe("#dashboard");
+    expect(defaultHash("", true)).toBe(homeHash(true));
+  });
+
   it("marks a grouped entry current on any of its tabs, and only those", () => {
     for (const [hash, current] of [
       ["#workers/pools", "#workers"],

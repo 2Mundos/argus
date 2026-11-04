@@ -160,7 +160,10 @@ Getting a first account, worker and orchestrator is the
   chat with that placeholder and no message is not listed: it exists only once
   someone has spoken in it.
 - **Archive:** `POST /api/conversations/{id}/archive` and `.../unarchive`. Archived
-  conversations leave the list; their messages stay.
+  conversations leave the default list (`GET /api/conversations?archived=true` also
+  returns them); their messages stay, and a message posted to one is `409 archived`.
+  The dashboard calls this **Delete** and **Restore** (3.8); nothing is erased, and
+  Updates cannot be archived.
 - Events: `conversation.created`, `conversation.updated`, `chat.message`,
   `chat.turn` (`started` | `finished`). The dashboard reads them over the existing
   SSE stream and resumes from `Last-Event-ID`.
@@ -299,6 +302,15 @@ Getting a first account, worker and orchestrator is the
   no author or time; the thread and composer are centred with the
   orchestrator status and conversation cost in the header; the right worker rail
   stays. At 390 px the conversation list becomes a drawer.
+- **Delete and restore.** Delete archives the chat (3.2) at once, with no
+  confirmation, because nothing is lost. Each chat row has a small **×** that shows
+  on hover or keyboard focus (always, where there is no hover), and the open chat has
+  a trash button in the corner of the thread; neither takes any layout space, and
+  Updates has neither. Deleted chats are listed in a collapsed **Deleted** group at
+  the end of the list, each with a restore button on hover; opening one shows its
+  messages read-only with **Restore** in place of the composer, and a restored chat
+  returns to its place by recency. Deleting the chat that is open returns to the
+  empty home.
 - **Verification limit.** The header status is registration and heartbeat
   evidence from the system pool, its instances and the orchestrator agent
   (`Registered`, `Starting`, `Draining`, `Stale`, `Lost`, `Ended`

@@ -3,6 +3,7 @@ import { ActionButton, useAction } from "../ActionButton";
 import {
   type Agent,
   api,
+  type Conversation,
   call,
   type EngineCatalog,
   type Instance,
@@ -138,13 +139,32 @@ function orchestratorRegistration(
   };
 }
 
+function Glyph({ d }: { d: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width={14} height={14} aria-hidden="true">
+      <path
+        d={d}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+const CLOSE = "M6 6l12 12M18 6 6 18";
+const TRASH = "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3";
+const UNDO = "M3 12a9 9 0 1 0 3-6.7M3 4v5h5";
+
 export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void }) {
   const { data: onboarding } = useLiveData(
     (signal) => call(api.GET("/api/onboarding", { signal })),
     [],
   );
   const { data: list, reload: reloadList } = useLiveData(
-    (signal) => call(api.GET("/api/conversations", { signal })),
+    (signal) =>
+      call(api.GET("/api/conversations", { params: { query: { archived: true } }, signal })),
     [],
   );
   const { data: poolsData, error: poolsError } = useLiveData(
@@ -181,8 +201,10 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
   const box = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
-  const conversations = list?.items ?? [];
-  const selected = conversations.find((c) => c.id === selectedId) ?? null;
+  const everything = list?.items ?? [];
+  const conversations = everything.filter((c) => !c.archived_at);
+  const deleted = everything.filter((c) => c.archived_at);
+  const selected = everything.find((c) => c.id === selectedId) ?? null;
 
   const { data: messages, reload: reloadMessages } = useLiveData(
     (signal) =>
@@ -239,6 +261,23 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
     setError(undefined);
     if (box.current) {
       box.current.style.height = "auto";
+    }
+  }
+
+  /** Delete is an archive: the chat leaves the list and can be restored (3.8). */
+  async function setDeleted(conv: Conversation, deleting: boolean) {
+    setError(undefined);
+    try {
+      const params = { params: { path: { conversation_id: conv.id } } };
+      await call(
+        deleting
+          ? api.POST("/api/conversations/{conversation_id}/archive", params)
+          : api.POST("/api/conversations/{conversation_id}/unarchive", params),
+      );
+      if (deleting) goHome();
+      reloadList();
+    } catch (err) {
+      setError((err as Error).message);
     }
   }
 
@@ -328,7 +367,7 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
     </form>
   );
 
-  const pending = pendingReply(items, registration.ok, now);
+  const pending = selected?.archived_at ? null : pendingReply(items, registration.ok, now);
 
   return (
     <section className="chat-page">
@@ -341,16 +380,53 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
           <span className="chat-list-title">New chat</span>
         </button>
         {conversations.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            className={selected?.id === c.id ? "chat-list-item current" : "chat-list-item"}
-            onClick={() => setSelectedId(c.id)}
-          >
-            <span className="chat-list-title">{c.title}</span>
-            {c.kind === "updates" && <span className="chat-list-kind">Updates</span>}
-          </button>
+          <div key={c.id} className="chat-list-row">
+            <button
+              type="button"
+              className={selected?.id === c.id ? "chat-list-item current" : "chat-list-item"}
+              onClick={() => setSelectedId(c.id)}
+            >
+              <span className="chat-list-title">{c.title}</span>
+              {c.kind === "updates" && <span className="chat-list-kind">Updates</span>}
+            </button>
+            {c.kind === "chat" && (
+              <ActionButton
+                className="chat-row-action"
+                iconOnly
+                aria-label={`Delete ${c.title}`}
+                title="Delete"
+                action={() => setDeleted(c, true)}
+              >
+                <Glyph d={CLOSE} />
+              </ActionButton>
+            )}
+          </div>
         ))}
+        {deleted.length > 0 && (
+          <details className="chat-deleted-group">
+            <summary>Deleted ({deleted.length})</summary>
+            {deleted.map((c) => (
+              <div key={c.id} className="chat-list-row">
+                <button
+                  type="button"
+                  className={selected?.id === c.id ? "chat-list-item current" : "chat-list-item"}
+                  onClick={() => setSelectedId(c.id)}
+                >
+                  <span className="chat-list-title">{c.title}</span>
+                </button>
+                <ActionButton
+                  className="chat-row-action"
+                  iconOnly
+                  aria-label={`Restore ${c.title}`}
+                  title="Restore"
+                  action={() => setDeleted(c, false)}
+                >
+                  <Glyph d={UNDO} />
+                </ActionButton>
+              </div>
+            ))}
+          </details>
+        )}
       </aside>
       {showHome ? (
         <div className="chat-stage chat-home">
@@ -369,6 +445,17 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
               <span className="muted small">~${selected.cost_usd.toFixed(2)} this thread</span>
             )}
           </header>
+          {selected && selected.kind === "chat" && !selected.archived_at && (
+            <ActionButton
+              className="chat-thread-delete"
+              iconOnly
+              aria-label="Delete chat"
+              title="Delete chat"
+              action={() => setDeleted(selected, true)}
+            >
+              <Glyph d={TRASH} />
+            </ActionButton>
+          )}
           <div className="chat-messages" ref={scroller}>
             {items.map((m) => {
               const role = messageRole(m.author);
@@ -381,7 +468,17 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
             })}
             {pending && <Working label={pending.label} rolling={pending.rolling} />}
           </div>
-          {composer}
+          {selected?.archived_at ? (
+            <div className="chat-composer-wrap chat-deleted">
+              <span className="muted">This chat was deleted.</span>
+              <ActionButton className="primary" action={() => setDeleted(selected, false)}>
+                Restore
+              </ActionButton>
+              {error && <p className="error small">{error}</p>}
+            </div>
+          ) : (
+            composer
+          )}
         </div>
       )}
     </section>
