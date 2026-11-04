@@ -14,6 +14,19 @@ DOCKERFILE = ENGINES / "Dockerfile.tools-layer"
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def _docker_daemon() -> bool:
+    exe = shutil.which("docker")
+    if not exe:
+        return False
+    try:
+        return (
+            subprocess.run([exe, "info"], capture_output=True, timeout=8).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def test_dockerfile_makes_argus_dirs_traversable() -> None:
     text = DOCKERFILE.read_text()
     assert "chmod 755 /etc/claude-code /usr/local/lib/argus" in text
@@ -21,7 +34,7 @@ def test_dockerfile_makes_argus_dirs_traversable() -> None:
     assert "/usr/local/lib/argus/git-hooks/commit-msg" in text
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker not available")
+@pytest.mark.skipif(not _docker_daemon(), reason="docker daemon not available")
 def test_built_layer_uid_1000_runs_guard_hook_and_reads_managed_settings() -> None:
     """Build an isolated tools-layer image; only remove the tags this test creates."""
     suffix = uuid.uuid4().hex[:12]

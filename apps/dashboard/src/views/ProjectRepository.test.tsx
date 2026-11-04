@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Projects, taskCounts } from "./Projects";
@@ -154,10 +154,10 @@ async function openForm(user: ReturnType<typeof userEvent.setup>) {
 
 describe("new task with a project that has no repository", () => {
   it("configures it from the form and keeps everything typed", async () => {
-    const user = userEvent.setup({ delay: null });
+    const user = userEvent.setup();
     await openForm(user);
-    await user.type(screen.getByLabelText("Title"), "Fix login");
-    await user.type(screen.getByLabelText(/^Spec/), "Details");
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Fix login" } });
+    fireEvent.change(screen.getByLabelText(/^Spec/), { target: { value: "Details" } });
     await user.selectOptions(screen.getByLabelText("Deliverable"), "pr_open");
 
     const notice = await screen.findByRole("status");
@@ -167,17 +167,15 @@ describe("new task with a project that has no repository", () => {
 
     // Bad input is explained and nothing is sent.
     const input = await within(dialog).findByLabelText("Repository URL");
-    await user.type(input, "http://git.example/acme/new");
+    fireEvent.change(input, { target: { value: "http://git.example/acme/new" } });
     await user.click(within(dialog).getByRole("button", { name: "Save repository" }));
     expect(await within(dialog).findByText(/must be an HTTPS URL/)).toBeTruthy();
-    await user.clear(input);
-    await user.type(input, "https://bot:secret@git.example/acme/new");
+    fireEvent.change(input, { target: { value: "https://bot:secret@git.example/acme/new" } });
     await user.click(within(dialog).getByRole("button", { name: "Save repository" }));
     expect(await within(dialog).findByText(/Remove the credentials/)).toBeTruthy();
     expect(net.puts).toEqual([]);
 
-    await user.clear(input);
-    await user.type(input, NEW);
+    fireEvent.change(input, { target: { value: NEW } });
     await user.click(within(dialog).getByRole("button", { name: "Save repository" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     // Only the repository is sent: the server keeps name and description as they are.

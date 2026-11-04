@@ -28,6 +28,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
             monkeypatch.delenv(name)
     monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    # Clearing ARGUS_* would otherwise re-enable the disk guard that conftest turns off.
+    monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "false")
     with TestClient(app) as c:
         app.state.secrets = MemorySecretStore()
         yield c
