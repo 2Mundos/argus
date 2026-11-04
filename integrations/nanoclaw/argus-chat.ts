@@ -13,6 +13,13 @@ export const CHAT_CLAIM_WAIT_S = 25;
 /** A turn the API still holds expires at 15 min; give up on ours a little sooner. */
 export const CHAT_TURN_TIMEOUT_MS = 14 * 60_000;
 
+export type ChatAttachment = {
+  id: string;
+  filename: string;
+  media_type: string;
+  size: number;
+};
+
 export type ChatMessage = {
   id: string;
   conversation_id: string;
@@ -21,6 +28,7 @@ export type ChatMessage = {
   state: string;
   turn_id: string | null;
   created_at: string;
+  attachments?: ChatAttachment[];
 };
 
 export type ChatConversation = {
@@ -93,6 +101,18 @@ export function renderChatInbound(claim: ChatClaim): string {
           "Argus removes that line before the admin reads the reply. Never repeat it.",
         ]
       : [];
+  const files = claim.message.attachments ?? [];
+  const listed = files.length
+    ? [
+        "",
+        `Attachments (${files.length}): read each with read_chat_attachment`,
+        `(conversation_id ${claim.conversation.id}).`,
+        ...files.map(
+          (a) =>
+            `- ${oneLine(a.filename, 80)} (${a.media_type}, ${a.size} bytes) id=${a.id}`,
+        ),
+      ]
+    : [];
   return [
     `[Argus chat] Trusted operator instruction from ${author}`,
     where,
@@ -101,6 +121,7 @@ export function renderChatInbound(claim: ChatClaim): string {
     ...titling,
     "",
     claim.message.body,
+    ...listed,
   ].join("\n");
 }
 

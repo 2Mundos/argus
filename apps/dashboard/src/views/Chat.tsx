@@ -5,10 +5,12 @@ import {
   api,
   type Conversation,
   call,
+  download,
   type EngineCatalog,
   type Instance,
   type Message,
   type Pool,
+  uploadConversationFile,
 } from "../api";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
@@ -156,6 +158,15 @@ function Glyph({ d }: { d: string }) {
 const CLOSE = "M6 6l12 12M18 6 6 18";
 const TRASH = "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3";
 const UNDO = "M3 12a9 9 0 1 0 3-6.7M3 4v5h5";
+const PAPERCLIP =
+  "M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48";
+const MAX_CHAT_FILES = 10;
+
+function formatSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void }) {
   const { data: onboarding } = useLiveData(
@@ -197,9 +208,12 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string>();
   const [draft, setDraft] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
   const action = useAction();
   const box = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const uploadedIds = useRef(new Map<File, string>());
 
   const everything = list?.items ?? [];
   const conversations = everything.filter((c) => !c.archived_at);
@@ -258,6 +272,8 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
   function goHome() {
     setSelectedId(null);
     setDraft("");
+    setFiles([]);
+    uploadedIds.current.clear();
     setError(undefined);
     if (box.current) {
       box.current.style.height = "auto";
@@ -284,7 +300,8 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
   async function send(e?: FormEvent) {
     e?.preventDefault();
     const text = draft.trim();
-    if (!text) return;
+    const pending = files;
+    if (!text && pending.length === 0) return;
     await action.run(async () => {
       setError(undefined);
       try {
@@ -296,13 +313,25 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
           conversationId = created.id;
           setSelectedId(created.id);
         }
+        const attachment_ids: string[] = [];
+        for (const file of pending) {
+          let id = uploadedIds.current.get(file);
+          if (!id) {
+            const uploaded = await uploadConversationFile(conversationId, file);
+            id = uploaded.id;
+            uploadedIds.current.set(file, id);
+          }
+          attachment_ids.push(id);
+        }
         await call(
           api.POST("/api/conversations/{conversation_id}/messages", {
             params: { path: { conversation_id: conversationId } },
-            body: { body: text },
+            body: attachment_ids.length ? { body: text, attachment_ids } : { body: text },
           }),
         );
         setDraft("");
+        setFiles([]);
+        uploadedIds.current.clear();
         if (box.current) box.current.style.height = "auto";
         reloadMessages();
         reloadList();
@@ -329,6 +358,30 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
 
   const composer = (
     <form className="chat-composer-wrap" onSubmit={(e) => void send(e)}>
+      {files.length > 0 && (
+        <ul className="chat-file-chips">
+          {files.map((file, i) => (
+            <li key={`${file.name}-${file.size}-${i}`}>
+              <span className="chat-file-chip">
+                {file.name}
+                <span className="muted small">{formatSize(file.size)}</span>
+                <button
+                  type="button"
+                  className="chat-file-remove"
+                  aria-label={`Remove ${file.name}`}
+                  disabled={action.busy}
+                  onClick={() => {
+                    uploadedIds.current.delete(file);
+                    setFiles((all) => all.filter((_, j) => j !== i));
+                  }}
+                >
+                  <Glyph d={CLOSE} />
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="chat-composer">
         <textarea
           ref={box}
@@ -344,11 +397,31 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
           }}
           onKeyDown={onKeyDown}
         />
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            const picked = [...(e.target.files ?? [])];
+            e.target.value = "";
+            setFiles((all) => [...all, ...picked].slice(0, MAX_CHAT_FILES));
+          }}
+        />
+        <button
+          type="button"
+          className="chat-attach"
+          aria-label="Attach files"
+          disabled={action.busy}
+          onClick={() => picker.current?.click()}
+        >
+          <Glyph d={PAPERCLIP} />
+        </button>
         <ActionButton
           type="submit"
           className="chat-send"
           iconOnly
-          disabled={!draft.trim()}
+          disabled={!draft.trim() && files.length === 0}
           pending={action.busy}
           aria-label="Send"
         >
@@ -462,7 +535,28 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
               const role = messageRole(m.author);
               return (
                 <article key={m.id} className={`chat-msg chat-msg-${role}`}>
-                  <Markdown>{m.body}</Markdown>
+                  {m.body ? <Markdown>{m.body}</Markdown> : null}
+                  {(m.attachments ?? []).length > 0 && (
+                    <ul className="chat-msg-files">
+                      {(m.attachments ?? []).map((a) => (
+                        <li key={a.id}>
+                          <button
+                            type="button"
+                            className="chat-msg-file"
+                            onClick={() =>
+                              download(
+                                `/api/conversations/${m.conversation_id}/attachments/${a.id}/content`,
+                                a.filename,
+                              )
+                            }
+                          >
+                            {a.filename}
+                            <span className="muted small">{formatSize(a.size)}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {m.truncated && <p className="muted small">Truncated</p>}
                 </article>
               );

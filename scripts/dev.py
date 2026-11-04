@@ -50,6 +50,7 @@ DROP_TABLES = (
     "workspace_cleanup",
     "workspace_cleanup_runs",
     "artifacts",
+    "message_attachments",  # bytes live in the artifact store, which is not copied
 )
 # Dropped unless `--accounts`; a child must be listed before its parent.
 ACCOUNT_TABLES = (

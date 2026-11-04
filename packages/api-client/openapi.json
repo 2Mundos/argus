@@ -3471,6 +3471,126 @@
         "title": "ChangesWrite",
         "type": "object"
       },
+      "ChatAttachment": {
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "conversation_id",
+          "message_id",
+          "filename",
+          "media_type",
+          "size",
+          "sha256",
+          "created_at"
+        ],
+        "title": "ChatAttachment",
+        "type": "object"
+      },
+      "ChatAttachmentText": {
+        "description": "A byte range of a chat attachment, as UTF-8 text or base64.",
+        "properties": {
+          "attachment": {
+            "$ref": "#/components/schemas/ChatAttachment"
+          },
+          "binary": {
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "content_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Base64"
+          },
+          "length": {
+            "title": "Length",
+            "type": "integer"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "attachment",
+          "offset",
+          "length",
+          "next_offset",
+          "binary",
+          "text",
+          "content_base64"
+        ],
+        "title": "ChatAttachmentText",
+        "type": "object"
+      },
       "ChatContext": {
         "description": "Bounded seed for a new session when session_ref cannot be resumed.",
         "properties": {
@@ -12230,6 +12350,13 @@
       },
       "Message": {
         "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/ChatAttachment"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "author": {
             "title": "Author",
             "type": "string"
@@ -12292,23 +12419,29 @@
           "truncated",
           "turn_id",
           "created_at",
-          "delivered_at"
+          "delivered_at",
+          "attachments"
         ],
         "title": "Message",
         "type": "object"
       },
       "MessageCreate": {
         "properties": {
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Attachment Ids",
+            "type": "array"
+          },
           "body": {
+            "default": "",
             "maxLength": 8000,
-            "minLength": 1,
             "title": "Body",
             "type": "string"
           }
         },
-        "required": [
-          "body"
-        ],
         "title": "MessageCreate",
         "type": "object"
       },
@@ -26867,6 +27000,199 @@
           }
         ],
         "summary": "Archive Conversation",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/attachments": {
+      "post": {
+        "description": "Store a file on this conversation. Pass its id in `attachment_ids` when\nposting the message. The original filename is kept; Content-Type is the media\ntype. Same size cap as a task artifact.",
+        "operationId": "upload_chat_attachment_api_conversations__conversation_id__attachments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "filename",
+            "required": true,
+            "schema": {
+              "title": "Filename",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {}
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAttachment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Chat Attachment",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/attachments/{attachment_id}/content": {
+      "get": {
+        "description": "The raw bytes. Admins and the internal orchestrator only.",
+        "operationId": "download_chat_attachment_api_conversations__conversation_id__attachments__attachment_id__content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Chat Attachment",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/conversations/{conversation_id}/attachments/{attachment_id}/text": {
+      "get": {
+        "description": "A UTF-8 slice of a text file, or a base64 slice of any other type.",
+        "operationId": "read_chat_attachment_text_api_conversations__conversation_id__attachments__attachment_id__text_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_bytes",
+            "required": false,
+            "schema": {
+              "default": 16384,
+              "maximum": 65536,
+              "minimum": 64,
+              "title": "Max Bytes",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAttachmentText"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Chat Attachment Text",
         "tags": [
           "conversations"
         ]

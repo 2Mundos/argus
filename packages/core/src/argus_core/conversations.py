@@ -2,8 +2,9 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ConversationKind(StrEnum):
@@ -38,6 +39,19 @@ class Conversation(BaseModel):
     cost_usd: float | None = None  # estimated spend attributed to this thread
 
 
+class ChatAttachment(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+    id: str
+    conversation_id: str
+    message_id: str | None
+    filename: str
+    media_type: str
+    size: int
+    sha256: str
+    created_at: datetime
+
+
 class Message(BaseModel):
     model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
@@ -50,6 +64,7 @@ class Message(BaseModel):
     turn_id: str | None = None
     created_at: datetime
     delivered_at: datetime | None = None
+    attachments: list[ChatAttachment] = Field(default_factory=list)
 
 
 class ConversationCreate(BaseModel):
@@ -61,7 +76,14 @@ class ConversationPatch(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    body: str = Field(min_length=1, max_length=8000)
+    body: str = Field(default="", max_length=8000)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def text_or_files(self) -> Self:
+        if not self.body.strip() and not self.attachment_ids:
+            raise ValueError("a message needs text or an attachment")
+        return self
 
 
 class AgentChatClaim(BaseModel):
@@ -90,6 +112,20 @@ class ConversationList(BaseModel):
 
 class MessageList(BaseModel):
     items: list[Message]
+
+
+class ChatAttachmentText(BaseModel):
+    """A byte range of a chat attachment, as UTF-8 text or base64."""
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+    attachment: ChatAttachment
+    offset: int
+    length: int
+    next_offset: int | None
+    binary: bool
+    text: str | None
+    content_base64: str | None = None
 
 
 class ChatSessionPut(BaseModel):

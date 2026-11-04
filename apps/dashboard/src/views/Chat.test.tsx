@@ -26,12 +26,30 @@ const net = vi.hoisted(() => ({
   createGate: null as Promise<void> | null,
   failMessages: false,
   nextId: 1,
+  uploads: [] as { conversationId: string; name: string }[],
+  downloads: [] as unknown[],
 }));
 
 vi.mock("../api", () => ({
   api: {
     GET: (path: string, opts?: unknown) => ({ method: "GET", path, opts }),
     POST: (path: string, opts?: unknown) => ({ method: "POST", path, opts }),
+  },
+  download: (...args: unknown[]) => {
+    net.downloads.push(args);
+  },
+  uploadConversationFile: async (conversationId: string, file: File) => {
+    net.uploads.push({ conversationId, name: file.name });
+    return {
+      id: `att-${file.name}`,
+      conversation_id: conversationId,
+      message_id: null,
+      filename: file.name,
+      media_type: file.type || "application/octet-stream",
+      size: file.size,
+      sha256: "abc",
+      created_at: "2026-10-29T12:00:00Z",
+    };
   },
   call: async (req: Req) => {
     if (req.method === "POST") {
@@ -54,12 +72,28 @@ vi.mock("../api", () => ({
       }
       if (net.failMessages) throw new Error("orchestrator unavailable");
       const id = req.opts?.params?.path?.conversation_id as string;
-      const body = (req.opts?.body as { body: string }).body;
+      const payload = req.opts?.body as { body: string; attachment_ids?: string[] };
+      const body = payload.body;
+      const attachments = (payload.attachment_ids ?? []).map((aid) => ({
+        id: aid,
+        conversation_id: id,
+        message_id: `m-${id}`,
+        filename: aid.replace(/^att-/, ""),
+        media_type: "text/plain",
+        size: 5,
+        sha256: "abc",
+        created_at: "2026-10-29T12:00:00Z",
+      }));
       // The server names a placeholder-titled chat after its first message.
       net.conversations = net.conversations.map((c) =>
-        c.id === id && c.title === "New chat" ? { ...c, title: body } : c,
+        c.id === id && c.title === "New chat"
+          ? { ...c, title: body || attachments[0]?.filename || c.title }
+          : c,
       );
-      net.messages[id] = [...(net.messages[id] ?? []), message(`m-${id}`, "admin:tester", body)];
+      net.messages[id] = [
+        ...(net.messages[id] ?? []),
+        { ...message(`m-${id}`, "admin:tester", body), conversation_id: id, attachments },
+      ];
       return {};
     }
     if (net.fail.has(req.path)) throw new Error(`${req.path} unavailable`);
@@ -139,6 +173,7 @@ function message(id: string, author: string, body: string): Message {
     turn_id: null,
     delivered_at: null,
     created_at: "2026-10-29T12:01:00Z",
+    attachments: [],
   };
 }
 
@@ -212,6 +247,8 @@ beforeEach(() => {
   net.createGate = null;
   net.failMessages = false;
   net.nextId = 1;
+  net.uploads = [];
+  net.downloads = [];
 });
 afterEach(cleanup);
 
@@ -297,6 +334,93 @@ describe("Chat first send", () => {
     await waitFor(() => expect(messagePosts()).toHaveLength(2));
     // The chat made by the failed send is not listed (no message yet), yet is reused.
     expect(convPosts()).toHaveLength(1);
+  });
+});
+
+describe("Chat attachments", () => {
+  const pick = (file: File) => {
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+  };
+
+  it("uploads picked files then posts their ids with the message", async () => {
+    renderChat();
+    const box = await messageBox();
+    pick(new File(["hello"], "notes.txt", { type: "text/plain" }));
+    expect(screen.getByText("notes.txt")).toBeTruthy();
+    fireEvent.change(box, { target: { value: "See the log" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(await findArticle("See the log")).toBeTruthy();
+    expect(net.uploads).toEqual([{ conversationId: "c1", name: "notes.txt" }]);
+    expect(messagePosts()).toEqual([
+      {
+        path: "/api/conversations/{conversation_id}/messages",
+        body: { body: "See the log", attachment_ids: ["att-notes.txt"] },
+      },
+    ]);
+    expect(await screen.findByRole("button", { name: /notes.txt/ })).toBeTruthy();
+  });
+
+  it("sends files with no text, and removes a chip before send", async () => {
+    renderChat();
+    await messageBox();
+    pick(new File(["x"], "keep.bin", { type: "application/octet-stream" }));
+    pick(new File(["y"], "drop.bin", { type: "application/octet-stream" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove drop.bin" }));
+    expect(screen.queryByText("drop.bin")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("button", { name: /keep.bin/ })).toBeTruthy();
+    expect(messagePosts()).toEqual([
+      {
+        path: "/api/conversations/{conversation_id}/messages",
+        body: { body: "", attachment_ids: ["att-keep.bin"] },
+      },
+    ]);
+  });
+
+  it("reuses an already-uploaded file when the post fails and is retried", async () => {
+    net.failMessages = true;
+    renderChat();
+    await messageBox();
+    pick(new File(["hello"], "notes.txt", { type: "text/plain" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("orchestrator unavailable")).toBeTruthy();
+    expect(net.uploads).toHaveLength(1);
+
+    net.failMessages = false;
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    await waitFor(() => expect(send.disabled).toBe(false));
+    fireEvent.click(send);
+    expect(await screen.findByRole("button", { name: /notes.txt/ })).toBeTruthy();
+    expect(net.uploads).toHaveLength(1);
+    expect(messagePosts()).toHaveLength(2);
+  });
+
+  it("downloads a file chip on a message", async () => {
+    net.conversations = [conversation];
+    net.messages.c0 = [
+      {
+        ...message("m1", "admin:tester", "See this"),
+        attachments: [
+          {
+            id: "a1",
+            conversation_id: "c0",
+            message_id: "m1",
+            filename: "notes.txt",
+            media_type: "text/plain",
+            size: 9,
+            sha256: "x",
+            created_at: "2026-10-29T12:01:00Z",
+          },
+        ],
+      },
+    ];
+    renderChat();
+    fireEvent.click(await screen.findByRole("button", { name: "Plan the release" }));
+    fireEvent.click(await screen.findByRole("button", { name: /notes.txt/ }));
+    expect(net.downloads).toEqual([["/api/conversations/c0/attachments/a1/content", "notes.txt"]]);
   });
 });
 

@@ -343,7 +343,8 @@ journey as native tools ([MCP operations](../../docs/specs/mcp-operations.spec.m
 `get_inbox` lists what waits (blocked, in review, awaiting approval) with
 decision and artifact ids; `list_decisions(view="detail")` or `get_decision`
 reads the questions; `list_artifacts`, `verify_artifact` and `read_artifact`
-check evidence; `answer_decision` or `answer_decisions` acts (give each answer a
+check evidence; `read_chat_attachment` reads a file an admin attached to a chat;
+`answer_decision` or `answer_decisions` acts (give each answer a
 `request_id`, so a retry is replayed, not refused); `get_tasks(ids)` reads the
 effects back.
 Lists are paged: `total` counts every match; follow `next_cursor` while

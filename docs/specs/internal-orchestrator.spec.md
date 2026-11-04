@@ -144,9 +144,10 @@ Getting a first account, worker and orchestrator is the
 - **Who may write:** admin tokens only (`POST /api/conversations`,
   `POST /api/conversations/{id}/messages`). Orchestrator and worker tokens get
   `403`. Any admin may read every conversation.
-- **Limits:** human messages 1 to 8000 characters after trimming; at most 20
-  `queued` per conversation (`409 too_many_queued`); one message per second per
-  conversation (`429 rate_limited`, with the wait). Orchestrator replies are capped
+- **Limits:** human messages 1 to 8000 characters after trimming, or empty when
+  the message has attachments; at most 20 `queued` per conversation
+  (`409 too_many_queued`); one message per second per conversation
+  (`429 rate_limited`, with the wait). Orchestrator replies are capped
   at 32 KB; a longer reply is cut and stored with `truncated: true`.
 - Bodies pass through the same redaction as the [task live log](task-live-log.spec.md)
   before storage.
@@ -164,6 +165,23 @@ Getting a first account, worker and orchestrator is the
   returns them); their messages stay, and a message posted to one is `409 archived`.
   The dashboard calls this **Delete** and **Restore** (3.8); nothing is erased, and
   Updates cannot be archived.
+- **Attachments.** An admin may attach any file to a chat. Bytes live in the
+  local artifact store under `conversations/{conversation_id}/{attachment_id}`
+  (same size cap as a task artifact, default 100 MiB). Metadata is table
+  **`message_attachments`**: `id`, `conversation_id`, `message_id` (null until
+  the file is sent), `filename` (the original name, 1–200 characters, no path),
+  `media_type`, `size`, `sha256`, `created_by`, `created_at`. A file is uploaded
+  first (`POST /api/conversations/{id}/attachments?filename=` with the raw body)
+  and then linked by `attachment_ids` on `POST .../messages`. A message needs
+  text or at least one attachment. At most 10 files per message and 50 per
+  conversation (`413 too_large`, `409 attachment_limit`). An already-linked id
+  is `409 attachment_linked`. Archived chats refuse uploads and posts. Files
+  stay when a chat is archived. Workers never see them. The internal
+  orchestrator reads them on a claimed message and through
+  `GET .../attachments/{id}/content` (bytes) and `.../text` (UTF-8 slices, or
+  `binary` plus `content_base64` for other types) and the MCP tool
+  `read_chat_attachment`. That tool is not a chat transport: there are still no
+  MCP tools to list or post conversations.
 - Events: `conversation.created`, `conversation.updated`, `chat.message`,
   `chat.turn` (`started` | `finished`). The dashboard reads them over the existing
   SSE stream and resumes from `Last-Event-ID`.
@@ -173,8 +191,11 @@ Getting a first account, worker and orchestrator is the
 - Chat travels only through the agent chat routes below. Their two consumers are
   the NanoClaw `argus` channel (`integrations/nanoclaw/argus.ts`) and the built-in
   loop ([built-in orchestrator](builtin-orchestrator.spec.md) 3.7), which follow
-  the same rules. **No MCP chat tools** are added; the orchestrator never calls a
-  tool to read or post chat.
+  the same rules. **No MCP tools list or post conversations**; the orchestrator
+  never calls a tool to send chat. A claimed human message carries its
+  `attachments`; the inbound prompt names each file (id, filename, type, size)
+  and tells the orchestrator to read it with `read_chat_attachment` (text as
+  UTF-8, other types as base64 slices).
 - **Inbound:** the channel long-polls `GET /api/agents/me/chat?wait_s≤30` (the
   `claim_task` pattern) for messages of its conversations. Each is injected into
   that conversation's session with `onInbound` and acknowledged
@@ -299,9 +320,11 @@ Getting a first account, worker and orchestrator is the
   conversation list (Updates pinned first, then by recency, with **New chat**)
   sits beside the thread; messages show only their text, as in any agent chat:
   the admin's right-aligned, the orchestrator's plain, system notices muted, with
-  no author or time; the thread and composer are centred with the
-  orchestrator status and conversation cost in the header; the right worker rail
-  stays. At 390 px the conversation list becomes a drawer.
+  no author or time, and any files as name chips that download; the thread and
+  composer are centred with the orchestrator status and conversation cost in the
+  header; the right worker rail stays. At 390 px the conversation list becomes a
+  drawer. The composer has a paperclip: picked files sit as chips until send, a
+  message may be files alone, and send uploads then posts.
 - **Delete and restore.** Delete archives the chat (3.2) at once, with no
   confirmation, because nothing is lost. Each chat row has a small **×** that shows
   on hover or keyboard focus (always, where there is no hover), and the open chat has
@@ -383,8 +406,8 @@ All are global only, admin-written, and follow the [settings](settings.spec.md) 
   any agent ([built-in orchestrator](builtin-orchestrator.spec.md) 5).
 - All writes go through `Database.write()` with `tx.now`; the daily cap uses
   `tx.now` for the UTC day.
-- Additive migrations only: `conversations`, `messages`, `tasks.origin_conversation_id`,
-  `pools.system`, and orchestrator usage rows.
+- Additive migrations only: `conversations`, `messages`, `message_attachments`,
+  `tasks.origin_conversation_id`, `pools.system`, and orchestrator usage rows.
 - Prompt-data isolation holds: only admin chat messages are trusted instructions.
 - Off by default; an install that never enables it sees no behaviour change except
   the `#home` → `#dashboard` rename.
@@ -398,6 +421,8 @@ onboarding). One API + dashboard PR and one NanoClaw channel PR, then the skill 
 `nanoclaw-orchestrator` template and the reconciler minting the pool's role;
 `system_pool` and `internal_orchestrator` refusals in the fleet routes; the six
 settings; conversation routes, agent chat routes, limits and redaction;
+chat attachments (`message_attachments`, upload/link/download/text, MCP
+`read_chat_attachment`);
 `origin_conversation_id` set from the active turn; usage per turn and the daily
 cap; events; the `#chat` route, conversation list, thread, composer, status
 header and cost; the Cost tab row; regenerated `openapi.json` and `schema.d.ts`.

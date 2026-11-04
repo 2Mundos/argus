@@ -8,8 +8,11 @@ from pathlib import Path
 
 import pytest
 from argus_api import orchestrator
+from argus_api.artifacts.store import LocalArtifactStore
+from argus_api.conversations import attachments as chat_files
 from argus_api.conversations import service as conversations
 from argus_api.db import Database, ts
+from argus_api.errors import ConflictError
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
 from argus_core.conversations import (
@@ -92,6 +95,109 @@ def test_message_limits(client: TestClient) -> None:
     assert second.status_code == 429
 
 
+def _upload(
+    client: TestClient, conv_id: str, name: str, body: bytes, media: str
+) -> dict:
+    res = client.post(
+        f"/api/conversations/{conv_id}/attachments",
+        params={"filename": name},
+        content=body,
+        headers={**ADMIN, "Content-Type": media},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_chat_attachments_round_trip(client: TestClient) -> None:
+    conv = client.post("/api/conversations", json={}, headers=ADMIN).json()
+    note = _upload(client, conv["id"], "notes.txt", b"hello log", "text/plain")
+    png = _upload(client, conv["id"], "shot.png", b"\x89PNG", "image/png")
+    assert note["filename"] == "notes.txt"
+    assert note["message_id"] is None
+    assert note["size"] == 9
+
+    posted = client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={"body": "See these", "attachment_ids": [note["id"], png["id"]]},
+        headers=ADMIN,
+    )
+    assert posted.status_code == 200, posted.text
+    msg = posted.json()
+    assert [a["filename"] for a in msg["attachments"]] == ["notes.txt", "shot.png"]
+    listed = client.get(
+        f"/api/conversations/{conv['id']}/messages", headers=ADMIN
+    ).json()["items"]
+    assert listed[-1]["attachments"][0]["id"] == note["id"]
+
+    raw = client.get(
+        f"/api/conversations/{conv['id']}/attachments/{note['id']}/content",
+        headers=ADMIN,
+    )
+    assert raw.content == b"hello log"
+    text = client.get(
+        f"/api/conversations/{conv['id']}/attachments/{note['id']}/text",
+        headers=ADMIN,
+    ).json()
+    assert text["text"] == "hello log"
+    assert text["binary"] is False
+    binary = client.get(
+        f"/api/conversations/{conv['id']}/attachments/{png['id']}/text",
+        headers=ADMIN,
+    ).json()
+    assert binary["binary"] is True
+    assert binary["content_base64"]
+
+    worker = bearer(agent_token(client, "worker"))
+    assert (
+        client.get(
+            f"/api/conversations/{conv['id']}/attachments/{note['id']}/content",
+            headers=worker,
+        ).status_code
+        == 403
+    )
+
+
+def test_chat_attachment_only_message_and_refusals(client: TestClient) -> None:
+    conv = client.post("/api/conversations", json={}, headers=ADMIN).json()
+    empty = client.post(
+        f"/api/conversations/{conv['id']}/messages", json={"body": ""}, headers=ADMIN
+    )
+    assert empty.status_code == 422
+
+    blob = _upload(client, conv["id"], "data.bin", b"xyz", "application/octet-stream")
+    posted = client.post(
+        f"/api/conversations/{conv['id']}/messages",
+        json={"attachment_ids": [blob["id"]]},
+        headers=ADMIN,
+    )
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["body"] == ""
+    assert posted.json()["attachments"][0]["id"] == blob["id"]
+    # Untitled chats take their draft title from the filename when there is no text.
+    named = client.get(f"/api/conversations/{conv['id']}", headers=ADMIN).json()
+    assert named["title"] == "data.bin"
+
+    slash = client.post(
+        f"/api/conversations/{conv['id']}/attachments",
+        params={"filename": "../secret"},
+        content=b"x",
+        headers={**ADMIN, "Content-Type": "text/plain"},
+    )
+    assert slash.status_code == 201
+    assert slash.json()["filename"] == "secret"
+
+    worker = bearer(agent_token(client, "worker"))
+    assert (
+        client.post(
+            f"/api/conversations/{conv['id']}/attachments",
+            params={"filename": "nope.txt"},
+            content=b"x",
+            headers={**worker, "Content-Type": "text/plain"},
+        ).status_code
+        == 403
+    )
+
+
 def test_archive_and_rename(client: TestClient) -> None:
     conv = client.post(
         "/api/conversations", json={"title": "Plan"}, headers=ADMIN
@@ -125,6 +231,14 @@ def test_archive_and_rename(client: TestClient) -> None:
     )
     assert posted.status_code == 409
     assert posted.json()["detail"]["code"] == "archived"
+    upload = client.post(
+        f"/api/conversations/{conv['id']}/attachments",
+        params={"filename": "late.txt"},
+        content=b"x",
+        headers={**ADMIN, "Content-Type": "text/plain"},
+    )
+    assert upload.status_code == 409
+    assert upload.json()["detail"]["code"] == "archived"
     restored = client.post(
         f"/api/conversations/{conv['id']}/unarchive", headers=ADMIN
     ).json()
@@ -168,6 +282,74 @@ async def chat(db: Database, clock: Clock, title: str, text: str = "hi") -> str:
 async def title_of(db: Database, conv: str) -> str:
     async with db.read() as conn:
         return (await conversations.get_conversation(conn, conv)).title
+
+
+async def _chunks(data: bytes):
+    yield data
+
+
+async def test_already_linked_attachment_is_refused(svc) -> None:
+    db, clock, path = svc
+    store = LocalArtifactStore(path.parent / "artifacts", 1024 * 1024)
+    async with db.write() as tx:
+        conv = await conversations.create_conversation(
+            tx, ConversationCreate(), "admin:t"
+        )
+    attached = await chat_files.attach(
+        db,
+        store,
+        conversation_id=conv.id,
+        filename="n.txt",
+        media_type="text/plain",
+        chunks=_chunks(b"hi"),
+        actor="admin:t",
+    )
+    async with db.write() as tx:
+        await conversations.post_human_message(
+            tx,
+            conv.id,
+            MessageCreate(body="see", attachment_ids=[attached.id]),
+            "admin:t",
+        )
+    clock.now += timedelta(seconds=2)
+    with pytest.raises(ConflictError) as err:
+        async with db.write() as tx:
+            await conversations.post_human_message(
+                tx,
+                conv.id,
+                MessageCreate(body="again", attachment_ids=[attached.id]),
+                "admin:t",
+            )
+    assert err.value.code == "attachment_linked"
+
+
+async def test_claimed_message_carries_attachments(svc) -> None:
+    db, _, path = svc
+    store = LocalArtifactStore(path.parent / "artifacts", 1024 * 1024)
+    async with db.write() as tx:
+        conv = await conversations.create_conversation(
+            tx, ConversationCreate(title="Plan"), "admin:t"
+        )
+    attached = await chat_files.attach(
+        db,
+        store,
+        conversation_id=conv.id,
+        filename="n.txt",
+        media_type="text/plain",
+        chunks=_chunks(b"hi"),
+        actor="admin:t",
+    )
+    async with db.write() as tx:
+        await conversations.post_human_message(
+            tx,
+            conv.id,
+            MessageCreate(body="see", attachment_ids=[attached.id]),
+            "admin:t",
+        )
+    got = await claim(db, path)
+    assert got is not None
+    assert [a.filename for a in got[1].attachments] == ["n.txt"]
+    assert got[1].attachments[0].id == attached.id
 
 
 async def test_title_follows_first_message_then_orchestrator_then_admin(svc) -> None:

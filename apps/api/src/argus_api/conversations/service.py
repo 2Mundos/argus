@@ -11,6 +11,7 @@ from uuid import uuid4
 import aiosqlite
 from argus_core.conversations import (
     AgentChatReply,
+    ChatAttachment,
     Conversation,
     ConversationCreate,
     ConversationKind,
@@ -22,6 +23,7 @@ from argus_core.conversations import (
 )
 from argus_core.redact import redact, redact_private_keys
 
+from argus_api.conversations import attachments as chat_files
 from argus_api.db import Tx, ts
 from argus_api.disk_guard import DiskGuard
 from argus_api.errors import (
@@ -93,7 +95,9 @@ def _to_conversation(row: aiosqlite.Row, cost: float | None = None) -> Conversat
     )
 
 
-def _to_message(row: aiosqlite.Row) -> Message:
+def _to_message(
+    row: aiosqlite.Row, files: list[ChatAttachment] | None = None
+) -> Message:
     return Message(
         id=row["id"],
         conversation_id=row["conversation_id"],
@@ -106,7 +110,15 @@ def _to_message(row: aiosqlite.Row) -> Message:
         delivered_at=datetime.fromisoformat(row["delivered_at"])
         if row["delivered_at"]
         else None,
+        attachments=files or [],
     )
+
+
+async def _with_attachments(
+    conn: aiosqlite.Connection, conv_id: str, messages: list[Message]
+) -> list[Message]:
+    by_id = await chat_files.attachments_for(conn, conv_id, [m.id for m in messages])
+    return [m.model_copy(update={"attachments": by_id.get(m.id, [])}) for m in messages]
 
 
 async def get_conversation(conn: aiosqlite.Connection, conv_id: str) -> Conversation:
@@ -253,7 +265,7 @@ async def list_messages(
     ) as cur:
         rows = list(await cur.fetchall())
     rows.reverse()
-    return [_to_message(r) for r in rows]
+    return await _with_attachments(conn, conv_id, [_to_message(r) for r in rows])
 
 
 async def _queued_count(conn: aiosqlite.Connection, conv_id: str) -> int:
@@ -299,7 +311,9 @@ async def post_human_message(
             f"one human message per second; wait {wait.total_seconds():.1f}s",
             details=[str(wait.total_seconds())],
         )
-    text, truncated = _clean_body(body.body, limit=HUMAN_MAX, secrets=secrets)
+    text, truncated = ("", False)
+    if body.body.strip():
+        text, truncated = _clean_body(body.body, limit=HUMAN_MAX, secrets=secrets)
     msg_id = str(uuid4())
     now = ts(tx.now)
     await tx.conn.execute(
@@ -307,7 +321,10 @@ async def post_human_message(
         " turn_id, created_at, delivered_at) VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, NULL)",
         (msg_id, conv_id, actor, text, int(truncated), now),
     )
+    files = await chat_files.link(tx, conv_id, msg_id, body.attachment_ids)
     draft = draft_title(text) if conv.title == PLACEHOLDER_TITLE else ""
+    if not draft and conv.title == PLACEHOLDER_TITLE and files:
+        draft = draft_title(files[0].filename)
     if draft and conv.title_source == TitleSource.ORCHESTRATOR:
         await tx.conn.execute(
             "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
@@ -336,7 +353,7 @@ async def post_human_message(
     async with tx.conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)) as cur:
         row = await cur.fetchone()
     assert row is not None
-    return _to_message(row)
+    return _to_message(row, files)
 
 
 async def _next_claimable(
@@ -612,7 +629,9 @@ async def claim_next(
     ) as cur:
         claimed = await cur.fetchone()
     assert claimed is not None
-    return conv, _to_message(claimed)
+    msg = _to_message(claimed)
+    filled = await _with_attachments(tx.conn, conv.id, [msg])
+    return conv, filled[0]
 
 
 async def post_reply(

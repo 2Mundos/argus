@@ -875,6 +875,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/conversations/{conversation_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Chat Attachment
+         * @description Store a file on this conversation. Pass its id in `attachment_ids` when
+         *     posting the message. The original filename is kept; Content-Type is the media
+         *     type. Same size cap as a task artifact.
+         */
+        post: operations["upload_chat_attachment_api_conversations__conversation_id__attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/conversations/{conversation_id}/attachments/{attachment_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Chat Attachment
+         * @description The raw bytes. Admins and the internal orchestrator only.
+         */
+        get: operations["download_chat_attachment_api_conversations__conversation_id__attachments__attachment_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/conversations/{conversation_id}/attachments/{attachment_id}/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Chat Attachment Text
+         * @description A UTF-8 slice of a text file, or a base64 slice of any other type.
+         */
+        get: operations["read_chat_attachment_text_api_conversations__conversation_id__attachments__attachment_id__text_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/conversations/{conversation_id}/messages": {
         parameters: {
             query?: never;
@@ -4341,6 +4403,47 @@ export interface components {
             /** Untracked */
             untracked?: components["schemas"]["UntrackedFile"][];
         };
+        /** ChatAttachment */
+        ChatAttachment: {
+            /** Conversation Id */
+            conversation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Id */
+            id: string;
+            /** Media Type */
+            media_type: string;
+            /** Message Id */
+            message_id: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+        };
+        /**
+         * ChatAttachmentText
+         * @description A byte range of a chat attachment, as UTF-8 text or base64.
+         */
+        ChatAttachmentText: {
+            attachment: components["schemas"]["ChatAttachment"];
+            /** Binary */
+            binary: boolean;
+            /** Content Base64 */
+            content_base64: string | null;
+            /** Length */
+            length: number;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Offset */
+            offset: number;
+            /** Text */
+            text: string | null;
+        };
         /**
          * ChatContext
          * @description Bounded seed for a new session when session_ref cannot be resumed.
@@ -7288,6 +7391,8 @@ export interface components {
         };
         /** Message */
         Message: {
+            /** Attachments */
+            attachments: components["schemas"]["ChatAttachment"][];
             /** Author */
             author: string;
             /** Body */
@@ -7314,8 +7419,13 @@ export interface components {
         };
         /** MessageCreate */
         MessageCreate: {
-            /** Body */
-            body: string;
+            /** Attachment Ids */
+            attachment_ids?: string[];
+            /**
+             * Body
+             * @default
+             */
+            body?: string;
         };
         /** MessageList */
         MessageList: {
@@ -13040,6 +13150,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_chat_attachment_api_conversations__conversation_id__attachments_post: {
+        parameters: {
+            query: {
+                filename: string;
+            };
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatAttachment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_chat_attachment_api_conversations__conversation_id__attachments__attachment_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_chat_attachment_text_api_conversations__conversation_id__attachments__attachment_id__text_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                max_bytes?: number;
+            };
+            header?: never;
+            path: {
+                conversation_id: string;
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatAttachmentText"];
                 };
             };
             /** @description Validation Error */
