@@ -43,8 +43,11 @@ isolation or sandbox/TLS restrictions.
   role). The lease request may carry `runtime_providers`: what the leasing
   runtime can technically apply (for NanoClaw, the providers with a vault
   mapping; engines exclude executor-only ones). It is required and non-empty
-  for credential delivery, and narrows eligibility, never orders it. The old
-  `providers` field is accepted and ignored. Every credential-bearing lease is
+  for credential delivery, and narrows eligibility, never orders it. The optional
+  `credential_kinds` (`api_key`, `subscription`) narrows the same way. The
+  built-in orchestrator sends `["api_key"]` so it never receives a credential
+  issued to a CLI ([built-in orchestrator](builtin-orchestrator.spec.md) 3.4). The
+  old `providers` field is accepted and ignored. Every credential-bearing lease is
   bound to `task_id` and `attempt` and requires that task to be currently claimed
   by the caller with an unexpired lease. The one exception is the internal
   orchestrator's engine: an agent of the system pool may omit both (only for
