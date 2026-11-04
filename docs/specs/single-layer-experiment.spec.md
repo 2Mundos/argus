@@ -83,8 +83,8 @@ always the default path, marked.
 - **Prompt.** The delegation block is replaced by "you are the coding model; do not
   call `argus-delegate` or start another coding CLI; name the PR URL in a progress
   message or in `COMPLETE`". Everything else in the task body is unchanged.
-- **`pr_opened`.** No delegate watches the session's output, so the channel reports
-  the milestone itself. A URL in a reply whose base is exactly the task's repository
+- **`pr_opened`.** The channel reports the milestone itself, as in delegated runs.
+  A URL in a reply whose base is exactly the task's repository
   and whose path ends `/pull/<n>` or `/pulls/<n>` is posted as `pr_opened`
   `{number, url}`, once per URL and attempt, before the reply is handled
   ([progress milestones](progress-milestones.spec.md)). A 409 claim-lost answer
@@ -170,9 +170,10 @@ Nothing is stored that needs undoing. The markers stay in `explanation` as histo
 - The `pr_opened` relay depends on the model naming the PR URL. A PR opened and
   never named is censored, which biases the single-layer arm's time to PR. The
   analysis cannot tell this apart from a missing PR.
-- The default path's `pr_opened` comes from the delegate's tracker, which matches
-  the repository as a prefix. The channel relay matches it exactly. The two can
-  differ on the same output.
+- The delegated path also has the delegate's tracker, which matches the repository
+  as a prefix. The channel relay used by both arms matches it exactly. The two
+  emitters can differ on the same output, and the tracker without an API token
+  writes only to its local file and stderr.
 - The harness model differs between the arms by design. The experiment compares
   the two designs, not models.
 
