@@ -214,6 +214,10 @@ every new dependency is judged against it.
   run findings become deduplicated tasks, approval-gated by default
 - [Internal orchestrator](specs/internal-orchestrator.spec.md) — Argus hosts its own
   orchestrator as a system pool; chat with it is the main page; spend cap; skill improvements
+- [Built-in orchestrator runtime](specs/builtin-orchestrator.spec.md) — the internal
+  orchestrator as an in-process loop on an API-key, custom or local account: no Docker,
+  image or OneCLI; same REST/MCP contract, per-step spend, task update notices, local
+  model detection
 - [Onboarding](specs/onboarding.spec.md) — a wizard from a fresh install to an account,
   a first worker and optionally the internal orchestrator; Home becomes Dashboard
 

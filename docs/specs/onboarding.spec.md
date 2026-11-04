@@ -30,14 +30,22 @@ In scope:
 ## 3.1 Steps
 
 1. **Add an account.** Offers the harness-capable providers, Claude and Codex,
-   with their existing import/generate forms. A link opens the Accounts tab for
-   the others (Cursor, Copilot, custom), which cannot carry a worker alone.
+   with their existing import/generate forms, and **Local model**, which detects a
+   model server on the node ([built-in orchestrator](builtin-orchestrator.spec.md)
+   3.11). A link opens the Accounts tab for the others (Cursor, Copilot, custom).
+   Cursor and Copilot cannot carry a worker alone.
 2. **Create a first worker.** The guided template form from the Agents view,
    unchanged (`GET /api/fleet/templates`, `POST /api/fleet/workers`).
 3. **Start the internal orchestrator** (optional, skippable). Shows what it does
    and costs, an editable `orchestrator.daily_budget_usd`, and an Enable button
-   that writes `orchestrator.enabled = true`. If the `nanoclaw-orchestrator`
-   template is not ready on the node, the step shows its blockers instead.
+   that writes `orchestrator.enabled = true`. What it shows depends on
+   `orchestrator_runtime` (3.2):
+   - `builtin`: "Runs inside Argus on `<account>`", with no template check;
+   - `nanoclaw`: as before;
+   - `null`: why neither runtime can run, with a link to step 1.
+
+   This step does not need step 2. A built-in orchestrator can start before any
+   worker exists, and the step says that tasks wait for a worker.
 
 Each step shows the result of its existing route (errors included) and moves on
 when its fact becomes true. A step already done shows as done and can be skipped.
@@ -51,6 +59,7 @@ Admin only. Returns:
   "account": true,
   "worker": false,
   "orchestrator": false,
+  "orchestrator_runtime": "builtin",
   "dismissed": false
 }
 ```
@@ -59,6 +68,10 @@ Admin only. Returns:
 - `worker`: at least one non-system pool exists (the orchestrator's system pool
   does not count).
 - `orchestrator`: `orchestrator.enabled` is true.
+- `orchestrator_runtime`: what `orchestrator.runtime = auto` would resolve to now,
+  `builtin`, `nanoclaw` or `null` when neither can run
+  ([built-in orchestrator](builtin-orchestrator.spec.md) 3.1). It is derived, not
+  stored.
 - `dismissed`: the global setting `onboarding.dismissed` (bool, default `false`,
   admin-written), the only stored value, so dismissing holds across browsers.
 

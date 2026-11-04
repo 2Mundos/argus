@@ -15,6 +15,11 @@ external one: the `orchestrator` scope, the Argus MCP tools and the
 not a new rule engine; deterministic recovery stays in
 [failure classes](failure-classes.spec.md), the reaper and the reconciler.
 
+It runs in one of two runtimes: **`nanoclaw`**, a NanoClaw host container (3.1),
+or **`builtin`**, an agent loop inside the Argus process that calls a model API
+with an API-key account ([built-in orchestrator](builtin-orchestrator.spec.md)).
+This spec holds for both unless it names one.
+
 In scope:
 
 - A system-owned orchestrator pool, its template, and its enable switch.
@@ -34,9 +39,9 @@ Getting a first account, worker and orchestrator is the
 - **Not a replacement for external orchestrators.** They keep working, and may run
   next to the internal one. Concurrent managers are already safe
   (`expected_version`, `request_id` replay, `decision_not_open`).
-- **No in-process agent loop.** Argus does not call a model API from the control
-  plane to orchestrate; the orchestrator runs in a container like any worker
-  ([single node](single-node.spec.md) 3.1).
+- **No in-process workers.** Only the orchestrator may run inside the Argus
+  process (the `builtin` runtime), and only through the same REST and MCP
+  contract as a remote agent. Task work always runs in a worker pool.
 - **No fleet scaling by the internal orchestrator** in this version: no launch,
   scale, pool create or requeue-recycle (3.4).
 - **No chat for external orchestrators or workers.** Chat is between admins and
@@ -53,7 +58,13 @@ Getting a first account, worker and orchestrator is the
 
 ## 3.1 Hosting: a system pool
 
-- A new template **`nanoclaw-orchestrator`** in `fleet/templates.py`, with the same
+- The system pool's runtime is chosen by `orchestrator.runtime` (`auto`,
+  `builtin`, `nanoclaw`) when the orchestrator is enabled
+  ([built-in orchestrator](builtin-orchestrator.spec.md) 3.1). The `builtin`
+  runtime's pool, target, accounts and model calls are specified there. The
+  rest of this section is the `nanoclaw` runtime, except where a rule names
+  both.
+- A template **`nanoclaw-orchestrator`** in `fleet/templates.py`, with the same
   readiness gating as the worker templates ([worker launch](worker-launch.spec.md)).
   It builds a NanoClaw pool whose agents register with **`role: orchestrator`**:
   the reconciler mints the instance's bootstrap token with the pool's role instead
@@ -63,10 +74,11 @@ Getting a first account, worker and orchestrator is the
   `409 system_pool`. An admin may change its image in the pool editor; nothing else.
   It is excluded from the "first worker" fact in onboarding and from worker-pool
   totals, and listed apart on the Pools tab.
-- **Enable switch:** the global setting `orchestrator.enabled` (bool, default
-  `false`) is the only source of truth. Writing `true` creates the pool from the
-  template if missing and sets `desired_replicas` to 1; writing `false` sets it to
-  0, which drains: the turn in flight finishes, new messages queue (3.3).
+- **Enable switch (both runtimes):** the global setting `orchestrator.enabled`
+  (bool, default `false`) is the only source of truth. Writing `true` resolves the
+  runtime, creates or converges the pool for it and sets `desired_replicas` to 1;
+  writing `false` sets it to 0, which drains: the turn in flight finishes, new
+  messages queue (3.3).
 - The orchestrator **leases accounts like any agent**
   ([account selection](account-selection.spec.md)), preferring the setting
   `orchestrator.model` (a harness engine/model; default: the best-priority
@@ -155,9 +167,11 @@ Getting a first account, worker and orchestrator is the
 
 ## 3.3 Transport: the `argus` channel
 
-- Chat travels only through the NanoClaw `argus` channel
-  (`integrations/nanoclaw/argus.ts`). **No MCP chat tools** are added; the
-  orchestrator never calls a tool to read or post chat.
+- Chat travels only through the agent chat routes below. Their two consumers are
+  the NanoClaw `argus` channel (`integrations/nanoclaw/argus.ts`) and the built-in
+  loop ([built-in orchestrator](builtin-orchestrator.spec.md) 3.7), which follow
+  the same rules. **No MCP chat tools** are added; the orchestrator never calls a
+  tool to read or post chat.
 - **Inbound:** the channel long-polls `GET /api/agents/me/chat?wait_s≤30` (the
   `claim_task` pattern) for messages of its conversations. Each is injected into
   that conversation's session with `onInbound` and acknowledged
@@ -183,11 +197,19 @@ Getting a first account, worker and orchestrator is the
 
 ## 3.4 Sessions and concurrency
 
-- One container, **one NanoClaw session per conversation** (`session_ref`), so
-  contexts do not mix.
-- The **Updates** session runs the inbox loop of the skill: `get_inbox` → work it →
-  `wait_for_events(inbox=true)` → repeat. Proactive posts ("3 reviews wait on a
-  human", "the tasks from *Fix login* are done") are a `deliver()` to Updates.
+- `nanoclaw`: one container, **one NanoClaw session per conversation**
+  (`session_ref`), so contexts do not mix. `builtin`: no session; each turn is
+  built from the thread's messages and its originated tasks
+  ([built-in orchestrator](builtin-orchestrator.spec.md) 3.5), and `session_ref`
+  stays null.
+- `nanoclaw`: the **Updates** session runs the inbox loop of the skill:
+  `get_inbox` → work it → `wait_for_events(inbox=true)` → repeat. `builtin`: Updates
+  turns start only from queued notices (inbox wake, inbox sweep, task updates).
+  Proactive posts ("3 reviews wait on a human", "the tasks from *Fix login* are
+  done") are a reply to Updates.
+- **Task update notices (both runtimes).** When a task with an
+  `origin_conversation_id` ends, Argus queues one `Task update.` notice on that
+  conversation ([built-in orchestrator](builtin-orchestrator.spec.md) 3.10).
   Updates also accepts admin messages. A reply the channel gets after its turn ended (a correction, a late result) or outside any turn is posted with no `turn_id`, never dropped.
 - **Inbox wake.** When a decision opens with audience `any` or `orchestrator` and
   `orchestrator.enabled` is true, Argus queues one message on Updates (`author:
@@ -213,7 +235,8 @@ Getting a first account, worker and orchestrator is the
 - At most **one turn in flight per conversation**; later messages queue behind it.
   At most `orchestrator.max_concurrent_turns` (default 2) conversation turns run at
   once, plus the Updates loop.
-- **Restart continuity:** after a container recreate (crash, account swap, image
+- **Restart continuity** (`nanoclaw`; the built-in rebuilds every turn from the
+  thread and needs none): after a container recreate (crash, account swap, image
   roll), the channel resumes the native session if it is still valid. Otherwise it
   starts a new session seeded with a bounded excerpt: the last 20 messages and the
   list of tasks created from that conversation (3.6). The thread then shows a
@@ -239,7 +262,11 @@ Getting a first account, worker and orchestrator is the
 - A request in a conversation is the goal. Tasks the orchestrator creates while
   working a conversation turn carry **`origin_conversation_id`** (nullable column on
   `tasks`, set by the server from the turn the agent is in, not from a tool
-  argument). Tasks created in the Updates loop carry the Updates id.
+  argument). The turn is the one named by the `X-Argus-Chat-Turn` header when the
+  runtime sends it and it is live; otherwise the agent's single turn in flight,
+  else Updates; with several turns in flight and no header, none
+  ([built-in orchestrator](builtin-orchestrator.spec.md) 3.6). Tasks created in
+  the Updates loop carry the Updates id.
 - A thread lists the tasks it originated (chips with state). Task detail links back
   to its conversation.
 - External orchestrators and humans create tasks as today, with
@@ -296,8 +323,8 @@ fails on a tool name that does not exist. It gains:
   spec and acceptance template; `depends_on` vs `parent_id`; how to pick a
   difficulty.
 - **Reporting back** (core): in a thread, say what was created (as ids), what
-  waits on a human and why; watch the created subjects with `wait_for_events` and
-  close the loop when they finish.
+  waits on a human and why; close the loop when the `Task update.` notice for that
+  conversation arrives, not by waiting inside a turn.
 - **Confirm before acting:** post the plan and wait for an explicit go before
   creating tasks when the plan has more than `orchestrator.confirm_above_tasks`
   (default 3) tasks, any `hard` task, or a `budget_usd` above
@@ -315,6 +342,7 @@ fails on a tool name that does not exist. It gains:
 | Key | Type | Default |
 | --- | --- | --- |
 | `orchestrator.enabled` | bool | `false` |
+| `orchestrator.runtime` | `auto` \| `builtin` \| `nanoclaw` | `auto` ([built-in orchestrator](builtin-orchestrator.spec.md) 3.1) |
 | `orchestrator.model` | engine/model or null | `null` (best-priority harness account) |
 | `orchestrator.daily_budget_usd` | number ≥ 0 | `5` |
 | `orchestrator.max_concurrent_turns` | int 1–4 | `2` |
@@ -338,7 +366,9 @@ All are global only, admin-written, and follow the [settings](settings.spec.md) 
 # 5. Constraints
 
 - Single node: two new tables, one column, the existing channel, heartbeat, event
-  bus and SSE paths. No broker, no new service, no model client in the API process.
+  bus and SSE paths. No broker, no new service. The only model client in the API
+  process is the built-in runtime's, which reaches Argus through REST and MCP like
+  any agent ([built-in orchestrator](builtin-orchestrator.spec.md) 5).
 - All writes go through `Database.write()` with `tx.now`; the daily cap uses
   `tx.now` for the UTC day.
 - Additive migrations only: `conversations`, `messages`, `tasks.origin_conversation_id`,

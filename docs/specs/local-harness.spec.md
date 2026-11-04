@@ -28,6 +28,10 @@ delegations.
   `argus-local-harness`), optional `model`, optional `context_tokens` (see "Harness orchestrates only"). No real secret; `max_leases` defaults
   to 1 (single GPU slot). Never marked exhausted for quota; availability follows
   the same probe as `ARGUS_LOCAL_MODEL_URL` via the reaper (`sync_local_health`).
+  The account form can detect a running Ollama, LM Studio or llama.cpp server
+  and fill these fields
+  ([built-in orchestrator](builtin-orchestrator.spec.md) 3.11). The built-in
+  orchestrator may also lease a `local` account as its engine.
 - **Lease ranking.** `fallback_tier`: every non-`local` account sorts before
   `local` (inverted for `trivial` tasks, see [task difficulty](task-difficulty.spec.md)), then `priority`, load, and deterministic ties (account selection spec).
 - **Harness is NanoClaw.** The worker loop is NanoClaw. For a `local` engine
