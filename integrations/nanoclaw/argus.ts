@@ -4346,8 +4346,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
-   * Single-layer has no delegate to watch its output, so a pull request of the task's
-   * repository named in a reply is reported here as `pr_opened`, once, under the attempt.
+   * The delegate may have no API token. Report a pull request of the task's repository
+   * named in a reply as `pr_opened`, once, under the attempt, in every execution mode.
    */
   async function relayPullRequests(task: Claim, text: string): Promise<boolean> {
     for (const pr of pullRequestsOf(currentClaim?.repository_url, text)) {
@@ -4521,12 +4521,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       // Receipts are fenced by the attempt: relay `consumed` while it is still held.
       if (d.kind !== "progress" || isFailureNotice) await inputsAfterAttempt(task);
       try {
-        if (
-          armDecision?.arm === "single_layer" &&
-          !isFailureNotice &&
-          !(await relayPullRequests(task, text))
-        )
-          return undefined;
+        if (!isFailureNotice && !(await relayPullRequests(task, text))) return undefined;
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {
@@ -4590,6 +4585,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             task.id,
             task.attempt,
             `[Argus] That question is already answered; do not ask it again. ${err.message}`,
+          );
+        } else if (
+          err instanceof ArgusError &&
+          err.status === 422 &&
+          err.code === "deliverable_missing"
+        ) {
+          resends += 1;
+          await injectTask(
+            task.id,
+            task.attempt,
+            `[Argus] Your COMPLETE was rejected: ${err.message}. Report the missing evidence, then complete again in this attempt. For an existing or merged PR, name its URL in a progress message or COMPLETE; do not create a replacement PR.`,
           );
         } else if (err instanceof ArgusError && err.code === "checklist_mismatch") {
           resends += 1;

@@ -93,6 +93,14 @@ recorded and the worker keeps its claim, so it can fix the gap in the same
 attempt; if it cannot, it fails or blocks as before. The gate runs before
 the checklist and review steps.
 
+The NanoClaw channel returns `deliverable_missing` to the worker in the same
+attempt, keeping its claim, so the worker can report the missing evidence and
+complete again. It never turns this correctable refusal into a `channel_error`
+failure. An existing or merged PR must be reported, not replaced with a new PR.
+In every execution mode the channel records a PR URL of exactly the task's
+repository named in a reply as `pr_opened` before forwarding the completion
+([progress milestones](progress-milestones.spec.md) 3.3).
+
 `pr_green` and `pr_merged` depend on facts that change after the worker is done.
 A completion with an open PR artifact for either goes to `in_review` (a review
 decision for the orchestrator is opened even when `review` is `none`) with
@@ -262,8 +270,10 @@ audit record.
   workers all see the same rule. A runtime that does not use the channel is
   still held to the completion gate. The binding (3.7) and the reconciliation
   (3.8) are server-side too and serve every engine's tasks alike; the
-  `deliverable_missing` failure text comes from the NanoClaw channel, so a task
-  of a runtime that does not use it is not eligible and is retried.
+  historical `deliverable_missing` failure text comes from older NanoClaw
+  channels, so a task of a runtime that does not use it is not eligible and is
+  retried. Current channels return that refusal to the worker within its claim
+  (3.4), for every engine.
 - **Way back**: the deliverable can be edited (3.6); a refused completion
   leaves the claim open; a rejected review returns the task to ready; a failed
   task with a bound PR is retried (3.7) or, once merged, reconciled to review
