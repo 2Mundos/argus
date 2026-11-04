@@ -479,7 +479,13 @@ async def test_disk_guard_real_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     outer = os.environ.get("DOCKER_HOST")
     # The guard's DockerRootDir probe must see the harness socket, never DOCKER_HOST.
     monkeypatch.delenv("DOCKER_HOST", raising=False)
-    h = Harness.create(secrets.token_hex(8), outer_docker_host=outer)
+    try:
+        h = Harness.create(secrets.token_hex(8), outer_docker_host=outer)
+    except (Refused, ValueError) as exc:  # nothing was created
+        ev.outcome = "refused"
+        ev.observed["refused"] = str(exc)
+        ev.write(EVIDENCE)
+        raise
     ev.observed["base"] = str(h.layout.base)
     problems: list[str] = []
     try:

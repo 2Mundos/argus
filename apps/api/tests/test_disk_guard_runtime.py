@@ -7,21 +7,28 @@ and the Docker client are fakes.
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import disk_guard_runtime
 import pytest
 from api_support import FakeTarget
 from argus_api.db import Database
 from disk_guard_runtime import (
+    BASE_PREFIX,
     FS_MIB,
     MARKER_FILE,
     MARKER_LABEL,
     MIB,
+    MKDTEMP_RANDOM_CHARS,
     OPT_IN,
+    TMPDIR_ENV,
     TOOLS,
     Evidence,
     Harness,
@@ -283,25 +290,43 @@ def container(cid: str, *labels: str) -> Any:
 
 
 class Host:
-    """Records commands; `mounts` is what /proc/self/mountinfo would list."""
+    """Records commands; `mounts` is what /proc/self/mountinfo would list
+    (`kinds` gives a point's fstype and source, default tmpfs). A command fails
+    when its joined argv starts with an entry of `fail`."""
 
     def __init__(self) -> None:
         self.ran: list[list[str]] = []
         self.mounts: list[str] = []
+        self.kinds: dict[str, tuple[str, str]] = {}
         self.fail: set[str] = set()
         self.loops = ""
 
     def run(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
         self.ran.append(argv)
-        if argv[0] in self.fail:
+        if any(" ".join(argv).startswith(f) for f in self.fail):
             raise subprocess.CalledProcessError(1, argv)
         if argv[0] == "umount":
             self.mounts.remove(argv[1])
+        elif argv[0] == "mount":
+            self.mounts.append(argv[-1])
+            if "loop" in argv:
+                self.kinds[argv[-1]] = ("ext4", "/dev/loop7")
+                self.loops += f"/dev/loop7: []: ({argv[-2]})\n"
+        elif argv[:2] == ["losetup", "-d"]:
+            self.loops = "".join(
+                ln for ln in self.loops.splitlines(True) if ln.split(":")[0] != argv[2]
+            )
         out = self.loops if argv[:2] == ["losetup", "-j"] else ""
         return subprocess.CompletedProcess(argv, 0, out, "")
 
     def mountinfo(self) -> str:
-        return "".join(f"1 1 0:1 / {p} rw - tmpfs x rw\n" for p in self.mounts)
+        return "".join(
+            "1 1 0:1 / {} rw - {} {} rw\n".format(p, *self.kinds.get(p, ("tmpfs", "x")))
+            for p in self.mounts
+        )
+
+    def touched(self, path: str) -> list[list[str]]:
+        return [argv for argv in self.ran if path in argv]
 
 
 class Proc:
@@ -320,17 +345,25 @@ class Proc:
         return 0
 
 
-def owned(tmp_path: Path, host: Host, client: FakeClient | None) -> Harness:
+def owned(
+    tmp_path: Path, host: Host, client: FakeClient | None, *, mounted: bool = True
+) -> Harness:
+    """A marked harness directory; `mounted` adds a running setup's daemons,
+    mounts and loop device, otherwise it is as `Harness.create` left it."""
     lay = Layout(tmp_path / "h")
+    lay.base.mkdir()
+    (lay.base / MARKER_FILE).write_text(TOKEN)
+    h = Harness(lay, TOKEN, run=host.run, mountinfo=host.mountinfo)
+    if not mounted:
+        return h
     lay.data_root.mkdir(parents=True)
     lay.backing.mkdir()
-    (lay.base / MARKER_FILE).write_text(TOKEN)
     lay.pidfile.write_text("42\n")
     (lay.data_root / "engine-id").write_text("ENGINE\n")
     lay.image.write_bytes(b"")
-    h = Harness(lay, TOKEN, run=host.run, mountinfo=host.mountinfo)
     h.client, h.dockerd, h.containerd = client, Proc(), Proc()
     host.mounts = [str(lay.backing), str(lay.fs), str(lay.data_root / "overlay2/m")]
+    host.kinds[str(lay.fs)] = ("ext4", "/dev/loop7")
     host.loops = f"/dev/loop7: []: ({lay.image})\n"
     return h
 
@@ -387,13 +420,167 @@ def test_teardown_keeps_the_directory_when_a_mount_stays(tmp_path: Path) -> None
     assert h.layout.base.exists()
 
 
-def test_teardown_keeps_a_directory_without_its_marker(tmp_path: Path) -> None:
+@pytest.mark.parametrize("marker", [None, "someone else"])
+def test_teardown_keeps_a_directory_without_its_marker(
+    tmp_path: Path, marker: str | None
+) -> None:
     host = Host()
     h = owned(tmp_path, host, None)
-    (h.layout.base / MARKER_FILE).write_text("someone else")
+    if marker is None:
+        (h.layout.base / MARKER_FILE).unlink()
+    else:
+        (h.layout.base / MARKER_FILE).write_text(marker)
     problems = h.teardown()
     assert any("lacks the harness marker" in p for p in problems)
+    # Ownership is checked before anything destructive: no command at all.
+    assert host.ran == [] and h.layout.image.exists() and len(host.mounts) == 3
+
+
+@pytest.mark.parametrize("link", ["base", "parent"])
+def test_a_symlinked_layout_is_refused_and_never_torn_down(
+    tmp_path: Path, link: str
+) -> None:
+    # The observed failure: mountinfo lists canonical paths, the Layout was the
+    # lexical path through a symlinked TMPDIR.
+    host = Host()
+    real = owned(tmp_path, host, None)
+    if link == "base":
+        lexical = tmp_path / "alias"
+        lexical.symlink_to(real.layout.base, target_is_directory=True)
+    else:
+        (tmp_path / "up").symlink_to(tmp_path, target_is_directory=True)
+        lexical = tmp_path / "up" / "h"
+    h = Harness(Layout(lexical), TOKEN, run=host.run, mountinfo=host.mountinfo)
+    assert bounded_fs_failures(real.layout, real.mounts(), MIB) == []
+    assert len(bounded_fs_failures(h.layout, h.mounts(), MIB)) == 2
+    problems = h.teardown()
+    assert any("not canonical" in p for p in problems), problems
+    assert host.ran == [] and real.layout.image.exists() and len(host.mounts) == 3
+
+
+def test_verify_fs_accepts_the_canonical_loop_on_tmpfs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = owned(tmp_path, Host(), None)
+    vfs = SimpleNamespace(f_blocks=FS_MIB, f_frsize=MIB)
+    monkeypatch.setattr(os, "statvfs", lambda _: vfs)
+    h.verify_fs()
+    assert h.layout.data_dir.is_dir() and h.layout.instances.is_dir()
+
+
+@pytest.mark.parametrize(
+    ("phase", "cleanup"),
+    [
+        ("mount -t tmpfs", []),
+        ("mkfs.ext4", [["losetup", "-j", "IMG"], ["umount", "BACKING"]]),
+        (
+            "mount -o loop",
+            [
+                ["losetup", "-j", "IMG"],
+                ["losetup", "-d", "/dev/loop7"],
+                ["umount", "BACKING"],
+            ],
+        ),
+    ],
+)
+def test_teardown_after_a_failed_mount_phase_undoes_only_what_exists(
+    tmp_path: Path, phase: str, cleanup: list[list[str]]
+) -> None:
+    host = Host()
+    h = owned(tmp_path, host, None, mounted=False)
+    lay = h.layout
+    host.fail = {phase}
+    if phase == "mount -o loop":  # a failed loop mount can leave the device bound
+        host.loops = f"/dev/loop7: []: ({lay.image})\n"
+    with pytest.raises(subprocess.CalledProcessError):
+        h.mount_fs()
+    done = len(host.ran)
+    assert h.teardown() == []
+    names = {"IMG": str(lay.image), "BACKING": str(lay.backing)}
+    assert host.ran[done:] == [[names.get(a, a) for a in argv] for argv in cleanup]
+    assert host.mounts == [] and host.loops == "" and not lay.base.exists()
+
+
+@pytest.mark.parametrize(
+    ("fail", "reported"),
+    [
+        ("umount", "unmount"),
+        ("losetup -j", "losetup -j"),
+        ("losetup -d", "detach /dev/loop7"),
+    ],
+)
+def test_teardown_reports_failures_without_masking_the_primary(
+    tmp_path: Path, fail: str, reported: str
+) -> None:
+    host = Host()
+    h = owned(tmp_path, host, None)
+    host.fail = {fail}
+    problems: list[str] = []
+    with pytest.raises(RuntimeError, match="primary"):
+        try:
+            raise RuntimeError("primary")
+        finally:
+            problems = h.teardown()
+    assert any(p.startswith(reported) for p in problems), problems
+
+
+def test_teardown_reports_a_busy_tree_without_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def busy(path: Any, **_: Any) -> None:
+        raise OSError(errno.EBUSY, "Device or resource busy", str(path))
+
+    h = owned(tmp_path, Host(), None)
+    monkeypatch.setattr(shutil, "rmtree", busy)
+    problems = h.teardown()
+    assert any("Device or resource busy" in p for p in problems), problems
     assert h.layout.base.exists()
+
+
+def test_teardown_keeps_everything_when_mounts_are_unreadable(tmp_path: Path) -> None:
+    host = Host()
+    h = owned(tmp_path, host, None)
+
+    def unreadable() -> str:
+        raise PermissionError("mountinfo")
+
+    h.mountinfo = unreadable
+    problems = h.teardown()
+    assert any("reading mountinfo" in p for p in problems), problems
+    assert host.ran == [] and h.layout.base.exists()
+
+
+def test_teardown_keeps_a_base_that_is_itself_a_mount(tmp_path: Path) -> None:
+    host = Host()
+    h = owned(tmp_path, host, None)
+    host.mounts.insert(0, str(h.layout.base))
+    problems = h.teardown()
+    assert any("directory kept" in p for p in problems), problems
+    assert host.touched(str(h.layout.base)) == [] and h.layout.base.exists()
+
+
+def test_teardown_never_touches_foreign_mounts_or_loops(tmp_path: Path) -> None:
+    host = Host()
+    h = owned(tmp_path, host, None)
+    base = str(h.layout.base)
+    foreign = [base + "-x", base + "x/fs", str(tmp_path)]
+    for p in foreign[:2]:
+        Path(p).mkdir(parents=True)
+        (Path(p) / "keep").write_text("")
+    host.mounts += foreign
+    host.loops += (
+        "/dev/loop9: []: (/srv/other/fs.img)\n"
+        f"/dev/loop8: []: ({base}-x/backing/fs.img)\n"
+    )
+    assert h.teardown() == []
+    for p in [*foreign, "/dev/loop8", "/dev/loop9"]:
+        assert host.touched(p) == [], p
+    assert host.mounts == foreign
+    assert [a for a in host.ran if a[:2] == ["losetup", "-d"]] == [
+        ["losetup", "-d", "/dev/loop7"]
+    ]
+    assert all((Path(p) / "keep").exists() for p in foreign[:2])
+    assert not h.layout.base.exists()
 
 
 def test_teardown_leaves_containers_when_the_daemon_changed(tmp_path: Path) -> None:
@@ -447,12 +634,54 @@ async def test_seed_world_claims_one_task_per_descendant(db: Database) -> None:
     assert all(s.group_folder == f"argus-web-{s.instance_id[:8]}" for s in sessions)
 
 
+# -- create: a canonical parent, checked before anything exists --------------------
+
+
 def test_create_refuses_a_base_too_long_for_instances_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     deep = tmp_path / ("d" * 60)
     deep.mkdir()
-    monkeypatch.setenv("ARGUS_DISK_GUARD_RT_TMPDIR", str(deep))
+    monkeypatch.setenv(TMPDIR_ENV, str(deep))
     with pytest.raises(ValueError, match="instances_root"):
         Harness.create(TOKEN)
     assert list(deep.iterdir()) == []
+
+
+@pytest.mark.parametrize("given", ["link", "link/sub"])
+def test_create_refuses_a_tmpdir_through_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: str
+) -> None:
+    real = tmp_path / "real"
+    (real / "sub").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    path = tmp_path / given
+    monkeypatch.setenv(TMPDIR_ENV, str(path))
+    with pytest.raises(Refused, match="canonical path") as refused:
+        Harness.create(TOKEN)
+    assert str(path) in str(refused.value)
+    assert os.path.realpath(path) in str(refused.value)
+    assert list(real.rglob("*")) == [real / "sub"]
+
+
+@pytest.mark.parametrize("given", ["relative/dir", "/nonexistent/argus-dg-parent"])
+def test_create_refuses_a_tmpdir_that_is_not_an_absolute_directory(
+    monkeypatch: pytest.MonkeyPatch, given: str
+) -> None:
+    monkeypatch.setenv(TMPDIR_ENV, given)
+    with pytest.raises(Refused, match="existing absolute directory"):
+        Harness.create(TOKEN)
+
+
+def test_create_accepts_the_canonical_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(TMPDIR_ENV, str(tmp_path))
+    # pytest's tmp_path is longer than the real limit allows.
+    monkeypatch.setattr(disk_guard_runtime, "INSTANCES_ROOT_MAX", 4096)
+    h = Harness.create(TOKEN)
+    base = h.layout.base
+    assert base.parent == tmp_path and (base / MARKER_FILE).read_text() == TOKEN
+    # The length limit is computed from this name before the directory exists.
+    assert base.name.startswith(BASE_PREFIX)
+    assert len(base.name) == len(BASE_PREFIX) + MKDTEMP_RANDOM_CHARS
