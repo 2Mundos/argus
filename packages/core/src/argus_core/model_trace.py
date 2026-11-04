@@ -16,6 +16,14 @@ Executor = Literal["claude", "codex", "opencode", "agent"]
 Evidence = Literal[
     "reported_by_runtime", "cli_output", "provider_response", "not_reported"
 ]
+# Why no model is observed: the run ended and its output named none, the executor or
+# engine prints no verified served model, or the model never started.
+EvidenceReason = Literal[
+    "engine_output_has_no_model",
+    "executor_not_verified",
+    "engine_not_verified",
+    "run_not_started",
+]
 ExecutionState = Literal["selected", "running", "succeeded", "failed", "cancelled"]
 SelectionKind = Literal[
     "initial",
@@ -95,6 +103,7 @@ class ExecutionReport(BaseModel):
     configured_model: str | None = None  # what the runtime was configured with
     observed_model: str | None = None  # what ran, only with evidence
     evidence: Evidence = "not_reported"
+    evidence_reason: EvidenceReason | None = None  # only with not_reported
     policy_revision: str | None = None  # model-selection policy snapshot
     account_id: str | None = None
     delegation_id: str | None = None  # the delegate's run id
@@ -126,6 +135,8 @@ class ExecutionReport(BaseModel):
                 "observed_model needs evidence other than not_reported, and no"
                 " observed_model means evidence not_reported"
             )
+        if self.evidence_reason is not None and self.evidence != "not_reported":
+            raise ValueError("evidence_reason belongs to evidence not_reported")
         if self.resumed_from == self.key:
             raise ValueError("an execution cannot resume itself")
         return self
@@ -271,6 +282,7 @@ class LayerModels(BaseModel):
     configured_model: str | None
     observed_model: str | None
     evidence: Evidence
+    evidence_reason: EvidenceReason | None = None
     executions: int  # every run recorded for the layer, across attempts
 
 

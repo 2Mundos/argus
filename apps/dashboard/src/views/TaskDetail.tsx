@@ -415,6 +415,9 @@ export function TaskDetail({
                                 : run.configured_model
                                   ? " (configured)"
                                   : ""}
+                              {!run.observed_model && run.evidence_reason
+                                ? ` · not reported: ${run.evidence_reason.replaceAll("_", " ")}`
+                                : ""}
                               {run.account_name
                                 ? ` · account ${run.account_name}`
                                 : run.account_id

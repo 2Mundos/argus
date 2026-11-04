@@ -44,6 +44,7 @@ _EXECUTION_COLS = [
     "configured_model",
     "observed_model",
     "evidence",
+    "evidence_reason",
     "policy_revision",
     "account_id",
     "delegation_id",
@@ -163,6 +164,8 @@ async def record_execution(
         else:
             state = body.state
         row_id = old["id"]
+    if values["evidence"] != "not_reported":
+        values["evidence_reason"] = None  # an observation replaces the "why not"
     # Evidence of a model needs a run that started; nothing was run otherwise.
     if values["observed_model"] and (
         state == "selected" or values["started_at"] is None
@@ -204,7 +207,8 @@ async def record_execution(
             [*full.values(), ts(tx.now), row_id],
         )
     keep = ("layer", "state", "executor", "engine", "provider", "requested_model")
-    keep += ("configured_model", "observed_model", "evidence", "policy_revision")
+    keep += ("configured_model", "observed_model", "evidence", "evidence_reason")
+    keep += ("policy_revision",)
     await record(
         tx,
         f"agent:{agent_id}" if agent_id else "argus",

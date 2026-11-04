@@ -760,6 +760,7 @@ function reportBlocked(e, snapshot, selection, executor, errorCode) {
         requested_model: selection?.requested_model ?? null,
         configured_model: selection?.configured_model ?? null,
         evidence: "not_reported",
+        evidence_reason: "run_not_started",
         account_id: accountId,
         policy_revision: selection?.policy_revision ?? null,
         started_at: null,
@@ -1399,6 +1400,12 @@ async function runAttempt(
         configured_model: selection.configured_model ?? null,
         observed_model: observedModel,
         evidence: observedModel ? "cli_output" : "not_reported",
+        // Only Claude prints a served model: for it a missing one is the output's gap.
+        evidence_reason: observedModel
+          ? null
+          : executor === "claude"
+            ? "engine_output_has_no_model"
+            : "executor_not_verified",
         account_id: accountId,
         delegation_id: path.basename(reportFile, ".json"),
         run_key: key,

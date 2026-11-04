@@ -1891,6 +1891,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     policy_revision: string | null;
     resumed_from: string | null;
     explanation: string | null;
+    // The model the engine's own output named for this session (null: none yet).
+    observed_model: string | null;
   } | null = null;
   let harnessSession = 0;
   // The single-layer experiment's decision for the claim in flight (null: not in it).
@@ -2408,6 +2410,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         task,
         now: nowMs,
         held: () => ({ engine: account?.id ?? null, executor: executor?.id ?? null }),
+        // Only the Claude Agent SDK result names the model that served the turn (its
+        // `modelUsage` keys). Codex's record carries the configured model: not evidence.
+        onEngineModel: (engine, model) => {
+          // The API refuses a model outside its identifier format: keep the report postable.
+          if (
+            harnessRun &&
+            engine === "claude" &&
+            /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/.test(model)
+          )
+            harnessRun.observed_model = model;
+        },
         post: (accountId, body) =>
           client.call("POST", `/accounts/${encodeURIComponent(accountId)}/usage`, body),
         // The delegate saw the executor CLI reject its credential (copilot accounts spec
@@ -3434,6 +3447,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       policy_revision: harnessSelection?.policy_revision ?? null,
       resumed_from: harnessSession > 1 ? resumed_from : null,
       explanation: armDecision ? armMarker(armDecision) : null,
+      observed_model: null,
     };
     if (armDecision?.fallback)
       log.warn("Single-layer arm not applied; the default path runs", {
@@ -4177,7 +4191,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     state: "running" | "succeeded" | "failed",
   ): Promise<void> {
     if (!harnessRun) return;
+    // Read what the engine reported so far, so the last turn's model is not missed.
+    if (state !== "running") await usageRelay?.poll();
     const ended_at = state === "running" ? null : new Date(nowMs()).toISOString();
+    const observed = harnessRun.observed_model;
     const model = harnessRun.configured_model;
     const selections =
       state !== "running"
@@ -4248,7 +4265,20 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             requested_model: harnessRun.requested_model,
             configured_model: harnessRun.configured_model,
             policy_revision: harnessRun.policy_revision,
-            evidence: "not_reported",
+            ...(observed
+              ? { observed_model: observed, evidence: "reported_by_runtime" }
+              : {
+                  evidence: "not_reported",
+                  // Open while running; at the end, say why nothing was observed.
+                  ...(state === "running"
+                    ? {}
+                    : {
+                        evidence_reason:
+                          harnessRun.engine === "claude"
+                            ? "engine_output_has_no_model"
+                            : "engine_not_verified",
+                      }),
+                }),
             started_at: harnessRun.started_at,
             ended_at,
             resumed_from: harnessRun.resumed_from,
