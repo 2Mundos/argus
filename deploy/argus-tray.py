@@ -8,16 +8,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QCoreApplication,
     QLockFile,
     QObject,
     QProcess,
@@ -28,6 +31,7 @@ from PySide6.QtCore import (
     Slot,
 )
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
@@ -159,9 +163,10 @@ def snapshot(host: Host, token: str) -> Snapshot:
         return Snapshot("Unreachable", version, url)
 
     if not token:
-        generated = run(*host.command("token"))
-        if not generated.returncode:
-            token = generated.stdout.strip()
+        with suppress(OSError, subprocess.SubprocessError):
+            generated = run(*host.command("token"))
+            if not generated.returncode:
+                token = generated.stdout.strip()
     if not token:
         return Snapshot(state, version, url, ("Stats unavailable: sign in for stats",))
     try:
@@ -215,6 +220,7 @@ class Tray(QObject):
         self.refresh_again = False
         self.command: QProcess | None = None
         self.output = bytearray()
+        self.stopping = False
         self.menu = QMenu()
         self.status = self.menu.addAction("Argus — Checking…")
         self.status.setEnabled(False)
@@ -278,7 +284,7 @@ class Tray(QObject):
             self.refresh()
 
     def refresh(self) -> None:
-        if self.command:
+        if self.command or self.stopping:
             return
         if self.refresh_job:
             self.refresh_again = True
@@ -317,7 +323,7 @@ class Tray(QObject):
         )
         for label, action in self.controls.items():
             allowed = current.state == "Stopped" if label == "Up" else available
-            if label in ("Down", "Restart", "Backup", "Recent logs…"):
+            if label in ("Down", "Restart", "Backup"):
                 allowed = allowed and current.state != "Stopped"
             action.setEnabled(allowed and self.command is None)
 
@@ -390,12 +396,70 @@ class Tray(QObject):
     def quit(self) -> None:
         if self.command:
             return
+        self.stopping = True
         self.timer.stop()
         self.tray.hide()
         # A bounded read may still be finishing; never destroy a running QThread.
         if self.refresh_job:
             self.refresh_job.wait()
         self.app.quit()
+
+
+def stop_address(home: Path) -> str:
+    return "argus-tray-" + hashlib.sha256(os.fsencode(str(home.resolve()))).hexdigest()
+
+
+def stop_tray(home: Path) -> int:
+    socket = QLocalSocket()
+    socket.connectToServer(stop_address(home))
+    if not socket.waitForConnected(3000):
+        lock = QLockFile(str(home / "tray.lock"))
+        lock.setStaleLockTime(0)
+        if lock.tryLock(0):
+            lock.unlock()
+            return 0
+    else:
+        socket.write(b"stop\n")
+        socket.flush()
+        socket.waitForDisconnected(45_000)
+        if socket.readAll().data() == b"stopped\n":
+            return 0
+    print("argus: could not stop the tray; quit it and retry", file=sys.stderr)
+    return 1
+
+
+def stop_server(tray: Tray, lock: QLockFile, home: Path) -> QLocalServer:
+    server = QLocalServer(tray)
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+    address = stop_address(home)
+    # The singleton lock is held: a leftover socket can only belong to a dead tray.
+    QLocalServer.removeServer(address)
+    server.listen(address)
+
+    def connected() -> None:
+        connection = server.nextPendingConnection()
+        if connection is None:
+            return
+
+        def request() -> None:
+            if not connection.canReadLine():
+                return
+            reply = b"busy\n"
+            if connection.readLine().data() == b"stop\n" and not tray.command:
+                tray.quit()
+                server.close()
+                lock.unlock()
+                reply = b"stopped\n"
+            connection.write(reply)
+            connection.flush()
+            connection.disconnectFromServer()
+
+        connection.readyRead.connect(request)
+        connection.disconnected.connect(connection.deleteLater)
+        request()
+
+    server.newConnection.connect(connected)
+    return server
 
 
 def main() -> int:
@@ -405,7 +469,9 @@ def main() -> int:
     parser.add_argument("--wsl-distro", default="")
     parser.add_argument("--wsl-user", default="")
     parser.add_argument("--wsl-home", default="")
-    parser.add_argument("--background", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--background", action="store_true")
+    mode.add_argument("--stop", action="store_true")
     args = parser.parse_args()
     if sys.platform not in ("linux", "darwin", "win32"):
         parser.error("the tray supports Linux, macOS and Windows through WSL 2")
@@ -420,6 +486,9 @@ def main() -> int:
         args.wsl_user,
     )
     os.environ["ARGUS_HOME"] = str(args.home.resolve())
+    if args.stop:
+        app = QCoreApplication(["argus-tray-stop"])
+        return stop_tray(args.home)
     if args.background:
         # Detach on Windows as well as Unix; the WSL/uv bootstrap can then exit.
         arguments = [arg for arg in sys.argv[1:] if arg != "--background"]
@@ -456,11 +525,19 @@ def main() -> int:
         print("argus: a tray is already running for this config", file=sys.stderr)
         return 1
     tray = Tray(app, host)
+    server = stop_server(tray, lock, args.home)
     app.setWindowIcon(icon("Ready"))
     try:
+        if not server.isListening():
+            print(
+                f"argus: could not listen for tray shutdown: {server.errorString()}",
+                file=sys.stderr,
+            )
+            return 1
         return app.exec()
     finally:
         tray.quit()
+        server.close()
         lock.unlock()
 
 

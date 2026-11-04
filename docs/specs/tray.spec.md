@@ -41,6 +41,15 @@ The first installation is completed with `argus up` in a terminal before its
 automatic tray launch. Only one tray per config directory runs at a time, so
 repeated `up` calls cannot add duplicate icons. The tray survives terminal closure
 and stays available after `argus down`; Quit Tray leaves the server running.
+After confirmation, `argus uninstall` stops the tray before removing any install
+resources, including with `--keep-data`. It uses `argus tray --stop` to request
+shutdown over a local Qt socket restricted to the same user, and waits for an
+acknowledgement after the icon is hidden, refresh work has finished, and its
+singleton lock is released. Windows uses the existing WSL-to-Windows bridge for
+this command. Shutdown needs no display and never signals a PID. If the tray is
+busy or cannot be contacted, uninstall fails before deleting resources and asks
+the operator to quit the tray and retry. A stale lock with no live tray is safe
+to clear through Qt's existing lock ownership checks.
 
 On Windows, install and run Argus in a WSL 2 distribution with Docker available,
 and install `uv` on Windows. Running `argus up` inside WSL detects the
@@ -60,6 +69,8 @@ Logs invoke the same installed launcher with the same `ARGUS_HOME`. They inherit
 its locking and named-container boundaries. Commands and periodic status reads
 run off the GUI thread. While a command runs, other commands and Quit are disabled;
 failures remain visible in a dialog. Quitting the tray leaves Argus running.
+Recent logs remain available for an existing stopped or crashed container;
+stopping the container does not erase its logs.
 
 Open Argus uses `http://127.0.0.1:<configured port>/` without credentials in the
 URL. Double-clicking the icon also opens it. The tray reads version, port and
@@ -81,7 +92,8 @@ HTTP Authorization header to the configured loopback server. Proxy handling and
 redirects are disabled. A preset or rotated token can be entered with Sign in
 for stats; it stays in memory for the tray session. Missing or rejected credentials
 leave service controls available and statistics explicitly unavailable. Failed
-refreshes clear old counts. Tokens never enter browser URLs, subprocess arguments,
+token lookups, including timeouts, preserve the service health and dashboard URL.
+Failed refreshes clear old counts. Tokens never enter browser URLs, subprocess arguments,
 dialogs, logs or persistent tray files.
 
 # 4. Open Questions
@@ -115,7 +127,8 @@ dialogs, logs or persistent tray files.
   `python3 scripts/validate_docs.py`; POSIX shell syntax checks.
 - Verified: existing launcher behavior against its Docker and curl fakes; tray
   syntax, formatting and headless smoke checks with disposable launcher/API data,
-  including automatic startup, headless/opt-out paths and background detachment.
+  including automatic startup, headless/opt-out paths, background detachment,
+  optional token lookup failures, stopped-container logs, and uninstall shutdown.
 - Not verified: real menu placement, browser launching and notifications in a
   Linux, macOS or Windows desktop session; the WSL-to-Windows process bridge and
   localhost forwarding on a real Windows machine; extraction from a published

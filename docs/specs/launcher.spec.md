@@ -27,7 +27,7 @@ The commands:
 | `argus backup` | Writes an online SQLite backup into the volume (3.5) and prints its name. |
 | `argus restore <name>` | Stops the container, backs up the current database, restores that backup, starts the version it was taken under (3.5). |
 | `argus status` | Version, container state, `/readyz`, config path, the newest backups. |
-| `argus tray` | Manually start the desktop tray with service controls, health, statistics and Open Argus ([desktop tray](tray.spec.md)); normally started automatically by `up`, requires `uv` on the host. |
+| `argus tray [--stop]` | Manually start or gracefully stop the desktop tray ([desktop tray](tray.spec.md)); normally started automatically by `up`, requires `uv` on the host. |
 | `argus token` · `argus logs [-f]` · `argus down` | Print the admin token · container logs · stop and remove the container (never the volume). |
 | `argus unlock` | Removes a stale lock left by a command that died (3.7). |
 | `argus worker setup\|status\|remove` | Workers on this machine: published worker images, the OneCLI gateway, Docker access ([local workers](local-workers.spec.md)). The first `up` offers `setup`; these add or remove workers later. Mutating subcommands take the lock (3.7). |
@@ -213,19 +213,22 @@ them with what it holds (database size, backup count, whether a secrets file
 exists), then asks for confirmation (`-y` skips it; without a terminal and
 without `-y` it refuses). It removes, in this order:
 
-1. The worker containers and network as `argus worker remove` does, if workers
+1. Stop the desktop tray, if running, and wait for it to release its singleton
+   lock before removing anything ([desktop tray](tray.spec.md)). Failure to stop
+   it leaves the installation intact and asks the operator to quit it and retry.
+2. The worker containers and network as `argus worker remove` does, if workers
    are set up, and the Argus container as `argus down` does.
-2. The images the launcher pulled, by exact reference: Argus and the worker
+3. The images the launcher pulled, by exact reference: Argus and the worker
    images at the configured and previous versions (from `argus.prev` and the
    backup names), and the pinned gateway images. An image another container
    still uses is left and reported; nothing is pruned.
-3. The worker checkouts under `$ARGUS_DATA_HOME/nanoclaw`.
-4. Unless `--keep-data`: the Argus volume (database, artifacts and the backups
+4. The worker checkouts under `$ARGUS_DATA_HOME/nanoclaw`.
+5. Unless `--keep-data`: the Argus volume (database, artifacts and the backups
    inside it), the gateway volumes, and `$ARGUS_HOME` (config, age key,
    `onecli.env`). The confirmation names the volume and says that its backups
    and the age key go with it, so `argus backup` cannot save them; copying a
    backup and the key out comes first.
-5. The installed launcher and `argus.prev`, last.
+6. The installed launcher and `argus.prev`, last.
 
 With `--keep-data` the volumes and `$ARGUS_HOME` stay, so running the install
 line and `argus up` again starts the same install at its configured version

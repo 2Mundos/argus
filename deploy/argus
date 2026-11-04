@@ -117,7 +117,7 @@ Usage: argus <command>
   backup             online backup of the database into the volume
   restore <name>     restore a backup and run the version it was taken under
   status             version, container state, readiness, backups
-  tray               desktop tray: controls, health, stats, open dashboard (needs uv)
+  tray [--stop]      start or gracefully stop the desktop tray (needs uv)
   token              print the generated admin token, if there is one
   logs [-f]          container logs
   down               stop and remove the container (never the volume)
@@ -947,6 +947,7 @@ cmd_uninstall() {
 	fi
 
 	say "This removes:"
+	[ ! -f "$ARGUS_HOME/tray.lock" ] || say "  desktop tray"
 	[ -z "$containers" ] || say "  containers:$containers"
 	[ -z "$network" ] || say "  network: $network"
 	for i in $images; do say "  image: $i"; done
@@ -979,6 +980,10 @@ cmd_uninstall() {
 		case $ans in y | Y | yes) ;; *) die "cancelled" ;; esac
 	fi
 
+	if [ -f "$ARGUS_HOME/tray.lock" ]; then
+		ARGUS_HOME=$ARGUS_HOME sh "$self" tray --stop ||
+			die "uninstall: quit the desktop tray and retry; nothing was removed"
+	fi
 	left=0
 	if [ -n "$containers$network" ]; then
 		run_step "remove the containers" remove_containers
@@ -1047,7 +1052,8 @@ auto_start_tray() {
 
 cmd_tray() {
 	if [ $# -gt 0 ]; then
-		[ $# -eq 1 ] && [ "$1" = --background ] || die "usage: argus tray [--background]"
+		[ $# -eq 1 ] || die "usage: argus tray [--background|--stop]"
+		case $1 in --background | --stop) ;; *) die "usage: argus tray [--background|--stop]" ;; esac
 	fi
 	if [ -n "${WSL_DISTRO_NAME:-}" ]; then
 		command -v uv.exe >/dev/null || die "tray: install uv on Windows, then reopen the WSL terminal (https://docs.astral.sh/uv/getting-started/installation/)"
@@ -1055,7 +1061,9 @@ cmd_tray() {
 	else
 		case $(uname -s) in
 		Linux)
-			[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || die "tray: no desktop display; run this in your desktop session"
+			if [ "${1:-}" != --stop ]; then
+				[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || die "tray: no desktop display; run this in your desktop session"
+			fi
 			;;
 		Darwin) ;;
 		*) die "tray: supported on Linux, macOS and Windows through WSL 2" ;;
