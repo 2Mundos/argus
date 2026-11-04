@@ -70,6 +70,34 @@ HOOKS_OVERRIDE_MESSAGE = (
     "Argus rejects this git command: do not override core.hooksPath on the "
     "command line; worker commits use the workspace hook directory"
 )
+IDENTITY_OVERRIDE_MESSAGE = (
+    "Argus rejects this git command: do not override the git author or committer "
+    "identity (GIT_AUTHOR_*/GIT_COMMITTER_* variables, --author, identity -c keys, "
+    "or git config writes); worker commits use the configured project identity"
+)
+_IDENTITY_ENV = (
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+)
+_IDENTITY_ENV_ASSIGNMENT = re.compile(r"(?<![\w])(?:" + "|".join(_IDENTITY_ENV) + r")=")
+_IDENTITY_KEYS = frozenset(
+    f"{section}.{field}"
+    for section in ("user", "author", "committer")
+    for field in ("name", "email")
+)
+_CONFIG_READ_FLAGS = frozenset(
+    {
+        "--get",
+        "--get-all",
+        "--get-regexp",
+        "--get-urlmatch",
+        "--list",
+        "-l",
+        "--show-origin",
+    }
+)
 
 
 def _test_hooks_allowed() -> bool:
@@ -168,6 +196,58 @@ def _forbidden_git_config(argv: list[str]) -> str | None:
             i += 1
             continue
         i += 1
+    return None
+
+
+def _is_identity_key(cfg: str) -> bool:
+    return cfg.split("=", 1)[0].strip().lower() in _IDENTITY_KEYS
+
+
+def _identity_override(argv: list[str]) -> str | None:
+    """Reject any attempt to override the configured git author/committer identity."""
+    if any(name in os.environ for name in _IDENTITY_ENV):
+        return IDENTITY_OVERRIDE_MESSAGE
+    args = list(argv)
+    if args and Path(args[0]).name == "git":
+        args = args[1:]
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        a = args[i]
+        if a in ("-c", "--config") and i + 1 < len(args):
+            if _is_identity_key(args[i + 1]):
+                return IDENTITY_OVERRIDE_MESSAGE
+            i += 2
+        elif a.startswith("--config-env="):
+            if _is_identity_key(a.split("=", 1)[1]):
+                return IDENTITY_OVERRIDE_MESSAGE
+            i += 1
+        elif a in ("--config-env", "-C", "--git-dir", "--work-tree", "--namespace"):
+            if (
+                a == "--config-env"
+                and i + 1 < len(args)
+                and _is_identity_key(args[i + 1])
+            ):
+                return IDENTITY_OVERRIDE_MESSAGE
+            i += 2
+        else:
+            i += 1
+    if i >= len(args):
+        return None
+    sub, rest = args[i], args[i + 1 :]
+    if sub == "commit" and any(
+        a == "--author" or a.startswith("--author=") for a in rest
+    ):
+        return IDENTITY_OVERRIDE_MESSAGE
+    is_read = any(a in _CONFIG_READ_FLAGS for a in rest) or rest[:1] in (
+        ["get"],
+        ["list"],
+    )
+    if (
+        sub == "config"
+        and not is_read
+        and any(a.strip().lower() in _IDENTITY_KEYS for a in rest)
+    ):
+        return IDENTITY_OVERRIDE_MESSAGE
     return None
 
 
@@ -289,7 +369,7 @@ def check_commit_argv(argv: list[str]) -> str | None:
     return None
 
 
-def _bash_git_commit_segments(command: str) -> list[list[str]]:
+def _bash_segments(command: str) -> list[list[str]]:
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     segments: list[list[str]] = [[]]
@@ -298,10 +378,22 @@ def _bash_git_commit_segments(command: str) -> list[list[str]]:
             segments.append([])
         else:
             segments[-1].append(token)
+    return [seg for seg in segments if seg]
+
+
+def _bash_git_argvs(command: str) -> list[list[str]]:
     out: list[list[str]] = []
-    for seg in segments:
-        if not seg:
-            continue
+    for seg in _bash_segments(command):
+        for idx, tok in enumerate(seg):
+            if Path(tok).name == "git":
+                out.append(seg[idx:])
+                break
+    return out
+
+
+def _bash_git_commit_segments(command: str) -> list[list[str]]:
+    out: list[list[str]] = []
+    for seg in _bash_segments(command):
         while seg and re.match(r"^\w+=", seg[0]):
             seg = seg[1:]
         idx = 0
@@ -318,7 +410,13 @@ def _bash_git_commit_segments(command: str) -> list[list[str]]:
 
 
 def check_bash_command(command: str) -> str | None:
+    if _IDENTITY_ENV_ASSIGNMENT.search(command):
+        return IDENTITY_OVERRIDE_MESSAGE
     try:
+        for argv in _bash_git_argvs(command):
+            ident_err = _identity_override(argv)
+            if ident_err:
+                return ident_err
         for seg in _bash_git_commit_segments(command):
             argv = seg if seg and seg[0] == "git" else ["git", *seg]
             cfg_err = _forbidden_git_config(argv)
@@ -590,6 +688,9 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
 
 
 def gate_git(default_cwd: str, argv: list[str]) -> str | None:
+    ident_err = _identity_override(argv)
+    if ident_err:
+        return ident_err
     inv = parse_git_argv(argv, default_cwd)
     if not inv:
         return None

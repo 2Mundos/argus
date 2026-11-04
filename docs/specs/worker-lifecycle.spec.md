@@ -680,6 +680,11 @@ earlier tasks neither inflate its cost nor contaminate its replies
     resolving the push range return an actionable error instead of allowing the
     push. It does not rewrite messages, amend history on its own, or strip
     trailers from commits that already exist on the remote.
+    The same wrapper pins the commit identity to the configured project
+    identity: `ARGUS_GIT_AUTHOR_NAME`/`ARGUS_GIT_AUTHOR_EMAIL` become author and
+    committer, and caller `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, `--author`,
+    identity `-c` keys, and `git config` identity writes are rejected. Having the
+    runtime provide those two variables is a follow-up.
   - **`core.hooksPath`** on each task workspace points at
     `/usr/local/lib/argus/git-hooks` (the image directory containing
     `commit-msg`), so commits created without a `-m`/`-F` message (editor flow)
