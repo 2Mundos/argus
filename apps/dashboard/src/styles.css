@@ -441,10 +441,35 @@ label.check input {
   margin-right: -0.14em;
   font-weight: 700;
   line-height: 1;
-  background: linear-gradient(135deg, #f8fafc 15%, #7dd3fc 58%, #c084fc 100%);
+}
+/* Gradient text (docs/specs/dashboard-working.spec.md). The tile is mirrored, so rolling
+   it by exactly one tile (200% of the box) loops without a seam; at rest it shows the
+   first half. */
+.roll-text {
+  background:
+    linear-gradient(90deg, #f8fafc 0%, #7dd3fc 25%, #c084fc 50%, #7dd3fc 75%, #f8fafc 100%) 0 0 /
+    200% 100% repeat-x;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+.roll-text.rolling {
+  animation: roll 1.8s linear infinite;
+}
+@keyframes roll {
+  to {
+    background-position-x: 200%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .roll-text.rolling {
+    animation: none;
+  }
+}
+.working {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 500;
 }
 .login .brand {
   font-size: 1.85rem;
@@ -1888,9 +1913,6 @@ main > section.chat-page.chat-off {
 }
 .chat-status.registered .chat-status-word::before {
   background: var(--muted);
-}
-.chat-msg-meta {
-  margin: 0;
 }
 .chat-thread-title {
   margin: 0;

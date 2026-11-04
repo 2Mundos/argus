@@ -9,15 +9,34 @@ import {
   type Message,
   type Pool,
 } from "../api";
-import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { Working } from "../Working";
 import { useNow } from "./Activity";
 
 function messageRole(author: string): "human" | "orchestrator" | "system" {
   if (author === "system") return "system";
   if (author.startsWith("orchestrator:")) return "orchestrator";
   return "human";
+}
+
+// Mirrors the server's TURN_TIMEOUT: a turn older than this was given up on.
+const TURN_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** The wait line under the thread: the admin spoke last and no reply has come yet. */
+export function pendingReply(
+  items: Message[],
+  registered: boolean,
+  now: number,
+): { label: string; rolling: boolean } | null {
+  const last = items[items.length - 1];
+  if (!last || messageRole(last.author) !== "human") return null;
+  if (last.state !== "queued" && last.state !== "delivered") return null;
+  if (now - Date.parse(last.created_at) > TURN_TIMEOUT_MS) return null;
+  if (last.state === "delivered") return { label: "Working…", rolling: true };
+  return registered
+    ? { label: "Waiting for the orchestrator…", rolling: true }
+    : { label: "Queued until the orchestrator is available", rolling: false };
 }
 
 type Registration = { word: string; reason: string; ok: boolean };
@@ -230,12 +249,13 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
     await action.run(async () => {
       setError(undefined);
       try {
-        let conversationId = selected?.id;
+        // `selectedId`, not the listed chat: a new one is not listed until it has a message,
+        // so a retry after a failed send must still find it.
+        let conversationId = selectedId;
         if (!conversationId) {
           const created = await call(api.POST("/api/conversations", { body: {} }));
           conversationId = created.id;
           setSelectedId(created.id);
-          reloadList();
         }
         await call(
           api.POST("/api/conversations/{conversation_id}/messages", {
@@ -292,9 +312,9 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
           pending={action.busy}
           aria-label="Send"
         >
-          <svg viewBox="0 0 24 24" width={16} height={16} aria-hidden="true">
+          <svg viewBox="0 0 24 24" width={15} height={15} aria-hidden="true">
             <path
-              d="M12 19V6M6 12l6-6 6 6"
+              d="M22 2 11 13M22 2l-7 20-4-9-9-4z"
               fill="none"
               stroke="currentColor"
               strokeWidth="2"
@@ -307,6 +327,8 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
       {error && <p className="error small">{error}</p>}
     </form>
   );
+
+  const pending = pendingReply(items, registration.ok, now);
 
   return (
     <section className="chat-page">
@@ -352,14 +374,12 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
               const role = messageRole(m.author);
               return (
                 <article key={m.id} className={`chat-msg chat-msg-${role}`}>
-                  <p className="muted small chat-msg-meta">
-                    {m.author} · <DateChip at={m.created_at} />
-                  </p>
                   <Markdown>{m.body}</Markdown>
                   {m.truncated && <p className="muted small">Truncated</p>}
                 </article>
               );
             })}
+            {pending && <Working label={pending.label} rolling={pending.rolling} />}
           </div>
           {composer}
         </div>

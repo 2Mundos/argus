@@ -9,7 +9,7 @@ type Req = { method: "GET" | "POST"; path: string; opts?: { body?: unknown; para
 
 const net = vi.hoisted(() => ({
   onboarding: { orchestrator: true } as { orchestrator: boolean },
-  conversations: [] as unknown[],
+  conversations: [] as { id: string; title: string; cost_usd?: number | null }[],
   messages: {} as Record<string, unknown[]>,
   pools: [] as unknown[],
   instances: [] as unknown[],
@@ -42,6 +42,10 @@ vi.mock("../api", () => ({
       if (net.failMessages) throw new Error("orchestrator unavailable");
       const id = req.opts?.params?.path?.conversation_id as string;
       const body = (req.opts?.body as { body: string }).body;
+      // The server names a placeholder-titled chat after its first message.
+      net.conversations = net.conversations.map((c) =>
+        c.id === id && c.title === "New chat" ? { ...c, title: body } : c,
+      );
       net.messages[id] = [...(net.messages[id] ?? []), message(`m-${id}`, "admin:tester", body)];
       return {};
     }
@@ -50,7 +54,12 @@ vi.mock("../api", () => ({
       case "/api/onboarding":
         return net.onboarding;
       case "/api/conversations":
-        return { items: net.conversations };
+        // The server lists a placeholder-titled chat only once it has a message.
+        return {
+          items: net.conversations.filter(
+            (c) => c.title !== "New chat" || (net.messages[c.id]?.length ?? 0) > 0,
+          ),
+        };
       case "/api/conversations/{conversation_id}/messages":
         return { items: net.messages[req.opts?.params?.path?.conversation_id] ?? [] };
       case "/api/pools":
@@ -220,9 +229,12 @@ describe("Chat first send", () => {
         body: { body: "Ship the fix" },
       },
     ]);
-    // Author and a timestamp accompany the message.
-    expect(screen.getByText(/^admin:tester ·/)).toBeTruthy();
-    expect(document.querySelector("article time")).toBeTruthy();
+    // The message is just its text, and the list names the chat after it, so the only
+    // "New chat" on screen is the button that starts one.
+    expect(screen.queryByText(/^admin:tester/)).toBeNull();
+    expect(document.querySelector("article time")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Ship the fix" })).toBeTruthy();
+    expect(screen.getAllByText("New chat")).toHaveLength(1);
   });
 
   it("does not send an empty message, whitespace, or Shift+Enter", async () => {
@@ -270,6 +282,8 @@ describe("Chat first send", () => {
     await waitFor(() => expect(box.disabled).toBe(false));
     fireEvent.keyDown(box, { key: "Enter" });
     await waitFor(() => expect(messagePosts()).toHaveLength(2));
+    // The chat made by the failed send is not listed (no message yet), yet is reused.
+    expect(convPosts()).toHaveLength(1);
   });
 });
 
@@ -283,14 +297,15 @@ describe("Chat thread", () => {
     ];
   });
 
-  it("shows author and timestamp per message and the thread cost", async () => {
+  it("shows each message as its text alone, and the thread cost", async () => {
     renderChat();
     fireEvent.click(await screen.findByRole("button", { name: "Plan the release" }));
     expect(await screen.findByText("All green.")).toBeTruthy();
-    for (const author of ["admin:tester", "orchestrator:agent-1", "system"]) {
-      expect(screen.getAllByText(new RegExp(`^${author} ·`)).length).toBe(1);
-    }
-    expect(document.querySelectorAll("article time").length).toBe(3);
+    expect(screen.getAllByRole("article").map((a) => a.textContent)).toEqual([
+      "Status?",
+      "All green.",
+      "The orchestrator did not answer this turn.",
+    ]);
     expect(screen.getByText("~$1.25 this thread")).toBeTruthy();
   });
 
