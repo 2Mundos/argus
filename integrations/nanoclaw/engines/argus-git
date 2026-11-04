@@ -10,6 +10,81 @@ fi
 if ! python3 "$py" gate "$PWD" "$@"; then
   exit 1
 fi
+sub=""
+sub_arg=""
+skip=0
+after_sub=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  if [ "$after_sub" = 1 ]; then sub_arg="$a"; break; fi
+  case "$a" in
+    -C|-c|--config-env|--git-dir|--work-tree|--namespace|--exec-path) skip=1 ;;
+    -*) ;;
+    *) sub="$a"; after_sub=1 ;;
+  esac
+done
+identity_required=0
+case "$sub" in
+  commit|push|merge|cherry-pick|rebase|revert|am|pull|commit-tree|stash|tag|notes)
+    identity_required=1
+    ;;
+esac
+case "$sub" in
+  stash)
+    case "$sub_arg" in
+      list|show) identity_required=0 ;;
+    esac
+    ;;
+  tag)
+    case "$sub_arg" in
+      ""|-l|--list|--contains|--no-contains|--merged|--no-merged|--points-at|--sort|--sort=*|--format|--format=*|-n|-n[0-9]*|--ignore-case|--column|--no-column|--omit-empty) identity_required=0 ;;
+    esac
+    ;;
+  notes)
+    case "$sub_arg" in
+      list|show) identity_required=0 ;;
+    esac
+    ;;
+esac
+if [ -z "${ARGUS_GIT_AUTHOR_NAME:-}" ] || [ -z "${ARGUS_GIT_AUTHOR_EMAIL:-}" ]; then
+  alias_command=0
+  if [ -n "$sub" ] && "$real" config --get "alias.$sub" >/dev/null 2>&1; then
+    alias_command=1
+  fi
+  skip_config_value=0
+  skip_other_value=0
+  for a in "$@"; do
+    if [ "$skip_config_value" = 1 ]; then
+      config_key=$(printf '%s' "${a%%=*}" | tr '[:upper:]' '[:lower:]')
+      case "$config_key" in alias.*) alias_command=1 ;; esac
+      skip_config_value=0
+      continue
+    fi
+    if [ "$skip_other_value" = 1 ]; then
+      skip_other_value=0
+      continue
+    fi
+    case "$a" in
+      -c|--config-env) skip_config_value=1 ;;
+      -C|--git-dir|--work-tree|--namespace|--exec-path) skip_other_value=1 ;;
+      -c*|--config-env=*)
+        config_key=${a#-c}
+        config_key=${config_key#--config-env=}
+        config_key=$(printf '%s' "${config_key%%=*}" | tr '[:upper:]' '[:lower:]')
+        case "$config_key" in alias.*) alias_command=1 ;; esac
+        ;;
+      -*) ;;
+      *) break ;;
+    esac
+  done
+  if [ "$alias_command" = 1 ]; then
+    identity_required=1
+  fi
+fi
+if { [ -z "${ARGUS_GIT_AUTHOR_NAME:-}" ] || [ -z "${ARGUS_GIT_AUTHOR_EMAIL:-}" ]; } && [ "$identity_required" = 1 ]; then
+  echo "Argus rejects this git command: no git author identity is configured; set the git.identity setting (global or project), then restart the worker" >&2
+  exit 1
+fi
 if [ -n "${ARGUS_GIT_AUTHOR_NAME:-}" ] && [ -n "${ARGUS_GIT_AUTHOR_EMAIL:-}" ]; then
   GIT_AUTHOR_NAME="$ARGUS_GIT_AUTHOR_NAME"
   GIT_AUTHOR_EMAIL="$ARGUS_GIT_AUTHOR_EMAIL"

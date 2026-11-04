@@ -10,6 +10,7 @@ from argus_api.config import refuse_preview_data
 from argus_api.errors import ValidationFailedError
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
+from argus_api.settings.service import effective_git_identity, resolve_git_identity
 from argus_api.tasks import independent_review as indep
 from argus_core.continuation import item_id
 from argus_core.tasks import HarnessModel
@@ -284,6 +285,71 @@ def test_difficulty_executors_setting_and_claim(client: TestClient) -> None:
     )
     assert claimed.status_code == 200, claimed.text
     assert claimed.json()["difficulty_executors"] == []
+
+
+@pytest.mark.parametrize(
+    ("project", "global_", "expected"),
+    [
+        ({"name": "P", "email": "p@x.io"}, {"name": "G", "email": "g@x.io"}, "P"),
+        ({}, {"name": "G", "email": "g@x.io"}, "G"),
+        (None, {"name": "G", "email": "g@x.io"}, "G"),
+        ({"name": "P", "email": "p@x.io"}, {}, "P"),
+    ],
+)
+def test_git_identity_precedence(
+    project: dict[str, str] | None, global_: dict[str, str], expected: str
+) -> None:
+    got = resolve_git_identity(project, global_)
+    assert got.name == expected
+
+
+def test_git_identity_unset_fails_closed_naming_the_key() -> None:
+    with pytest.raises(ValidationFailedError, match=r"git\.identity"):
+        resolve_git_identity({}, {})
+
+
+def test_git_identity_setting_resolves_project_over_global(
+    client: TestClient,
+) -> None:
+    client.put(
+        "/api/projects/demo",
+        json={"name": "Demo", "description": "d"},
+        headers=ADMIN,
+    )
+    db = client.app.state.db  # ty: ignore[unresolved-attribute]
+    path = Path(os.environ["ARGUS_DATA_DIR"])
+
+    async def resolve() -> str:
+        async with db.read() as conn:
+            return (await effective_git_identity(conn, path, "demo")).name
+
+    def put(url: str, value: dict[str, str]) -> None:
+        res = client.put(url, json={"value": value}, headers=ADMIN)
+        assert res.status_code == 200, res.text
+
+    with pytest.raises(ValidationFailedError, match=r"git\.identity"):
+        client.portal.call(resolve)  # ty: ignore[unresolved-attribute]
+    put("/api/settings/git.identity", {"name": "G", "email": "g@x.io"})
+    assert client.portal.call(resolve) == "G"  # ty: ignore[unresolved-attribute]
+    put("/api/projects/demo/settings/git.identity", {"name": "P", "email": "p@x.io"})
+    assert client.portal.call(resolve) == "P"  # ty: ignore[unresolved-attribute]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"name": "", "email": "a@x.io"},
+        {"name": "A", "email": "not an address"},
+        {"name": "A", "email": "nope"},
+        {"name": "A"},
+        {"name": "A", "email": "a@x.io", "extra": 1},
+    ],
+)
+def test_git_identity_schema_rejects_bad_shapes(
+    client: TestClient, value: dict[str, object]
+) -> None:
+    res = client.put("/api/settings/git.identity", json={"value": value}, headers=ADMIN)
+    assert res.status_code == 422, res.text
 
 
 def test_merge_and_partial_policy_unit() -> None:

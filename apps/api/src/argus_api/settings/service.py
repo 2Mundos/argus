@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiosqlite
 from argus_core.difficulty import as_jsonable, parse_difficulty_executors
@@ -27,6 +27,12 @@ GLOBAL = "global"
 MODELS_KEY = "models"
 REVIEW_KEY = "review.independent"
 DIFFICULTY_EXECUTORS_KEY = "difficulty.executors"
+GIT_IDENTITY_KEY = "git.identity"
+
+
+class GitIdentity(NamedTuple):
+    name: str
+    email: str
 
 
 def _check_schema(defn: SettingDefinition, value: Any) -> None:
@@ -265,6 +271,25 @@ async def effective_model_policy(
     setting = await _models_for_project(conn, path, project)
     policy = model_policy.validate(setting.value)
     return policy, setting.revision or model_policy.revision(policy)
+
+
+def resolve_git_identity(project: Any, global_: Any) -> GitIdentity:
+    """Project override wins over global; neither set fails closed."""
+    for value in (project, global_):
+        if value:
+            return GitIdentity(value["name"], value["email"])
+    raise ValidationFailedError(
+        "git author identity is not configured; set the git.identity setting "
+        "(global or project)",
+        code="git_identity_unset",
+    )
+
+
+async def effective_git_identity(
+    conn: aiosqlite.Connection, path: Path, project: str
+) -> GitIdentity:
+    override = await project_override(conn, project, GIT_IDENTITY_KEY)
+    return resolve_git_identity(override, await global_value(conn, GIT_IDENTITY_KEY))
 
 
 def _check_scope(defn: SettingDefinition, scope: str) -> None:

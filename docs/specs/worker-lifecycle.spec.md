@@ -683,8 +683,11 @@ earlier tasks neither inflate its cost nor contaminate its replies
     The same wrapper pins the commit identity to the configured project
     identity: `ARGUS_GIT_AUTHOR_NAME`/`ARGUS_GIT_AUTHOR_EMAIL` become author and
     committer, and caller `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, `--author`,
-    identity `-c` keys, and `git config` identity writes are rejected. Having the
-    runtime provide those two variables is a follow-up.
+    identity `-c` keys, and `git config` identity writes are rejected. The
+    reconciler passes the global `git.identity` setting into the pool container
+    as those two variables ([settings](settings.spec.md) 3.8); without them the
+    wrapper rejects commit-creating commands and `push`. A per-project override
+    is not delivered to running workers yet (pool-scoped containers).
   - **`core.hooksPath`** on each task workspace points at
     `/usr/local/lib/argus/git-hooks` (the image directory containing
     `commit-msg`), so commits created without a `-m`/`-F` message (editor flow)

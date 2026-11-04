@@ -380,7 +380,14 @@ if "GIT_HTTP_PROXY_AUTHMETHOD" not in s:
     new = "  'GIT_SSL_CAINFO',\n  'GIT_HTTP_PROXY_AUTHMETHOD',\n  'GIT_TERMINAL_PROMPT',\n  'HOME',"
     assert old in s, "codex-app-server CODEX_ENV_ALLOWLIST shape changed upstream"
     s = s.replace(old, new, 1)
-runtime_keys = ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME", "ARGUS_REPOSITORIES_JSON", "ARGUS_CODEX_TURN_TIMEOUT_MS"]
+runtime_keys = [
+    "CURSOR_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "ARGUS_REPOSITORIES_JSON",
+    "ARGUS_GIT_AUTHOR_NAME",
+    "ARGUS_GIT_AUTHOR_EMAIL",
+    "ARGUS_CODEX_TURN_TIMEOUT_MS",
+]
 missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
 if missing:
     insert = "".join(f"  '{k}',\n" for k in missing)
@@ -420,6 +427,25 @@ open(p, "w").write(s.replace(old, new, 1))
 PY
   echo "patched $container_runner (host ARGUS_REPOSITORIES_JSON → agent contributedEnv)"
 fi
+if [ -f "$container_runner" ] && ! grep -q "ARGUS_GIT_AUTHOR_NAME" "$container_runner"; then
+  python3 - "$container_runner" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """  const contributedEnv: Record<string, string> = {
+    ...(contribution.env ?? {}),
+    ...(gateway.env ?? {}),
+  };"""
+new = old + """
+  for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL']) {
+    const value = process.env[key];
+    if (value?.trim()) contributedEnv[key] = value;
+  }"""
+assert old in s, "container-runner composeSessionSpec contributedEnv block changed upstream"
+open(p, "w").write(s.replace(old, new, 1))
+PY
+  echo "patched $container_runner (host git identity → agent contributedEnv)"
+fi
 
 codex_test="$target/container/agent-runner/src/providers/codex-app-server.test.ts"
 if [ -f "$codex_test" ]; then
@@ -438,6 +464,8 @@ if marker not in s:
       GIT_SSL_CAINFO: '/tmp/onecli-ca.pem',
       GIT_HTTP_PROXY_AUTHMETHOD: 'basic',
       GIT_TERMINAL_PROMPT: '0',
+      ARGUS_GIT_AUTHOR_NAME: 'Argus Test',
+      ARGUS_GIT_AUTHOR_EMAIL: 'test@example.invalid',
       OPENAI_API_KEY: 'sk-test',""",
         1,
     )
@@ -449,25 +477,27 @@ if marker not in s:
     expect(env.GIT_SSL_CAINFO).toBe('/tmp/onecli-ca.pem');
     expect(env.GIT_HTTP_PROXY_AUTHMETHOD).toBe('basic');
     expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env.ARGUS_GIT_AUTHOR_NAME).toBe('Argus Test');
+    expect(env.ARGUS_GIT_AUTHOR_EMAIL).toBe('test@example.invalid');
     expect(env.OPENAI_API_KEY).toBeUndefined();""",
         1,
     )
     assert marker in s, "codex-app-server env test shape changed upstream"
 runtime_marker = "forwards Cursor delegate and Gitea allowlist env"
-if runtime_marker not in s:
+if runtime_marker not in s and "expect(env.CURSOR_CONFIG_DIR)" not in s:
+    assert "      GIT_TERMINAL_PROMPT: '0'," in s, "codex-app-server env test input changed upstream"
+    assert "    expect(env.GIT_TERMINAL_PROMPT).toBe('0');" in s, "codex-app-server env test assertion changed upstream"
     s = s.replace(
-        """      GIT_TERMINAL_PROMPT: '0',
-      OPENAI_API_KEY: 'sk-test',""",
+        "      GIT_TERMINAL_PROMPT: '0',",
         """      GIT_TERMINAL_PROMPT: '0',
       CURSOR_CONFIG_DIR: '/home/node/.config/cursor',
       XDG_CONFIG_HOME: '/home/node/.config',
       ARGUS_REPOSITORIES_JSON: '{"radar":"https://git.example.test/radar/radar.git"}',
-      OPENAI_API_KEY: 'sk-test',""",
+""",
         1,
     )
     s = s.replace(
-        """    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
-    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+        "    expect(env.GIT_TERMINAL_PROMPT).toBe('0');",
         """    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
     // forwards Cursor delegate and Gitea allowlist env
     expect(env.CURSOR_CONFIG_DIR).toBe('/home/node/.config/cursor');
@@ -475,7 +505,7 @@ if runtime_marker not in s:
     expect(env.ARGUS_REPOSITORIES_JSON).toBe(
       '{"radar":"https://git.example.test/radar/radar.git"}',
     );
-    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+""",
         1,
     )
     assert "expect(env.CURSOR_CONFIG_DIR)" in s, "codex-app-server env test runtime keys missing"

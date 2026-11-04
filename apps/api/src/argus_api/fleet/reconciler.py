@@ -53,6 +53,7 @@ from argus_api.fleet.targets import (
     container_name,
 )
 from argus_api.ops import LoopStats
+from argus_api.settings import service as settings_service
 
 log = logging.getLogger(__name__)
 
@@ -461,6 +462,7 @@ async def _act(
             " last_start_at = ?, image = ? WHERE id = ?",
             (ts(tx.now), pool.image, action.instance_id),
         )
+        identity = await settings_service.global_value(tx.conn, "git.identity")
     assert settings.argus_url is not None
     try:
         spec = runtimes.container_spec(
@@ -470,6 +472,7 @@ async def _act(
             settings.argus_url,
             model_policy=_model_policy(pool, settings),
             worker_name=worker_name,
+            git_identity=(identity["name"], identity["email"]) if identity else None,
         )
         await target.start(spec)
     except TargetError as exc:
