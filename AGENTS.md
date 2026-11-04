@@ -70,6 +70,7 @@ calling work done, check which of these apply and say so:
 - Extend before adding: add a row or assertion to an existing test when one fits.
 - A logic, data or protocol bug gets a failing test first, then the fix. A purely
   visual bug gets before/after screenshots instead of a test.
+- A bug that meets the postmortem bar gets one in the same PR as its fix.
 - No sleeps, polling loops, per-test timeouts, retries or elapsed-time asserts.
   Await the event or future that marks the milestone; fix flaky tests, don't
   retry them. A skip needs a `reason=`.
