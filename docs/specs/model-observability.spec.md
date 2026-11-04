@@ -37,6 +37,13 @@ through it for the delegate) and the dashboard views.
 - `observed_model` is set only with `evidence` in `reported_by_runtime |
   cli_output | provider_response`. Otherwise it is `null` with evidence
   `not_reported`: explicit unknown. The database enforces the pairing.
+- A run with no observed model says why in `evidence_reason`, only with
+  `not_reported`: `engine_output_has_no_model` (the run ended and its output
+  named none), `executor_not_verified` (delegate CLI that prints no verified
+  served model), `engine_not_verified` (harness engine other than Claude, or an
+  unknown one), `run_not_started` (blocked before the model started). It is
+  `null` while the run may still report one, and on records that predate it. An
+  observation clears it; a stored reason is history like any other value.
 - `requested_model` (asked for) and `configured_model` (what the runtime was
   configured with) are separate facts and never stand in for `observed_model`.
 - An observed model needs a run that started: it is refused for state
@@ -137,9 +144,14 @@ best effort (a refused or failed report never fails the task).
   an attempt carries an `initial` selection (reason `policy`, the model chain
   position); when the harness chain moved on because of earlier failures or
   review it is a `model_switch` (reason `error`) from the previous chain model,
-  or `retry_no_fallback` when the chain has no other model. The harness does
-  not expose the model that served it to the host: `observed_model` stays
-  `not_reported`.
+  or `retry_no_fallback` when the chain has no other model. The model that
+  served the session is taken only from the engine's own output: the harness
+  usage records the host already relays ([account usage](account-usage.spec.md) 3.9) carry the
+  Claude Agent SDK result's `modelUsage` model, which sets `observed_model` with
+  evidence `reported_by_runtime` when the session ends. Codex records carry the
+  configured model, which is not evidence, so they leave `not_reported`
+  (`engine_not_verified`); a Claude session without such a record is
+  `engine_output_has_no_model`.
 - **Delegate.** Every `argus-delegate` model attempt is one execution, key
   `dlg:<hash of run_key>`, `delegation_id` the invocation's id, `run_key` the
   account usage key: runtime `argus-delegate`, the `executor`, the executor
@@ -188,7 +200,6 @@ best effort (a refused or failed report never fails the task).
 
 - Codex, Cursor and OpenCode: once a real output sample shows a model field,
   their observation can move from `not_reported` to `cli_output`.
-- Whether the harness runtime can report its observed model to the host.
 - Whether cost view should group by observed model once producers report it.
 
 # 5. Constraints

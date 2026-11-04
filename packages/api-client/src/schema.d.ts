@@ -6170,6 +6170,8 @@ export interface components {
              * @enum {string}
              */
             evidence?: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
+            /** Evidence Reason */
+            evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
             executor?: ("claude" | "codex" | "opencode" | "agent") | null;
             /** Id */
@@ -6243,6 +6245,8 @@ export interface components {
              * @enum {string}
              */
             evidence?: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
+            /** Evidence Reason */
+            evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
             executor?: ("claude" | "codex" | "opencode" | "agent") | null;
             /** Key */
@@ -7115,6 +7119,8 @@ export interface components {
              * @enum {string}
              */
             evidence: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
+            /** Evidence Reason */
+            evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Execution Id */
             execution_id: string;
             /** Executions */

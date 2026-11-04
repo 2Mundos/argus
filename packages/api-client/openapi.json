@@ -8555,6 +8555,23 @@
             "title": "Evidence",
             "type": "string"
           },
+          "evidence_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "engine_output_has_no_model",
+                  "executor_not_verified",
+                  "engine_not_verified",
+                  "run_not_started"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Reason"
+          },
           "executor": {
             "anyOf": [
               {
@@ -8808,6 +8825,23 @@
             ],
             "title": "Evidence",
             "type": "string"
+          },
+          "evidence_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "engine_output_has_no_model",
+                  "executor_not_verified",
+                  "engine_not_verified",
+                  "run_not_started"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Reason"
           },
           "executor": {
             "anyOf": [
@@ -11486,6 +11520,23 @@
             ],
             "title": "Evidence",
             "type": "string"
+          },
+          "evidence_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "engine_output_has_no_model",
+                  "executor_not_verified",
+                  "engine_not_verified",
+                  "run_not_started"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Reason"
           },
           "execution_id": {
             "title": "Execution Id",

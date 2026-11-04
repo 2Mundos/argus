@@ -160,6 +160,8 @@ export function createUsageRelay(opts: {
   post: Post;
   /** Report a rejected executor credential; called at most once per account and relay. */
   authRejected?: (accountId: string) => Promise<unknown>;
+  /** A harness (engine role) record that names a model, as soon as it is read. */
+  onEngineModel?: (engine: string | null, model: string) => void;
   now?: () => number;
 }) {
   const now = opts.now ?? Date.now;
@@ -244,6 +246,8 @@ export function createUsageRelay(opts: {
         }
         if (seen.has(checked.body.run_key)) continue;
         seen.add(checked.body.run_key);
+        if (checked.body.role === "engine" && checked.body.model)
+          opts.onEngineModel?.(checked.body.engine, checked.body.model);
         if (pending.length >= PENDING_MAX) pending.shift();
         pending.push({ accountId: checked.accountId, body: checked.body });
       }

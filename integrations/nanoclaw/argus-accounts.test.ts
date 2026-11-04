@@ -3766,6 +3766,37 @@ describe("usage relay in the channel", () => {
     rmSync(r.dir, { recursive: true });
   });
 
+  it("reports the harness's served model from its own output, else not_reported with a reason", async () => {
+    const harnessExecution = (r: Awaited<ReturnType<typeof run>>) =>
+      r.w.calls
+        .filter((c) => c.path === "/tasks/t1/models")
+        .flatMap((c) => c.body.executions ?? [])
+        .filter((e: any) => e.layer === "harness" && e.state === "succeeded")
+        .at(-1);
+    const seen = await run([lease("claude-1", "sk-ant")]);
+    write(
+      seen.usageFile,
+      usageRecord(
+        { source: "harness", role: "engine", account_id: "a-claude-1" },
+        { run_key: "h1:t1:1:q:1", model: "claude-sonnet-5-5" },
+      ),
+    );
+    await seen.finish();
+    expect(harnessExecution(seen)).toMatchObject({
+      observed_model: "claude-sonnet-5-5",
+      evidence: "reported_by_runtime",
+    });
+    expect(harnessExecution(seen).evidence_reason).toBeUndefined();
+    rmSync(seen.dir, { recursive: true });
+    const none = await run([lease("claude-1", "sk-ant")]);
+    await none.finish();
+    const e = harnessExecution(none);
+    expect(e.observed_model).toBeUndefined();
+    // This world pins no engine policy, so the engine is unknown: not verified.
+    expect([e.evidence, e.evidence_reason]).toEqual(["not_reported", "engine_not_verified"]);
+    rmSync(none.dir, { recursive: true });
+  });
+
   it("an executor on the engine's own account posts once against it and takes no second lease", async () => {
     const r = await run([lease("claude-1", "sk-ant")]);
     write(r.usageFile, usageRecord({ account_id: "a-claude-1" }));

@@ -323,6 +323,35 @@ def test_failure_before_model_started(client, agent) -> None:
         )
 
 
+def test_not_reported_states_its_reason(client, agent) -> None:
+    task_id, attempt = claimed(client, agent)
+    why = {"evidence_reason": "engine_output_has_no_model"}
+    run = post(client, agent, task_id, attempt, [delegate("d1")]).json()
+    assert run["executions"][0]["evidence_reason"] is None  # may still report
+    ended = delegate("d1", state="succeeded", **why)
+    run = post(client, agent, task_id, attempt, [ended]).json()["executions"][0]
+    assert run["observed_model"] is None and run["evidence"] == "not_reported"
+    assert run["evidence_reason"] == "engine_output_has_no_model"
+    summary = client.get(f"/api/tasks/{task_id}/models").json()["summary"]
+    assert summary["delegate"]["evidence_reason"] == "engine_output_has_no_model"
+    # The reason is history too, and an observation never carries one.
+    other = {**ended, "evidence_reason": "executor_not_verified"}
+    assert post(client, agent, task_id, attempt, [other]).status_code == 409
+    seen = {"observed_model": "m", "evidence": "cli_output"}
+    assert (
+        post(
+            client, agent, task_id, attempt, [delegate("d2", **seen, **why)]
+        ).status_code
+        == 422
+    )
+    assert (
+        post(
+            client, agent, task_id, attempt, [delegate("d3", evidence_reason="guess")]
+        ).status_code
+        == 422
+    )
+
+
 def test_resend_completes_but_never_overwrites(client, agent) -> None:
     task_id, attempt = claimed(client, agent)
     post(client, agent, task_id, attempt, [delegate("d1")])

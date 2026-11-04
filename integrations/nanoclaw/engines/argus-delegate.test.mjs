@@ -651,9 +651,11 @@ cat >/dev/null; ${stdoutLines.map((l) => `echo '${l}'`).join("; ")}`,
   const withInit = await terminalExecution([init, '{"type":"result","result":"ok"}']);
   assert.equal(withInit.observed_model, "claude-init-model");
   assert.equal(withInit.evidence, "cli_output");
+  assert.equal(withInit.evidence_reason, null);
   const neither = await terminalExecution(['{"type":"result","result":"ok"}']);
   assert.equal(neither.observed_model, null);
   assert.equal(neither.evidence, "not_reported");
+  assert.equal(neither.evidence_reason, "engine_output_has_no_model");
   // Cursor agent's result `model` is not a verified served model (model observability 3.6).
   fs.mkdirSync(path.join(s.home, ".config", "cursor"), { recursive: true });
   fs.writeFileSync(path.join(s.home, ".config", "cursor", "auth.json"), '{"accessToken":"t"}');
@@ -663,6 +665,7 @@ cat >/dev/null; ${stdoutLines.map((l) => `echo '${l}'`).join("; ")}`,
   );
   assert.equal(agent.observed_model, null);
   assert.equal(agent.evidence, "not_reported");
+  assert.equal(agent.evidence_reason, "executor_not_verified");
 });
 
 test("invalid policies and invalid retry requests fail before CLI execution", async (t) => {
