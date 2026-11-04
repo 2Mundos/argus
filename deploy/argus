@@ -1,6 +1,6 @@
 #!/bin/sh
 # argus: run a single-node Argus with Docker (docs/specs/launcher.spec.md).
-# POSIX sh; needs only docker and curl on the host. Anything more runs in the image.
+# POSIX sh; terminal commands need only docker and curl. The optional tray uses uv.
 set -eu
 
 ARGUS_HOME=${ARGUS_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/argus}
@@ -108,14 +108,16 @@ usage() {
 Usage: argus <command>
 
   up [--docker|--no-docker] [--port N] [--age-key FILE] [--version vX.Y.Z]
-     [--workers|--no-workers]
+     [--workers|--no-workers] [--no-tray]
                      start or apply config changes (--version, --workers: first run only;
                      the first run asks whether to set up workers)
+                     automatically start the desktop tray; --no-tray skips it
   update [vX.Y.Z] [-y]
                      back up, upgrade to the newest (or given) release, roll back on failure
   backup             online backup of the database into the volume
   restore <name>     restore a backup and run the version it was taken under
   status             version, container state, readiness, backups
+  tray [--stop]      start or gracefully stop the desktop tray (needs uv)
   token              print the generated admin token, if there is one
   logs [-f]          container logs
   down               stop and remove the container (never the volume)
@@ -571,10 +573,12 @@ cmd_up() {
 	key_src=
 	want_version=
 	want_workers=
+	want_tray=1
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--workers) want_workers=1 ;;
 		--no-workers) want_workers=0 ;;
+		--no-tray) want_tray=0 ;;
 		--docker) want_docker=1 ;;
 		--no-docker) want_docker=0 ;;
 		--port) want_port=${2:?--port needs a value} && shift ;;
@@ -659,6 +663,7 @@ cmd_up() {
 	fi
 	save_config
 	restart_argus
+	[ "$want_tray" = 0 ] || auto_start_tray
 	if newest=$(latest_version 2>/dev/null) && version_lt "$ARGUS_VERSION" "$newest"; then
 		say "Argus $newest is available: run \`argus update\`."
 	fi
@@ -942,6 +947,7 @@ cmd_uninstall() {
 	fi
 
 	say "This removes:"
+	[ ! -f "$ARGUS_HOME/tray.lock" ] || say "  desktop tray"
 	[ -z "$containers" ] || say "  containers:$containers"
 	[ -z "$network" ] || say "  network: $network"
 	for i in $images; do say "  image: $i"; done
@@ -974,6 +980,10 @@ cmd_uninstall() {
 		case $ans in y | Y | yes) ;; *) die "cancelled" ;; esac
 	fi
 
+	if [ -f "$ARGUS_HOME/tray.lock" ]; then
+		ARGUS_HOME=$ARGUS_HOME sh "$self" tray --stop ||
+			die "uninstall: quit the desktop tray and retry; nothing was removed"
+	fi
 	left=0
 	if [ -n "$containers$network" ]; then
 		run_step "remove the containers" remove_containers
@@ -1010,6 +1020,86 @@ cmd_uninstall() {
 	else
 		say "Uninstalled Argus; the data stays. Run the install line and \`argus up\` to start it again."
 	fi
+}
+
+auto_start_tray() {
+	[ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || return 0
+	if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+		tray_runtime=uv.exe
+		tray_platform=" on Windows"
+	else
+		case $(uname -s) in
+		Linux) [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 0 ;;
+		Darwin) ;;
+		*) return 0 ;;
+		esac
+		tray_runtime=uv
+		tray_platform=
+	fi
+	if ! command -v "$tray_runtime" >/dev/null; then
+		say "Desktop tray needs uv$tray_platform; install it (https://docs.astral.sh/uv/getting-started/installation/), then run \`argus up\` again."
+		return 0
+	fi
+	tray_log=$ARGUS_HOME/tray.log
+	if ! touch "$tray_log" || ! chmod 600 "$tray_log"; then
+		say "Could not prepare the desktop tray log at $tray_log; Argus is running."
+		return 0
+	fi
+	# Use a fresh shell so the background command never inherits our lock ownership.
+	ARGUS_HOME=$ARGUS_HOME nohup sh "$(self_path)" tray --background </dev/null >>"$tray_log" 2>&1 &
+	say "Starting desktop tray (startup log: $tray_log)."
+}
+
+cmd_tray() {
+	if [ $# -gt 0 ]; then
+		[ $# -eq 1 ] || die "usage: argus tray [--background|--stop]"
+		case $1 in --background | --stop) ;; *) die "usage: argus tray [--background|--stop]" ;; esac
+	fi
+	if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+		command -v uv.exe >/dev/null || die "tray: install uv on Windows, then reopen the WSL terminal (https://docs.astral.sh/uv/getting-started/installation/)"
+		command -v wslpath >/dev/null || die "tray: wslpath is required for the native Windows tray"
+	else
+		case $(uname -s) in
+		Linux)
+			if [ "${1:-}" != --stop ]; then
+				[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || die "tray: no desktop display; run this in your desktop session"
+			fi
+			;;
+		Darwin) ;;
+		*) die "tray: supported on Linux, macOS and Windows through WSL 2" ;;
+		esac
+		command -v uv >/dev/null || die "tray: install uv first (https://docs.astral.sh/uv/getting-started/installation/); terminal commands do not need it"
+	fi
+	load_config
+	[ "$HAVE_CONFIG" = 1 ] || die "tray: run \`argus up\` in a terminal first"
+	valid_version "$ARGUS_VERSION" || die "tray: no valid configured version; run \`argus up\` first"
+	ensure_home
+	mkdir -p "$ARGUS_HOME/tray"
+	tray=$ARGUS_HOME/tray/$ARGUS_VERSION.py
+	if [ ! -s "$tray" ]; then
+		ensure_image "$(image)"
+		part=$tray.$$.tmp
+		if ! docker run --rm --entrypoint cat "$(image)" /app/bin/argus-tray.py >"$part"; then
+			rm -f "$part"
+			die "tray: this image has no desktop companion; run \`argus update\` first"
+		fi
+		mv "$part" "$tray"
+	fi
+	launcher=$(self_path)
+	case $launcher in /*) ;; *) launcher=$PWD/$launcher ;; esac
+	if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+		wsl_home=$(cd "$ARGUS_HOME" && pwd -P)
+		exec uv.exe run --script "$(wslpath -a -w "$tray")" \
+			--launcher "$launcher" --home "$(wslpath -a -w "$ARGUS_HOME")" \
+			--wsl-distro "$WSL_DISTRO_NAME" --wsl-user "$(id -un)" --wsl-home "$wsl_home" "$@"
+	fi
+	ARGUS_HOME=$ARGUS_HOME exec uv run --script "$tray" --launcher "$launcher" --home "$ARGUS_HOME" "$@"
+}
+
+cmd_tray_config() {
+	load_config
+	[ "$HAVE_CONFIG" = 1 ] || die "no install found at $ARGUS_HOME"
+	printf '%s\n' "$ARGUS_VERSION" "$ARGUS_PORT" "$ARGUS_CONTAINER"
 }
 
 cmd_status() {
@@ -1065,6 +1155,8 @@ __apply-update) cmd_apply_update "$@" ;;
 backup) cmd_backup ;;
 restore) cmd_restore "$@" ;;
 status) cmd_status ;;
+tray) cmd_tray "$@" ;;
+__tray-config) cmd_tray_config ;;
 token) cmd_token ;;
 logs) load_config && exec docker logs "$@" "$ARGUS_CONTAINER" ;;
 down)

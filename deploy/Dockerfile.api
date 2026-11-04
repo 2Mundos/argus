@@ -57,6 +57,7 @@ COPY --from=dashboard /src/apps/dashboard/dist /app/dashboard
 # The host launcher and every release's notes travel with the image, so
 # `argus update` installs the matching launcher and shows notes offline.
 COPY --chmod=755 deploy/argus /app/bin/argus
+COPY deploy/argus-tray.py /app/bin/argus-tray.py
 COPY docs/releases /app/releases
 # ssh: remote Docker targets (DOCKER_HOST=ssh://…). The data dir is created in the
 # image so a fresh named volume inherits nobody's ownership.

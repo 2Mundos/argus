@@ -167,6 +167,8 @@ every new dependency is judged against it.
   NanoClaw host and agent images, the OneCLI gateway, a ready worker template
 - [Launcher](specs/launcher.spec.md) — `argus`: one-line install, `argus up`, and
   `argus update` with a backup first and automatic rollback
+- [Desktop tray](specs/tray.spec.md) — automatic with `argus up`, with service controls,
+  dashboard access, health and basic statistics on Linux, macOS and Windows/WSL 2
 - [Releases](specs/releases.spec.md) — `make release`, version inference, notes
   that say whether an upgrade can be rolled back, the tagged image
 - [Task delivery](specs/task-delivery.spec.md) — read-only PR projection (state,
