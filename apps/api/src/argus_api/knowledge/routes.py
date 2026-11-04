@@ -1,3 +1,4 @@
+from contextlib import suppress
 from datetime import timedelta
 from typing import Annotated
 
@@ -30,6 +31,7 @@ from argus_api.auth import Identity
 from argus_api.config import Settings
 from argus_api.db import Database, utcnow
 from argus_api.deps import CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.errors import ForbiddenError, NotFoundError
 from argus_api.knowledge import service
 
 router = APIRouter(tags=["knowledge"])
@@ -73,7 +75,20 @@ async def upsert_project(
     slug: Slug, body: ProjectUpsert, db: DbDep, caller: ManagerDep
 ) -> Project:
     async with db.write() as tx:
-        return await service.upsert_project(tx, slug, body, caller.actor)
+        if "repository_url" in body.model_fields_set and caller.scope != Scope.ADMIN:
+            # The URL decides which host a repository credential is sent to, so
+            # only an admin may change it (an unchanged value is fine).
+            current = None
+            with suppress(NotFoundError):
+                current = (await service.get_project(tx.conn, slug)).repository_url
+            if body.repository_url != current:
+                raise ForbiddenError(
+                    "only an admin can change a project's repository",
+                    code="repository_admin_only",
+                )
+        return await service.upsert_project(
+            tx, slug, body, caller.actor, admin=caller.scope == Scope.ADMIN
+        )
 
 
 # -- pages -------------------------------------------------------------------------------

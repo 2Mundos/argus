@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from argus_core.fleet import (
+    NANOCLAW_WORKER_CAPABILITIES,
     TEMPLATE_DEFAULT_MAX_REPLICAS,
     Check,
     CreateWorkerRequest,
@@ -666,7 +667,12 @@ async def catalog(
                         if tpl.id == NANOCLAW_ORCHESTRATOR.id
                         else TEMPLATE_DEFAULT_MAX_REPLICAS
                     ),
-                    capabilities=[],
+                    capabilities=(
+                        list(NANOCLAW_WORKER_CAPABILITIES)
+                        if tpl.runtime == RuntimeKind.NANOCLAW
+                        and tpl.id != NANOCLAW_ORCHESTRATOR.id
+                        else []
+                    ),
                     extra_hosts=list(EXTRA_HOSTS),
                 ),
                 readiness=readiness,
@@ -774,7 +780,7 @@ def build_pool(
             image=settings.nanoclaw_host_image,
             capabilities=adv.capabilities
             if adv and adv.capabilities is not None
-            else [],
+            else list(tpl.defaults.capabilities),
             agents_per_instance=1,
             docker=DockerOptions(
                 host=host,

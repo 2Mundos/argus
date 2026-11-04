@@ -11,6 +11,30 @@ from argus_core.agents import AgentRuntime
 
 POOL_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,39}$"
 
+# What a NanoClaw worker is built to do, so a new one claims it without the admin
+# listing anything (worker launch spec): push to a project's repository when the
+# task holds a repository lease, and materialize task inputs. A capability only
+# makes a task claimable; the lease, preflight and isolation stay per task.
+NANOCLAW_WORKER_CAPABILITIES = ("repository:write", "task-inputs")
+
+
+def validate_repository_url(raw: str) -> str:
+    """An HTTPS `owner/repository` URL without credentials, query or fragment.
+    The one rule for a pool's repositories map and a project's repository."""
+    parsed = urlsplit(raw)
+    parts = [part for part in parsed.path.split("/") if part]
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or len(parts) != 2
+    ):
+        raise ValueError("repository must be an HTTPS owner/repository URL")
+    return raw
+
 
 class TargetKind(StrEnum):
     DOCKER = "docker"  # local socket or remote host (DOCKER_HOST ssh:// or tcp://)
@@ -206,18 +230,13 @@ class NanoclawOptions(BaseModel):
     @model_validator(mode="after")
     def validate_repositories(self) -> "NanoclawOptions":
         for project, raw in self.repositories.items():
-            parsed = urlsplit(raw)
-            parts = [part for part in parsed.path.split("/") if part]
-            if (
-                not project
-                or parsed.scheme != "https"
-                or not parsed.hostname
-                or parsed.username
-                or parsed.password
-                or parsed.query
-                or parsed.fragment
-                or len(parts) != 2
-            ):
+            try:
+                validate_repository_url(raw)
+            except ValueError:
+                raise ValueError(
+                    "repositories must map project names to HTTPS owner/repository URLs"
+                ) from None
+            if not project:
                 raise ValueError(
                     "repositories must map project names to HTTPS owner/repository URLs"
                 )

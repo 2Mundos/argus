@@ -141,6 +141,7 @@
   "progress_message": "attempt 2 released: recycle; requeued",
   "progress_percent": null,
   "project": "demo",
+  "project_repository": null,
   "prompt_trust": "orchestrator",
   "quota_resume": null,
   "refill_at": null,

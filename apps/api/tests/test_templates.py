@@ -13,6 +13,7 @@ from api_support import FakeTarget
 from argus_api.fleet.names import WORDS, suggest
 from argus_core.fleet import POOL_NAME_PATTERN
 from fastapi.testclient import TestClient
+from httpx2 import Response
 from test_launch import (  # noqa: F401  (fixtures)
     ADMIN,
     agent_token,
@@ -980,3 +981,378 @@ def test_suggestion_skips_taken_names_and_falls_back_to_a_suffix() -> None:
     pick = suggest(everything)
     assert pick.rsplit("-", 1)[1] == "2" and pick.rsplit("-", 1)[0] in WORDS
     assert suggest(everything | {pick}).endswith("-3")
+
+
+# -- default capabilities and repository resolution (worker launch spec) ---------------
+
+
+def worker_claiming(client: TestClient, pool: dict) -> Callable[[], Response]:
+    """A worker as the container runs it: it registers and claims with the pool's
+    ARGUS_CAPABILITIES (the claim body carries them)."""
+    boot = client.post(
+        "/api/agents/bootstrap-tokens", json={"role": "worker"}, headers=ADMIN
+    ).json()["token"]
+    token = client.post(
+        "/api/agents/register",
+        json={"bootstrap_token": boot, "capabilities": pool["capabilities"]},
+    ).json()["token"]
+    return lambda: client.post(
+        "/api/tasks/claim",
+        json={"wait_s": 0, "capabilities": pool["capabilities"]},
+        headers=bearer(token),
+    )
+
+
+@BOTH
+def test_new_nanoclaw_worker_claims_a_repository_task_and_resolves_its_project_repo(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    ready_node(target)
+    cat = templates(client)
+    assert cat["nanoclaw-socket"]["defaults"]["capabilities"] == [
+        "repository:write",
+        "task-inputs",
+    ]
+    # Only workers that implement them claim; orchestrator and plain images do not.
+    assert cat["nanoclaw-orchestrator"]["defaults"]["capabilities"] == []
+    assert cat["argus-worker"]["defaults"]["capabilities"] == []
+
+    pool = create(client, template="nanoclaw-socket", name="fresh").json()["pool"]
+    assert pool["capabilities"] == ["repository:write", "task-inputs"]
+    assert pool["nanoclaw"]["repositories"] == {}  # nothing hand-configured
+    worker = worker_claiming(client, pool)
+
+    repo = "https://git.example/acme/api"
+    task = {
+        "project": "acme",
+        "title": "ship it",
+        "deliverable": "branch",
+        "required_capabilities": ["repository:write"],
+    }
+    # Unknown repository: refused up front, never invented.
+    client.put("/api/projects/acme", json={"name": "Acme"}, headers=ADMIN)
+    refused = client.post("/api/tasks", json=task, headers=ADMIN)
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["code"] == "deliverable_repository"
+
+    put = client.put(
+        "/api/projects/acme",
+        json={"name": "Acme", "repository_url": repo},
+        headers=ADMIN,
+    )
+    assert put.status_code == 200, put.text
+    other = client.put("/api/projects/other", json={"name": "Other"}, headers=ADMIN)
+    assert other.json()["repository_url"] is None
+    created = client.post("/api/tasks", json=task, headers=ADMIN)
+    assert created.status_code == 201, created.text
+    read_only = client.post(
+        "/api/tasks", json={"project": "other", "title": "look"}, headers=ADMIN
+    ).json()
+
+    # Claim order between equal tasks is not the point; each carries its own answer.
+    raw = [w() for w in (worker, worker_claiming(client, pool))]  # one task each
+    claims = {c["id"]: c for c in (r.json() for r in raw)}
+    assert claims[created.json()["id"]]["project_repository"] == repo
+    # The pool map was never edited: the project record is the source.
+    assert (
+        client.get("/api/pools/fresh", headers=ADMIN).json()["nanoclaw"]["repositories"]
+        == {}
+    )
+    # An unrelated project gets no repository (and so no lease or workspace).
+    assert claims[read_only["id"]]["project_repository"] is None
+
+    # A later project edit applies to the next claim without touching the worker.
+    client.put(
+        "/api/projects/other",
+        json={"name": "Other", "repository_url": "https://git.example/acme/other"},
+        headers=ADMIN,
+    )
+    client.post(
+        "/api/tasks", json={"project": "other", "title": "again"}, headers=ADMIN
+    )
+    again = worker_claiming(client, pool)().json()
+    assert again["project_repository"] == "https://git.example/acme/other"
+
+
+@BOTH
+def test_explicit_capabilities_and_existing_pools_are_not_widened(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    ready_node(target)
+    narrow = create(
+        client,
+        template="nanoclaw-socket",
+        name="narrow",
+        advanced={"capabilities": []},
+    ).json()["pool"]
+    assert narrow["capabilities"] == []
+    client.put("/api/projects/acme", json={"name": "Acme"}, headers=ADMIN)
+    client.put(
+        "/api/projects/acme",
+        json={"name": "Acme", "repository_url": "https://git.example/acme/api"},
+        headers=ADMIN,
+    )
+    # A pool without the capability still cannot take a repository:write task.
+    t = client.post(
+        "/api/tasks",
+        json={
+            "project": "acme",
+            "title": "w",
+            "deliverable": "branch",
+            "required_capabilities": ["repository:write"],
+        },
+        headers=ADMIN,
+    )
+    assert t.status_code == 201
+    assert worker_claiming(client, narrow)().status_code == 204
+
+
+def orchestrator(client: TestClient) -> dict:
+    return bearer(agent_token(client, "orchestrator"))
+
+
+@BOTH
+def test_only_an_admin_decides_where_a_repository_credential_goes(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    """The project URL picks the host a repository token is sent to: an orchestrator
+    may manage projects but not point one at another host."""
+    orch = orchestrator(client)
+    evil = {"name": "Acme", "repository_url": "https://evil.example/acme/api"}
+    assert client.put("/api/projects/acme", json=evil, headers=orch).status_code == 403
+    assert (
+        client.put(
+            "/api/projects/acme", json={"name": "Acme"}, headers=orch
+        ).status_code
+        == 200
+    )
+    # Everything an orchestrator may do leaves the repository alone.
+    admin_set = {"name": "Acme", "repository_url": "https://git.example/acme/api"}
+    assert (
+        client.put("/api/projects/acme", json=admin_set, headers=ADMIN).status_code
+        == 200
+    )
+    renamed = client.put("/api/projects/acme", json={"name": "Acme 2"}, headers=orch)
+    assert renamed.json()["repository_url"] == "https://git.example/acme/api"
+    assert client.put("/api/projects/acme", json=evil, headers=orch).status_code == 403
+    clear = client.put(
+        "/api/projects/acme",
+        json={"name": "Acme", "repository_url": None},
+        headers=orch,
+    )
+    assert clear.status_code == 403
+    # Credentials in the URL are refused outright, even for an admin.
+    bad = {"name": "Acme", "repository_url": "https://u:tok@git.example/acme/api"}
+    assert client.put("/api/projects/acme", json=bad, headers=ADMIN).status_code == 422
+    # A worker token is not a manager at all.
+    worker = bearer(agent_token(client, "worker"))
+    assert (
+        client.put("/api/projects/acme", json=admin_set, headers=worker).status_code
+        == 403
+    )
+
+
+def _pool_with_repository(project: str, url: str) -> dict:
+    return {
+        "runtime": "nanoclaw",
+        "image": "h",
+        "max_replicas": 1,
+        "docker": {"runtime": "runsc"},
+        "nanoclaw": {
+            "install_dir": "/opt/nanoclaw",
+            "instances_root": "/srv/i",
+            "agent_image": "a:1",
+            "repositories": {project: url},
+        },
+    }
+
+
+@BOTH
+def test_orchestrator_create_bootstraps_repository_from_agreed_pool_map(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    ready_node(target)
+    repo = "https://git.example/acme/api"
+    assert client.put(
+        "/api/pools/map", json=_pool_with_repository("acme", repo), headers=ADMIN
+    ).status_code in (200, 201)
+    orch = orchestrator(client)
+    created = client.put(
+        "/api/projects/acme",
+        json={"name": "Acme", "repository_url": None},
+        headers=orch,
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["repository_url"] == repo
+
+
+@BOTH
+def test_orchestrator_json_null_on_update_is_noop_when_repository_still_null(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    ready_node(target)
+    orch = orchestrator(client)
+    assert (
+        client.put(
+            "/api/projects/docs", json={"name": "Docs"}, headers=orch
+        ).status_code
+        == 200
+    )
+    renamed = client.put(
+        "/api/projects/docs",
+        json={"name": "Docs 2", "repository_url": None},
+        headers=orch,
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["repository_url"] is None
+
+
+@BOTH
+def test_orchestrator_json_null_cannot_clear_a_stored_repository(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    ready_node(target)
+    url = "https://git.example/acme/api"
+    assert (
+        client.put(
+            "/api/projects/acme",
+            json={"name": "Acme", "repository_url": url},
+            headers=ADMIN,
+        ).status_code
+        == 200
+    )
+    orch = orchestrator(client)
+    assert (
+        client.put(
+            "/api/projects/acme",
+            json={"name": "Acme", "repository_url": None},
+            headers=orch,
+        ).status_code
+        == 403
+    )
+
+
+@BOTH
+def test_claim_resolves_project_repository_in_the_claim_write_transaction(
+    client: TestClient,
+    target: FakeTarget,
+    extra_env: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.tasks import delivery as delivery_mod
+
+    ready_node(target)
+    repo = "https://git.example/acme/api"
+    client.put(
+        "/api/projects/acme",
+        json={"name": "Acme", "repository_url": repo},
+        headers=ADMIN,
+    )
+    task = {
+        "project": "acme",
+        "title": "t",
+        "deliverable": "branch",
+        "required_capabilities": ["repository:write"],
+    }
+    assert client.post("/api/tasks", json=task, headers=ADMIN).status_code == 201
+    pool = create(client, template="nanoclaw-socket", name="claim-tx").json()["pool"]
+    in_tx: list[bool | None] = []
+    real = delivery_mod.project_repository_url
+
+    async def tracked(conn, project: str):
+        in_tx.append(getattr(conn, "in_transaction", None))
+        return await real(conn, project)
+
+    monkeypatch.setattr(delivery_mod, "project_repository_url", tracked)
+    claim = worker_claiming(client, pool)()
+    assert claim.status_code == 200, claim.text
+    assert claim.json()["project_repository"] == repo
+    assert in_tx == [True]
+
+
+@BOTH
+def test_mcp_set_project_repository_end_to_end(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    client.put("/api/projects/acme", json={"name": "Acme"}, headers=ADMIN)
+    url = "https://git.example/acme/api"
+    admin = ADMIN["Authorization"].removeprefix("Bearer ")
+    done = tool(
+        client, admin, "set_project_repository", project="acme", repository_url=url
+    )
+    assert done["repository_url"] == url
+    [acme] = [
+        p
+        for p in client.get("/api/projects", headers=ADMIN).json()
+        if p["slug"] == "acme"
+    ]
+    assert acme["repository_url"] == url  # the REST view shows what MCP set
+    unknown = tool(
+        client, admin, "set_project_repository", project="nope", repository_url=url
+    )
+    assert "unknown project" in unknown["error"]
+    refused = tool(
+        client,
+        admin,
+        "set_project_repository",
+        project="acme",
+        repository_url="http://git.example/acme/api",
+    )
+    assert "error" in refused
+    cleared = tool(
+        client, admin, "set_project_repository", project="acme", repository_url=None
+    )
+    assert cleared["repository_url"] is None
+    # Orchestrators do not even see the tool.
+    token = agent_token(client, "orchestrator")
+    assert "set_project_repository" not in {
+        t["name"] for t in rpc(client, token, "tools/list")["tools"]
+    }
+
+
+@BOTH
+def test_mcp_and_rest_create_the_same_default_worker_and_honour_overrides(
+    client: TestClient, target: FakeTarget, extra_env: dict
+) -> None:
+    ready_node(target)
+    admin = ADMIN["Authorization"].removeprefix("Bearer ")
+    via_mcp = tool(client, admin, "create_worker", template="nanoclaw-socket", name="m")
+    via_rest = create(client, template="nanoclaw-socket", name="r").json()
+    assert (
+        via_mcp["pool"]["capabilities"]
+        == via_rest["pool"]["capabilities"]
+        == [
+            "repository:write",
+            "task-inputs",
+        ]
+    )
+    narrowed = tool(
+        client,
+        admin,
+        "create_worker",
+        template="nanoclaw-socket",
+        name="n",
+        advanced={"capabilities": ["task-inputs"]},
+    )
+    assert narrowed["pool"]["capabilities"] == ["task-inputs"]
+
+
+def test_default_capabilities_cover_every_capability_the_code_recognises() -> None:
+    """The defaults are a closed list: a capability something checks for must be in
+    it, or a new default worker silently cannot take that task."""
+    import re
+
+    from argus_api.tasks.continuation import INPUTS_CAPABILITY
+    from argus_api.tasks.deliverable import REPOSITORY_WRITE
+    from argus_core.fleet import NANOCLAW_WORKER_CAPABILITIES
+
+    root = Path(__file__).resolve().parents[3]
+    channel = (root / "integrations/nanoclaw/argus.ts").read_text()
+    channel_checks = set(
+        re.findall(r'required_capabilities\?\.includes\("([^"]+)"\)', channel)
+    )
+    # The channel gates repository work; the API gates inputs, and the channel
+    # always adds that capability to what it claims with.
+    assert channel_checks == {REPOSITORY_WRITE}
+    assert '"task-inputs"' in channel.split("function capabilitiesFromEnv", 1)[1][:400]
+    assert set(NANOCLAW_WORKER_CAPABILITIES) == {REPOSITORY_WRITE, INPUTS_CAPABILITY}

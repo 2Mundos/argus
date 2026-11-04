@@ -50,8 +50,10 @@ events, and the continuation's artifacts:
   No other `#N`, "PR 12" or issue form is a reference.
 - Several different PRs in text with no artifact are ambiguous: none is chosen.
 
-The proof of a repository is the pools' explicit `nanoclaw.repositories` map
-(project -> HTTPS owner/repository). A project that pools disagree on has none.
+The proof of a repository is the project's own `repository_url`
+([knowledge](knowledge.spec.md) 3.1), else the pools' explicit
+`nanoclaw.repositories` map (project -> HTTPS owner/repository). A project that
+pools disagree on, and has no record of its own, has none.
 Argus tasks are never assumed to live in Radar's repository. Restricting URLs to
 that allowlist also means the credential is never sent to a host from task text.
 

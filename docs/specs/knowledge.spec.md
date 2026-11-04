@@ -29,8 +29,32 @@ task's spec and clarifications are what one task needs.
 
 ## 3.1 Projects
 
-`projects` (`slug`, `name`, `description`) are a first-class scope, managed by
-orchestrators and admins (`PUT /api/projects/{slug}`). `global` exists by
+`projects` (`slug`, `name`, `description`, optional `repository_url`) are a
+first-class scope, managed by orchestrators and admins (`PUT /api/projects/{slug}`;
+MCP `set_project_repository`; only an admin may change the URL, because it decides
+which host a repository credential is sent to: `403 repository_admin_only`
+otherwise). `repository_url` is the project's code, the
+authoritative source for its repository: an HTTPS `owner/repository` URL without
+credentials, query or fragment (422 otherwise). Omitted from a PUT it is kept; an
+**admin's** explicit null clears the stored URL. JSON null from a non-admin on
+update is treated as omitted (so clients that round-trip null do not clear a URL).
+On **create**, a project with no URL inherits the single agreed pool-map entry
+(same rule as migration 0071); only an admin's explicit null on create skips that
+bootstrap. It is a pointer, not access: a task still needs a registered repository
+account and gets a task-scoped lease. The claim response carries it as
+`project_repository` (resolved in the same write transaction as the claim, from the
+project record else the one URL every pool allowlist agrees on; null when unknown
+and for `global`), so an edit reaches the next claim without restarting a worker or
+editing a pool. The channel prefers it over its pool map and scopes it to the task:
+it is the whole OneCLI allowlist for that task and is added to the helpers'
+`ARGUS_REPOSITORIES_JSON` only until the task releases its repository.
+**Automatic bootstrap.** Migration 0071 copies each existing project's URL from
+pool allowlists when every pool that names it agrees; new projects inherit on create
+the same way. **First-use gap:** when no pool names the project, or pools disagree,
+there is no authoritative URL—Argus never guesses. An admin must set
+`repository_url` (REST or MCP `set_project_repository`) before branch/PR deliverables
+or write tasks can run; read-only code availability and claims stay without a tree
+until then. `global` exists by
 default as the scope of fleet-wide knowledge and settings; it is **not a home
 for tasks**. **Every task belongs to a real project**: it is required on
 creation, except that a subtask without one inherits its parent's. Naming

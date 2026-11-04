@@ -292,6 +292,11 @@ async def claim_task(
                     default_timeout_s=settings.task_timeout_s,
                     disk_guard=disk_guard,
                 )
+                project_repository = (
+                    await delivery.project_repository_url(tx.conn, task.project)
+                    if task is not None
+                    else None
+                )
             if task is not None:
                 async with db.read() as conn:
                     refs = await knowledge.refs_for_task(
@@ -328,6 +333,7 @@ async def claim_task(
                     model_switch=switch,
                     steer_unknown=unknown,
                     quota_resume=resume,
+                    project_repository=project_repository,
                     difficulty_executors=difficulty_executors,
                 )
             remaining = deadline - loop.time()

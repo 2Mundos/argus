@@ -4303,6 +4303,17 @@
             "title": "Project",
             "type": "string"
           },
+          "project_repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Repository"
+          },
           "prompt_trust": {
             "$ref": "#/components/schemas/PromptTrust"
           },
@@ -15344,6 +15355,17 @@
             "title": "Name",
             "type": "string"
           },
+          "repository_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Url"
+          },
           "slug": {
             "title": "Slug",
             "type": "string"
@@ -15490,6 +15512,17 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "repository_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Url"
           }
         },
         "required": [

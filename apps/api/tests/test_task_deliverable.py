@@ -20,12 +20,17 @@ from test_mcp import ADMIN_TOKEN
 from test_task_delivery import (
     BASE,
     HEAD,
+    HOST,
+    OWNER,
+    REPO,
     URL,
     forge,
     full_forge,
     open_pr,
     setup_repository,
 )
+
+PROJECT_REPOSITORY_URL = f"https://{HOST}/{OWNER}/{REPO}"
 
 CAPS = ["repository:write"]
 LEVELS = [d.value for d in Deliverable]
@@ -175,6 +180,24 @@ def test_creation_asks_for_the_capabilities_the_level_implies(
     res = create(client, level)
     assert res.status_code == 201, res.text
     assert res.json()["deliverable"] == level
+
+
+def test_branch_deliverable_accepts_a_project_record_without_pool_map(
+    client: TestClient,
+) -> None:
+    # `setup_repository` maps only `demo` on the pool; this project is proven by record.
+    slug = "recordonly"
+    assert (
+        client.put(
+            f"/api/projects/{slug}",
+            json={"name": "Record only", "repository_url": PROJECT_REPOSITORY_URL},
+        ).status_code
+        == 200
+    )
+    res = create(client, "branch", project=slug)
+    assert res.status_code == 201, res.text
+    assert res.json()["project"] == slug
+    assert res.json()["deliverable"] == "branch"
 
 
 async def test_routine_templates_and_drafts_share_the_creation_rules(

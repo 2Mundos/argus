@@ -480,6 +480,8 @@ export interface ArgusTask {
   project: string;
   required_capabilities?: string[];
   repository_url?: string;
+  /** The project's repository as Argus resolved it at claim; wins over the pool map. */
+  project_repository?: string | null;
   input?: Record<string, unknown>;
   attempt: number;
   /** The engine account Argus reserved in the claim itself; consumed by `ensureAccount`. */
@@ -1896,6 +1898,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let activeRepositoryLease: AccountLease | null = null;
   let activeRepositoryUrl: string | null = null;
   let activeRepositoryAllowlist: string[] = [];
+  /**
+   * The forge helpers in the agent containers read ARGUS_REPOSITORIES_JSON from the host's
+   * environment when a session spawns. Base is the pool map; a claimed repository is added
+   * for this task only and taken away when the task releases its repository.
+   */
+  function scopeHelperRepositories(base: Record<string, string>, extra: Record<string, string>) {
+    process.env.ARGUS_REPOSITORIES_JSON = JSON.stringify({ ...base, ...extra });
+  }
   let repositoryAssignmentReconciled = false;
   let abortClaim: AbortController | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -2996,7 +3006,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     // map names a repository there (tasks on global are refused at the API).
     if (!needsWrite && task.project === "global") return null;
     const acc = cfg.accounts;
-    const repositoryUrl = acc?.repositories?.[task.project];
+    // Argus resolves the project's repository at every claim (HTTPS owner/repo vetted at
+    // write and on output; migration copies only pool-validated URLs). This channel still
+    // normalizes before any lease. The pool map is the fallback when claim names none
+    // (older API). A resolved URL is trusted only from Argus, scoped to this task (below),
+    // and never broadens what other tasks may use.
+    const claimedRepository = task.project_repository?.trim() || undefined;
+    const repositoryUrl = claimedRepository || acc?.repositories?.[task.project];
     if (!acc || !repositoryUrl) {
       if (needsWrite)
         return {
@@ -3020,7 +3036,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       repositoryLeaseHeld = true;
       activeRepositoryLease = lease;
       activeRepositoryUrl = normalizedRepository.cloneUrl;
-      activeRepositoryAllowlist = Object.values(acc.repositories ?? {});
+      // A claimed repository is the whole allowlist: no other pool or project repository
+      // becomes injectable because this task named one.
+      activeRepositoryAllowlist = claimedRepository
+        ? [claimedRepository]
+        : Object.values(acc.repositories ?? {});
+      scopeHelperRepositories(
+        acc.repositories ?? {},
+        claimedRepository ? { [task.project]: claimedRepository } : {},
+      );
       repositoryTarget = await acc.resolveTarget();
       await applyRepositoryLease(
         acc.onecli,
@@ -3032,6 +3056,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       );
       task.repository_url = normalizedRepository.cloneUrl;
     } catch (err) {
+      scopeHelperRepositories(acc.repositories ?? {}, {});
       return { reason: "env_repository_unavailable", error: String(err) };
     }
     const target = repositoryTarget;
@@ -3431,6 +3456,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         activeRepositoryLease = null;
         activeRepositoryUrl = null;
         activeRepositoryAllowlist = [];
+        scopeHelperRepositories(cfg.accounts.repositories ?? {}, {});
         if (repositoryTarget) {
           try {
             await releaseRepositoryLease(
