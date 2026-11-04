@@ -12,7 +12,7 @@ import { followEvents, type StreamStatus } from "./sse";
 
 interface Live {
   status: StreamStatus;
-  /** Bumped (debounced) when events arrive, and again each time the stream reconnects. */
+  /** Bumped when the stream reconnects to recover events missed while offline. */
   version: number;
   /** Bumped each time the stream (re)connects; transient events sent while it was down are gone. */
   connection: number;
@@ -35,7 +35,6 @@ export function LiveProvider(props: {
 
   useEffect(() => {
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
     followEvents({
       token,
       onUnauthorized,
@@ -51,16 +50,11 @@ export function LiveProvider(props: {
       onMessage: (data) => {
         const event = JSON.parse(data) as ArgusEvent;
         for (const listener of listeners.current) listener(event);
-        // output only: no state to refetch (TaskChanges listens for its own)
-        if (event.kind === "task.log" || event.kind === "task.changes") return;
-        clearTimeout(timer);
-        timer = setTimeout(() => setVersion((v) => v + 1), 250);
       },
       signal: controller.signal,
     });
     return () => {
       controller.abort();
-      clearTimeout(timer);
       // A restarted effect's first live is a new snapshot, not a reconnect.
       seenLive.current = false;
     };
@@ -99,6 +93,11 @@ export function reportPage<T>(signal: AbortSignal, partial: T): void {
   partials.get(signal)?.(partial);
 }
 
+export interface LiveDataOptions<T> {
+  accepts?: (event: ArgusEvent) => boolean;
+  update?: (data: T, events: ArgusEvent[], signal: AbortSignal) => Promise<T>;
+}
+
 /**
  * Load data and reload it whenever live events arrive (or deps change).
  * `load` may call `reportPage` with the signal it was given (the Tasks board
@@ -108,8 +107,32 @@ export function reportPage<T>(signal: AbortSignal, partial: T): void {
 export function useLiveData<T>(
   load: (signal: AbortSignal) => Promise<T>,
   deps: unknown[],
+  options?: LiveDataOptions<T>,
 ): { data: T | undefined; error: Error | undefined; reload: () => void } {
-  const { version } = useLive();
+  const { version, subscribe } = useLive();
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const pending = useRef<ArgusEvent[]>([]);
+  const snapshotReady = useRef(false);
+  const [eventVersion, setEventVersion] = useState(0);
+  const previousRefresh = useRef({ version, nonce: 0 });
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = subscribe((event) => {
+      if (event.kind === "task.log" || event.kind === "task.changes") return;
+      if (optionsRef.current?.accepts && !optionsRef.current.accepts(event)) return;
+      if (optionsRef.current?.update) pending.current.push(event);
+      if (timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        setEventVersion((v) => v + 1);
+      }, 250);
+    });
+    return () => {
+      unsubscribe();
+      clearTimeout(timer);
+    };
+  }, [subscribe]);
   const [data, setData] = useState<T>();
   const [error, setError] = useState<Error>();
   const [nonce, setNonce] = useState(0);
@@ -141,6 +164,14 @@ export function useLiveData<T>(
         setError(undefined);
       }
     }
+    const events = pending.current.slice();
+    const incremental =
+      snapshotReady.current &&
+      !changed &&
+      inflight.current.size === 0 &&
+      previousRefresh.current.version === version &&
+      previousRefresh.current.nonce === nonce;
+    previousRefresh.current = { version, nonce };
     const hadData = dataRef.current !== undefined;
     const query = queryGen.current;
     const id = ++latest.current;
@@ -172,9 +203,20 @@ export function useLiveData<T>(
       paint(partial as T);
     });
 
-    load(controller.signal)
+    const update = incremental && events.length && dataRef.current !== undefined && options?.update;
+    if (!update) snapshotReady.current = false;
+    const request =
+      update && dataRef.current !== undefined
+        ? update(dataRef.current, events, controller.signal)
+        : load(controller.signal);
+    request
       .then(
         (value) => {
+          if (latest.current === id && query === queryGen.current) {
+            snapshotReady.current = true;
+            const consumed = new Set(events);
+            pending.current = pending.current.filter((event) => !consumed.has(event));
+          }
           paint(value);
         },
         (err: unknown) => {
@@ -196,7 +238,7 @@ export function useLiveData<T>(
         inflight.current.delete(controller);
       }
     };
-  }, [version, nonce, ...deps]);
+  }, [version, eventVersion, nonce, ...deps]);
 
   return { data, error, reload: () => setNonce((n) => n + 1) };
 }

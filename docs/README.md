@@ -34,6 +34,8 @@ every new dependency is judged against it.
 
 ### Specs
 
+- [Dashboard live data performance](specs/dashboard-performance.spec.md) — scoped refreshes, task deltas and card rendering
+
 - [Lightweight single-node](specs/single-node.spec.md) — the core principle:
   one process, SQLite + Litestream, no required services
 - [Worker lifecycle and task coordination](specs/worker-lifecycle.spec.md) —

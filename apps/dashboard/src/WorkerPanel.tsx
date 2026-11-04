@@ -2,6 +2,7 @@ import { createContext, type ReactNode, useContext } from "react";
 import { type Agent, api, call } from "./api";
 import { shortId } from "./format";
 import { useLiveData } from "./live";
+import { workerEvent } from "./liveEvents";
 
 export type WorkerKind = "busy" | "idle" | "draining" | "quiet" | "ended" | "unknown";
 
@@ -35,7 +36,9 @@ export function WorkerPanelProvider({
   openWorker: (agentId: string) => void;
   children: ReactNode;
 }) {
-  const { data: agents } = useLiveData((signal) => call(api.GET("/api/agents", { signal })), []);
+  const { data: agents } = useLiveData((signal) => call(api.GET("/api/agents", { signal })), [], {
+    accepts: workerEvent,
+  });
   return (
     <WorkerPanelContext.Provider value={{ openWorker, selectedId, agents }}>
       {children}

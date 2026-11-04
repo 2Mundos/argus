@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { api, call, handleUnauthorized, type SystemSummary, setToken, token } from "./api";
 import { Brand } from "./Brand";
 import { LiveProvider, useLive, useLiveData } from "./live";
+import { onboardingEvent, overviewEvent, systemEvent } from "./liveEvents";
 import { verdict } from "./overview";
 import { Home } from "./views/Home";
 import { LiveStatusBar } from "./views/LiveStatusBar";
@@ -339,11 +340,15 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
   const { data: overview } = useLiveData(
     (signal) => call(api.GET("/api/overview", { signal })),
     [],
+    { accepts: overviewEvent },
   );
-  const { data: system } = useLiveData((signal) => call(api.GET("/api/system", { signal })), []);
+  const { data: system } = useLiveData((signal) => call(api.GET("/api/system", { signal })), [], {
+    accepts: systemEvent,
+  });
   const { data: onboarding } = useLiveData(
     (signal) => call(api.GET("/api/onboarding", { signal })),
     [],
+    { accepts: onboardingEvent },
   );
   useEffect(() => {
     const onHash = () => {

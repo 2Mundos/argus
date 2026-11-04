@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { type Agent, api, call } from "./api";
 import { useLiveData } from "./live";
+import { workerEvent } from "./liveEvents";
 import { useNow } from "./views/Activity";
 import { WorkerChip } from "./WorkerChip";
 
@@ -62,6 +63,7 @@ export function WorkersSidebar({ selectedId }: { selectedId: string | null }) {
   const { data: agents, error } = useLiveData(
     (signal) => call(api.GET("/api/agents", { signal })),
     [],
+    { accepts: workerEvent },
   );
   const workers = liveWorkers(agents);
   const ended = recentlyEnded(agents);
