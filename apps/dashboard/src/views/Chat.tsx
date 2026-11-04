@@ -347,6 +347,7 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
         <ActionButton
           type="submit"
           className="chat-send"
+          iconOnly
           disabled={!draft.trim()}
           pending={action.busy}
           aria-label="Send"
