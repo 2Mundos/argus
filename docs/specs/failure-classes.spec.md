@@ -132,7 +132,14 @@ reasons and adds `failure_class` to each failure row and a count per class.
     per 10 s), so a completed turn with text is progress through that
     `task.progress` event. A turn with no text, or a note still coalescing when
     the claim ends, posts nothing and is not progress.
-- `max_attempts` keeps its meaning: the cap on attempts that count.
+- `max_attempts` keeps its meaning: the cap on counted failures. `attempt`
+  counts claims and is bumped on every claim; `failures` counts the failures
+  that count (a worker fail or an expiry) and is what `max_attempts` limits, so
+  `attempt` may exceed `max_attempts`. These paths claim again without spending
+  `failures`: a provider quota pause, an admission failure, a runtime still
+  preparing, an operator requeue or release, and a review rejection. A retry of
+  a failed task resets `failures` to 0 and `attempt` to 0, so the next claim is
+  attempt 1. The two values are never compared with each other.
 - **OOM.** `env_oom` blocks after 2 consecutive OOM-killed sessions on one pool.
   Before that, an OOM-killed session is a `session` attempt as today, with the
   `oom_kill` fact recorded on the failure row. 3.2.1 defines it.
