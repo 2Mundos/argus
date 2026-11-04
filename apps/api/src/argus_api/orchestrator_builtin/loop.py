@@ -41,7 +41,12 @@ class BuiltinLoop:
         self.argus = argus
         self.models = models
         self.sleep = sleep
-        self.stopping = handle.stopping  # set by stop, or by a draining heartbeat
+        self.stopping = (
+            handle.stopping
+        )  # stop claiming: a stop, or a draining heartbeat
+        # Turns finished: the heartbeat may end. It runs through a drain, or the
+        # server would mark the agent lost before its turns reply.
+        self.done = asyncio.Event()
         self.engine = Engine(argus, handle.log)
         self.turns: set[asyncio.Task[None]] = set()
         self.deps: turn.TurnDeps | None = None
@@ -62,6 +67,7 @@ class BuiltinLoop:
             await asyncio.gather(*self.turns, return_exceptions=True)
             raise
         finally:
+            self.done.set()
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
@@ -92,12 +98,13 @@ class BuiltinLoop:
         )
 
     async def _heartbeat(self) -> None:
-        while not self.stopping.is_set():
+        while not self.done.is_set():
             if await self._beat() == "stop":
                 self.stopping.set()
-                return
+                if self.ended:
+                    return
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self.stopping.wait(), self.interval)
+                await asyncio.wait_for(self.done.wait(), self.interval)
 
     async def _beat(self) -> str | None:
         """One heartbeat; "stop" when the server drains or ended this identity."""
@@ -140,12 +147,16 @@ class BuiltinLoop:
             )
         )
         stop = asyncio.ensure_future(self.stopping.wait())
-        await asyncio.wait({poll, stop}, return_when=asyncio.FIRST_COMPLETED)
-        stop.cancel()
-        if not poll.done():
-            poll.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await poll
+        try:
+            await asyncio.wait({poll, stop}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # Also when the loop itself is cancelled: no orphaned poll may claim
+            # a message nobody answers.
+            stop.cancel()
+            if not poll.done():
+                poll.cancel()
+                await asyncio.wait({poll})  # never swallows our own cancellation
+        if poll.cancelled():
             return None
         try:
             res = poll.result()

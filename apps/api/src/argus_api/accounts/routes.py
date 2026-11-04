@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -542,9 +543,19 @@ async def with_local_context(request: Request, leased: AccountLease) -> AccountL
     update: dict = {}
     if needs_ctx and info.n_ctx:
         update["credential"] = {**leased.credential, "context_tokens": info.n_ctx}
-    if needs_model and info.reachable and info.model and leased.settings is not None:
+    # The probe describes the node's configured local model; it names the model
+    # only of an account on that same endpoint.
+    same = leased.settings is not None and _origin(local_model.url) == _origin(
+        leased.settings.base_url
+    )
+    if needs_model and same and info.reachable and info.model and leased.settings:
         update["settings"] = leased.settings.model_copy(update={"model": info.model})
     return leased.model_copy(update=update) if update else leased
+
+
+def _origin(url: str) -> tuple[str, str]:
+    parts = urlsplit(url)
+    return parts.scheme, parts.netloc.lower()
 
 
 @router.post("/release", status_code=status.HTTP_204_NO_CONTENT)

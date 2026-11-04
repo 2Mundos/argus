@@ -109,7 +109,12 @@ async def discard_draft(tx: Tx, draft_id: str, expected_version: str) -> None:
 
 
 async def publish(
-    tx: Tx, req: PublishRequest, actor: str, *, hourly_limit: int | None = None
+    tx: Tx,
+    req: PublishRequest,
+    actor: str,
+    *,
+    hourly_limit: int | None = None,
+    chat_turn: str | None = None,
 ) -> PublishResult:
     """Validate and publish a batch (3.3), idempotently by key (3.4)."""
     digest = _digest(req)
@@ -196,7 +201,7 @@ async def publish(
         try:
             async with tx.savepoint():
                 task = await service.create_task(
-                    tx, create, actor, hourly_limit=hourly_limit
+                    tx, create, actor, hourly_limit=hourly_limit, chat_turn=chat_turn
                 )
                 await _check_capabilities(tx.conn, task.required_capabilities)
                 await tx.conn.execute(

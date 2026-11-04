@@ -780,3 +780,106 @@ def test_the_loop_claims_replies_and_leaves_on_stop(env: Env) -> None:
 
     assert env.call(run) == ["gone"]
     assert reply_of(env, conv) == "Hello back."
+
+
+# -- review fixes ----------------------------------------------------------------
+
+
+def test_a_local_429_is_load_not_a_quota(env: Env) -> None:
+    local = add_account(
+        env,
+        "local",
+        provider="local",
+        credential={"base_url": "http://127.0.0.1:11434", "model": "qwen3"},
+    )
+    enable(env)
+    loop = boot(env)
+    conv = chat(env, "hi")
+    env.model.script = [env.model.error(429)] * 3
+    run_turn(env, loop)
+    assert reply_of(env, conv) == (
+        "The model provider did not answer (`429`). Send the message again."
+    )
+    assert env.sleeps == [2.0, 8.0]
+    accounts = env.client.get("/api/accounts", headers=ADMIN).json()
+    assert next(x for x in accounts if x["id"] == local)["state"] == "available"
+
+
+def test_a_key_in_the_title_line_never_reaches_the_title(env: Env) -> None:
+    add_account(env, "a")
+    enable(env)
+    loop = boot(env)
+    conv = chat(env, "hi")
+    env.model.script = [env.model.text(f"TITLE: {KEY_A}\nDone.")]
+    run_turn(env, loop)
+    got = env.client.get(f"/api/conversations/{conv}", headers=ADMIN).json()
+    assert KEY_A not in got["title"] and got["title"] == "[redacted]"
+    assert reply_of(env, conv) == "Done."
+
+
+def test_tools_do_not_run_past_the_deadline(env: Env) -> None:
+    add_account(env, "a")
+    enable(env)
+    loop = boot(env)
+    assert loop.deps is not None
+    now = [0.0]
+    loop.deps.clock = lambda: now[0]
+    conv = chat(env, "hi")
+    model = env.model
+
+    def late(body: dict) -> Answer:
+        now[0] = turn.DEADLINE_S + 1  # the model answered at the deadline
+        return model.use(("create_task", {"title": "late", "project": "demo"}))
+
+    model.script = [late, model.text("Out of time.")]
+    run_turn(env, loop)
+    assert reply_of(env, conv) == "Out of time."
+    final = model.requests[-1].body
+    result = final["messages"][-1]["content"][0]
+    assert (result["content"], result["is_error"]) == (turn.NOT_RUN_TEXT, True)
+    assert final["tool_choice"] == {"type": "none"}
+    tasks = env.client.get("/api/tasks", headers=ADMIN).json()["items"]
+    assert [t for t in tasks if t["title"] == "late"] == []
+
+
+def test_published_drafts_keep_their_origin(env: Env) -> None:
+    add_account(env, "a")
+    enable(env)
+    loop = boot(env)
+    mine, other = chat(env, "Draft it"), chat(env, "Wait")
+    model = env.model
+    draft = {"title": "drafted", "project": "demo", "spec": "s", "acceptance": ["a"]}
+
+    def publish(body: dict) -> Answer:
+        made = json.loads(body["messages"][-1]["content"][0]["content"])
+        item = {"draft_id": made["id"], "expected_version": made["version"]}
+        return model.use(
+            ("publish_task_drafts", {"idempotency_key": "k1", "drafts": [item]})
+        )
+
+    model.script = [
+        model.use(("create_task_draft", {"draft": draft})),
+        publish,
+        model.text("Published."),
+    ]
+
+    async def go() -> None:
+        first = await loop.claim_once()
+        assert first and await loop.claim_once()  # two turns in flight
+        assert first["conversation"]["id"] == mine
+        await turn.run(loop.deps, first)
+
+    env.call(go)
+    assert reply_of(env, mine) == "Published."
+
+    async def origin() -> str | None:
+        async with (
+            app.state.db.read() as conn,
+            conn.execute(
+                "SELECT origin_conversation_id FROM tasks WHERE title = 'drafted'"
+            ) as cur,
+        ):
+            row = await cur.fetchone()
+        return row[0] if row else None
+
+    assert env.call(origin) == mine != other

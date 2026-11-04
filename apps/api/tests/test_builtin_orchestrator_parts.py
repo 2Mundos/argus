@@ -555,3 +555,128 @@ async def test_no_update_when_disabled_archived_or_full(db: Database) -> None:
             )
     await _cancel(db, task)
     assert await _notices(db, full) == []
+
+
+# -- the loop's concurrency (review fixes) ----------------------------------------
+
+
+class FakeArgus:
+    """An ArgusClient stand-in: each route answers from `routes`, optionally
+    holding the call until the test releases it."""
+
+    def __init__(self) -> None:
+        from argus_api.orchestrator_builtin.client import Response
+
+        self.Response = Response
+        self.calls: list[str] = []
+        self.hold: dict[str, asyncio.Event] = {}
+        self.entered: dict[str, asyncio.Event] = {}
+        self.cancelled: list[str] = []
+        self.answers: dict[str, tuple[int, object]] = {}
+        self.token = "t"
+
+    async def rest(self, method: str, path: str, **_: object):
+        self.calls.append(path)
+        self.entered.setdefault(path, asyncio.Event()).set()
+        try:
+            if path in self.hold:
+                await self.hold[path].wait()
+        except asyncio.CancelledError:
+            self.cancelled.append(path)
+            raise
+        status, body = self.answers.get(path, (200, {}))
+        return self.Response(status, body)
+
+
+async def test_concurrent_acquires_take_one_lease() -> None:
+    from argus_api.orchestrator_builtin.accounts import Engine
+
+    argus = FakeArgus()
+    argus.answers["/accounts/lease"] = (
+        200,
+        {"lease_id": "l1", "account_id": "a", "name": "a", "provider": "custom",
+         "settings": {"model": "m"}},
+    )  # fmt: skip
+    argus.hold["/accounts/lease"] = asyncio.Event()
+    engine = Engine(argus, lambda _: None)  # ty: ignore[invalid-argument-type]
+    first = asyncio.create_task(engine.acquire())
+    second = asyncio.create_task(engine.acquire())
+    await argus.entered.setdefault("/accounts/lease", asyncio.Event()).wait()
+    argus.hold["/accounts/lease"].set()
+    assert await first and await second
+    assert argus.calls.count("/accounts/lease") == 1
+
+
+def _loop(argus: FakeArgus):
+    from argus_api.orchestrator_builtin.loop import BuiltinLoop
+
+    loop = BuiltinLoop(
+        InProcessHandle(_spec()),
+        argus,  # ty: ignore[invalid-argument-type]
+        None,  # ty: ignore[invalid-argument-type]
+    )
+    loop.interval = 0.0
+    return loop
+
+
+async def test_the_heartbeat_runs_through_a_drain() -> None:
+    argus = FakeArgus()
+    argus.answers["/agents/me/heartbeat"] = (
+        200,
+        {"state": "draining", "heartbeat_interval_s": 0},
+    )
+    loop = _loop(argus)
+    beats = asyncio.create_task(loop._heartbeat())
+    await loop.stopping.wait()  # the drain stops claiming
+    argus.entered.pop("/agents/me/heartbeat")
+    again = asyncio.ensure_future(
+        argus.entered.setdefault("/agents/me/heartbeat", asyncio.Event()).wait()
+    )
+    # Either another beat comes, or the heartbeat task ends: it must be the beat.
+    await asyncio.wait({again, beats}, return_when=asyncio.FIRST_COMPLETED)
+    assert again.done() and not beats.done()  # still proving liveness
+    loop.done.set()
+    await beats
+
+
+async def test_a_cancelled_claim_cancels_its_poll() -> None:
+    argus = FakeArgus()
+    argus.hold["/agents/me/chat"] = asyncio.Event()  # a long poll that never ends
+    loop = _loop(argus)
+    claim = asyncio.create_task(loop.claim_once())
+    await argus.entered.setdefault("/agents/me/chat", asyncio.Event()).wait()
+    claim.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await claim
+    assert argus.cancelled == ["/agents/me/chat"]
+
+
+async def test_the_probe_names_the_model_only_of_its_own_endpoint() -> None:
+    from types import SimpleNamespace
+
+    from argus_api.accounts.routes import with_local_context
+    from argus_api.engines.local import LocalModelInfo
+    from argus_core.accounts import AccountLease
+    from argus_core.custom_accounts import LeaseSettings
+
+    class Probe:
+        url = "http://127.0.0.1:8080/v1"
+
+        async def probe(self) -> LocalModelInfo:
+            return LocalModelInfo(reachable=True, model="served", n_ctx=8192)
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(local_model=Probe()))
+    )
+
+    def lease(base_url: str) -> AccountLease:
+        return AccountLease(
+            lease_id="l", account_id="a", name="a", provider="local", kind="api_key",
+            credential={"base_url": base_url},
+            settings=LeaseSettings(base_url=base_url, label="local", model=None, provider=None),
+        )  # fmt: skip
+
+    same = await with_local_context(request, lease("http://127.0.0.1:8080"))  # ty: ignore[invalid-argument-type]
+    other = await with_local_context(request, lease("http://127.0.0.1:11434"))  # ty: ignore[invalid-argument-type]
+    assert same.settings is not None and same.settings.model == "served"
+    assert other.settings is not None and other.settings.model is None

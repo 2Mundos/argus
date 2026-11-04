@@ -8,7 +8,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any
 
@@ -39,6 +39,7 @@ STEP_LIMIT_TEXT = (
 )
 STOPPED_TEXT = "Argus stopped during this turn. Send the message again."
 EMPTY_TEXT = "(The model returned no text.)"
+NOT_RUN_TEXT = "not run: the turn reached its deadline"
 
 
 class TurnEnded(Exception):
@@ -122,10 +123,7 @@ async def _steps(
                     deps, conv, context["tasks"], history, transcript, final, state
                 )
         except TimeoutError:
-            raise TurnEnded(
-                f"This turn ran out of time after {transcript.steps()} steps."
-                + (f" Tools called: {state.summary()}." if state.made else "")
-            ) from None
+            raise TurnEnded(_out_of_time(transcript, state)) from None
         await _report_usage(deps, conv, message["turn_id"], reply, lease, state)
         if final or not reply.calls:
             return reply.text
@@ -135,11 +133,29 @@ async def _steps(
         deps.log(f"step {step + 1}: {', '.join(c.name for c in reply.calls)}")
         names = {t.name for t in _offered(deps, lease)}
         for call in reply.calls:
-            text, is_error = await tools.call(
-                deps.argus, call, names, message["turn_id"]
-            )
-            state.made.append((call.name, not is_error))
+            elapsed = deps.clock() - started
+            if elapsed >= DEADLINE_S:
+                # Every call needs a result; the next request is the final one.
+                text, is_error = NOT_RUN_TEXT, True
+            else:
+                try:
+                    # A tool never runs past the server's turn expiry, and the
+                    # reply keeps time to be posted.
+                    async with asyncio.timeout(HARD_DEADLINE_S - elapsed):
+                        text, is_error = await tools.call(
+                            deps.argus, call, names, message["turn_id"]
+                        )
+                except TimeoutError:
+                    state.made.append((call.name, False))
+                    raise TurnEnded(_out_of_time(transcript, state)) from None
+                state.made.append((call.name, not is_error))
             transcript.items.append(Result(call.id, call.name, text, is_error, step))
+
+
+def _out_of_time(transcript: Transcript, state: _State) -> str:
+    return f"This turn ran out of time after {transcript.steps()} steps." + (
+        f" Tools called: {state.summary()}." if state.made else ""
+    )
 
 
 def _offered(deps: TurnDeps, lease: Lease) -> list[ToolSpec]:
@@ -208,6 +224,10 @@ async def _model_step(
         if isinstance(outcome, Reply):
             return outcome, lease
         deps.log(f"error: {outcome.kind} {outcome.label}")
+        if outcome.kind == "quota" and lease.provider == "local":
+            # A local server's 429 is load, not a quota: local accounts are never
+            # exhausted, so failover would take the same account straight back.
+            outcome = replace(outcome, kind="transient")
         await _handle(deps, lease, outcome, state)
         if outcome.kind == "transient":
             transient += 1
@@ -299,11 +319,12 @@ async def _reply(
     text: str,
     secrets: set[str],
 ) -> None:
+    # Redacted whole first: a key in the title line must not reach the title.
+    for secret in secrets:
+        text = text.replace(secret, "[redacted]")
     title = None
     if conv["kind"] == "chat" and conv.get("title_source") == "orchestrator":
         text, title = prompt.split_title(text)
-    for secret in secrets:
-        text = text.replace(secret, "[redacted]")
     text = text.strip() or EMPTY_TEXT
     await post(deps, conv["id"], turn_id, text, title)
 

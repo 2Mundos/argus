@@ -83,7 +83,13 @@ class Engine:
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> bool:
-        """Lease the best built-in-capable account; False when none is usable."""
+        """Lease the best built-in-capable account unless another caller already
+        did; False when none is usable. Serialized: each lease replaces the last."""
+        async with self._lock:
+            return self.lease is not None or await self._acquire()
+
+    async def _acquire(self) -> bool:
+        """Lease now; the caller holds `_lock`."""
         res = await self.argus.rest("POST", "/accounts/lease", json=LEASE_BODY)
         if res.status == 409:
             self.lease = None
@@ -152,7 +158,7 @@ class Engine:
             )
             self.lease = None
             answer = res.body if res.ok and isinstance(res.body, dict) else {}
-            if answer.get("next_account_id") and await self.acquire():
+            if answer.get("next_account_id") and await self._acquire():
                 assert self.lease is not None
                 self.log(f"failover from {seen.name} to {self.lease.name}")
                 return self.lease
