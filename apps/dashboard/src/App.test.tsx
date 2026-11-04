@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaultHash } from "./App";
+import { defaultHash, isCurrent, parseRoute } from "./App";
 
 describe("defaultHash", () => {
   it("rewrites an empty or invalid hash by the default route rule", () => {
@@ -12,6 +13,37 @@ describe("defaultHash", () => {
   it("keeps known and legacy routes", () => {
     for (const hash of ["#dashboard", "#chat", "#tasks/t1", "#workers/bogus", "#home", "#agents"]) {
       expect(defaultHash(hash, true)).toBeNull();
+    }
+  });
+});
+
+describe("menu", () => {
+  it("marks a grouped entry current on any of its tabs, and only those", () => {
+    for (const [hash, current] of [
+      ["#workers/pools", "#workers"],
+      ["#workers", "#workers"],
+      ["#setup/cost", "#setup"],
+      ["#setup", "#setup"],
+      ["#tasks/t1", "#tasks"],
+    ] as const) {
+      window.location.hash = hash;
+      const route = parseRoute();
+      const all = ["#tasks", "#workers", "#setup", "#chat"].filter((href) =>
+        isCurrent(href, route),
+      );
+      expect(all).toEqual([current]);
+    }
+  });
+
+  it("opens the first tab of a group and keeps old deep links", () => {
+    for (const [hash, expected] of [
+      ["#workers", { tab: "workers", sub: "agents" }],
+      ["#setup", { tab: "setup", sub: "settings" }],
+      ["#accounts", { tab: "setup", sub: "accounts" }],
+      ["#frota", { tab: "workers", sub: "fleet" }],
+    ] as const) {
+      window.location.hash = hash;
+      expect(parseRoute()).toEqual(expected);
     }
   });
 });

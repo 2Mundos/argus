@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { api, call, handleUnauthorized, type SystemSummary, setToken, token } from "./api";
 import { Brand } from "./Brand";
-import { LiveProvider, useLive, useLiveData } from "./live";
+import { LiveProvider, useLiveData } from "./live";
 import { onboardingEvent, overviewEvent, systemEvent } from "./liveEvents";
 import { verdict } from "./overview";
 import { Home } from "./views/Home";
@@ -51,8 +51,8 @@ type WorkersSub = keyof typeof WORKERS_SUB;
 
 const SETUP_SUB = {
   settings: "Settings",
-  engines: "Engines",
   accounts: "Accounts",
+  engines: "Engines",
   cost: "Cost",
   events: "Events",
 } as const;
@@ -143,110 +143,9 @@ export function App() {
   );
 }
 
-const PAGES: { href: string; label: string }[] = [
-  { href: "#chat", label: "Chat" },
-  { href: "#dashboard", label: "Dashboard" },
-  { href: "#tasks", label: "Tasks" },
-  { href: "#inbox", label: "Inbox" },
-  { href: "#workers/agents", label: "Agents" },
-  { href: "#workers/pools", label: "Pools" },
-  { href: "#setup/accounts", label: "Accounts" },
-  { href: "#knowledge", label: "Knowledge" },
-  { href: "#routines", label: "Routines" },
-  { href: "#workers/fleet", label: "Fleet" },
-  { href: "#setup/engines", label: "Engines" },
-  { href: "#setup/cost", label: "Cost" },
-  { href: "#setup/events", label: "Events" },
-  { href: "#setup/settings", label: "Settings" },
-];
-
-function PageSearch() {
-  const input = useRef<HTMLInputElement>(null);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const hits = PAGES.filter((page) =>
-    page.label.toLowerCase().includes(query.trim().toLowerCase()),
-  );
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        input.current?.focus();
-        setOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-  return (
-    <form
-      className="page-search"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const target = hits[0];
-        if (!target) return;
-        window.location.hash = target.href.slice(1);
-        setQuery("");
-        setOpen(false);
-        input.current?.blur();
-      }}
-    >
-      <input
-        ref={input}
-        type="search"
-        placeholder="Go to a page…"
-        aria-label="Go to a page"
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
-      />
-      <kbd>Ctrl K</kbd>
-      {open && query.trim() !== "" && (
-        <ul className="page-hits" onMouseDown={(event) => event.preventDefault()}>
-          {hits.length === 0 ? (
-            <li className="muted small">No page</li>
-          ) : (
-            hits.map((page) => (
-              <li key={page.href}>
-                <a
-                  href={page.href}
-                  onClick={() => {
-                    setQuery("");
-                    setOpen(false);
-                  }}
-                >
-                  {page.label}
-                </a>
-              </li>
-            ))
-          )}
-        </ul>
-      )}
-    </form>
-  );
-}
-
-function isCurrent(href: string, route: Route): boolean {
-  if (href === "#chat") return route.tab === "chat";
-  if (href === "#dashboard") return route.tab === "dashboard";
-  if (href === "#tasks") return route.tab === "tasks";
-  if (href === "#inbox") return route.tab === "inbox";
-  if (href === "#projects") return route.tab === "projects";
-  if (href === "#knowledge") return route.tab === "knowledge";
-  if (href === "#routines") return route.tab === "routines";
-  if (href === "#workers/agents") return route.tab === "workers" && route.sub === "agents";
-  if (href === "#workers/pools") return route.tab === "workers" && route.sub === "pools";
-  if (href === "#workers/fleet") return route.tab === "workers" && route.sub === "fleet";
-  if (href === "#setup/accounts") return route.tab === "setup" && route.sub === "accounts";
-  if (href === "#setup/settings") return route.tab === "setup" && route.sub === "settings";
-  if (href === "#setup/engines") return route.tab === "setup" && route.sub === "engines";
-  if (href === "#setup/cost") return route.tab === "setup" && route.sub === "cost";
-  if (href === "#setup/events") return route.tab === "setup" && route.sub === "events";
-  return false;
+/** A menu entry is current on its page, or on any tab of its group. */
+export function isCurrent(href: string, route: Route): boolean {
+  return route.tab === href.slice(1).split("/")[0];
 }
 
 function uptime(seconds: number): string {
@@ -336,7 +235,6 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
   const [route, setRoute] = useState<Route>(parseRoute);
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [onboardingStep, setOnboardingStep] = useState<1 | 2 | 3 | null>(null);
-  const { status } = useLive();
   const { data: overview } = useLiveData(
     (signal) => call(api.GET("/api/overview", { signal })),
     [],
@@ -382,75 +280,25 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
               label="Tasks"
               count={awaiting}
             />
-            <NavLink href="#projects" current={isCurrent("#projects", route)} label="Projects" />
             <NavLink
               href="#inbox"
               current={isCurrent("#inbox", route)}
               label="Inbox"
               count={openDecisions}
             />
-            <NavLink
-              href="#workers/agents"
-              current={isCurrent("#workers/agents", route)}
-              label="Agents"
-            />
-            <NavLink
-              href="#workers/pools"
-              current={isCurrent("#workers/pools", route)}
-              label="Pools"
-            />
-            <NavLink
-              href="#setup/accounts"
-              current={isCurrent("#setup/accounts", route)}
-              label="Accounts"
-            />
-          </nav>
-          <p className="nav-label">More</p>
-          <nav aria-label="More">
+            <NavLink href="#projects" current={isCurrent("#projects", route)} label="Projects" />
             <NavLink href="#knowledge" current={isCurrent("#knowledge", route)} label="Knowledge" />
             <NavLink href="#routines" current={isCurrent("#routines", route)} label="Routines" />
-            <NavLink
-              href="#workers/fleet"
-              current={isCurrent("#workers/fleet", route)}
-              label="Fleet"
-            />
-            <NavLink
-              href="#setup/engines"
-              current={isCurrent("#setup/engines", route)}
-              label="Engines"
-            />
-            <NavLink href="#setup/cost" current={isCurrent("#setup/cost", route)} label="Cost" />
-            <NavLink
-              href="#setup/events"
-              current={isCurrent("#setup/events", route)}
-              label="Events"
-            />
-            <NavLink
-              href="#setup/settings"
-              current={isCurrent("#setup/settings", route)}
-              label="Settings"
-            />
+            <NavLink href="#workers" current={isCurrent("#workers", route)} label="Workers" />
+            <NavLink href="#setup" current={isCurrent("#setup", route)} label="Setup" />
           </nav>
           <ServerBox system={system} />
+          <button type="button" className="nav-signout" onClick={onSignOut}>
+            <Icon d={SIGN_OUT_ICON} />
+            <span className="nav-text">Sign out</span>
+          </button>
         </aside>
         <div className="workspace">
-          <header className="topbar">
-            <PageSearch />
-            <div className="topbar-end">
-              <span className={`status status-${status}`} title={`Event stream: ${status}`}>
-                {status === "live" ? "Live" : status}
-              </span>
-              <a className="bell" href="#inbox" aria-label="Inbox">
-                <Icon d={iconFor("#inbox")} />
-                {openDecisions !== undefined && openDecisions > 0 && (
-                  <span className="nav-count">{openDecisions}</span>
-                )}
-              </a>
-              <button type="button" className="link" onClick={onSignOut}>
-                Sign out
-              </button>
-            </div>
-          </header>
           <main>
             <Suspense fallback={<p className="muted">Loading…</p>}>
               {selectedWorker ? (
@@ -484,17 +332,15 @@ const NAV_ICON: Record<string, string> = {
   "#dashboard": "M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z",
   "#tasks": "M9 6h11M9 12h11M9 18h11M5 6h.01M5 12h.01M5 18h.01",
   "#inbox": "M4 5h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 5l8 6 8-6",
-  "#workers/agents":
-    "M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6M20 19v-1a3.5 3.5 0 0 0-2.5-3.3M16.5 5.2a3 3 0 0 1 0 5.6",
-  "#workers/pools": "M12 3 4 7l8 4 8-4zM4 12l8 4 8-4M4 17l8 4 8-4",
-  "#setup/accounts": "M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0M5 19a6 6 0 0 1 14 0",
+  "#projects": "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   "#knowledge": "M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3zM5 4v16",
-  "#workers/fleet": "M4 5h7v7H4zM13 5h7v7h-7zM4 14h7v5H4zM13 14h7v5h-7z",
-  "#setup/engines": "M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3M7 7h10v10H7z",
-  "#setup/cost": "M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3",
-  "#setup/events": "M4 6h16M4 12h10M4 18h13",
-  "#setup/settings": "M4 7h16M4 12h16M4 17h16M8 7v.01M14 12v.01M10 17v.01",
+  "#routines": "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+  "#workers":
+    "M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6M20 19v-1a3.5 3.5 0 0 0-2.5-3.3M16.5 5.2a3 3 0 0 1 0 5.6",
+  "#setup": "M4 7h16M4 12h16M4 17h16M8 7v.01M14 12v.01M10 17v.01",
 };
+
+const SIGN_OUT_ICON = "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9";
 
 function iconFor(href: string): string {
   return NAV_ICON[href] ?? "M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z";
@@ -529,9 +375,32 @@ function NavLink({
   return (
     <a href={href} aria-current={current ? "page" : undefined}>
       <Icon d={iconFor(href)} />
-      <span>{label}</span>
+      <span className="nav-text">{label}</span>
       {count !== undefined && count > 0 && <span className="nav-count">{count}</span>}
     </a>
+  );
+}
+
+/** Tabs for the pages of one menu entry; links, so the hash keeps back/forward working. */
+function SubTabs({
+  group,
+  label,
+  items,
+  active,
+}: {
+  group: string;
+  label: string;
+  items: Record<string, string>;
+  active: string;
+}) {
+  return (
+    <nav className="subtabs" aria-label={label}>
+      {Object.entries(items).map(([id, text]) => (
+        <a key={id} href={`#${group}/${id}`} aria-current={id === active ? "page" : undefined}>
+          {text}
+        </a>
+      ))}
+    </nav>
   );
 }
 
@@ -558,14 +427,28 @@ function RouteView({
     case "routines":
       return <Routines />;
     case "workers":
-      if (route.sub === "pools") return <Pools />;
-      if (route.sub === "fleet") return <Fleet />;
-      return <Agents />;
+      return (
+        <>
+          <SubTabs group="workers" label="Workers" items={WORKERS_SUB} active={route.sub} />
+          {route.sub === "pools" ? <Pools /> : route.sub === "fleet" ? <Fleet /> : <Agents />}
+        </>
+      );
     case "setup":
-      if (route.sub === "engines") return <Engines />;
-      if (route.sub === "accounts") return <Accounts />;
-      if (route.sub === "cost") return <Cost />;
-      if (route.sub === "events") return <Events />;
-      return <Settings />;
+      return (
+        <>
+          <SubTabs group="setup" label="Setup" items={SETUP_SUB} active={route.sub} />
+          {route.sub === "engines" ? (
+            <Engines />
+          ) : route.sub === "accounts" ? (
+            <Accounts />
+          ) : route.sub === "cost" ? (
+            <Cost />
+          ) : route.sub === "events" ? (
+            <Events />
+          ) : (
+            <Settings />
+          )}
+        </>
+      );
   }
 }
