@@ -190,6 +190,17 @@ def test_a_worker_blocks_only_for_the_environment(
     )
     assert (res.json()["state"], res.json()["error"]) == ("blocked", "x")
 
+    res = client.post(f"/api/tasks/{task['id']}/cancel")
+    body = res.json()
+    assert (body["state"], body["block_reason"], body["error"]) == (
+        "cancelled",
+        "env_repository_unreachable",
+        "x",
+    )
+    assert body["progress_message"] == (
+        "cancelled by admin:preset while blocked as env_repository_unreachable"
+    )
+
 
 WORKSPACE_REASONS = [
     "env_workspace_unconfigured",

@@ -3472,7 +3472,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             reason: envBlock.reason,
             error: redactSessionTail(envBlock.error).slice(0, 1500),
           })
-          .catch(() => undefined);
+          .catch((err) => {
+            log.error("Could not block the task after the environment preflight failed", {
+              task: task.id,
+              reason: envBlock.reason,
+              err: redactSessionTail(String(err)),
+            });
+          });
         finishTask();
         return;
       }
