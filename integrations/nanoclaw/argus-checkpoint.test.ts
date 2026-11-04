@@ -32,6 +32,7 @@ import {
   prepareTaskWorkspace,
   TASK_WORKSPACES_DIR,
   taskWorkspacePath,
+  WORKER_GIT_HOOKS_PATH,
 } from "./argus-workspace.js";
 
 // Patch steps (gitToFile) run git directly, not through the injected runner: observe them at
@@ -779,6 +780,7 @@ describe("git config written by the worker never runs on the host", () => {
       ["filter.x.clean", `sh -c 'touch ${marker(w)}; cat'`],
       ["filter.x.process", `sh -c 'touch ${marker(w)}'`],
       ["gpg.program", `sh -c 'touch ${marker(w)}'`],
+      ["core.hooksPath", "/tmp/untrusted-hooks"],
       ["log.showSignature", "true"],
       ["core.worktree", "/etc"],
       ["core.pager", `sh -c 'touch ${marker(w)}'`],
@@ -793,6 +795,7 @@ describe("git config written by the worker never runs on the host", () => {
       expect(r.ok ? "" : r.error, key).toContain(key.toLowerCase().replace(/\.[^.]*$/, ""));
       git(w.wsA, "config", "--unset-all", key);
     }
+    git(w.wsA, "config", "core.hooksPath", WORKER_GIT_HOOKS_PATH);
     expect(existsSync(marker(w))).toBe(false);
     for (const redirect of ["commondir", "objects/info/alternates"]) {
       writeFileSync(path.join(w.wsA, ".git", redirect), "/elsewhere\n");
