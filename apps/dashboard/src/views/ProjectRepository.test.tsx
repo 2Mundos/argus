@@ -154,7 +154,7 @@ async function openForm(user: ReturnType<typeof userEvent.setup>) {
 
 describe("new task with a project that has no repository", () => {
   it("configures it from the form and keeps everything typed", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await openForm(user);
     await user.type(screen.getByLabelText("Title"), "Fix login");
     await user.type(screen.getByLabelText(/^Spec/), "Details");
