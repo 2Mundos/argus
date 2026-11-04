@@ -1,9 +1,16 @@
 name: Quality
+# Release notes alone (`docs/releases/`) are cut with a tag; Release CI owns that
+# push. Skip Quality when the diff is only those files so a `make release --push`
+# does not re-run the full suite next to the publish workflow.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "docs/releases/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/releases/**"
   workflow_dispatch:
 
 concurrency:

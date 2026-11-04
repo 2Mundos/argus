@@ -16,9 +16,12 @@ the tag builds and publishes everything else.
   GitHub container registry, and
   creates the GitHub release with the notes as its body and `deploy/install.sh`
   as its one asset ([launcher](launcher.spec.md) 3.1); for a release that
-  already exists it leaves the notes alone and re-attaches that asset. Quality CI also builds
-  (without publishing) the NanoClaw host and echo-worker images so those
-  Dockerfiles cannot rot; the echo worker is never published.
+  already exists it leaves the notes alone and re-attaches that asset.
+- Quality CI ignores pushes and PRs whose diff is only under `docs/releases/`
+  (3.8): the notes commit that accompanies the tag does not re-run the suite.
+  On every other change, Quality still builds (without publishing) the NanoClaw
+  host and echo-worker images so those Dockerfiles cannot rot; the echo worker
+  is never published.
 - A second job builds and pushes the worker images
   `ghcr.io/<owner>/argus-nanoclaw-host:vX.Y.Z` and `…/argus-nanoclaw-agent:vX.Y.Z`
   ([local workers](local-workers.spec.md) 3.1), with the same `latest` rule.
@@ -110,6 +113,17 @@ because pulling `latest` can apply migrations that make the upgrade one-way (3.3
 without the operator reading the notes first. The README names no version: its
 `docker run` uses `latest` and says to replace it with a `vX.Y.Z` tag to pin.
 
+## 3.8 Notes-only commits skip Quality
+
+`make release` commits only the new notes file and pushes `main` with the tag
+atomically. Quality's `on.push` / `on.pull_request` use
+`paths-ignore: docs/releases/**`, so that notes commit does not start Quality;
+only the Release workflow runs for the tag. A commit that touches anything
+outside `docs/releases/` still runs Quality as usual. CodeQL default setup is
+configured in the repository's Advanced Security settings (not in this tree) and
+still runs on the notes push unless that setup is given a path filter or moved
+to an advanced workflow with the same ignore.
+
 # 4. Open Questions
 
 1. Multi-arch images. The Dockerfile already selects `sops` per architecture,
@@ -131,6 +145,7 @@ without the operator reading the notes first. The README names no version: its
 - `scripts/release.py`, `scripts/test_release.py` (unit tests plus one run
   against a throwaway repository with a bare remote), `make release`.
 - `.github/workflows/release.yaml`.
+- `.github/workflows/quality.yaml`: `paths-ignore` for `docs/releases/**` (3.8).
 - `deploy/Dockerfile.api`: `ARG`/`ENV ARGUS_VERSION` and OCI labels.
 - `argus_api.ops.VERSION` reads `ARGUS_VERSION`.
 - `scripts/validate_docs.py`: the `releases/` naming rule and series link.
