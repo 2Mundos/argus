@@ -116,6 +116,8 @@ pnpm run build && ~/path/to/argus/integrations/nanoclaw/install.sh . >/dev/null 
 pnpm exec vitest run src/channels/
 ```
 
+`provision.sh check` runs only the suites named on the `pnpm exec vitest run` line in `provision.sh`; that includes the two preflight suites (`argus-repo-preflight.test.ts`, `argus-onecli-preflight-lease.test.ts`). `integrations/nanoclaw/tests/test_nanoclaw_vitest_list.py` (in `make test`) enforces: every `*.test.ts` that `install.sh` copies into `src/channels` or `src/gateway-providers` is on that line or in the test's `EXEMPT` dict (each with a reason: image-gated, e2e, or untriaged); stale exemptions fail too. Add new installed suites to the line, not to `EXEMPT`.
+
 Rebuild the agent image (`provision.sh`, `ARGUS_NANOCLAW_ENGINES=1` on an engines
 node) only when the image's own inputs change (`container/Dockerfile`, CLI tools,
 `argus-delegate`, `gitea-api.mjs`, `github-api.mjs`). Then recreate the worker instances: running
