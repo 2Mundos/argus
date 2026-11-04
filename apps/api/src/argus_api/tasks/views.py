@@ -21,7 +21,6 @@ from argus_api.errors import ValidationFailedError
 from argus_api.modeltrace import service as modeltrace
 from argus_api.paging import (
     PageInfo,
-    View,
     cap,
     clamp,
     decode_cursor,
@@ -30,6 +29,7 @@ from argus_api.paging import (
 from argus_api.tasks import service
 from argus_api.tasks.finalization import Finalization, newest
 
+TaskView = Literal["summary", "detail", "compact"]
 MAX_IDS = 50
 MAX_QUERY_TERMS = 8
 MAX_TERM_LEN = 64
@@ -92,6 +92,20 @@ class TaskDetail(Task, TaskSummary):
     pass
 
 
+class TaskCompact(BaseModel):
+    """The cheapest list row: no refs, models, spec or result (view=compact)."""
+
+    id: str
+    title: str
+    state: TaskState
+    attempt: int
+    max_attempts: int
+    block_reason: str | None
+    progress_message: str | None
+    created_at: datetime
+    updated_at: str
+
+
 class TaskRead(Task):
     """The single-task read (stall visibility 3.4): the task plus its quiet facts."""
 
@@ -119,7 +133,7 @@ async def read_task(
 
 
 class TaskPage(PageInfo):
-    items: list[TaskSummary | TaskDetail]
+    items: list[TaskSummary | TaskDetail | TaskCompact]
     missing: list[str] = Field(default_factory=list)  # requested ids not found
 
 
@@ -127,6 +141,9 @@ class TaskPage(PageInfo):
 SUMMARY_OMITS = sorted(
     set(Task.model_fields) - set(TaskSummary.model_fields) - {"updated_at"}
 )
+
+# What a compact row leaves out of the full task.
+COMPACT_OMITS = sorted(set(Task.model_fields) - set(TaskCompact.model_fields))
 
 # Columns a list row needs. Bodies (spec, acceptance, input, result, error) stay
 # in the table; view=detail loads them per id.
@@ -155,6 +172,7 @@ LIST_COLUMNS = (
     "updated_at",
 )
 _LIST_SQL = ", ".join(LIST_COLUMNS)
+_COMPACT_SQL = ", ".join(TaskCompact.model_fields)
 
 
 def parse_query(q: str | None) -> list[str] | None:
@@ -259,7 +277,7 @@ async def list_tasks(
     kind: str | None = None,
     assignee: str | None = None,
     archived: bool = False,
-    view: View = "summary",
+    view: TaskView = "summary",
     limit: int = 25,
     cursor: str | None = None,
     task_scope: tuple[str, list[str]] | None = None,
@@ -305,6 +323,7 @@ async def list_tasks(
             liked = _like_term(term)
             params += [liked, liked]
     conn = snap.conn
+    columns = _COMPACT_SQL if view == "compact" else _LIST_SQL
     async with conn.execute(
         f"SELECT count(*) FROM tasks WHERE {' AND '.join(where)}",  # noqa: S608
         params,
@@ -317,7 +336,7 @@ async def list_tasks(
         params += after
     if terms is None:
         sql = (
-            f"SELECT {_LIST_SQL} FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
+            f"SELECT {columns} FROM tasks WHERE {' AND '.join(where)}"  # noqa: S608
             " ORDER BY created_at DESC, id DESC LIMIT ?"
         )
         list_params: list[Any] = [*params, limit + 1]
@@ -327,11 +346,11 @@ async def list_tasks(
         pos_expr = f"min({pos_parts}, {_SPEC_POS_SENTINEL})"
         # SELECT placeholders (instr terms) bind before WHERE placeholders.
         sql = (
-            f"SELECT {_LIST_SQL}, _spec_pos, _spec_len, "  # noqa: S608
+            f"SELECT {columns}, _spec_pos, _spec_len, "  # noqa: S608
             f"CASE WHEN _spec_pos >= {_SPEC_POS_SENTINEL} THEN NULL "
             f"ELSE substr(spec, max(1, _spec_pos - {_SPEC_WINDOW_PAD}), "
             f"{_SPEC_WINDOW_LEN}) END AS _spec_window "
-            f"FROM (SELECT {_LIST_SQL}, spec, {pos_expr} AS _spec_pos, "
+            f"FROM (SELECT {columns}, spec, {pos_expr} AS _spec_pos, "
             f"length(spec) AS _spec_len FROM tasks "
             f"WHERE {' AND '.join(where)} "
             "ORDER BY created_at DESC, id DESC LIMIT ?)"
@@ -353,7 +372,7 @@ async def list_tasks(
 async def get_tasks(
     snap: Snapshot,
     ids: list[str],
-    view: View = "summary",
+    view: TaskView = "summary",
     *,
     task_scope: tuple[str, list[str]] | None = None,
 ) -> TaskPage:
@@ -362,7 +381,8 @@ async def get_tasks(
     ids = list(dict.fromkeys(ids))
     if not 1 <= len(ids) <= MAX_IDS:
         raise ValidationFailedError(f"ids takes 1 to {MAX_IDS} task ids")
-    sql = f"SELECT {_LIST_SQL} FROM tasks WHERE id IN ({','.join('?' * len(ids))})"  # noqa: S608
+    columns = _COMPACT_SQL if view == "compact" else _LIST_SQL
+    sql = f"SELECT {columns} FROM tasks WHERE id IN ({','.join('?' * len(ids))})"  # noqa: S608
     params: list[Any] = list(ids)
     if task_scope is not None:
         clause, scope_params = task_scope
@@ -409,10 +429,12 @@ async def refs(conn: aiosqlite.Connection, ids: list[str]) -> dict[str, Refs]:
 async def _page(
     snap: Snapshot,
     rows: list[aiosqlite.Row],
-    view: View,
+    view: TaskView,
     *,
     terms: list[str] | None = None,
 ) -> TaskPage:
+    if view == "compact":
+        return _compact_page(rows)
     ids = [r["id"] for r in rows]
     by_id = await refs(snap.conn, ids) if rows else {}
     models = await modeltrace.summaries(snap.conn, ids) if rows else {}
@@ -451,6 +473,33 @@ async def _page(
         items.append(item)
     if view == "summary":
         omitted |= set(SUMMARY_OMITS)
+    return TaskPage(
+        items=items,
+        total=len(items),
+        has_more=False,
+        next_cursor=None,
+        omitted=sorted(omitted),
+    )
+
+
+def _compact_page(rows: list[aiosqlite.Row]) -> TaskPage:
+    """No refs, trace or body queries; `q` filters rows but cites nothing."""
+    items: list[TaskSummary | TaskDetail | TaskCompact] = []
+    omitted: set[str] = set(COMPACT_OMITS)
+    for row in rows:
+        truncated: dict[str, int] = {}
+        items.append(
+            TaskCompact.model_validate(
+                {
+                    **{f: row[f] for f in TaskCompact.model_fields},
+                    "block_reason": cap(row["block_reason"], "block_reason", truncated),
+                    "progress_message": cap(
+                        row["progress_message"], "progress_message", truncated
+                    ),
+                }
+            )
+        )
+        omitted |= truncated.keys()
     return TaskPage(
         items=items,
         total=len(items),
