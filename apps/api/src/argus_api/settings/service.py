@@ -175,6 +175,11 @@ async def _setting(
     return SettingValue(key=key, value=defn.default, source="default")
 
 
+async def global_value(conn: aiosqlite.Connection, key: str) -> Any:
+    """The effective global value of a setting that has no file-backed source."""
+    return (await _setting(conn, Path(), GLOBAL, key)).value
+
+
 async def list_settings(
     conn: aiosqlite.Connection,
     path: Path,

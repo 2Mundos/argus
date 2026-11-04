@@ -114,6 +114,13 @@ Findings outside the gap list:
   first, by when the row started waiting. Pending tasks stuck behind a failed or
   cancelled dependency are rows too
   ([task dependencies](task-dependencies.spec.md) 3.2).
+- **Stuck flag:** a task row whose current block reason (`blocked`, dated by
+  `updated_at`) or progress message (dated by `progress_at`) is at least
+  `inbox.stuck_after_s` old (global setting, default 21600 s, minimum 60) carries
+  `stuck {kind: block_reason|progress, reason, since, age_s, threshold_s}`, else
+  `null`. It is derived on read and changes no row set, order or total. Limit: no
+  column records when a block reason was set, so any task edit that bumps
+  `updated_at` restarts the clock.
 - **Inbox groups and impact:** `GET /api/inbox` and `get_inbox` also take
   `blocking_only` (bool, default false) and `order` (`age` default | `impact`),
   and return the same data to the dashboard, MCP and REST.

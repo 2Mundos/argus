@@ -1173,6 +1173,16 @@
               }
             ]
           },
+          "stuck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Stuck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "subject_id": {
             "title": "Subject Id",
             "type": "string"
@@ -10175,6 +10185,16 @@
               }
             ]
           },
+          "stuck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Stuck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "subject_id": {
             "title": "Subject Id",
             "type": "string"
@@ -18596,6 +18616,45 @@
           "attempt"
         ],
         "title": "SteerPage",
+        "type": "object"
+      },
+      "Stuck": {
+        "description": "A task that kept the same block reason or progress past the threshold.\nAdvisory and derived on read; nothing sets or clears it.",
+        "properties": {
+          "age_s": {
+            "title": "Age S",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "block_reason",
+              "progress"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "threshold_s": {
+            "title": "Threshold S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "reason",
+          "since",
+          "age_s",
+          "threshold_s"
+        ],
+        "title": "Stuck",
         "type": "object"
       },
       "SystemSummary": {
