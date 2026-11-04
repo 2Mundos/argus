@@ -580,6 +580,7 @@ def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> Non
     )
     (repo / "a").write_text("1\n")
     subprocess.run([REAL, "add", "a"], cwd=repo, check=True)
+    subprocess.run([REAL, "config", "alias.ci", "commit"], cwd=repo, check=True)
     subprocess.run([REAL, "commit", "-m", "initial"], cwd=repo, check=True)
     subprocess.run([REAL, "notes", "add", "-m", "note"], cwd=repo, check=True)
     (repo / "a").write_text("2\n")
@@ -627,3 +628,6 @@ def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> Non
         ).stdout.strip()
         == head
     )
+    alias = _run_git(repo, env, "ci", "-m", "msg")
+    assert alias.returncode == 1
+    assert "no git author identity is configured" in alias.stderr

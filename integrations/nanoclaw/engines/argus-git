@@ -46,6 +46,41 @@ case "$sub" in
     esac
     ;;
 esac
+if [ -z "${ARGUS_GIT_AUTHOR_NAME:-}" ] || [ -z "${ARGUS_GIT_AUTHOR_EMAIL:-}" ]; then
+  alias_command=0
+  if [ -n "$sub" ] && "$real" config --get "alias.$sub" >/dev/null 2>&1; then
+    alias_command=1
+  fi
+  skip_config_value=0
+  skip_other_value=0
+  for a in "$@"; do
+    if [ "$skip_config_value" = 1 ]; then
+      config_key=$(printf '%s' "${a%%=*}" | tr '[:upper:]' '[:lower:]')
+      case "$config_key" in alias.*) alias_command=1 ;; esac
+      skip_config_value=0
+      continue
+    fi
+    if [ "$skip_other_value" = 1 ]; then
+      skip_other_value=0
+      continue
+    fi
+    case "$a" in
+      -c|--config-env) skip_config_value=1 ;;
+      -C|--git-dir|--work-tree|--namespace|--exec-path) skip_other_value=1 ;;
+      -c*|--config-env=*)
+        config_key=${a#-c}
+        config_key=${config_key#--config-env=}
+        config_key=$(printf '%s' "${config_key%%=*}" | tr '[:upper:]' '[:lower:]')
+        case "$config_key" in alias.*) alias_command=1 ;; esac
+        ;;
+      -*) ;;
+      *) break ;;
+    esac
+  done
+  if [ "$alias_command" = 1 ]; then
+    identity_required=1
+  fi
+fi
 if { [ -z "${ARGUS_GIT_AUTHOR_NAME:-}" ] || [ -z "${ARGUS_GIT_AUTHOR_EMAIL:-}" ]; } && [ "$identity_required" = 1 ]; then
   echo "Argus rejects this git command: no git author identity is configured; set the git.identity setting (global or project), then restart the worker" >&2
   exit 1
