@@ -17,7 +17,10 @@ gitea_src="$here/../gitea-api.mjs"
 ctx="$(mktemp -d)"
 trap 'rm -rf "$ctx"' EXIT
 shopt -s nullglob
-cp -p "$here"/*.mjs "$here"/*.json "$here/command_guard.py" "$ctx/"
+cp -p "$here"/*.mjs "$here"/*.json "$here/command_guard.py" "$here/commit_attribution.py" "$ctx/"
+cp -p "$here/argus-git" "$ctx/"
+mkdir -p "$ctx/git-hooks"
+cp -p "$here/git-hooks/commit-msg" "$ctx/git-hooks/"
 # Resource-hygiene shims (agent-resource-hygiene.spec.md) live one level up, next to their patch.
 cp -p "$here"/../argus-oom-priority.sh "$here"/../argus-cpu-count.sh "$here"/../argus-cpu-count.cjs \
   "$here"/../argus-cpu-count-sitecustomize.py "$ctx/"

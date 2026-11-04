@@ -29,8 +29,10 @@ bypass. Background: [draft](../drafts/2026-10-29.command-guard.draft.md),
 # 3. Decisions Made
 
 - **One source of truth.** `integrations/nanoclaw/engines/command_guard.py` holds
-  the rules (`REASONS`, `check()`); the hook and the tests use the same module.
-  It is standard library only and runs with the image's `python3`.
+  the catastrophic-command rules (`REASONS`, `check()`); the hook and the tests
+  use the same module. Co-author trailer detection lives in
+  `commit_attribution.py`, imported by the guard for Bash `git commit` one-liners
+  and by the worker git wrapper / commit-msg hook. Standard library only.
 - **Rules.** Each id has a reason and a paired block/allow test; a new rule
   cannot ship without both.
   - `rm_root`: recursive `rm` of `/`, `~`, `$HOME`, `/home/*` or `/root`
@@ -41,6 +43,12 @@ bypass. Background: [draft](../drafts/2026-10-29.command-guard.draft.md),
     `loop`, `md`, `dm-`).
   - `device_redirect`: `> /dev/<disk>`.
   - `fork_bomb`: the classic `:(){ :|:& };:`.
+  - `commit_attribution`: a `git commit` (including in a compound shell command)
+    whose `-m`/`--message`/`-F`/`--file` text contains a prohibited co-author
+    or attribution trailer line (case-insensitive), uses `--no-verify`/`-n`, or
+    passes `-c core.hooksPath=…` on the command line. Editor-only commits are covered by the workspace commit-msg hook instead;
+    publication is covered by the git wrapper on `git push` ([worker lifecycle](worker-lifecycle.spec.md)
+    3.8).
 - **Shell forms.** Commands are split on `;`, `&&`, `||`, `|`, `&`, redirects and
   newlines. `sudo`/`doas`/`env`/`VAR=x` prefixes are skipped, and
   `bash|sh|zsh -c '...'` and `eval` are checked recursively (depth 4).
@@ -92,13 +100,17 @@ bypass. Background: [draft](../drafts/2026-10-29.command-guard.draft.md),
 
 # 6. Implementation Consequences
 
-- `integrations/nanoclaw/engines/command_guard.py`, `claude-managed-settings.json`
+- `integrations/nanoclaw/engines/command_guard.py`, `commit_attribution.py`,
+  `claude-managed-settings.json`, `argus-git`, `git-hooks/commit-msg`
 - `engines/Dockerfile.tools-layer` and `engines/apply-tools-layer.sh` install them.
 - `integrations/nanoclaw/tests/test_command_guard.py`
 
 ## Verification boundary
 
-- Commands: `pytest integrations/nanoclaw/tests/test_command_guard.py`.
+- Commands: `pytest integrations/nanoclaw/tests/test_command_guard.py`,
+  `pytest integrations/nanoclaw/tests/test_commit_attribution.py`,
+  `pytest integrations/nanoclaw/tests/test_tools_layer_permissions.py` (Docker
+  probe when available).
 - Verified: rule tables (block and allow, shell forms), the hook's stdin/stdout
   contract, fail-open and the env opt-out, at unit level.
 - Not verified: the image build, that Claude Code loads the managed settings and

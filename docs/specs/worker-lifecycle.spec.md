@@ -649,17 +649,58 @@ earlier tasks neither inflate its cost nor contaminate its replies
 - The worker's agent group runs with `cli_scope: "disabled"`. The worker never
   uses `ncl`, and NanoClaw then leaves the `cli` and `scheduling` module
   instructions (about 7.7 KB) out of the composed `CLAUDE.md`.
-- The harness's system-level instruction forbids `Co-Authored-By:` (and other
-  co-author or attribution) trailers in commit messages it creates. The
-  instruction is installed into NanoClaw's core canon `container/CLAUDE.md`
-  (composed into `CLAUDE.md` for the claude provider and `AGENTS.md` for codex
-  on every spawn) and prepended to every `argus-delegate` run. It is an
-  instruction only: no hooks, no history rewriting, no trailer stripping, no
-  change to git author identity, and it does not alter existing task prompts,
-  engine behaviour or repo-wide settings. Limitation: executor-only CLIs
-  (Cursor/`agent`, `opencode`, `copilot`, and delegated `codex`/`claude`) never
-  load the harness project document, so they rely on the `argus-delegate`
-  prefix alone.
+- **Commit attribution (prompt plus enforcement).** The harness's system-level
+  instruction still forbids `Co-Authored-By:` (and other co-author or
+  attribution) trailers in commit messages workers create. It is installed into
+  NanoClaw's core canon `container/CLAUDE.md` (composed into `CLAUDE.md` for
+  the claude provider and `AGENTS.md` for codex on every spawn) and prepended
+  to every `argus-delegate` run. **Deterministic enforcement** (accident and
+  policy prevention, not a hostile-agent sandbox) applies on the worker image
+  normal paths only:
+  - **`/usr/local/lib/argus/bin/git`** is prepended to the session container
+    `PATH` (`patch-git-worker-attribution.py`), so `git commit`, `git push`,
+    `argus-task deliver`, and delegated executors that inherit `PATH` hit the
+    same wrapper. It refuses new commit messages that carry prohibited trailer
+    lines, and refuses a push when any **outgoing** commit (relative to the
+    remote ref being updated, or since the merge-base with the remote default
+    branch when the remote branch is new) still carries one. `git push --all`,
+    `--tags`, and `--mirror` are rejected (fail closed). Tag refspecs,
+    `--follow-tags`, and other non-branch refspecs are rejected for the same
+    reason (they would skip outgoing branch scans). Git errors while
+    resolving the push range return an actionable error instead of allowing the
+    push. It does not rewrite messages, amend history on its own, or strip
+    trailers from commits that already exist on the remote.
+  - **`core.hooksPath`** on each task workspace points at
+    `/usr/local/lib/argus/git-hooks` (the image directory containing
+    `commit-msg`), so commits created without a `-m`/`-F` message (editor flow)
+    are checked too. Host-side workspace git keeps `core.hooksPath=/dev/null` on
+    every command so the channel never runs worker hooks.
+  - **Claude Code Bash** also runs `commit_attribution` through the existing
+    command guard when a one-liner passes `-m` text with a trailer
+    ([command guard](command-guard.spec.md)). The git wrapper rejects
+    `git commit --no-verify` and `-n`, and any `-c core.hooksPath=…` override
+    (fail closed). Host-side workspace git may still pass
+    `-c core.hooksPath=/dev/null`; that path does not use the worker wrapper.
+  - **Trust boundary:** production `argus-git` and the commit-msg hook use fixed
+    paths (`/usr/bin/git`, `/usr/local/lib/argus/commit_attribution.py`). Only
+    when `ARGUS_ATTRIBUTION_TEST_HOOKS=1` (tests and local harnesses) may
+    `ARGUS_GIT_REAL` or `ARGUS_COMMIT_ATTRIBUTION_PY` redirect execution; the
+    worker image does not set that flag.
+  - **Bypasses (documented, not fully preventable):** calling `/usr/bin/git`
+    directly, plumbing commands that create commits without going through
+    `commit`/`push`, non-Bash engines with no managed hook (Cursor, opencode,
+    Copilot, Codex without verified hooks), and any root-equivalent escape on
+    the host. Argus does not enforce this on human workflows outside the worker
+    image `PATH`. There is no supported worker opt-out environment variable.
+  - **Image permissions:** the tools layer creates `/etc/claude-code` and
+    `/usr/local/lib/argus` (including `bin/` and `git-hooks/`) with mode `0755`
+    so uid `1000` (`node`) can traverse them and read managed settings, run the
+    command guard, and source `argus-oom-priority.sh`. File modes stay `0644` /
+    `0755` as appropriate; credentials are not exposed.
+  Executor-only CLIs (Cursor/`agent`, `opencode`, `copilot`, and delegated
+  `codex`/`claude`) still rely on the `argus-delegate` prefix when they never
+  load the harness project document; the git wrapper and hook cover their shell
+  git use when `PATH` and the workspace hook apply.
 
 The Argus-installed NanoClaw overlay imposes no wall-clock or heartbeat-age
 ceiling on a running container: a quiet or long-running session remains valid

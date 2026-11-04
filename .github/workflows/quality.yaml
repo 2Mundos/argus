@@ -232,7 +232,11 @@ jobs:
           set -euo pipefail
           # 64 is argus-delegate's usage exit (no EXECUTOR): it got past every import;
           # a missing module exits 1 before that.
-          docker run --rm argus-tools-layer:ci sh -c '
+          docker run --rm --user 1000:1000 argus-tools-layer:ci sh -c '
+            test -r /etc/claude-code/managed-settings.json
+            test -x /usr/local/lib/argus
+            test -x /usr/local/lib/argus/bin/git
+            test -r /usr/local/lib/argus/argus-oom-priority.sh
             argus-delegate >/dev/null 2>&1; rc=$?; [ "$rc" = 64 ] || { echo "argus-delegate exited $rc"; exit 1; }
             for m in account-settings model-policy milestones livelog usage anthropic-redirect; do
               node -e "import(\"/usr/local/bin/$m.mjs\")" || exit 1

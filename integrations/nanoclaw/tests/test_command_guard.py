@@ -83,6 +83,18 @@ CASES = {
         "block": [":(){ :|:& };:", "bash -c ':(){ :|: & }; :'"],
         "allow": ["echo done; ls"],
     },
+    "commit_attribution": {
+        "block": [
+            'git commit -m "x\n\nCo-Authored-By: bot@example.com"',
+            "git commit --message='Co-authored-by: a'",
+            "git commit --no-verify -m ok",
+        ],
+        "allow": [
+            "git commit -m 'fix'",
+            "git status",
+            'echo "Co-Authored-By: not a git commit"',
+        ],
+    },
 }
 
 

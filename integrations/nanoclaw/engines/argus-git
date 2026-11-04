@@ -1,0 +1,13 @@
+#!/bin/sh
+# Worker git front: enforces commit-attribution rules, then execs the real git.
+set -eu
+real="/usr/bin/git"
+py="/usr/local/lib/argus/commit_attribution.py"
+if [ "${ARGUS_ATTRIBUTION_TEST_HOOKS:-}" = "1" ]; then
+  real="${ARGUS_GIT_REAL:-/usr/bin/git}"
+  py="${ARGUS_COMMIT_ATTRIBUTION_PY:-$py}"
+fi
+if ! python3 "$py" gate "$PWD" "$@"; then
+  exit 1
+fi
+exec "$real" "$@"

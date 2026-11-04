@@ -9,12 +9,25 @@ The hook reads the PreToolUse JSON on stdin and, for a blocked Bash command,
 prints a deny decision on stdout. Any internal error allows the command.
 """
 
+import importlib.util
 import json
 import os
 import posixpath
 import re
 import shlex
 import sys
+from pathlib import Path
+
+_ATTRIBUTION = Path(__file__).with_name("commit_attribution.py")
+_spec = importlib.util.spec_from_file_location("commit_attribution", _ATTRIBUTION)
+_attribution = (
+    importlib.util.module_from_spec(_spec) if _spec and _spec.loader else None
+)
+if _attribution and _spec and _spec.loader:
+    sys.modules[_spec.name] = _attribution
+    _spec.loader.exec_module(_attribution)
+else:
+    _attribution = None
 
 DISABLE_ENV = "ARGUS_COMMAND_GUARD"  # "0" or "off" turns the guard off
 MAX_DEPTH = 4
@@ -26,6 +39,10 @@ BLOCK_DEVICE = r"/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-)"
 
 # id -> reason. The first matching rule wins.
 REASONS = {
+    "commit_attribution": (
+        "a commit message must not contain a Co-Authored-By or other co-author "
+        "attribution trailer (remove the trailer; git author and committer is enough)"
+    ),
     "rm_root": "recursive deletion of /, ~, $HOME, /home/* or /root",
     "no_preserve_root": "--no-preserve-root disables the safety check of rm",
     "mkfs": "creating a filesystem destroys the data on the device",
@@ -109,6 +126,8 @@ def _check_segment(tokens: list[str], depth: int) -> str | None:
 def _check(command: str, depth: int = 0) -> str | None:
     if depth > MAX_DEPTH:
         return None
+    if _attribution and _attribution.check_bash_command(command):
+        return "commit_attribution"
     if _FORK_BOMB.search(command):
         return "fork_bomb"
     if _DEVICE_REDIRECT.search(command):

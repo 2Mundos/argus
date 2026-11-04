@@ -1,0 +1,8 @@
+#!/bin/sh
+# Worker commit-msg hook (core.hooksPath). Validates before a commit is created.
+set -eu
+py="/usr/local/lib/argus/commit_attribution.py"
+if [ "${ARGUS_ATTRIBUTION_TEST_HOOKS:-}" = "1" ]; then
+  py="${ARGUS_COMMIT_ATTRIBUTION_PY:-$py}"
+fi
+exec python3 "$py" validate-msg "$1"

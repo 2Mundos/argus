@@ -24,6 +24,7 @@ import {
   taskBranch,
   taskWorkspaceContainerPath,
   taskWorkspacePath,
+  WORKER_GIT_HOOKS_PATH,
 } from "./argus-workspace.js";
 
 const REPO = "https://git.example.test/org/repo.git";
@@ -67,6 +68,10 @@ const git = (cwd: string, ...args: string[]) =>
     env: gitEnv(),
     encoding: "utf8",
   }).trim();
+
+/** Read a key from the workspace `.git/config` (host git pins hooksPath=/dev/null). */
+const workspaceGitConfig = (ws: string, key: string) =>
+  git(ws, "config", "--file", path.join(".git", "config"), "--get", key);
 
 /** Every entry under `dir` (not following symlinks): content hashes, link targets, modes. */
 function snapshot(dir: string): Record<string, string> {
@@ -142,7 +147,20 @@ describe("prepareTaskWorkspace", () => {
     expect(git(r.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/argus/task-${id.slice(0, 8)}`);
     expect(() => git(r.path, "rev-parse", "--verify", "-q", "HEAD")).toThrow(); // unborn
     expect(git(r.path, "config", "--get", "remote.origin.url")).toBe(REPO);
+    expect(workspaceGitConfig(r.path, "core.hooksPath")).toBe(WORKER_GIT_HOOKS_PATH);
     expect(readdirSync(path.join(group, TASK_WORKSPACES_DIR))).toEqual([id]);
+  });
+
+  it("sets core.hooksPath on an existing valid workspace when it was missing", async () => {
+    const group = tmp("argus-ws-group-");
+    const id = randomUUID();
+    const r = await prepare(group, id);
+    if (!r.ok) throw new Error(r.error);
+    git(r.path, "config", "--unset", "core.hooksPath");
+    expect(() => workspaceGitConfig(r.path, "core.hooksPath")).toThrow();
+    const again = await prepare(group, id);
+    expect(again).toMatchObject({ ok: true, created: false });
+    expect(workspaceGitConfig(r.path, "core.hooksPath")).toBe(WORKER_GIT_HOOKS_PATH);
   });
 
   it("gives a later attempt the same workspace and leaves its work in progress intact", async () => {
