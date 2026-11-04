@@ -371,6 +371,8 @@ every new dependency is judged against it.
 
 - [Worker instance directory permission denial under launcher](postmortems/2026-11-04.launcher-instance-permission.ref.md) —
   unprivileged API fallback to helper container and OSError handling (#194)
+- [Pre-push checks rewrote the repository](postmortems/2026-11-04.pre-push-git-env.ref.md) —
+  git's hook variables reached a test's `git init`; the hook now unsets them
 
 ### Releases
 
