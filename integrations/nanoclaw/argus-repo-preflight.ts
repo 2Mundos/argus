@@ -78,16 +78,34 @@ const HELPER_ERROR_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Policy rules the helper names on a denial (gitea-api.mjs `GiteaError.rule`), each with a
+ * fixed remediation hint. The table is closed: a rule outside it is not reported.
+ */
+const RULE_HINTS: Readonly<Record<string, string>> = {
+  repository_write_access:
+    "the forge credential for this repository lacks push access; grant write access or fix the repository assignment",
+  repository_read_access:
+    "the forge credential for this repository lacks read access; grant read access or fix the repository assignment",
+  repository_allowlist:
+    "the repository is not in this worker's repository allowlist; add it to the worker's repositories",
+  forge_proxy:
+    "the OneCLI HTTPS proxy is missing or invalid in the preflight session; check the OneCLI gateway setup",
+};
+
+/**
  * Why the child failed, as a closed reason. The verdict file is written by the container,
  * so none of its free text (messages, paths, provider names) reaches the task: only a code
- * from the helper's fixed set, or a fixed phrase.
+ * and a rule from the helper's fixed sets, the host-derived repository, and a fixed hint.
  */
-export function describeFailure(verdict: unknown): string {
+export function describeFailure(verdict: unknown, repository?: string): string {
   if (!isRecord(verdict) || !isRecord(verdict.error)) return "no verdict was written";
-  const { code } = verdict.error;
-  return typeof code === "string" && HELPER_ERROR_CODES.has(code)
-    ? `helper error ${code}`
-    : "helper error of an unknown kind";
+  const { code, rule } = verdict.error;
+  if (typeof code !== "string" || !HELPER_ERROR_CODES.has(code))
+    return "helper error of an unknown kind";
+  if (code !== "policy_denied") return `helper error ${code}`;
+  if (typeof rule !== "string" || !Object.hasOwn(RULE_HINTS, rule))
+    return `helper error ${code}: rule not reported by the helper`;
+  return `helper error ${code}: rule ${rule}${repository ? ` on ${repository}` : ""}: ${RULE_HINTS[rule]}`;
 }
 
 /** Bounded, printable, credential-scrubbed text for errors whose origin is not ours (drivers, OneCLI). */
@@ -125,7 +143,7 @@ export class RepositoryPreflightError extends Error {
     message: string,
     readonly evidence: ProbeEvidence | null = null,
   ) {
-    super(safeText(message, 300));
+    super(safeText(message, 500));
     this.name = "RepositoryPreflightError";
   }
 }
@@ -211,10 +229,12 @@ export function assertPreflightPositive(
   };
   if (result.exitCode !== 0)
     fail(
-      `the repository preflight session exited with code ${result.exitCode} (${describeFailure(v)})`,
+      `the repository preflight session exited with code ${result.exitCode} (${describeFailure(v, expected.repository)})`,
     );
   if (!isRecord(v) || v.ok !== true)
-    fail(`the repository preflight did not confirm access (${describeFailure(v)})`);
+    fail(
+      `the repository preflight did not confirm access (${describeFailure(v, expected.repository)})`,
+    );
   const ok = v as Record<string, unknown>;
   if (ok.provider !== expected.provider)
     fail(`the repository preflight ran for another provider than ${expected.provider}`, "unknown");
@@ -388,7 +408,7 @@ export async function runRepositoryPreflight(
       outcome,
       reason: preflightReason(outcome),
       error:
-        detail === undefined ? null : `repository preflight ${outcome}: ${safeText(detail, 300)}`,
+        detail === undefined ? null : `repository preflight ${outcome}: ${safeText(detail, 500)}`,
       event,
     };
   };

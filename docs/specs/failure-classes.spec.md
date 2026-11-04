@@ -317,8 +317,13 @@ therefore runs in a bounded, ephemeral, model-free session:
   attempt (best effort; a failed post never changes the outcome).
 - **What the task is told.** Nothing the container wrote is passed on as text. A failing child
   is reported as a closed reason: its outcome and the helper's error code if they are in their
-  fixed sets, else "of an unknown kind", else "no verdict was written". Provider and repository
-  fields in the verdict are compared, never echoed. Errors from the driver and OneCLI are
+  fixed sets, else "of an unknown kind", else "no verdict was written". For `policy_denied` the
+  helper also names the policy rule (`repository_write_access`, `repository_read_access`,
+  `repository_allowlist`, `forge_proxy`); the host checks it against its own closed table and
+  appends the rule, the host-derived repository (`origin/owner/repo`) and a fixed remediation
+  hint, or "rule not reported by the helper". The block reason stays the closed code; the
+  specifics travel in the block `error`. Provider and repository fields in the verdict are
+  compared, never echoed. Errors from the driver and OneCLI are
   printable-only, credential-scrubbed and cut to 160 characters, and the channel redacts and
   bounds the block `error` again.
 - **Startup order.** NanoClaw's `index.ts` starts the channel adapters (the Argus claim loop)

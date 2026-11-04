@@ -235,7 +235,7 @@ describe.skipIf(!IMAGE)("preflight in real containers (synthetic gateway and for
   it("an unauthenticated read (no injection) is refused by exit status and verdict", async () => {
     forge.inject = false;
     await expect(probe()(GITHUB, [GITHUB], "github")).rejects.toThrow(
-      /exited with code 13 \(helper error policy_denied\)/,
+      /exited with code 13 \(helper error policy_denied: rule repository_write_access on https:\/\/github\.com\/acme\/widget: /,
     );
     expect(leftovers()).toBe("");
   }, 90_000);
