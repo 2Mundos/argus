@@ -215,7 +215,7 @@ export function TaskDetail({
             ) : (
               <button
                 type="button"
-                title={`Reset attempts (${task.attempt}/${task.max_attempts} used) and run it again`}
+                title={`Reset failures (${task.failures}/${task.max_attempts} used) and run it again`}
                 disabled={action.busy}
                 onClick={() => setConfirmingRetry(true)}
               >
