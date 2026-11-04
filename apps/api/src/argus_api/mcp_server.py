@@ -59,7 +59,7 @@ awaiting approval) with decision and artifact ids; list_decisions(view="detail")
 get_decision reads the questions (get_inbox(view="actionable") gives, per row,
 who may answer, what each answer does, what it holds up and labelled evidence: hints
 only, nothing is executed); list_artifacts, verify_artifact and read_artifact
-check evidence; answer_decision or answer_decisions acts (give each answer a
+check evidence; read_chat_attachment reads a file an admin attached to a chat; answer_decision or answer_decisions acts (give each answer a
 request_id, so retries are safe); get_tasks(ids) reads the effects back. edit_task changes a task's title, spec,
 acceptance, priority, capabilities, pins or dependencies (pass its `version`). To
 assemble related tasks before any worker can claim them, create_task_draft each one
@@ -467,6 +467,26 @@ async def list_artifacts(
         "GET",
         f"/tasks/{task_id}/artifacts",
         params={"attempt": attempt, "role": role},
+    )
+
+
+@tool(MANAGERS)
+async def read_chat_attachment(
+    ctx: Context,
+    conversation_id: str,
+    attachment_id: str,
+    offset: int = 0,
+    max_bytes: int = 16384,
+) -> dict:
+    """Read a file an admin attached to a chat. Text and JSON come back as UTF-8
+    from byte `offset` (max_bytes ≤ 65536); continue from `next_offset`. Other
+    types: `binary` true and `content_base64` of that slice. Not a way to send
+    chat — only to read a file already on a message."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/conversations/{conversation_id}/attachments/{attachment_id}/text",
+        params={"offset": offset, "max_bytes": max_bytes},
     )
 
 

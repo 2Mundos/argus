@@ -100,6 +100,8 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
     assert "claim_task" in by_scope[Scope.WORKER]
     assert "claim_task" not in by_scope[Scope.ADMIN]
     assert "answer_decision" not in by_scope[Scope.WORKER]
+    assert "read_chat_attachment" in by_scope[Scope.ORCHESTRATOR]
+    assert "read_chat_attachment" not in by_scope[Scope.WORKER]
     admin_only = {n for n, a in mcp_server.audiences.items() if a == {Scope.ADMIN}}
     assert admin_only == {
         "update_pool",

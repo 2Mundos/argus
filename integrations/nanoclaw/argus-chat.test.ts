@@ -56,6 +56,32 @@ describe("renderChatInbound", () => {
     expect(text).toContain("Trusted operator instruction from admin:alice");
     expect(text).toContain("Ship the fix");
     expect(text).toContain("untrusted DATA");
+    expect(text).not.toContain("Attachments");
+  });
+
+  it("names attached files and the tool that reads them", () => {
+    const text = renderChatInbound({
+      message: {
+        id: "m1",
+        conversation_id: "c1",
+        author: "admin:alice",
+        body: "See the log",
+        state: "delivered",
+        turn_id: "t1",
+        created_at: "2026-10-20T12:00:00Z",
+        attachments: [{ id: "a1", filename: "build.log", media_type: "text/plain", size: 120 }],
+      },
+      conversation: {
+        id: "c1",
+        kind: "chat",
+        title: "Login",
+        session_ref: null,
+      },
+    });
+    expect(text).toContain("Attachments (1)");
+    expect(text).toContain("read_chat_attachment");
+    expect(text).toContain("build.log");
+    expect(text).toContain("id=a1");
   });
 
   it("frames a system inbox wake as a notice, not an admin instruction", () => {

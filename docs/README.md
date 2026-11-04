@@ -213,7 +213,8 @@ every new dependency is judged against it.
 - [Routines](specs/routines.spec.md) — cron-scheduled task templates per project;
   run findings become deduplicated tasks, approval-gated by default
 - [Internal orchestrator](specs/internal-orchestrator.spec.md) — Argus hosts its own
-  orchestrator as a system pool; chat with it is the main page; spend cap; skill improvements
+  orchestrator as a system pool; chat with it (including file attachments) is the
+  main page; spend cap; skill improvements
 - [Built-in orchestrator runtime](specs/builtin-orchestrator.spec.md) — the internal
   orchestrator as an in-process loop on an API-key, custom or local account: no Docker,
   image or OneCLI; same REST/MCP contract, per-step spend, task update notices, local

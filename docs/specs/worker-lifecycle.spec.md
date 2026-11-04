@@ -570,7 +570,7 @@ as a managed pool of size 1 uses the same model: see
   `upload_text_artifact`, `list_artifacts`, `read_artifact`, `verify_artifact`,
   `leave`; `search_knowledge`, `get_knowledge_page`, `write_knowledge`;
   `lease_account`, `report_account_exhausted`; `list_engines`, `run_local`; and
-  for orchestrators `attach_artifact`, `get_inbox`, `list_tasks`, `edit_task`, `set_task_dependencies`,
+  for orchestrators `attach_artifact`, `read_chat_attachment`, `get_inbox`, `list_tasks`, `edit_task`, `set_task_dependencies`,
   `create_task_draft`, `list_task_drafts`, `get_task_draft`, `edit_task_draft`,
   `discard_task_draft`, `publish_task_drafts` ([task drafts](task-drafts.spec.md)),
   `unblock_task`, `retry_task`, `release_task`,

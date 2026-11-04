@@ -10,6 +10,8 @@ from argus_core.auth import Scope
 from argus_core.conversations import (
     AgentChatClaim,
     AgentChatReply,
+    ChatAttachment,
+    ChatAttachmentText,
     ChatContext,
     ChatOriginTask,
     ChatSessionPut,
@@ -21,8 +23,11 @@ from argus_core.conversations import (
     MessageCreate,
     MessageList,
 )
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, status
+from fastapi.responses import FileResponse
 
+from argus_api.artifacts.routes import StoreDep
+from argus_api.conversations import attachments as chat_files
 from argus_api.conversations import service
 from argus_api.deps import (
     AdminDep,
@@ -111,6 +116,78 @@ async def list_messages(
     return MessageList(items=items)
 
 
+@router.post(
+    "/conversations/{conversation_id}/attachments",
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra={
+        "requestBody": {"content": {"application/octet-stream": {}}, "required": True}
+    },
+)
+async def upload_chat_attachment(
+    conversation_id: str,
+    request: Request,
+    db: DbDep,
+    store: StoreDep,
+    caller: AdminDep,
+    filename: Annotated[str, Query()],
+) -> ChatAttachment:
+    """Store a file on this conversation. Pass its id in `attachment_ids` when
+    posting the message. The original filename is kept; Content-Type is the media
+    type. Same size cap as a task artifact."""
+    return await chat_files.attach(
+        db,
+        store,
+        conversation_id=conversation_id,
+        filename=filename,
+        media_type=request.headers.get("content-type", "application/octet-stream"),
+        chunks=request.stream(),
+        actor=caller.actor,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/attachments/{attachment_id}/content",
+    response_class=FileResponse,
+)
+async def download_chat_attachment(
+    conversation_id: str,
+    attachment_id: str,
+    db: DbDep,
+    store: StoreDep,
+    caller: CallerDep,
+) -> FileResponse:
+    """The raw bytes. Admins and the internal orchestrator only."""
+    await _require_chat_reader(db, caller)
+    async with db.read() as conn:
+        attachment = await chat_files.get_attachment(
+            conn, conversation_id, attachment_id
+        )
+    return FileResponse(
+        store.path(chat_files.store_key(conversation_id, attachment.id)),
+        media_type=attachment.media_type,
+        filename=attachment.filename,
+    )
+
+
+@router.get("/conversations/{conversation_id}/attachments/{attachment_id}/text")
+async def read_chat_attachment_text(
+    conversation_id: str,
+    attachment_id: str,
+    db: DbDep,
+    store: StoreDep,
+    caller: CallerDep,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    max_bytes: Annotated[int, Query(ge=64, le=65536)] = 16384,
+) -> ChatAttachmentText:
+    """A UTF-8 slice of a text file, or a base64 slice of any other type."""
+    await _require_chat_reader(db, caller)
+    async with db.read() as conn:
+        attachment = await chat_files.get_attachment(
+            conn, conversation_id, attachment_id
+        )
+    return await chat_files.read_range(store, attachment, offset, max_bytes)
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(
     conversation_id: str,
@@ -135,6 +212,16 @@ async def _require_internal_orchestrator(db, agent_id: str) -> None:
                 "chat channel is only for the internal orchestrator",
                 code="not_internal_orchestrator",
             )
+
+
+async def _require_chat_reader(db, caller) -> None:
+    if caller.scope is Scope.ADMIN:
+        return
+    if caller.scope is Scope.ORCHESTRATOR and caller.agent_id:
+        async with db.read() as conn:
+            if await agent_system_pool(conn, caller.agent_id) == "orchestrator":
+                return
+    raise ForbiddenError("conversations are admin-only")
 
 
 @router.get("/agents/me/chat")

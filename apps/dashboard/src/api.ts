@@ -35,6 +35,7 @@ export type Overview = components["schemas"]["Overview"];
 export type OnboardingStatus = components["schemas"]["OnboardingStatus"];
 export type Conversation = components["schemas"]["Conversation"];
 export type Message = components["schemas"]["Message"];
+export type ChatAttachment = components["schemas"]["ChatAttachment"];
 export type AgentHygiene = components["schemas"]["AgentHygiene"];
 export type EngineCatalog = components["schemas"]["EngineCatalog"];
 export type ModelPolicy = components["schemas"]["ModelPolicy"];
@@ -215,6 +216,37 @@ export async function boardTasks(
     }),
   ]);
   return { ...merged(), loading: false };
+}
+
+/** Upload a file onto a conversation; pass the returned id when posting the message. */
+export async function uploadConversationFile(
+  conversationId: string,
+  file: File,
+): Promise<ChatAttachment> {
+  const params = new URLSearchParams({ filename: file.name });
+  const res = await fetch(`/api/conversations/${conversationId}/attachments?${params}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${currentToken}`,
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+  if (res.status === 401) onUnauthorized();
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const err = (await res.json()) as ErrorBody;
+      const detail = err.detail;
+      if (typeof detail === "object" && detail !== null && "message" in detail) {
+        message = String(detail.message ?? message);
+      }
+    } catch {
+      // keep statusText
+    }
+    throw new ApiError(res.status, "error", message);
+  }
+  return res.json() as Promise<ChatAttachment>;
 }
 
 /** Fetch an authenticated file (artifacts) and trigger a download. */
