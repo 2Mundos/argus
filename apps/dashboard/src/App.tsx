@@ -23,6 +23,7 @@ const Fleet = lazy(() => import("./views/Fleet").then((m) => ({ default: m.Fleet
 const Inbox = lazy(() => import("./views/Inbox").then((m) => ({ default: m.Inbox })));
 const Knowledge = lazy(() => import("./views/Knowledge").then((m) => ({ default: m.Knowledge })));
 const Pools = lazy(() => import("./views/Pools").then((m) => ({ default: m.Pools })));
+const Projects = lazy(() => import("./views/Projects").then((m) => ({ default: m.Projects })));
 const Routines = lazy(() => import("./views/Routines").then((m) => ({ default: m.Routines })));
 const Settings = lazy(() => import("./views/Settings").then((m) => ({ default: m.Settings })));
 const Tasks = lazy(() => import("./views/Tasks").then((m) => ({ default: m.Tasks })));
@@ -32,6 +33,7 @@ const TABS = {
   dashboard: "Dashboard",
   inbox: "Inbox",
   tasks: "Tasks",
+  projects: "Projects",
   workers: "Workers",
   knowledge: "Knowledge",
   routines: "Routines",
@@ -70,7 +72,7 @@ const LEGACY: Record<string, string> = {
 };
 
 type Route =
-  | { tab: "chat" | "dashboard" | "inbox" | "knowledge" | "routines" }
+  | { tab: "chat" | "dashboard" | "inbox" | "knowledge" | "projects" | "routines" }
   | { tab: "tasks"; taskId: string | null }
   | { tab: "workers"; sub: WorkersSub }
   | { tab: "setup"; sub: SetupSub };
@@ -104,6 +106,7 @@ export function parseRoute(): Route {
   if (
     head === "inbox" ||
     head === "knowledge" ||
+    head === "projects" ||
     head === "routines" ||
     head === "dashboard" ||
     head === "chat"
@@ -231,6 +234,7 @@ function isCurrent(href: string, route: Route): boolean {
   if (href === "#dashboard") return route.tab === "dashboard";
   if (href === "#tasks") return route.tab === "tasks";
   if (href === "#inbox") return route.tab === "inbox";
+  if (href === "#projects") return route.tab === "projects";
   if (href === "#knowledge") return route.tab === "knowledge";
   if (href === "#routines") return route.tab === "routines";
   if (href === "#workers/agents") return route.tab === "workers" && route.sub === "agents";
@@ -373,6 +377,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
               label="Tasks"
               count={awaiting}
             />
+            <NavLink href="#projects" current={isCurrent("#projects", route)} label="Projects" />
             <NavLink
               href="#inbox"
               current={isCurrent("#inbox", route)}
@@ -541,6 +546,8 @@ function RouteView({
       return <Tasks />;
     case "knowledge":
       return <Knowledge />;
+    case "projects":
+      return <Projects />;
     case "routines":
       return <Routines />;
     case "workers":

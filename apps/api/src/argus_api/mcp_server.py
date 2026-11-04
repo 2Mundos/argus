@@ -2071,19 +2071,11 @@ async def set_project_repository(
     next claim, so no worker or pool needs editing. It is a pointer, not access: a
     task still needs a registered repository account (Settings > Accounts) and gets
     a task-scoped lease. A project name that does not exist is unknown_project."""
-    projects = await _call(ctx, "GET", "/projects")
-    current = next((p for p in projects if p["slug"] == project), None)
-    if current is None:
-        raise ToolError(f"unknown project: {project}")
     return await _call(
         ctx,
-        "PUT",
-        f"/projects/{project}",
-        json={
-            "name": current["name"],
-            "description": current["description"],
-            "repository_url": repository_url,
-        },
+        "PATCH",
+        f"/projects/{project}/repository",
+        json={"repository_url": repository_url},
     )
 
 

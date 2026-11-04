@@ -10,6 +10,7 @@ import { PageHeader } from "../PageHeader";
 import { dur, quietFacts } from "../stall";
 import { TaskLabel } from "../TaskLabel";
 import { BatchPanel, type Draft, type Entry, isAnswerable, MAX_BATCH } from "./InboxBatch";
+import { RepositoryBlockAction } from "./RepositoryBlockAction";
 import { TaskDetail } from "./TaskDetail";
 import { TaskSteers } from "./TaskSteers";
 
@@ -222,6 +223,9 @@ function BlockedCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => 
         blocked{reason ? `: ${reason}` : ""}.
       </p>
       {item.task?.error && <p className="small">{item.task.error}</p>}
+      {item.task?.block_reason === "env_repository_unconfigured" && item.project && (
+        <RepositoryBlockAction taskId={item.subject_id} project={item.project} />
+      )}
       <div className="actions left">
         <button type="button" className="link" onClick={onOpenTask}>
           Open task

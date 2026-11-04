@@ -12,6 +12,8 @@ from argus_core.knowledge import (
     PageListItem,
     PageRestore,
     Project,
+    ProjectRepositoryChange,
+    ProjectStats,
     ProjectUpsert,
     Proposal,
     ProposalState,
@@ -30,7 +32,7 @@ from argus_api.access import (
 from argus_api.auth import Identity
 from argus_api.config import Settings
 from argus_api.db import Database, utcnow
-from argus_api.deps import CallerDep, DbDep, ManagerDep, SettingsDep
+from argus_api.deps import AdminDep, CallerDep, DbDep, ManagerDep, SettingsDep
 from argus_api.errors import ForbiddenError, NotFoundError
 from argus_api.knowledge import service
 
@@ -70,6 +72,14 @@ async def list_projects(db: DbDep, caller: CallerDep) -> list[Project]:
         return [p for p in projects if p.slug in allowed]
 
 
+@router.get("/projects/stats")
+async def project_stats(db: DbDep, caller: ManagerDep) -> list[ProjectStats]:
+    """Per-project counts and the repository workers would resolve (not for workers:
+    it spans every project)."""
+    async with db.read() as conn:
+        return await service.project_stats(conn)
+
+
 @router.put("/projects/{slug}")
 async def upsert_project(
     slug: Slug, body: ProjectUpsert, db: DbDep, caller: ManagerDep
@@ -89,6 +99,16 @@ async def upsert_project(
         return await service.upsert_project(
             tx, slug, body, caller.actor, admin=caller.scope == Scope.ADMIN
         )
+
+
+@router.patch("/projects/{slug}/repository")
+async def set_project_repository(
+    slug: Slug, body: ProjectRepositoryChange, db: DbDep, caller: AdminDep
+) -> Project:
+    """Admin only: set (or with null clear) just the repository. Unlike the full PUT it
+    never touches name or description, so it cannot overwrite a concurrent edit."""
+    async with db.write() as tx:
+        return await service.set_repository(tx, slug, body.repository_url, caller.actor)
 
 
 # -- pages -------------------------------------------------------------------------------

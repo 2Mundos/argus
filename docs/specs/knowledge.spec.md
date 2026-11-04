@@ -33,14 +33,22 @@ task's spec and clarifications are what one task needs.
 first-class scope, managed by orchestrators and admins (`PUT /api/projects/{slug}`;
 MCP `set_project_repository`; only an admin may change the URL, because it decides
 which host a repository credential is sent to: `403 repository_admin_only`
-otherwise). `repository_url` is the project's code, the
+otherwise). `PATCH /api/projects/{slug}/repository` (admin only, body
+`{"repository_url": url|null}`, field required) changes just the repository in one
+write: it never reads or writes name or description, so it cannot overwrite a
+concurrent edit of them; the dashboard and MCP `set_project_repository` use it.
+`global` has none (422 `project_global`); an unknown project is 404. `repository_url` is the project's code, the
 authoritative source for its repository: an HTTPS `owner/repository` URL without
 credentials, query or fragment (422 otherwise). Omitted from a PUT it is kept; an
 **admin's** explicit null clears the stored URL. JSON null from a non-admin on
 update is treated as omitted (so clients that round-trip null do not clear a URL).
 On **create**, a project with no URL inherits the single agreed pool-map entry
 (same rule as migration 0071); only an admin's explicit null on create skips that
-bootstrap. It is a pointer, not access: a task still needs a registered repository
+bootstrap. **One resolver.** Create-time checks, delivery, the claim and the stats
+all accept a stored or pool repository only if it canonicalises (HTTPS, no
+credentials, a real `owner/repo`; `https://host/owner/.git` does not), so a value
+one rejects is rejected by all; a usable pool mapping still stands in for an unusable
+record. It is a pointer, not access: a task still needs a registered repository
 account and gets a task-scoped lease. The claim response carries it as
 `project_repository` (resolved in the same write transaction as the claim, from the
 project record else the one URL every pool allowlist agrees on; null when unknown
@@ -54,7 +62,16 @@ the same way. **First-use gap:** when no pool names the project, or pools disagr
 there is no authoritative URL—Argus never guesses. An admin must set
 `repository_url` (REST or MCP `set_project_repository`) before branch/PR deliverables
 or write tasks can run; read-only code availability and claims stay without a tree
-until then. `global` exists by
+until then. `GET /api/projects/stats` (orchestrator or admin) returns per project the
+repository Argus resolves (the canonical URL) and `repository_source`: `project`
+(a usable record), `pools` (every pool that names it agrees), `conflict` (pools name
+different repositories: Argus picks none, though a worker whose own pool names one
+may still use it), `invalid` (a stored value that cannot be canonicalised, with no
+pool to stand in) or null (nothing names one). It also returns live task counts by
+state, archived tasks, the newest task update and active knowledge pages, all counted
+from Argus's own tables and computed from one read of the pools, not one per project.
+Nothing is estimated; a project with no tasks reports empty counts and no activity
+time. `global` exists by
 default as the scope of fleet-wide knowledge and settings; it is **not a home
 for tasks**. **Every task belongs to a real project**: it is required on
 creation, except that a subtask without one inherits its parent's. Naming
@@ -63,6 +80,44 @@ Work that spans projects goes in a project made for it (for example `argus` or
 `ops`). Tasks created before this rule stay in `global`, and their subtasks
 inherit it. Routine templates and draft publishes follow the same rule. No
 per-project permissions: any valid token reads every project.
+
+### 3.1.1 Dashboard
+
+- **Projects page** (`#projects`, in the primary nav) lists every project with its
+  repository, the source when the pools supply it, and the stats above. Setting,
+  changing or clearing the repository opens one dialog that reads the project (to
+  prefill it), sends `PATCH /api/projects/{slug}/repository` (name and description are
+  never sent or touched), and shows the API's refusal in plain words (`repository_admin_only`, 422 shape errors,
+  an unknown project, no connection). The dashboard does not know the token's role,
+  so every user sees the edit control and a non-admin is refused on save. `global`
+  has no repository and no edit control. If the stats fail, the page says so and
+  shows only what the project records hold.
+- **New task** warns when the selected project has no usable repository, following
+  the selection, and never blocks Create. The wording follows what is true: Argus
+  refuses to create a branch/PR task without one (`deliverable_repository`); a task
+  holding `repository:write` (typed, or the kind's default capabilities while the
+  field is empty) is blocked by a worker that cannot resolve one; with
+  `conflict` the warning says workers whose pool names one may use it and others
+  block; `invalid` says the stored value is unusable; anything else says the task
+  can still run without a checkout. "Set repository…" opens the same dialog beside the
+  form (a portal, never a form inside the form), so nothing typed is lost on save,
+  cancel or error. A saved repository counts at once, until the stats are re-read.
+  When the stats cannot be read the form says the repository is unknown instead of
+  claiming it is missing.
+- **Escape and focus.** The dialog takes focus and handles Escape itself, stopping
+  it from reaching the drawer or page behind.
+- **Blocked on a missing repository.** A task blocked with
+  `env_repository_unconfigured` shows, in the inbox card and the task drawer, the
+  project's current state: no repository ("Set repository…"), conflicting pools or an
+  unusable value (set one), or a repository that resolves now, possibly set elsewhere
+  since the block (an "Unblock task" button with no save needed). After a save,
+  "Unblock task" appears. Unblocking is always an explicit click, single-flight; once
+  it succeeds the controls are replaced by a confirmation, and a 409 (someone already
+  moved the task) is shown as "already unblocked", not as an error. The worker
+  protocol is unchanged: no new decision kind is opened because answering a decision
+  cannot change a project's repository. The inbox's actionable `next` names
+  `set_project_repository` for an admin and `escalate_to_human` for anyone else
+  ([MCP operations](mcp-operations.spec.md) 3.2).
 
 ## 3.2 Pages and revisions
 

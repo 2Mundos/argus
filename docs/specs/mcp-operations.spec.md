@@ -179,6 +179,9 @@ Findings outside the gap list:
     facts, never executed by Argus and never an approval. Actions: `answer_decision`
     (with `decision_id` and, for a known option set, no preselected choice),
     `escalate_to_human` (the caller may not answer), `unblock_task`,
+    `set_project_repository` (a task blocked with `env_repository_unconfigured` and
+    an admin caller: set the project's repository, then `unblock_task`; any other
+    caller gets `escalate_to_human`, because only an admin may change it),
     `retry_dependency` (a failed or cancelled dependency), `inspect_stall` (a
     quiet claim: `get_task_log`, `steer_task` or `release_task`), `reread` (the
     decision changed during the read) or `none`. A merged PR never yields

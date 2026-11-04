@@ -16,6 +16,7 @@ import { WorkerChip } from "../WorkerChip";
 import { Activity } from "./Activity";
 import { AttemptStrip } from "./AttemptStrip";
 import { EventList } from "./EventList";
+import { RepositoryBlockAction } from "./RepositoryBlockAction";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskSteers } from "./TaskSteers";
 import { TaskTerminal } from "./TaskTerminal";
@@ -289,6 +290,9 @@ export function TaskDetail({
           )}
           <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
+          {task.state === "blocked" && task.block_reason === "env_repository_unconfigured" && (
+            <RepositoryBlockAction taskId={taskId} project={task.project} onUnblocked={reload} />
+          )}
           <dl className="facts task-facts">
             <dt>State</dt>
             <dd className="task-state-line">

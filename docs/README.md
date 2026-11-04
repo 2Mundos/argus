@@ -62,8 +62,8 @@ every new dependency is judged against it.
   (OpenRouter first) as an account: model and routing per role, probe, 402/429 failover
 - [Custom harness](specs/custom-harness.spec.md) — NanoClaw Claude Code on a custom
   engine account via a loopback Anthropic→OpenAI bridge; executor stays independent
-- [Knowledge](specs/knowledge.spec.md) — projects and a versioned wiki shared by
-  agents and people, delivered with every claim
+- [Knowledge](specs/knowledge.spec.md) — projects (repository, Projects page, stats)
+  and a versioned wiki shared by agents and people, delivered with every claim
 - [Home](specs/home.spec.md) — the default dashboard tab: what needs attention,
   complete totals for every core state, recent activity, and health
 - [Dashboard action feedback](specs/dashboard-actions.spec.md) — every control

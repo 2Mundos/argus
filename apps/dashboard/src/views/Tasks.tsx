@@ -6,6 +6,7 @@ import { DELIVERABLES, type Deliverable } from "../deliverables";
 import { reportPage, useLiveData } from "../live";
 import { TaskSignal } from "../milestones";
 import { PageHeader } from "../PageHeader";
+import { repositoryNeed, repositoryState, repositoryWarning } from "../projectRepository";
 import { TaskLabel } from "../TaskLabel";
 import { executorPin, harnessPin } from "../taskEdit";
 import { WorkerChip } from "../WorkerChip";
@@ -14,6 +15,7 @@ import { useNow } from "./Activity";
 import { ArchiveTasks } from "./ArchiveTasks";
 import { ModelChip } from "./ModelChip";
 import { ModelPin } from "./ModelPin";
+import { ProjectRepositoryDialog } from "./ProjectRepositoryDialog";
 import { TaskDetail } from "./TaskDetail";
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
@@ -220,6 +222,11 @@ function NewTask({ onClose }: { onClose: () => void }) {
     (signal) => call(api.GET("/api/projects", { signal })),
     [],
   );
+  const {
+    data: stats,
+    error: statsError,
+    reload: reloadStats,
+  } = useLiveData((signal) => call(api.GET("/api/projects/stats", { signal })), []);
   const [form, setForm] = useState({
     title: "",
     spec: "",
@@ -238,12 +245,33 @@ function NewTask({ onClose }: { onClose: () => void }) {
     harnessAccount: "",
   });
   const [error, setError] = useState<string>();
+  const [configuring, setConfiguring] = useState<string | null>(null);
+  // A repository saved from this dialog counts at once, but only until the stats are
+  // re-read: the override belongs to the stats object it was saved against.
+  const [saved, setSaved] = useState<Record<string, { url: string | null; stats: unknown }>>({});
   const action = useAction();
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
   // `global` scopes knowledge and settings only; a task needs a real project.
   const taskProjects = (projects ?? []).filter((p) => p.slug !== "global");
   const project = form.project || taskProjects[0]?.slug || "";
+  // What Argus knows about the selected project's repository: "unknown" until the stats
+  // answer (or if they fail), never assumed missing.
+  const override = saved[project]?.stats === stats ? saved[project] : undefined;
+  const state = override
+    ? override.url
+      ? "set"
+      : "absent"
+    : repositoryState(stats?.find((s) => s.slug === project));
+  // The kind's default capabilities apply when the field is empty, as on the server.
+  const typedCapabilities = form.capabilities
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean);
+  const capabilities = typedCapabilities.length
+    ? typedCapabilities
+    : (kinds?.find((k) => k.name === form.kind)?.default_capabilities ?? []);
+  const need = repositoryNeed(form.deliverable, capabilities);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -288,146 +316,179 @@ function NewTask({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="overlay">
-      <form className="dialog" onSubmit={submit}>
-        <h2>New task</h2>
-        <label>
-          Title
-          <input value={form.title} onChange={(e) => set("title", e.target.value)} required />
-        </label>
-        <label>
-          Spec (Markdown)
-          <textarea rows={8} value={form.spec} onChange={(e) => set("spec", e.target.value)} />
-        </label>
-        <div className="row">
+    <>
+      <div className="overlay">
+        <form className="dialog" onSubmit={submit}>
+          <h2>New task</h2>
           <label>
-            Kind
-            <select value={form.kind} onChange={(e) => set("kind", e.target.value)}>
-              {(kinds ?? [{ name: "generic" }]).map((k) => (
-                <option key={k.name}>{k.name}</option>
-              ))}
-            </select>
+            Title
+            <input value={form.title} onChange={(e) => set("title", e.target.value)} required />
           </label>
           <label>
-            Project
-            <select value={project} onChange={(e) => set("project", e.target.value)} required>
-              {taskProjects.map((p) => (
-                <option key={p.slug} value={p.slug}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            Spec (Markdown)
+            <textarea rows={8} value={form.spec} onChange={(e) => set("spec", e.target.value)} />
           </label>
+          <div className="row">
+            <label>
+              Kind
+              <select value={form.kind} onChange={(e) => set("kind", e.target.value)}>
+                {(kinds ?? [{ name: "generic" }]).map((k) => (
+                  <option key={k.name}>{k.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Project
+              <select value={project} onChange={(e) => set("project", e.target.value)} required>
+                {taskProjects.map((p) => (
+                  <option key={p.slug} value={p.slug}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Deliverable
+              <select
+                value={form.deliverable}
+                onChange={(e) => set("deliverable", e.target.value as Deliverable)}
+              >
+                {DELIVERABLES.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Priority
+              <input
+                type="number"
+                value={form.priority}
+                onChange={(e) => set("priority", Number(e.target.value))}
+              />
+            </label>
+            <label>
+              Review
+              <select
+                value={form.review}
+                onChange={(e) => set("review", e.target.value as typeof form.review)}
+              >
+                <option value="none">none</option>
+                <option value="human">human</option>
+                <option value="orchestrator">orchestrator</option>
+              </select>
+            </label>
+          </div>
+          {project && (state === "absent" || state === "invalid" || state === "conflict") && (
+            <div className="repo-notice" role="status">
+              <p className="small">{repositoryWarning(project, state, need)}</p>
+              <button type="button" disabled={action.busy} onClick={() => setConfiguring(project)}>
+                Set repository…
+              </button>
+            </div>
+          )}
+          {project && state === "unknown" && statsError && (
+            <p className="muted small" role="status">
+              Could not check whether {project} has a repository ({statsError.message}).{" "}
+              <button type="button" className="link" onClick={reloadStats}>
+                Retry
+              </button>
+            </p>
+          )}
           <label>
-            Deliverable
+            Difficulty (trivial and simple work goes to a cheap executor; hard work to the
+            strongest)
             <select
-              value={form.deliverable}
-              onChange={(e) => set("deliverable", e.target.value as Deliverable)}
+              value={form.difficulty}
+              onChange={(e) => set("difficulty", e.target.value as typeof form.difficulty)}
             >
-              {DELIVERABLES.map((d) => (
-                <option key={d.value} value={d.value}>
-                  {d.label}
-                </option>
-              ))}
+              <option value="">decide from the title and spec</option>
+              <option value="trivial">trivial</option>
+              <option value="simple">simple</option>
+              <option value="standard">standard</option>
+              <option value="hard">hard</option>
             </select>
           </label>
           <label>
-            Priority
+            Required capabilities (comma-separated; empty uses the kind's default)
             <input
-              type="number"
-              value={form.priority}
-              onChange={(e) => set("priority", Number(e.target.value))}
+              value={form.capabilities}
+              onChange={(e) => set("capabilities", e.target.value)}
             />
           </label>
           <label>
-            Review
-            <select
-              value={form.review}
-              onChange={(e) => set("review", e.target.value as typeof form.review)}
-            >
-              <option value="none">none</option>
-              <option value="human">human</option>
-              <option value="orchestrator">orchestrator</option>
-            </select>
+            Restrict to account providers (comma-separated, e.g. local; empty: any)
+            <input
+              value={form.accountProviders}
+              onChange={(e) => set("accountProviders", e.target.value)}
+            />
           </label>
-        </div>
-        <label>
-          Difficulty (trivial and simple work goes to a cheap executor; hard work to the strongest)
-          <select
-            value={form.difficulty}
-            onChange={(e) => set("difficulty", e.target.value as typeof form.difficulty)}
-          >
-            <option value="">decide from the title and spec</option>
-            <option value="trivial">trivial</option>
-            <option value="simple">simple</option>
-            <option value="standard">standard</option>
-            <option value="hard">hard</option>
-          </select>
-        </label>
-        <label>
-          Required capabilities (comma-separated; empty uses the kind's default)
-          <input value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} />
-        </label>
-        <label>
-          Restrict to account providers (comma-separated, e.g. local; empty: any)
-          <input
-            value={form.accountProviders}
-            onChange={(e) => set("accountProviders", e.target.value)}
-          />
-        </label>
-        <label>
-          Harness engine and model (empty: the model policy)
-          <ModelPin
-            field="harness_model"
-            id="new-harness-model"
-            value={form.harnessModel}
-            onChange={(v) => set("harnessModel", v)}
-          />
-        </label>
-        <label>
-          Harness account (empty: any; local and custom accounts bring their own model)
-          <AccountPin
-            id="new-harness-account"
-            value={form.harnessAccount}
-            onChange={(v) => set("harnessAccount", v)}
-          />
-        </label>
-        <label>
-          Coding executor and model (empty: the model policy)
-          <ModelPin
-            field="executor_model"
-            id="new-executor-model"
-            value={form.executorModel}
-            onChange={(v) => set("executorModel", v)}
-          />
-        </label>
-        <label>
-          Timeout in minutes (empty: the kind's, then the server's default)
-          <input
-            type="number"
-            min={1}
-            value={form.timeoutMinutes}
-            onChange={(e) => set("timeoutMinutes", e.target.value)}
-          />
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.requires_approval}
-            onChange={(e) => set("requires_approval", e.target.checked)}
-          />
-          Requires approval before it can start
-        </label>
-        {error && <p className="error">{error}</p>}
-        <div className="actions">
-          <button type="button" disabled={action.busy} onClick={onClose}>
-            Cancel
-          </button>
-          <ActionButton type="submit" className="primary" pending={action.busy}>
-            Create
-          </ActionButton>
-        </div>
-      </form>
-    </div>
+          <label>
+            Harness engine and model (empty: the model policy)
+            <ModelPin
+              field="harness_model"
+              id="new-harness-model"
+              value={form.harnessModel}
+              onChange={(v) => set("harnessModel", v)}
+            />
+          </label>
+          <label>
+            Harness account (empty: any; local and custom accounts bring their own model)
+            <AccountPin
+              id="new-harness-account"
+              value={form.harnessAccount}
+              onChange={(v) => set("harnessAccount", v)}
+            />
+          </label>
+          <label>
+            Coding executor and model (empty: the model policy)
+            <ModelPin
+              field="executor_model"
+              id="new-executor-model"
+              value={form.executorModel}
+              onChange={(v) => set("executorModel", v)}
+            />
+          </label>
+          <label>
+            Timeout in minutes (empty: the kind's, then the server's default)
+            <input
+              type="number"
+              min={1}
+              value={form.timeoutMinutes}
+              onChange={(e) => set("timeoutMinutes", e.target.value)}
+            />
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.requires_approval}
+              onChange={(e) => set("requires_approval", e.target.checked)}
+            />
+            Requires approval before it can start
+          </label>
+          {error && <p className="error">{error}</p>}
+          <div className="actions">
+            <button type="button" disabled={action.busy} onClick={onClose}>
+              Cancel
+            </button>
+            <ActionButton type="submit" className="primary" pending={action.busy}>
+              Create
+            </ActionButton>
+          </div>
+        </form>
+      </div>
+      {configuring && (
+        <ProjectRepositoryDialog
+          slug={configuring}
+          onCancel={() => setConfiguring(null)}
+          onSaved={(p) => {
+            setSaved((s) => ({ ...s, [p.slug]: { url: p.repository_url ?? null, stats } }));
+            setConfiguring(null);
+            reloadStats();
+          }}
+        />
+      )}
+    </>
   );
 }
