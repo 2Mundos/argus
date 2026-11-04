@@ -570,7 +570,19 @@ def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> Non
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run([REAL, "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        [REAL, "config", "user.name", "Ambient User"], cwd=repo, check=True
+    )
+    subprocess.run(
+        [REAL, "config", "user.email", "ambient@example.invalid"],
+        cwd=repo,
+        check=True,
+    )
     (repo / "a").write_text("1\n")
+    subprocess.run([REAL, "add", "a"], cwd=repo, check=True)
+    subprocess.run([REAL, "commit", "-m", "initial"], cwd=repo, check=True)
+    subprocess.run([REAL, "notes", "add", "-m", "note"], cwd=repo, check=True)
+    (repo / "a").write_text("2\n")
     subprocess.run([REAL, "add", "a"], cwd=repo, check=True)
     env = {
         k: v
@@ -578,17 +590,40 @@ def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> Non
         if not k.startswith(("GIT_", "ARGUS_GIT_AUTHOR"))
     }
     env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+    head = subprocess.run(
+        [REAL, "rev-parse", "HEAD"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
     res = _run_git(repo, env, "-C", ".", "commit", "-m", "msg")
     assert res.returncode == 1
     assert "no git author identity is configured" in res.stderr
     assert "git.identity" in res.stderr
+    assert _run_git(repo, env, "tag", "--list").returncode == 0
+    assert _run_git(repo, env, "stash", "list").returncode == 0
+    notes = _run_git(repo, env, "notes", "show", "HEAD")
+    assert notes.returncode == 0, notes.stderr
+    assert notes.stdout.strip() == "note"
+    assert _run_git(repo, env, "status", "--short").returncode == 0
+    for args in (
+        ("tag", "-a", "new-tag", "-m", "tag"),
+        ("stash", "push"),
+        ("notes", "add", "-m", "new note"),
+    ):
+        blocked = _run_git(repo, env, *args)
+        assert blocked.returncode == 1
+        assert "no git author identity is configured" in blocked.stderr
     assert (
         subprocess.run(
-            [REAL, "rev-parse", "-q", "--verify", "HEAD"],
+            [REAL, "rev-parse", "HEAD"],
             cwd=repo,
             env=env,
-            check=False,
-        ).returncode
-        != 0
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == head
     )
-    assert _run_git(repo, env, "status", "--short").returncode == 0
