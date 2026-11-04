@@ -69,7 +69,26 @@ def test_notice_is_sanitized() -> None:
         ("You've hit your usage limit", "", "quota_exhausted"),
         ("Error: HTTP 401 token_expired", "", "auth_expired"),
         ("fetch failed: ETIMEDOUT", "", "network_unavailable"),
+        ("Error: stream disconnected before completion", "", "network_unavailable"),
+        ("Reconnecting... 2/5: stream disconnected", "", "network_unavailable"),
+        ("Error: connect ECONNREFUSED 10.0.0.1:443", "", "network_unavailable"),
+        ("task workspace failed: TypeError: fetch failed", "", "network_unavailable"),
+        ("Request timed out", "", "network_unavailable"),
         ("AssertionError in tests/test_x.py", "", "implementation"),
+        # The work's own words are not network evidence (failure evidence audit).
+        ("Tests timed out after 30s", "", "implementation"),
+        (
+            "pytest could not reach the test database: connection refused",
+            "",
+            "implementation",
+        ),
+        ("Timed out waiting for the dev server", "", "implementation"),
+        (
+            "the agent run failed (log: npm ERR! fetch failed | exit 1)",
+            "",
+            "implementation",
+        ),
+        ("build failed: connection reset by peer", "", "implementation"),
         ("anything", "runtime_switch_failed", "runtime_switch_failed"),
     ],
 )

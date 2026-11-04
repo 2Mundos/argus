@@ -69,15 +69,25 @@ STRUCTURED_QUOTA_CODES = frozenset(
         "insufficient_quota",
     }
 )
-# Failures that are the network's, not the account's or the task's.
+# Failures that are the network's, not the account's or the task's. Anchored at
+# the start of the notice, after the runner's and channel's prefixes: the same
+# words in the work's own output ("Tests timed out") are not evidence.
 NETWORK_NOTICES = re.compile(
-    r"\b(?:etimedout|econnreset|econnrefused|enotfound|eai_again|epipe|ehostunreach)\b"
+    r"^(?:(?:connect|read|write|getaddrinfo)\s+)?"
+    r"(?:(?:etimedout|econnreset|econnrefused|enotfound|eai_again|epipe|ehostunreach)\b"
     r"|fetch failed|network (?:error|is unreachable|unreachable)"
-    r"|connection (?:reset|refused|closed|timed out)"
-    r"|stream disconnected|timed? ?out|httpconnectionfailed|temporarily unavailable"
-    r"|service unavailable|bad gateway|gateway time-?out",
+    r"|connection (?:reset|refused|closed|timed out)|(?:request|socket) timed out"
+    r"|stream disconnected|httpconnectionfailed|temporarily unavailable"
+    r"|service unavailable|bad gateway|gateway time-?out)",
     re.I,
 )
+# The channel's own `<step> failed: <error>` (integrations/nanoclaw/argus.ts,
+# reason `channel_error`), then a JavaScript error name.
+_CHANNEL_STEP = re.compile(
+    r"^(?:repository preflight|continuation preflight|knowledge pages|task inputs"
+    r"|task workspace|task injection) failed:\s*"
+)
+_JS_ERROR = re.compile(r"^(?:[A-Z][A-Za-z]*)?Error:\s*")
 
 _PREFIX = re.compile(
     r"^(?:(?:codex |claude )?error:\s*|turn failed:\s*|reconnecting\.{3}\s*\d+/\d+:\s*)",
@@ -208,7 +218,10 @@ def failure_class(
     hit = classify_quota(notice, provider)
     if hit is not None:
         return hit.code
-    if NETWORK_NOTICES.search(notice):
+    head = _JS_ERROR.sub(
+        "", _CHANNEL_STEP.sub("", _PREFIX.sub("", _fold(notice), count=1))
+    )
+    if NETWORK_NOTICES.match(head):
         return "network_unavailable"
     return "implementation"
 

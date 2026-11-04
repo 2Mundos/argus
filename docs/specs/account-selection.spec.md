@@ -266,6 +266,10 @@ isolation or sandbox/TLS restrictions.
     separates `quota_exhausted`, `auth_expired`, `network_unavailable`,
     `runtime_switch_failed` and `implementation`; only the first two rotate and
     only `implementation`/network failures follow the normal attempt policy.
+    `network_unavailable` needs the notice itself to start with a network
+    error, after the runner's prefix, the channel's `<step> failed:` and a
+    JavaScript error name; the same words later in the text (the work's own
+    "Tests timed out", a log excerpt) are `implementation`.
   - *One eligibility rule.* `accounts/eligibility.py` `engine_pool` is the only
     reader of "is any engine account usable": the claim gate, `awaiting_quota`,
     `refill_at`, `release_waiting_tasks`, the overview and the engine catalog
