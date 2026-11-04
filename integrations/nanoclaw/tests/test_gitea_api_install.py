@@ -487,6 +487,10 @@ def test_install_sh_wires_copilot_delegate_runtime() -> None:
 def test_install_sh_forwards_git_identity_to_worker_shells() -> None:
     script = INSTALL_SH.read_text(encoding="utf-8")
     assert "if (value?.trim()) contributedEnv[key] = value;" in script
+    assert (
+        'if [ -f "$container_runner" ] && ! grep -q "ARGUS_GIT_AUTHOR_NAME" "$container_runner"; then'
+        in script
+    )
     for key in ("ARGUS_GIT_AUTHOR_NAME", "ARGUS_GIT_AUTHOR_EMAIL"):
         assert f'"{key}"' in script
         assert f"expect(env.{key})" in script

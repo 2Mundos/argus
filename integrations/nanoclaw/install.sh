@@ -421,7 +421,22 @@ new = """  const contributedEnv: Record<string, string> = {
   const argusRepositoriesJson = process.env.ARGUS_REPOSITORIES_JSON?.trim();
   if (argusRepositoriesJson) {
     contributedEnv.ARGUS_REPOSITORIES_JSON = argusRepositoriesJson;
-  }
+  }"""
+assert old in s, "container-runner composeSessionSpec contributedEnv block changed upstream"
+open(p, "w").write(s.replace(old, new, 1))
+PY
+  echo "patched $container_runner (host ARGUS_REPOSITORIES_JSON → agent contributedEnv)"
+fi
+if [ -f "$container_runner" ] && ! grep -q "ARGUS_GIT_AUTHOR_NAME" "$container_runner"; then
+  python3 - "$container_runner" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = """  const contributedEnv: Record<string, string> = {
+    ...(contribution.env ?? {}),
+    ...(gateway.env ?? {}),
+  };"""
+new = old + """
   for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL']) {
     const value = process.env[key];
     if (value?.trim()) contributedEnv[key] = value;
@@ -429,7 +444,7 @@ new = """  const contributedEnv: Record<string, string> = {
 assert old in s, "container-runner composeSessionSpec contributedEnv block changed upstream"
 open(p, "w").write(s.replace(old, new, 1))
 PY
-  echo "patched $container_runner (host ARGUS_REPOSITORIES_JSON → agent contributedEnv)"
+  echo "patched $container_runner (host git identity → agent contributedEnv)"
 fi
 
 codex_test="$target/container/agent-runner/src/providers/codex-app-server.test.ts"
