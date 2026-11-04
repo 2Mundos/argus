@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import { codexUsageLimitFailure } from "./codex-usage-limit.js";
 
 function quotaNoticesFixturePath(): string {
+  const installed = fileURLToPath(
+    new URL("../../../../src/channels/argus-quota-notices.json", import.meta.url),
+  );
+  if (existsSync(installed)) return installed;
   const local = fileURLToPath(new URL("./quota-notices.json", import.meta.url));
   if (existsSync(local)) return local;
   return fileURLToPath(
@@ -28,6 +32,19 @@ describe("codexUsageLimitFailure", () => {
 
   it("keeps the reset text unnormalised", () => {
     expect(codexUsageLimitFailure(TEXT)?.reset_text).toBe("Nov 19th, 2026 2:08 PM");
+  });
+
+  it("keeps zoneless ISO reset text exactly as the provider wrote it", () => {
+    expect(
+      codexUsageLimitFailure("You've hit your usage limit (resets 2026-11-19T14:08:00)")
+        ?.reset_text,
+    ).toBe("2026-11-19T14:08:00");
+  });
+
+  it("uses the earliest reset marker when both parenthetical and try-again appear", () => {
+    const notice =
+      "You've hit your usage limit (resets 2026-11-19T14:08:00). Upgrade, or try again at 3pm.";
+    expect(codexUsageLimitFailure(notice)?.reset_text).toBe("2026-11-19T14:08:00");
   });
 
   it("takes the reset from its sentence, not only at the end of the message", () => {
@@ -85,7 +102,11 @@ describe("codexUsageLimitFailure against shared quota notices fixture", () => {
     } else {
       expect(f).toMatchObject({ provider: "codex", kind: "rate_limit" });
       if (c.reset_status === "ambiguous") {
-        expect(f?.reset_text).toBeTruthy();
+        if (c.notice === "You've hit your usage limit (resets 2026-11-19T14:08:00)") {
+          expect(f?.reset_text).toBe("2026-11-19T14:08:00");
+        } else {
+          expect(f?.reset_text).toBeTruthy();
+        }
       }
     }
   });
