@@ -26,6 +26,9 @@ cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
 cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
 cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
 cp "$here/argus-changes-relay.ts" "$target/src/channels/argus-changes-relay.ts"
+# Single-layer coding run experiment (single-layer-experiment spec): off by default.
+cp "$here/argus-single-layer.ts" "$target/src/channels/argus-single-layer.ts"
+cp "$here/argus-single-layer.test.ts" "$target/src/channels/argus-single-layer.test.ts"
 cp "$here/argus-changes-relay.test.ts" "$target/src/channels/argus-changes-relay.test.ts"
 cp "$here/argus-workspace.ts" "$target/src/channels/argus-workspace.ts"
 # The one polling wait the channel tests share (test-hygiene lint draft).

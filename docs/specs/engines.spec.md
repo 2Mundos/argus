@@ -129,13 +129,30 @@ In scope:
   executor's account or appended to `argus-usage.jsonl` for the NanoClaw host
   when the child has no API env; it never changes the exit code
   ([account usage](account-usage.spec.md) §3.8–3.9).
-  The Argus NanoClaw channel states this contract in every claimed task body
-  (`integrations/nanoclaw/argus.ts` `renderTask`; see
+  By default the Argus NanoClaw channel states this contract in every claimed task
+  body (`integrations/nanoclaw/argus.ts` `renderTask`; see
   [prompt-data isolation](prompt-data-isolation.spec.md)): implementation must use
   `/usr/local/bin/argus-delegate` (Cursor → `agent`); direct `cursor-agent` /
   vendor CLIs are forbidden for delegated coding; materialized gateway stubs are
   authorized non-secret metadata; the worker attaches the delegate JSON report
   and resumes the same task on failure rather than inheriting another task's block.
+  The one exception is the opt-in, experimental single-layer arm below.
+- **Single-layer coding run (experiment, off by default;
+  [single-layer experiment](single-layer-experiment.spec.md)).** With
+  `ARGUS_SINGLE_LAYER=claude` and an assignment file on the NanoClaw host, a claim
+  the file assigns to `single_layer` runs with the Claude harness as the coding
+  model. The harness gets the implementation-tier chain the delegate would have
+  used for a Claude executor, and the prompt replaces the delegation block with
+  "work directly, do not call `argus-delegate`". It applies to the Claude harness
+  on an `anthropic` engine lease only. Any other flag value (`codex`, `cursor`,
+  `local`, `custom`, `copilot`, …) leaves the flag off and the host logs the
+  refusal. A claim whose precondition fails, for example a non-Claude lease, a
+  pinned harness or executor model, or no implementation chain, runs the default
+  path and records the reason. It is never emulated through the delegate.
+  Unchanged in both arms: default routing and account leases, isolation and
+  workspace, the task protocol directives, structured PR delivery, credentials
+  held by the gateway and never shown to the model, and cancellation. The arm is
+  recorded in the harness model selection's `explanation`, with no schema change.
 - **Local routing is conservative and deterministic.** A task goes to the
   local model only if *all* hold: the caller declares it simple and low-risk
   and gives deterministic acceptance criteria; it touches no auth, security or
@@ -216,6 +233,9 @@ In scope:
   **restricted** `json_schema` subset (no `$ref`, `pattern`, or remote resolution).
   Legacy `must_match` (regex) is rejected with 422. Empty criteria are rejected
   with 422; answers are never `accepted` without an effective check.
+- `integrations/nanoclaw/argus-single-layer.ts`: the experiment flag, assignment,
+  eligibility, harness selection and arm marker, wired into `argus.ts`; its vitest
+  includes a fake-API end-to-end run of both arms and the fallbacks.
 - `integrations/nanoclaw/engines/`: installer for the Codex payload and the
   CLI manifest, the image steps for opencode and the Cursor agent (checksum
   pinned), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer

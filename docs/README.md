@@ -126,6 +126,10 @@ every new dependency is judged against it.
   id; the next claim on the same node and engine sends one framed message or falls
   back to a fresh session; resume (opt-in, `ARGUS_QUOTA_RESUME=1`) seeds the new
   session's runner continuation; real two-account run not done
+- [Single-layer experiment](specs/single-layer-experiment.spec.md) — P7 A/B, off by
+  default (`ARGUS_SINGLE_LAYER=claude`): an assigned claim runs the Claude harness on
+  the implementation tier with no `argus-delegate` hop; seeded stratified assignment,
+  arm marker, intention-to-treat analysis; no result yet
 - [Account usage](specs/account-usage.spec.md) — tokens spent and quota left per
   provider account: reported usage, Codex quota probe, Cursor pools, charts
 - [Cost view](specs/cost-view.spec.md) — the Cost tab: tokens and estimated cost
@@ -288,6 +292,9 @@ every new dependency is judged against it.
 - [OOM evidence smoke](runbooks/2026-10-31.oom-smoke.ref.md) — disposable
   `--memory 64m` probe, `OOMKilled`/`ExitCode` via the channel's reader, `docker kill`
   negative control; not yet run
+- [Single-layer experiment](runbooks/2026-11-04.single-layer-experiment.ref.md) —
+  operator-run P7 A/B: budget cap, 20 tasks, first-claim checks, stop conditions,
+  rollback by flag off and restart; not yet run
 
 ### Reports
 

@@ -74,6 +74,10 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   `milestones.jsonl`. The channel does not put it into the agent container today, so
   until the pool environment does, only the file and stderr are written (4).
 - Failures of a sink never fail the delegation.
+- In the single-layer experiment arm there is no delegate, so the NanoClaw channel
+  emits `pr_opened` itself. A PR URL of exactly the task's repository, named in a
+  reply, is posted once per attempt, and a claim-lost answer abandons the attempt
+  ([single-layer experiment](single-layer-experiment.spec.md) 3.3).
 
 ## 3.4 Dashboard
 

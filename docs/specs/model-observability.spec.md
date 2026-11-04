@@ -69,7 +69,9 @@ accounts and cannot change model, provider or executor. An account-only switch
 therefore can never be labelled a model switch.
 
 - `reason_code`: `priority | availability | compatibility | context | quota |
-  error | policy`, plus a short `explanation` (sanitised, max 300 chars).
+  error | policy`, plus a short `explanation` (sanitised, max 300 chars). In the
+  single-layer experiment, the harness selection's explanation carries the arm
+  marker ([single-layer experiment](single-layer-experiment.spec.md) 3.5).
 - `alternatives` (max 10): considered options by identifier, with the code for
   why each was not chosen.
 - `policy_revision` (the model-policy snapshot hash) and `execution_key`
