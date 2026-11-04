@@ -291,7 +291,9 @@ describe("repository preflight session", () => {
         },
       },
     });
-    await expect(run()).rejects.toThrow(/exited with code 13 \(helper error policy_denied\)/);
+    await expect(run()).rejects.toThrow(
+      /exited with code 13 \(helper error policy_denied: rule not reported by the helper\)/,
+    );
     expect(released).toBe(1);
     expect(removed()).toBe(true);
   });
@@ -343,8 +345,39 @@ describe("what the container can put in the task's error", () => {
       (e: Error) => e,
     );
     expect(error?.message).toBe(
-      "the repository preflight session exited with code 13 (helper error policy_denied)",
+      "the repository preflight session exited with code 13 (helper error policy_denied: rule not reported by the helper)",
     );
+    child = () => ({
+      code: 13,
+      verdict: {
+        ok: false,
+        error: { code: "policy_denied", rule: `${SECRET} x`, message: SECRET },
+      },
+    });
+    const injected = await run().then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(injected?.message).toMatch(/rule not reported by the helper/);
+    expect(injected?.message).not.toContain(SECRET);
+    child = () => ({
+      code: 13,
+      verdict: {
+        ok: false,
+        error: { code: "policy_denied", rule: "repository_write_access", message: SECRET },
+      },
+    });
+    const ruled = await run().then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(ruled).toBeInstanceOf(RepositoryPreflightError);
+    expect(ruled?.message).toContain(
+      `(helper error policy_denied: rule repository_write_access on ${GITHUB}: `,
+    );
+    expect(ruled?.message).toContain("lacks push access");
+    expect(ruled?.message.endsWith(")")).toBe(true);
+    expect(ruled?.message).not.toContain(SECRET);
     child = () => ({
       code: 13,
       verdict: { ok: false, error: { code: `${SECRET}\n`, message: SECRET } },
@@ -959,6 +992,34 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       probe: { source: "preflight_session_verdict", push: true, authentication: "proven" },
     });
     expect(events[0].preflight_id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("carries the denial's rule, resource and hint into the task error untruncated", async () => {
+    const { done } = preflight({
+      probe: async () =>
+        assertPreflightPositive(
+          {
+            exitCode: 13,
+            verdict: {
+              ok: false,
+              evidence: {
+                http_status: 200,
+                permissions: "present",
+                push: false,
+                visibility: "private",
+              },
+              error: { code: "policy_denied", rule: "repository_write_access" },
+            },
+          },
+          { provider: "github", repository: GITHUB },
+        ),
+    });
+    const result = await done;
+    expect(result.reason).toBe("env_repository_unreachable");
+    expect(result.error).toContain(
+      `exited with code 13 (helper error policy_denied: rule repository_write_access on ${GITHUB}: `,
+    );
+    expect(result.error).toMatch(/lacks push access[^)]*\)$/);
   });
 
   it.each([

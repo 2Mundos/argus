@@ -31,6 +31,7 @@ export class GiteaError extends Error {
   status: number | null;
   method: string | null;
   path: string | null;
+  rule: string | null;
 }
 
 export type GiteaApiOptions = {

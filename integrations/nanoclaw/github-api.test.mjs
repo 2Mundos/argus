@@ -77,6 +77,7 @@ describe("repo-preflight (offline logic; production proof is the session child)"
       const r = await run(["repo-preflight"], repo({ permissions }));
       assert.equal(r.code, 13, r.out);
       assert.match(JSON.parse(r.err).error.message, /does not show write access/);
+      assert.equal(JSON.parse(r.err).error.rule, "repository_write_access");
     }
   });
 
@@ -129,6 +130,7 @@ describe("repo-preflight (offline logic; production proof is the session child)"
     const r = await run(["repo-preflight", "--access", "read"], repo({ permissions: {} }));
     assert.equal(r.code, 13);
     assert.match(JSON.parse(r.err).error.message, /read access/);
+    assert.equal(JSON.parse(r.err).error.rule, "repository_read_access");
   });
 
   it("uses only permissions.push on the repository GET as the write signal (not scope headers)", async () => {

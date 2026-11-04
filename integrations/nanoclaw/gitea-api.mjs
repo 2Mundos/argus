@@ -47,18 +47,20 @@ export const EXIT_CODES = Object.freeze({
 });
 
 export class GiteaError extends Error {
-  constructor(code, message, { status = null, method = null, path = null } = {}) {
+  constructor(code, message, { status = null, method = null, path = null, rule = null } = {}) {
     super(message);
     this.name = "GiteaError";
     this.code = code;
     this.status = status;
     this.method = method;
     this.path = path;
+    /** Closed id of the policy rule that denied the call (fixed strings in this file only). */
+    this.rule = rule;
   }
 }
 
 const usage = (message) => new GiteaError("usage", message);
-const policy = (message) => new GiteaError("policy_denied", message);
+const policy = (message, rule = null) => new GiteaError("policy_denied", message, { rule });
 
 /** Route Undici fetch calls through OneCLI's HTTPS proxy; never fall back to direct. */
 export function createGatewayFetch({
@@ -66,15 +68,15 @@ export function createGatewayFetch({
   proxy = process.env.HTTPS_PROXY ?? process.env.https_proxy,
   requestTls,
 } = {}) {
-  if (!proxy) throw policy("OneCLI HTTPS proxy is not configured");
+  if (!proxy) throw policy("OneCLI HTTPS proxy is not configured", "forge_proxy");
   let proxyUrl;
   try {
     proxyUrl = new URL(proxy);
   } catch {
-    throw policy("OneCLI HTTPS proxy URL is invalid");
+    throw policy("OneCLI HTTPS proxy URL is invalid", "forge_proxy");
   }
   if (!["http:", "https:"].includes(proxyUrl.protocol))
-    throw policy("OneCLI HTTPS proxy URL must use HTTP or HTTPS");
+    throw policy("OneCLI HTTPS proxy URL must use HTTP or HTTPS", "forge_proxy");
   const { ProxyAgent, fetch: undiciFetch } = loadUndici();
   fetchImpl ??= undiciFetch;
   const dispatcher = new ProxyAgent({ uri: proxyUrl.toString(), requestTls });
@@ -94,7 +96,8 @@ export function allowlistedRepository(repositoryUrl, allowedRepositories) {
       return `${url.origin}/${url.owner}/${url.repo}`;
     }),
   );
-  if (!allow.has(normalized)) throw policy("repository is not configured for this worker");
+  if (!allow.has(normalized))
+    throw policy("repository is not configured for this worker", "repository_allowlist");
   return candidate;
 }
 
@@ -1411,8 +1414,16 @@ async function repoPreflight(api, resultFile, access = "write") {
     const canWrite = perms.push === true;
     const canRead = canWrite || perms.pull === true || perms.admin === true;
     if (needWrite) {
-      if (!canWrite) throw policy("the response does not show write access to the repository");
-    } else if (!canRead) throw policy("the response does not show read access to the repository");
+      if (!canWrite)
+        throw policy(
+          "the response does not show write access to the repository",
+          "repository_write_access",
+        );
+    } else if (!canRead)
+      throw policy(
+        "the response does not show read access to the repository",
+        "repository_read_access",
+      );
     const allowed = [`${origin}/${fullName}`];
     for (const other of [
       `https://preflight-denied.invalid/${fullName}`,
@@ -2002,6 +2013,7 @@ export function errorPayload(error) {
       method: error.method,
       path: error.path,
       message: sanitizeMessage(error.message),
+      ...(error.rule ? { rule: error.rule } : {}),
     };
   return {
     code: "internal_error",
