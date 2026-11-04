@@ -97,6 +97,26 @@ live in `~/.config/argus/`; keep a copy of `age-key.txt` there, since it decrypt
 provider credentials. `argus uninstall` removes everything the launcher
 created after listing it; `--keep-data` keeps the data for a later install.
 
+For a desktop tray on Linux, macOS or Windows, install
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/). `argus up`
+automatically starts the tray in the background when a desktop is available.
+Use `argus up --no-tray` to skip it; headless installs skip it automatically.
+The menu offers Open Argus, Up, Down, Restart, Backup and recent logs, with health,
+task and agent counts, inbox size and uptime.
+Qt downloads once into uv's cache. On GNOME, enable the AppIndicator extension
+if the desktop has no tray. Stats use the generated token automatically;
+Sign in for stats accepts an existing token for the current tray session.
+Quit Tray leaves Argus running; Down keeps the tray available to start it again.
+`argus tray` can also start it manually. Startup errors are recorded in
+`~/.config/argus/tray.log` ([desktop tray](docs/specs/tray.spec.md)).
+
+On Windows, run the install line and `argus up` inside WSL 2 with Docker
+available. Install `uv` on **Windows**, then reopen the WSL terminal and run
+`argus up` there. It automatically launches a native Windows tray; Open Argus
+uses the Windows browser. Its controls run the launcher in the original WSL
+distribution as the same user. WSL localhost forwarding must be enabled for
+health and stats.
+
 The manual route (plain `docker run`, Compose, building from source) is under
 [Run with Docker](#run-with-docker).
 

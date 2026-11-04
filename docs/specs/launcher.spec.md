@@ -22,11 +22,12 @@ The commands:
 
 | Command | Does |
 | --- | --- |
-| `argus up [--docker\|--no-docker] [--port N] [--age-key FILE] [--version vX.Y.Z] [--workers\|--no-workers]` | Writes the given options to the config, (re)creates the container from it at the configured version, waits for `/readyz`, prints the URL and, when one was generated, the admin token (3.3). `--version` and `--workers\|--no-workers` are accepted only on the first run (3.8). |
+| `argus up [--docker\|--no-docker] [--port N] [--age-key FILE] [--version vX.Y.Z] [--workers\|--no-workers] [--no-tray]` | Writes the given options to the config, (re)creates the container from it at the configured version, waits for `/readyz`, prints the URL and, when one was generated, the admin token (3.3), and starts the desktop tray when available (3.10). `--version` and `--workers\|--no-workers` are accepted only on the first run (3.8). |
 | `argus update [vX.Y.Z] [-y]` | The only way to change the version of an existing install (3.4). |
 | `argus backup` | Writes an online SQLite backup into the volume (3.5) and prints its name. |
 | `argus restore <name>` | Stops the container, backs up the current database, restores that backup, starts the version it was taken under (3.5). |
 | `argus status` | Version, container state, `/readyz`, config path, the newest backups. |
+| `argus tray` | Manually start the desktop tray with service controls, health, statistics and Open Argus ([desktop tray](tray.spec.md)); normally started automatically by `up`, requires `uv` on the host. |
 | `argus token` · `argus logs [-f]` · `argus down` | Print the admin token · container logs · stop and remove the container (never the volume). |
 | `argus unlock` | Removes a stale lock left by a command that died (3.7). |
 | `argus worker setup\|status\|remove` | Workers on this machine: published worker images, the OneCLI gateway, Docker access ([local workers](local-workers.spec.md)). The first `up` offers `setup`; these add or remove workers later. Mutating subcommands take the lock (3.7). |
@@ -42,7 +43,9 @@ The commands:
   stay for building from a clone; the launcher runs published images only.
 - No TLS, reverse proxy or exposure beyond loopback (and the Docker bridge
   gateway with `--docker`). Exposing Argus stays the operator's proxy.
-- No native Windows. WSL 2 and macOS (Docker Desktop) are supported.
+- No native Windows server launcher. WSL 2 and macOS (Docker Desktop) are
+  supported; `argus tray` in WSL launches the native Windows tray
+  ([desktop tray](tray.spec.md)).
 - No downgrade command. Going back is `argus restore` of a pre-upgrade backup,
   which runs the image the backup was taken under (3.5).
 
@@ -230,6 +233,16 @@ line and `argus up` again starts the same install at its configured version
 fails is reported and the rest still run; then `$ARGUS_HOME` and the launcher
 stay, and the command exits non-zero, so a second `uninstall` finishes the job.
 
+## 3.10 `up` starts the desktop tray
+
+After the server becomes ready, `up` starts the desktop tray in the background
+on a desktop or in WSL 2 ([desktop tray](tray.spec.md)). It returns to the terminal
+without waiting for the tray to exit. `--no-tray` skips this for one invocation;
+headless sessions skip it automatically. Missing tray dependencies or startup
+errors leave the server running and do not fail `up`. Repeated starts share one
+tray per config directory. `down` leaves the tray open so its Up action can start
+Argus again; the tray's own Up and Restart suppress another tray launch.
+
 # 4. Open Questions
 
 1. Engines other than Docker Engine and Docker Desktop (Podman, Colima,
@@ -239,7 +252,9 @@ stay, and the command exits non-zero, so a second `uninstall` finishes the job.
 # 5. Constraints
 
 - POSIX `sh` plus `docker` and `curl` on the host; no `jq`, Python or age on
-  the host. Anything that needs more runs inside the Argus image.
+  the host for terminal commands. Anything that needs more runs inside the Argus
+  image, except the optional `tray` companion, whose Python and Qt environment is
+  managed by `uv` on the desktop ([desktop tray](tray.spec.md)).
 - The launcher never prints secrets except the admin token on `up` and `token`.
   It never passes the age key or token on a command line or in
   `docker inspect`-visible environment.
