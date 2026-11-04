@@ -260,6 +260,19 @@ every new dependency is judged against it.
   preview database that cannot start workers
 - [Changed-only checks](drafts/2026-10-31.changed-only-checks.draft.md) — a
   pre-push run of only the checks the changed files can affect
+- [Repeat-call reminder](drafts/2026-11-04.repeat-call-reminder.draft.md) — an
+  advisory `PostToolUse` hook that nudges a worker repeating an identical tool call
+- [Failure evidence audit](drafts/2026-11-04.failure-evidence-audit.draft.md) —
+  classify failures only from evidence the work cannot write; two unanchored
+  classifiers found (network class, Codex quota text)
+- [Engine transcript replay](drafts/2026-11-04.engine-transcript-replay.draft.md) —
+  recorded raw engine output replayed through the channel's parsers, no model
+- [Postmortems](drafts/2026-11-04.postmortems.draft.md) — a dated record of why a
+  bug escaped the process, ending in the guardrails added
+- [Tool description rules](drafts/2026-11-04.tool-description-rules.draft.md) —
+  writing rules for MCP tool text and a per-role token difference on every change
+- [DeepSeek Harness as an engine](drafts/2026-11-04.dsh-engine.draft.md) — `dsh`
+  headless as an off-by-default executor for custom and local accounts; ACP later
 
 ### Runbooks
 
