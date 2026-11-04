@@ -1,0 +1,21 @@
+{
+  "experiment": "p7-fixture",
+  "engine": "claude",
+  "seed": "fixture",
+  "arms": {
+    "s1": "single_layer",
+    "s2": "single_layer",
+    "s3": "single_layer",
+    "d1": "delegated",
+    "d2": "delegated",
+    "d3": "delegated"
+  },
+  "strata": {
+    "s1": "standard",
+    "s2": "standard",
+    "s3": "hard",
+    "d1": "standard",
+    "d2": "standard",
+    "d3": "hard"
+  }
+}

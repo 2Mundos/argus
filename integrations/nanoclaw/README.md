@@ -397,6 +397,17 @@ and the SQLite mailbox; otherwise the attempt falls back to a fresh session. It
 is proven only against a fake API (`scripts/quota-resume-spike.sh`). A real
 two-account run is in the spec's verification boundary.
 
+## Single-layer experiment (off by default)
+
+With `ARGUS_SINGLE_LAYER=claude` and `ARGUS_SINGLE_LAYER_ASSIGNMENT=<file>` (from
+`scripts/single_layer_ab.py assign`), a claim the file assigns to `single_layer`
+runs the Claude harness on the implementation-tier model with no `argus-delegate`
+hop ([spec](../../docs/specs/single-layer-experiment.spec.md)). Any other flag
+value is refused with a logged reason, and an ineligible claim runs the default
+path with a recorded fallback. The flag is read at host start. No experiment
+result exists. The operator procedure is the
+[runbook](../../docs/runbooks/2026-11-04.single-layer-experiment.ref.md).
+
 ## Task inputs
 
 Before the workspace and the model, the channel downloads the attachments an

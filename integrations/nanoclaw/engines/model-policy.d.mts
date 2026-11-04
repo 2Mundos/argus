@@ -45,12 +45,17 @@ export function policySnapshot(raw: unknown, context?: PolicySnapshot["context"]
 export function loadPolicy(e?: NodeJS.ProcessEnv, snapshotFile?: string): PolicySnapshot;
 export function selectModel(
   snapshot: PolicySnapshot,
-  scope: "harness" | "implementation",
+  scope: string,
   engine: string,
   attempt?: number,
   reason?: string | null,
   override?: string,
 ): ModelSelection;
+export function implementationScope(
+  snapshot: PolicySnapshot,
+  executor: string,
+  context?: { complexity?: string | null; account_provider?: string | null } | null,
+): string;
 export function selectHarnessModel(
   snapshot: PolicySnapshot,
   engine: string,

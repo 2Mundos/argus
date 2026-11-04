@@ -125,6 +125,20 @@ import {
   sessionRepositoryProbe,
 } from "./argus-repo-preflight.js";
 import {
+  type ArmDecision,
+  armMarker,
+  assignedArm,
+  decideArm,
+  harnessSelection,
+  ineligibility,
+  parseSingleLayerEnv,
+  pullRequestsOf,
+  readAssignment,
+  SINGLE_LAYER_LINES,
+  SINGLE_LAYER_SCOPES,
+  type SingleLayerConfig,
+} from "./argus-single-layer.js";
+import {
   type ApiErrorFact,
   boundHead,
   boundTail,
@@ -233,6 +247,8 @@ export interface HeldAccounts {
   executor: { provider: string; account_id: string } | null;
   engine_settings?: CustomLeaseSettings | null;
   executor_settings?: CustomLeaseSettings | null;
+  /** The claim runs the single-layer arm: the harness takes the implementation tier. */
+  single_layer?: boolean;
 }
 
 /** What a runtime saw of the live system for a task (preflight observation body, minus the attempt). */
@@ -419,6 +435,8 @@ export interface ArgusConfig {
   runtime?: RuntimeHooks;
   /** Apply a pinned policy before starting a task; absent only in test adapters. */
   selectModels?: (task: ArgusTask, held: HeldAccounts) => Promise<ModelSelection>;
+  /** The single-layer experiment (single-layer-experiment spec); absent: off. */
+  singleLayer?: SingleLayerConfig | null;
   /**
    * The tail of the agent's log (host-provided). A run that ends with only the
    * generic failure notice is checked for Claude Code's `Rate limit [..] (resets
@@ -1200,6 +1218,8 @@ export function renderTask(
     workspace?: TaskWorkspace | null;
     /** Materialized task inputs: trusted metadata only, never content (task inputs spec 3.5). */
     inputs?: MaterializedInput[];
+    /** The single-layer experiment arm: the harness codes, with no delegate. */
+    singleLayer?: boolean;
   } = {},
 ): string {
   const pinned = task.executor_model;
@@ -1263,61 +1283,63 @@ export function renderTask(
     ...contractLines(task),
     ...steerUnknownLines(task),
     "",
-    ...(direct
-      ? [
-          "No delegated executor for this difficulty: do the coding and model work yourself on this harness.",
-          "Do not call argus-delegate. Direct Git, gates, QA, and other shell commands in the checkout are fine.",
-          ...(opts.localHarness ? ["", ...localHarnessRules(null, { direct: true }), ""] : []),
-          ...(opts.customHarness ? ["", ...customHarnessRules(null, { direct: true }), ""] : []),
-          "",
-          ...howToRespond,
-        ]
-      : [
-          "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
-          "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit).",
-          ...(pinned
-            ? pinBlocked
-              ? [
-                  `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}), which cannot run on the local harness (local_harness_engine_only). Do not switch executor and do not delegate; report the task blocked.`,
-                ]
-              : [
-                  `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}): use it for all delegated work; argus-delegate applies the model. Do not switch executor; if it is unavailable (auth_missing or not_installed), report the task blocked.`,
-                ]
-            : preferredExecutor
-              ? [
-                  `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
-                  ...(trivial
-                    ? [
-                        "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy); it is the leased executor.",
-                      ]
-                    : []),
-                ]
-              : []),
-          ...(opts.localHarness ? ["", ...localHarnessRules(effective), ""] : []),
-          ...(opts.customHarness ? ["", ...customHarnessRules(effective), ""] : []),
-          "Do not invoke agent, cursor-agent, claude, codex, or opencode directly (nor copilot) for implementation — that bypasses",
-          "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
-          "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
-          "substitute for argus-delegate.",
-          "",
-          "Example (normal implementation, not --read-only):",
-          `  /usr/local/bin/argus-delegate ${effective ?? "EXECUTOR"} \\`,
-          "    --cwd <task-checkout> --prompt-file <prompt.txt> --out <task-checkout>/.argus-delegate --timeout <seconds>",
-          "Use the model and retry policy from argus-model-policy.json (or --model / --model-attempt when retrying).",
-          "",
-          "The delegate wrapper may materialize gateway stubs and cli-config metadata in a private writable directory;",
-          "that is authorized and is not a copy of real credentials. Do not chmod or remount read-only seed files, and",
-          "do not read auth.json or other secret material.",
-          "",
-          "Model policy: argus-model-policy.json pins this task policy for argus-delegate. Attach the delegate JSON",
-          "report (last stdout line) as a task artifact. After a failed verification/context limit, retry with",
-          "--model-attempt N --fallback-reason REASON; --model pins an override.",
-          "",
-          "If delegation fails, resume this same task (same Task id above) with the error and artifact context; do not",
-          "treat another task's block or missing Postgres as proof this task cannot proceed.",
-          "",
-          ...howToRespond,
-        ]),
+    ...(opts.singleLayer
+      ? [...SINGLE_LAYER_LINES, "", ...howToRespond]
+      : direct
+        ? [
+            "No delegated executor for this difficulty: do the coding and model work yourself on this harness.",
+            "Do not call argus-delegate. Direct Git, gates, QA, and other shell commands in the checkout are fine.",
+            ...(opts.localHarness ? ["", ...localHarnessRules(null, { direct: true }), ""] : []),
+            ...(opts.customHarness ? ["", ...customHarnessRules(null, { direct: true }), ""] : []),
+            "",
+            ...howToRespond,
+          ]
+        : [
+            "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
+            "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit).",
+            ...(pinned
+              ? pinBlocked
+                ? [
+                    `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}), which cannot run on the local harness (local_harness_engine_only). Do not switch executor and do not delegate; report the task blocked.`,
+                  ]
+                : [
+                    `This task pins EXECUTOR ${pinned.executor} (model ${pinned.model}): use it for all delegated work; argus-delegate applies the model. Do not switch executor; if it is unavailable (auth_missing or not_installed), report the task blocked.`,
+                  ]
+              : preferredExecutor
+                ? [
+                    `Preferred EXECUTOR for this task: ${preferredExecutor} (the CLI of the best-priority account Argus leased to this worker).`,
+                    ...(trivial
+                      ? [
+                          "This task is trivial: use EXECUTOR agent (Cursor, model from the trivial policy); it is the leased executor.",
+                        ]
+                      : []),
+                  ]
+                : []),
+            ...(opts.localHarness ? ["", ...localHarnessRules(effective), ""] : []),
+            ...(opts.customHarness ? ["", ...customHarnessRules(effective), ""] : []),
+            "Do not invoke agent, cursor-agent, claude, codex, or opencode directly (nor copilot) for implementation — that bypasses",
+            "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
+            "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
+            "substitute for argus-delegate.",
+            "",
+            "Example (normal implementation, not --read-only):",
+            `  /usr/local/bin/argus-delegate ${effective ?? "EXECUTOR"} \\`,
+            "    --cwd <task-checkout> --prompt-file <prompt.txt> --out <task-checkout>/.argus-delegate --timeout <seconds>",
+            "Use the model and retry policy from argus-model-policy.json (or --model / --model-attempt when retrying).",
+            "",
+            "The delegate wrapper may materialize gateway stubs and cli-config metadata in a private writable directory;",
+            "that is authorized and is not a copy of real credentials. Do not chmod or remount read-only seed files, and",
+            "do not read auth.json or other secret material.",
+            "",
+            "Model policy: argus-model-policy.json pins this task policy for argus-delegate. Attach the delegate JSON",
+            "report (last stdout line) as a task artifact. After a failed verification/context limit, retry with",
+            "--model-attempt N --fallback-reason REASON; --model pins an override.",
+            "",
+            "If delegation fails, resume this same task (same Task id above) with the error and artifact context; do not",
+            "treat another task's block or missing Postgres as proof this task cannot proceed.",
+            "",
+            ...howToRespond,
+          ]),
   ];
   return lines.join("\n");
 }
@@ -1867,8 +1889,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     configured_model: string | null;
     policy_revision: string | null;
     resumed_from: string | null;
+    explanation: string | null;
   } | null = null;
   let harnessSession = 0;
+  // The single-layer experiment's decision for the claim in flight (null: not in it).
+  let armDecision: ArmDecision | null = null;
+  const prRelayed = new Set<string>();
   let selectedModels: ModelSelection | null = null;
   let previousHarnessModel: string | null = null;
   let currentClaim: ArgusTask | null = null;
@@ -2963,8 +2989,34 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     log.warn("No session container observed to verify the project image", { task: task.id });
   }
 
+  /** The experiment's arm for this claim, after the engine lease (null: not in it). */
+  function singleLayerDecision(task: ArgusTask): ArmDecision | null {
+    const sl = cfg.singleLayer;
+    if (!sl) return null;
+    let assigned: ReturnType<typeof assignedArm>;
+    try {
+      assigned = assignedArm(readAssignment(sl.assignmentFile), task.id);
+    } catch (err) {
+      log.warn("Single-layer assignment unreadable; the default path runs", {
+        task: task.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    return decideArm(
+      assigned,
+      ineligibility(task, { engine: engineInUse, provider: account?.provider ?? null }),
+    );
+  }
+
   async function prepareModels(task: ArgusTask): Promise<void> {
-    if (!cfg.selectModels) return;
+    const singleLayer = armDecision?.arm === "single_layer";
+    if (!cfg.selectModels) {
+      // No policy picks the harness model, so nothing would make it the implementation tier.
+      if (singleLayer && armDecision)
+        armDecision = { ...armDecision, arm: "delegated", fallback: "no_model_policy" };
+      return;
+    }
     const engineLease = activeAccountLeases.find(
       (l) => l.role !== "repository" && l.role !== "executor",
     );
@@ -2986,9 +3038,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           return engineLease.settings ?? null;
         return null;
       })(),
+      ...(singleLayer ? { single_layer: true } : {}),
     });
+    if (singleLayer && armDecision && !SINGLE_LAYER_SCOPES.includes(selection.scope))
+      armDecision = { ...armDecision, arm: "delegated", fallback: "no_implementation_chain" };
     selectedModels = selection;
-    const bytes = new TextEncoder().encode(JSON.stringify(selection, null, 2));
+    const recorded = armDecision ? { ...selection, experiment: armDecision } : selection;
+    const bytes = new TextEncoder().encode(JSON.stringify(recorded, null, 2));
     const sha = createHash("sha256").update(bytes).digest("hex");
     const name = `model-policy-attempt-${task.attempt}.json`;
     attached.set(await ensureArtifact(task, name, bytes, sha, "application/json"), { name, sha });
@@ -3346,6 +3402,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       finishTask();
       return;
     }
+    armDecision = singleLayerDecision(task);
+    prRelayed.clear();
     try {
       await prepareModels(task);
     } catch (err) {
@@ -3374,7 +3432,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       configured_model: harnessSelection?.configured_model ?? null,
       policy_revision: harnessSelection?.policy_revision ?? null,
       resumed_from: harnessSession > 1 ? resumed_from : null,
+      explanation: armDecision ? armMarker(armDecision) : null,
     };
+    if (armDecision?.fallback)
+      log.warn("Single-layer arm not applied; the default path runs", {
+        task: task.id,
+        reason: armDecision.fallback,
+      });
     await reportHarness(task, "running");
     try {
       let envBlock: { reason: string; error: string } | null = await repositoryPreflight(task);
@@ -3423,6 +3487,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!changesRelay) await startChangesRelay(task);
       resends = 0;
       const best = executor ?? account;
+      const singleLayer = armDecision?.arm === "single_layer";
       renderCurrent = () =>
         renderTask(task, pages, preferredExecutorForLease(account, executor), {
           localHarness: account?.provider === "local",
@@ -3430,6 +3495,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           runtime: runtimeSelection,
           workspace,
           inputs,
+          ...(singleLayer ? { singleLayer } : {}),
         });
       currentText = renderCurrent();
       sessionCarriesTask = true;
@@ -4117,6 +4183,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
               to_account_id: harnessRun!.account_id,
               execution_key: harnessRun!.key,
               policy_revision: harnessRun!.policy_revision,
+              ...(harnessRun!.explanation ? { explanation: harnessRun!.explanation } : {}),
             };
             if (harnessSession <= 1 && !previousHarnessModel) {
               return [
@@ -4278,6 +4345,34 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /**
+   * Single-layer has no delegate to watch its output, so a pull request of the task's
+   * repository named in a reply is reported here as `pr_opened`, once, under the attempt.
+   */
+  async function relayPullRequests(task: Claim, text: string): Promise<boolean> {
+    for (const pr of pullRequestsOf(currentClaim?.repository_url, text)) {
+      if (prRelayed.has(pr.url)) continue;
+      try {
+        await client.call("POST", `/tasks/${task.id}/progress`, {
+          attempt: task.attempt,
+          message: `Pull request opened: ${pr.url}`,
+          kind: "pr_opened",
+          data: pr,
+        });
+        prRelayed.add(pr.url);
+      } catch (err) {
+        if (err instanceof ArgusError && err.status === 409 && CLAIM_LOST.includes(err.code)) {
+          await abandonTask(err.code); // a stale lease: nothing of this reply is ours to report
+          return false;
+        }
+        log.warn("Argus pr_opened milestone failed (retried on the next reply)", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return true;
+  }
+
   function queueProgress(task: Claim, text: string): void {
     const wait = lastProgressAt + progressInterval - nowMs();
     if (wait <= 0) {
@@ -4426,6 +4521,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       // Receipts are fenced by the attempt: relay `consumed` while it is still held.
       if (d.kind !== "progress" || isFailureNotice) await inputsAfterAttempt(task);
       try {
+        if (
+          armDecision?.arm === "single_layer" &&
+          !isFailureNotice &&
+          !(await relayPullRequests(task, text))
+        )
+          return undefined;
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {
@@ -4984,7 +5085,13 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       snapshot = claimed;
     }
     const engine = (config.provider || "claude").toLowerCase();
-    const selection = selectHarnessModel(snapshot, engine, task, held.engine?.provider);
+    const selection = harnessSelection(
+      snapshot,
+      engine,
+      task,
+      held.engine?.provider,
+      held.single_layer,
+    );
     if (held.engine && !selection.configured_model) {
       // Never leave the previous engine's model configured for the leased account's.
       throw new Error(`model policy has no harness chain for engine ${engine}`);
@@ -5093,6 +5200,13 @@ export function quotaResumeFromEnv(
   return env.ARGUS_QUOTA_RESUME === "1" ? resumeClaudeSessionFromEnv : undefined;
 }
 
+/** ARGUS_SINGLE_LAYER=claude with an assignment file turns the P7 experiment on; else off. */
+function singleLayerFromEnv(env: NodeJS.ProcessEnv): SingleLayerConfig | null {
+  const { config, refused } = parseSingleLayerEnv(env);
+  if (refused) log.warn("Single-layer experiment refused; the default path runs", { refused });
+  return config;
+}
+
 /** The redacted log tails of the group's session containers, from the runtime hooks. */
 function sessionLogTail(runtime: RuntimeHooks): () => Promise<SessionEvidence> {
   return async () => {
@@ -5155,6 +5269,7 @@ export function fromEnv(): ChannelAdapter | null {
       },
     },
     selectModels: modelsFromEnv(),
+    singleLayer: singleLayerFromEnv(process.env),
     delegateLogFile: async () => {
       const dir = await argusGroupDir();
       return dir ? path.join(dir, DELEGATE_LOG_FILE) : null;
