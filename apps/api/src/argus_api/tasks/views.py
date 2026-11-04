@@ -64,7 +64,11 @@ class TaskSummary(Refs):
     state: TaskState
     priority: int
     review: Review
+    # Claims so far: bumped on every claim, restarts at 1 after an operator retry.
     attempt: int
+    # Cap on counted failures (worker fail or expiry), not on `attempt`: quota
+    # pauses, admission failures, releases and review rejections spend none, so
+    # `attempt` may exceed it.
     max_attempts: int
     assignee_agent_id: str | None
     lease_expires_at: datetime | None
