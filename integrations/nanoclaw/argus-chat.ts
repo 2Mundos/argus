@@ -108,8 +108,7 @@ export function renderChatInbound(claim: ChatClaim): string {
         `Attachments (${files.length}): read each with read_chat_attachment`,
         `(conversation_id ${claim.conversation.id}).`,
         ...files.map(
-          (a) =>
-            `- ${oneLine(a.filename, 80)} (${a.media_type}, ${a.size} bytes) id=${a.id}`,
+          (a) => `- ${oneLine(a.filename, 80)} (${a.media_type}, ${a.size} bytes) id=${a.id}`,
         ),
       ]
     : [];

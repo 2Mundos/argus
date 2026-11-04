@@ -69,9 +69,7 @@ describe("renderChatInbound", () => {
         state: "delivered",
         turn_id: "t1",
         created_at: "2026-10-20T12:00:00Z",
-        attachments: [
-          { id: "a1", filename: "build.log", media_type: "text/plain", size: 120 },
-        ],
+        attachments: [{ id: "a1", filename: "build.log", media_type: "text/plain", size: 120 }],
       },
       conversation: {
         id: "c1",
