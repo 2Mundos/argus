@@ -1173,6 +1173,31 @@ async def complete(
 PROGRESS_MIN_INTERVAL_S = 10
 
 
+def readable_progress(message: str, kind: str | None = None) -> str:
+    """One readable line for a progress message; a JSON object message is rendered."""
+    text = message.strip()
+    if not text.startswith("{"):
+        return message
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return message
+    if not isinstance(payload, dict):
+        return message
+    kind = str(payload.pop("kind", None) or kind or "update")
+    if kind == "pr_opened" and "number" in payload and "url" in payload:
+        line = f"PR opened: #{payload['number']} {payload['url']}"
+    else:
+        fields = ", ".join(
+            f"{k} {v}"
+            for k, v in payload.items()
+            if isinstance(v, str | int | float) and not isinstance(v, bool)
+        )
+        line = f"{kind}: {fields}" if fields else kind
+    line = " ".join(line.split())
+    return line if len(line) <= 300 else line[:299] + "…"
+
+
 async def report_progress(
     tx: Tx,
     agent_id: str,
@@ -1193,6 +1218,7 @@ async def report_progress(
         validate_milestone(kind, data)
     except ValueError as err:
         raise ValidationFailedError(str(err)) from None
+    message = readable_progress(message, kind)
     row = await _owned(tx, task_id, attempt, agent_id)
     if row["progress_at"] is not None and (
         kind is None or kind == row["progress_kind"]

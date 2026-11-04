@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 import pytest
@@ -144,6 +145,47 @@ async def test_progress_is_recorded_and_renews_the_lease(
     after = await progress(db, task, "half way", 50)
     assert (after.progress_message, after.progress_percent) == ("half way", 50)
     assert after.lease_expires_at == clock.now + timedelta(seconds=60)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "progress pr_opened: PR #207 ready",
+        "see {braces} here",
+        '{"kind": oops',
+        "[1, 2]",
+    ],
+)
+async def test_non_object_messages_are_stored_unchanged(
+    db: Database, message: str
+) -> None:
+    await create(db)
+    task = await claim(db)
+    assert (await progress(db, task, message)).progress_message == message
+
+
+async def test_json_object_message_is_rendered_and_data_is_untouched(
+    db: Database, clock: FakeClock
+) -> None:
+    await create(db)
+    task = await claim(db)
+    url = "https://git.example.com/o/r/pulls/159"
+    raw = json.dumps({"kind": "pr_opened", "number": 159, "url": url})
+    after = await progress(db, task, raw)
+    assert after.progress_message == f"PR opened: #159 {url}"
+    assert after.progress_data is None
+    clock.advance(10)
+    other = json.dumps({"kind": "ci", "state": "red", "tries": 2, "x": {"a": 1}})
+    assert (
+        await progress(db, task, other)
+    ).progress_message == "ci: state red, tries 2"
+    clock.advance(10)
+    data = {"number": 159, "url": url}
+    after = await milestone(db, task, "pr_opened", data, json.dumps(data))
+    assert after.progress_message == f"PR opened: #159 {url}"
+    assert after.progress_data is not None
+    assert after.progress_data.pop("at")
+    assert after.progress_data == data
 
 
 async def test_progress_is_rate_limited(db: Database, clock: FakeClock) -> None:

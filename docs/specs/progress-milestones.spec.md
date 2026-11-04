@@ -40,7 +40,10 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
 
 - `ProgressRequest` gains optional `kind` and `data`; `message` stays required (a
   readable line for clients that ignore milestones). MCP `report_progress` takes the
-  same optional fields.
+  same optional fields. The stored `progress_message` (and the `task.progress` event
+  message) is always readable one-line text: a `message` that is a JSON object is
+  rendered (`PR opened: #7 <url>` for `pr_opened`, else `<kind>: key value, ...`);
+  any other message is stored as sent.
 - `tasks.progress_kind` and `tasks.progress_data` (JSON text) are nullable. The task
   views expose `progress_kind` and `progress_data` (an object). The server adds `at`
   (its own time of the milestone) to `progress_data`, because later free-text notes
