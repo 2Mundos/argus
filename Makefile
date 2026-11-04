@@ -36,6 +36,10 @@ run-docker: ## Start Argus via Compose (http://127.0.0.1:8000); Ctrl-C stops.
 test-docker: ## Run the real-Docker integration tests (needs a Docker daemon).
 	ARGUS_DOCKER_TESTS=1 $(UV) run pytest -q -p no:cacheprovider apps/api/tests/test_docker_integration.py
 
+.PHONY: test-disk-guard-runtime
+test-disk-guard-runtime: ## Disk guard on a disposable dockerd + 512 MiB loop fs (root, cgroup v2; evidence in .argus/).
+	ARGUS_DISK_GUARD_REAL_RUNTIME=1 $(UV) run pytest -q -p no:cacheprovider apps/api/tests/integration/test_disk_guard_real_runtime.py
+
 .PHONY: test-k8s
 test-k8s: ## Kubernetes target integration test; needs ARGUS_K8S_CONTEXT (use an isolated kind cluster).
 	@test -n "$$ARGUS_K8S_CONTEXT" || { echo "set ARGUS_K8S_CONTEXT to a throwaway cluster's context (never a shared one); with kind also set ARGUS_KIND_CLUSTER"; exit 2; }

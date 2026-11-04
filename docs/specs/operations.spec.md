@@ -126,9 +126,9 @@ containers, guard-side lease renewal, shed of the heaviest writer, the
 failed-measurement pause, and writer ranking by cgroup `io.stat` with a size
 fallback. **Not implemented:** a `timeout_s` exemption while paused (decided: none),
 pause on remote daemons or Kubernetes (warn and refuse only), and any host-disk
-filling. **Not verified:** the pause path has only synthetic tests (see
-Verification boundary); real `docker pause`, real cgroup `io.stat` and the
-disposable tmpfs scenario of the draft have not been run.
+filling. **Not verified:** the real-runtime harness for the pause path exists
+(see Verification boundary) but has not been run yet; real `docker pause`, real
+cgroup `io.stat` and the disposable filesystem scenario have no observed evidence.
 
 One guard loop measures free space and acts in bands. The 64 MiB `disk` readiness
 check in 3.1 stays unchanged: data directory only, no effect from guard bands. The
@@ -245,7 +245,8 @@ paused and resumes them with the rest.
   bind-mount writes.
 - If `io.stat` is unreadable (controller not enabled for the Docker slice, or no
   cgroup v2), rank by directory size and say "ranked by size" in the `disk.shed`
-  event. Not yet verified on a real Docker host.
+  event. Which basis a real host gets is what the real-runtime run records; it
+  has not been run yet (Verification boundary).
 
 ### Filesystems
 
@@ -288,11 +289,62 @@ paths or identifiers.
 
 ### Verification boundary
 
-Automated tests are synthetic: injected `statvfs` / `stat` / clock / Docker-info /
-`io.stat` / directory-size fixtures, a fake container target, and disposable
-temporary directories. They do not prove behaviour against a real host disk, a live
-Docker daemon (`docker pause`, cgroup `io.stat`), or production free-space
-conditions. The draft's disposable tmpfs test has not been run.
+**Synthetic (every CI run).** `test_disk_guard*.py` and `test_disk_pause.py` use
+injected `stat` / `statvfs` / clock / Docker-info / `io.stat` / directory-size
+fixtures, a fake container target and temporary directories.
+`test_disk_guard_runtime.py` covers the real-runtime harness itself without
+privilege: prerequisite detection, the isolation preflight, teardown ownership
+and evidence outcomes.
+
+**Real runtime (opt-in).** `sudo -E make test-disk-guard-runtime`
+(`ARGUS_DISK_GUARD_REAL_RUNTIME=1`,
+`apps/api/tests/integration/test_disk_guard_real_runtime.py`). Ordinary runs skip
+it; opted in on a host that lacks a prerequisite, it fails and names each one,
+because a skip is not evidence. Prerequisites: Linux, root or `CAP_SYS_ADMIN`,
+`dockerd`, `containerd`, `containerd-shim-runc-v2`, `runc`, `mount`, `umount`,
+`mkfs.ext4`, `losetup`, `/dev/loop-control`, a writable cgroup v2 hierarchy with
+the `io` controller, and a busybox image (pulled by the test daemon, or
+`ARGUS_DISK_GUARD_RT_IMAGE_TAR`). Evidence: `.argus/disk-guard-runtime.json`
+(`ARGUS_DISK_GUARD_RT_EVIDENCE`), with each check as observed and outcome
+`verified` only if every check held.
+
+- **Isolation.** The harness makes a marked temp directory, mounts a tmpfs there
+  and on it a 512 MiB ext4 loop filesystem. That filesystem holds the database,
+  the instance directories and the Docker data root. It then starts its own
+  containerd and dockerd: their sockets, data root, exec root and pidfile are in
+  that directory, with an ownership label and no networking setup. Before it
+  creates a container or fills a byte, a preflight proves the setup is its own:
+  the socket is under the directory and is neither the host default nor
+  `DOCKER_HOST`; the pidfile names the spawned process; `DockerRootDir`, the
+  engine ID and the label match; and the daemon has no containers. Otherwise it
+  refuses. Teardown (in `finally`) re-proves the daemon's identity, then removes
+  only labelled containers, its own mounts and loop device, and the directory,
+  and only if the marker matches. It reports anything it leaves behind. The
+  live Argus database, the host daemon and production flags are never touched.
+- **What it checks.** The production `DiskGuard.run_pass` and `PauseController`
+  run on a real `DockerTarget`, real `statvfs` and the real `io.stat` reader.
+  Thresholds are scaled (warn 192 MiB, clear 224, refuse 96, resume 128).
+  Ballast moves free space through: all three roots measured; warn with one
+  event; refuse with `disk_low`; a real `docker pause` of descendant containers,
+  but not of the host container; `paused_disk_at` and `stall_cause` set; lease
+  renewal by the guard while the reaper neither expires nor flags the silent
+  claims; refusal and pause held in the dead band; one shed after the period,
+  with the victim matching the ranking basis (two writers set up so that
+  `io.stat` and directory size pick different victims; `io.stat` must be used
+  when it is readable); the victim's task `ready` with no failure counted; the
+  survivor still frozen (no writes); resume above the resume edge with a real
+  unpause, the pause cleared and progress again; and warn hysteresis with a
+  second episode.
+- **Not covered by the run:** production thresholds on a real host disk; real
+  NanoClaw sessions (busybox stand-ins carry its labels); the systemd cgroup
+  driver path (cgroupfs is used); the failed-measurement pause and stale
+  snapshot; adoption after an API restart; remote daemons and Kubernetes.
+- **Not yet run.** The harness is implemented, but the real-runtime run has not
+  been performed. Its first environment, the Argus agent sandbox (Linux 6.17,
+  uid 1000, cgroup v2 with `io`, 2026-11-04), failed closed. Missing there:
+  `dockerd`, `containerd`, `containerd-shim-runc-v2` and `runc` on PATH; root or
+  `CAP_SYS_ADMIN`; a writable `/sys/fs/cgroup`; and `/dev/loop-control`. No
+  real-runtime behaviour has been observed yet.
 
 ### Open questions (owner decisions)
 
