@@ -19,6 +19,7 @@ fails otherwise (`scripts/validate_docs.py`).
 | [`research/`](research) | Investigations and comparisons |
 | [`runbooks/`](runbooks) | Operational procedures |
 | [`reports/`](reports) | Point-in-time review and QA receipts |
+| [`postmortems/`](postmortems) | Systematic bug retrospectives and guardrails |
 | [`releases/`](releases) | Release notes, one per version |
 
 ## Core principle
@@ -31,6 +32,7 @@ every new dependency is judged against it.
 ## Index
 
 - [Spec template](templates/spec.md)
+- [Postmortem template](templates/postmortem.md)
 
 ### Specs
 
@@ -364,6 +366,11 @@ every new dependency is judged against it.
   containment and manual activation of the cross-task reply fence
 - [Cursor executor fleet smoke](runbooks/2026-10-18.cursor-fleet-smoke.ref.md) —
   completed parent verification of delegated `composer-2.5` (2026-10-18)
+
+### Postmortems
+
+- [Worker instance directory permission denial under launcher](postmortems/2026-11-04.launcher-instance-permission.ref.md) —
+  unprivileged API fallback to helper container and OSError handling (#194)
 
 ### Releases
 
