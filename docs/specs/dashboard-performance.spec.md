@@ -22,17 +22,31 @@ No persistent browser cache, new server dependency, or engine-specific behaviour
   event invalidations until a response is accepted, so a
   superseding delta also reads tasks from the request it replaces. An incomplete
   initial snapshot is always replaced by a full snapshot.
-- Initial snapshots retain cursor pagination and progressively show their pages.
-  Cursors depend on previous responses and cannot safely be fetched in parallel.
+- Snapshots read two independent cursor chains in parallel (`GET /tasks?state=...`):
+  the active states (waiting, ready, running, in review), then the ended ones
+  (done, failed, cancelled), each newest first and capped at 500. The board paints
+  as soon as the first active page is in; until the ended tasks arrive their columns
+  show an unknown count, not zero, and the "newest N of M" notice is withheld.
+  Within one chain, cursors depend on the previous response and are fetched in order.
 - Memoize cards using displayed fields. A single board clock updates every 30
   seconds; only running cards receive its ticks.
 - Header, onboarding and worker queries filter their own relevant event families.
   Other views retain broad invalidation until their dependencies are audited.
+- One read per resource on the shell. The workers rail and worker chips share the
+  worker provider's agent list; the setup host takes the shell's onboarding status;
+  the setup wizard reads its status and template catalog only while open. Over
+  HTTP/1.1 the browser allows six connections per host, one held by the event
+  stream, so every duplicate startup read delays the board's first page.
+- The server gzips responses of 1 KiB or more (JSON and dashboard assets), except
+  the event stream, already-compressed and opaque binary types, and ranged reads.
 
 # 4. Open Questions
 
 Persistent cache reuse across navigation needs explicit user scoping and freshness
-rules. Smaller initial payloads may be useful after browser profiling.
+rules. Task pages are capped at 100 rows and chain through cursors, so the ended
+tasks still cost one sequential round trip per 100 (three at 239); a larger cap or a
+parallel-safe cursor would need an API change. The agent list still includes every
+ended worker.
 
 # 5. Constraints
 
@@ -58,5 +72,10 @@ queries. No API schema or generated client changes are required.
   the title update falls from 54,187 to 264 bytes; this is not a live payload size.
   Browser checks also cover archive membership, creation, reconnect refresh and
   overlapping updates (the superseding batch includes both unresolved IDs).
+- Profiled before this change (production build against the remote preview, 262
+  tasks, HTTP/1.1, about 0.6 s per round trip): twelve startup reads (three of
+  onboarding, two of agents at 99 KB each) queued ahead of the board; the first
+  cards appeared at about 3.1 s and the last page at about 5.8 s, with 360 KB of
+  uncompressed task JSON. Dedupe and gzip target exactly these.
 - Not verified: production latency or CPU improvement with real active tasks;
   the browser comparison used a disposable fixture, not the live preview.

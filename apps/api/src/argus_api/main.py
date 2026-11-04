@@ -28,6 +28,7 @@ from argus_api.agents.routes import router as agents_router
 from argus_api.artifacts.routes import router as artifacts_router
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.auth import ensure_admin_token
+from argus_api.compression import Compression
 from argus_api.config import Settings, refuse_preview_data
 from argus_api.conversations.routes import router as conversations_router
 from argus_api.db import Database, DataDirLock
@@ -309,6 +310,8 @@ mcp_server.bind(app)
 app.mount("/mcp", mcp_server.endpoint)
 app.add_middleware(mcp_server.SlashAlias)
 app.add_middleware(SecurityHeadersMiddleware)
+# Outermost, so every response is compressed after the others have set their headers.
+app.add_middleware(Compression)
 
 
 @app.exception_handler(DomainError)

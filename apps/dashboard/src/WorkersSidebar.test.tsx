@@ -83,7 +83,8 @@ describe("WorkersSidebar", () => {
     ).toBeTruthy();
     expect(screen.queryByText("Live log")).toBeNull();
     expect(document.querySelector(".rail-log")).toBeNull();
-    expect(calls.paths.filter((p) => p === "/api/agents").length).toBeGreaterThan(0);
+    // The rail and the chips share the provider's read.
+    expect(calls.paths.filter((p) => p === "/api/agents")).toHaveLength(1);
   });
 
   it("collapses the rail and remembers it", async () => {
