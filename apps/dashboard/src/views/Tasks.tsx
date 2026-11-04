@@ -1,6 +1,14 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, memo, useCallback, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
-import { api, call, newestTasks, type TaskKind, type TaskState, type TaskSummary } from "../api";
+import {
+  type ArgusEvent,
+  api,
+  call,
+  newestTasks,
+  type TaskKind,
+  type TaskState,
+  type TaskSummary,
+} from "../api";
 import { DateChip } from "../DateChip";
 import { DELIVERABLES, type Deliverable } from "../deliverables";
 import { reportPage, useLiveData } from "../live";
@@ -52,6 +60,42 @@ function boardSections(
   return sections;
 }
 
+type BoardData = { items: TaskSummary[]; total: number };
+
+const boardEvent = (event: ArgusEvent) => event.subject_type === "task";
+
+async function updateBoard(
+  data: BoardData,
+  events: ArgusEvent[],
+  signal: AbortSignal,
+  archived: boolean,
+): Promise<BoardData> {
+  const ids = [...new Set(events.map((event) => event.subject_id))];
+  const known = new Set(data.items.map((task) => task.id));
+  if (ids.some((id) => !known.has(id))) return newestTasks(5, archived, { signal });
+  const batches = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    batches.push(
+      call(
+        api.GET("/api/tasks", {
+          params: { query: { ids: ids.slice(i, i + 50).join(",") } },
+          signal,
+        }),
+      ),
+    );
+  }
+  const pages = await Promise.all(batches);
+  const changed = pages.flatMap((page) => page.items);
+  if (
+    changed.length !== ids.length ||
+    changed.some((task) => Boolean(task.archived_at) !== archived)
+  ) {
+    return newestTasks(5, archived, { signal });
+  }
+  const replacements = new Map(changed.map((task) => [task.id, task]));
+  return { ...data, items: data.items.map((task) => replacements.get(task.id) ?? task) };
+}
+
 export function Tasks() {
   // `#tasks/<id>` (linked from Fleet) opens that task's detail.
   const [selected, setSelected] = useState<string | null>(
@@ -64,8 +108,14 @@ export function Tasks() {
   const { data, error } = useLiveData(
     (signal) => newestTasks(5, archived, { signal, onPage: (page) => reportPage(signal, page) }),
     [archived],
+    {
+      accepts: boardEvent,
+      update: (data, events, signal) => updateBoard(data, events, signal, archived),
+    },
   );
   const tasks = data?.items;
+  const now = useNow(30_000);
+  const openTask = useCallback((id: string) => setSelected(id), []);
 
   function collapseColumn(title: string) {
     setCollapsed((prev) => new Set(prev).add(title));
@@ -163,7 +213,12 @@ export function Tasks() {
               </div>
               <div className="column-body">
                 {section.items.map((task) => (
-                  <TaskCard key={task.id} task={task} onOpen={() => setSelected(task.id)} />
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    onOpen={openTask}
+                    now={task.state === "claimed" ? now : 0}
+                  />
                 ))}
               </div>
             </div>
@@ -176,41 +231,77 @@ export function Tasks() {
   );
 }
 
-function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
-  const now = useNow(30_000);
-  return (
-    <button type="button" className="task-card" onClick={onOpen}>
-      <TaskLabel className="title" title={task.title} project={task.project} />
-      <span className="meta">
-        <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
-        {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
-        {task.priority !== 0 && <span className="badge">p{task.priority}</span>}
-        {task.attempt > 0 && <span className="muted">attempt {task.attempt}</span>}
-      </span>
-      {task.models?.used?.length ? (
-        <span className="meta" aria-label="Models used">
-          {task.models.used.map((item) => (
-            <ModelChip
-              key={`${item.layer}-${item.tool}-${item.model}`}
-              tool={item.tool ?? item.layer}
-              model={item.model}
-              observed={item.observed}
-            />
-          ))}
+const TaskCard = memo(
+  function TaskCard({
+    task,
+    onOpen,
+    now,
+  }: {
+    task: TaskSummary;
+    onOpen: (id: string) => void;
+    now: number;
+  }) {
+    return (
+      <button type="button" className="task-card" onClick={() => onOpen(task.id)}>
+        <TaskLabel className="title" title={task.title} project={task.project} />
+        <span className="meta">
+          <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
+          {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
+          {task.priority !== 0 && <span className="badge">p{task.priority}</span>}
+          {task.attempt > 0 && <span className="muted">attempt {task.attempt}</span>}
         </span>
-      ) : null}
-      {task.state === "claimed" && task.assignee_agent_id && (
-        <span className="muted small">
-          <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
-          <DateChip at={task.lease_expires_at} now={now} />
-        </span>
-      )}
-      {task.state === "claimed" && <TaskSignal task={task} now={now} />}
-      {task.block_reason && task.state === "blocked" && (
-        <span className="small muted">{task.block_reason}</span>
-      )}
-    </button>
-  );
+        {task.models?.used?.length ? (
+          <span className="meta" aria-label="Models used">
+            {task.models.used.map((item) => (
+              <ModelChip
+                key={`${item.layer}-${item.tool}-${item.model}`}
+                tool={item.tool ?? item.layer}
+                model={item.model}
+                observed={item.observed}
+              />
+            ))}
+          </span>
+        ) : null}
+        {task.state === "claimed" && task.assignee_agent_id && (
+          <span className="muted small">
+            <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
+            <DateChip at={task.lease_expires_at} now={now} />
+          </span>
+        )}
+        {task.state === "claimed" && <TaskSignal task={task} now={now} />}
+        {task.block_reason && task.state === "blocked" && (
+          <span className="small muted">{task.block_reason}</span>
+        )}
+      </button>
+    );
+  },
+  (a, b) =>
+    a.onOpen === b.onOpen &&
+    a.now === b.now &&
+    (a.task === b.task ||
+      JSON.stringify(cardFields(a.task)) === JSON.stringify(cardFields(b.task))),
+);
+
+function cardFields(task: TaskSummary) {
+  return [
+    task.id,
+    task.title,
+    task.project,
+    task.state,
+    task.kind,
+    task.priority,
+    task.attempt,
+    task.assignee_agent_id,
+    task.lease_expires_at,
+    task.block_reason,
+    task.models?.used,
+    task.progress_message,
+    task.progress_percent,
+    task.progress_at,
+    task.progress_kind,
+    task.progress_data,
+    task.output_at,
+  ];
 }
 
 function NewTask({ onClose }: { onClose: () => void }) {

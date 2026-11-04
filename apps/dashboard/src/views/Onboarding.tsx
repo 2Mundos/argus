@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActionButton } from "../ActionButton";
 import { api, call, type OnboardingStatus, type TemplateCatalog } from "../api";
 import { useLiveData } from "../live";
+import { onboardingEvent } from "../liveEvents";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 import { NewWorker } from "./GuidedWorker";
@@ -49,6 +50,7 @@ export function OnboardingWizard({
   const { data: status, reload } = useLiveData(
     (signal) => call(api.GET("/api/onboarding", { signal })),
     [],
+    { accepts: onboardingEvent },
   );
   const { data: catalog } = useLiveData(
     (signal) => call(api.GET("/api/fleet/templates", { signal })),
@@ -380,6 +382,7 @@ export function OnboardingHost({
   const { data: status, reload } = useLiveData(
     (signal) => call(api.GET("/api/onboarding", { signal })),
     [],
+    { accepts: onboardingEvent },
   );
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step | undefined>();
