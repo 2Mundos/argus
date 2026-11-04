@@ -54,7 +54,7 @@ from argus_api.engines.router import DEFAULT_EXECUTORS
 from argus_api.errors import ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
-from argus_api.paging import DEFAULT_LIMIT, View
+from argus_api.paging import DEFAULT_LIMIT
 from argus_api.settings import service as settings_svc
 from argus_api.tasks import (
     changes,
@@ -225,7 +225,7 @@ async def list_tasks(
     assignee: str | None = None,
     archived: bool = False,
     ids: str | None = None,
-    view: View = "summary",
+    view: views.TaskView = "summary",
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
     q: str | None = None,
@@ -235,7 +235,9 @@ async def list_tasks(
     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
     are left out unless `archived=true`, which lists only those. Workers only see
     tasks they have leased. Optional `q` is literal substring search over title
-    and spec (task discovery)."""
+    and spec (task discovery). `view=compact` returns only id, title, state, attempt,
+    max_attempts, block_reason, progress_message, created_at and updated_at (no refs,
+    models or `matches`): the cheapest way to scan many tasks."""
     scope = worker_task_filter(caller)
     async with db.snapshot() as snap:
         if ids is not None:

@@ -157,7 +157,8 @@ export async function newestTasks(
         signal: opts?.signal,
       }),
     );
-    items.push(...page.items);
+    // The default view is summary; only view=compact rows lack these fields.
+    items.push(...(page.items as TaskSummary[]));
     total = page.total;
     opts?.onPage?.({ items: items.slice(), total });
     if (!page.next_cursor) break;

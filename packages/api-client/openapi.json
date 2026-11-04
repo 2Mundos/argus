@@ -19893,6 +19893,74 @@
         "title": "TaskChanges",
         "type": "object"
       },
+      "TaskCompact": {
+        "description": "The cheapest list row: no refs, models, spec or result (view=compact).",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "progress_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Message"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state",
+          "attempt",
+          "max_attempts",
+          "block_reason",
+          "progress_message",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TaskCompact",
+        "type": "object"
+      },
       "TaskCreate": {
         "properties": {
           "acceptance": {
@@ -21300,6 +21368,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/TaskDetail"
+                },
+                {
+                  "$ref": "#/components/schemas/TaskCompact"
                 }
               ]
             },
@@ -32176,7 +32247,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased. Optional `q` is literal substring search over title\nand spec (task discovery).",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased. Optional `q` is literal substring search over title\nand spec (task discovery). `view=compact` returns only id, title, state, attempt,\nmax_attempts, block_reason, progress_message, created_at and updated_at (no refs,\nmodels or `matches`): the cheapest way to scan many tasks.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
@@ -32280,7 +32351,8 @@
               "default": "summary",
               "enum": [
                 "summary",
-                "detail"
+                "detail",
+                "compact"
               ],
               "title": "View",
               "type": "string"

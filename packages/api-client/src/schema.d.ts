@@ -2502,7 +2502,9 @@ export interface paths {
          *     instead: no other filter, no paging, unknown ids in `missing`. Archived tasks
          *     are left out unless `archived=true`, which lists only those. Workers only see
          *     tasks they have leased. Optional `q` is literal substring search over title
-         *     and spec (task discovery).
+         *     and spec (task discovery). `view=compact` returns only id, title, state, attempt,
+         *     max_attempts, block_reason, progress_message, created_at and updated_at (no refs,
+         *     models or `matches`): the cheapest way to scan many tasks.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -10099,6 +10101,32 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * TaskCompact
+         * @description The cheapest list row: no refs, models, spec or result (view=compact).
+         */
+        TaskCompact: {
+            /** Attempt */
+            attempt: number;
+            /** Block Reason */
+            block_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Progress Message */
+            progress_message: string | null;
+            state: components["schemas"]["TaskState"];
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+        };
         /** TaskCreate */
         TaskCreate: {
             /**
@@ -10574,7 +10602,7 @@ export interface components {
             /** Has More */
             has_more: boolean;
             /** Items */
-            items: (components["schemas"]["TaskSummary"] | components["schemas"]["TaskDetail"])[];
+            items: (components["schemas"]["TaskSummary"] | components["schemas"]["TaskDetail"] | components["schemas"]["TaskCompact"])[];
             /** Missing */
             missing?: string[];
             /** Next Cursor */
@@ -16164,7 +16192,7 @@ export interface operations {
                 assignee?: string | null;
                 archived?: boolean;
                 ids?: string | null;
-                view?: "summary" | "detail";
+                view?: "summary" | "detail" | "compact";
                 limit?: number;
                 cursor?: string | null;
                 q?: string | null;

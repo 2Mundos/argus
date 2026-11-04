@@ -92,7 +92,8 @@ async function updateBoard(
     );
   }
   const pages = await Promise.all(batches);
-  const changed = pages.flatMap((page) => page.items);
+  // The default view is summary; only view=compact rows lack these fields.
+  const changed = pages.flatMap((page) => page.items as TaskSummary[]);
   if (
     changed.length !== ids.length ||
     changed.some((task) => Boolean(task.archived_at) !== archived)

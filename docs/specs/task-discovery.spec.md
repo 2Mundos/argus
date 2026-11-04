@@ -59,6 +59,14 @@ When `q` is absent the response shape, totals and cursors are unchanged.
   stays in-row (titles are ≤ 200 characters). Citation identity is the item's
   existing `id` and `version` (task `updated_at`). When `q` is absent, `matches`
   is omitted.
+- **Compact view.** `view=compact` (also on `get_tasks`) is the cheapest scan
+  for large pages. A row carries only `id`, `title`, `state`, `attempt`,
+  `max_attempts`, `block_reason`, `progress_message`, `created_at`, `updated_at`;
+  the refs, model-trace and body queries are skipped. Text fields keep the
+  `TEXT_CAP` cut, and `omitted` lists every other task field plus any cut one
+  (compact rows have no `truncated` map). `q`, filters, `total`, `has_more` and
+  `next_cursor` behave as in `summary`, but rows carry no `matches`. `summary`
+  stays the default and its fields do not change.
 - **Empty vs truncated vs failed.** No matches → `items: []`, `total: 0` (not
   an error). Snippet cuts set `matches[].truncated` (and may appear in the
   row's `truncated` map). `omitted` keeps its projection meaning. A failed

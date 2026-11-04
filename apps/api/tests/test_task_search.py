@@ -273,3 +273,52 @@ def test_mcp_list_tasks_forwards_q(client: TestClient) -> None:
     assert page["total"] == 1
     assert page["items"][0]["matches"]
     assert "matches" in page["items"][0]
+
+
+COMPACT_KEYS = {
+    "id",
+    "title",
+    "state",
+    "attempt",
+    "max_attempts",
+    "block_reason",
+    "progress_message",
+    "created_at",
+    "updated_at",
+}
+
+
+def test_compact_view_is_small_and_summary_keys_are_unchanged(
+    client: TestClient,
+) -> None:
+    for n in range(30):
+        create(client, title=f"bulk-{n} compact-marker", spec="s" * 5000)
+    default = ok(client.get("/api/tasks", params={"limit": 30}))
+    assert set(default["items"][0]) == {
+        "id", "parent_id", "kind", "title", "project", "state", "priority",
+        "review", "attempt", "max_attempts", "assignee_agent_id",
+        "lease_expires_at", "block_reason", "progress_message",
+        "progress_percent", "progress_at", "progress_kind", "progress_data",
+        "models", "output_at", "created_at", "archived_at", "version", "age_s",
+        "truncated", "depends_on", "decision_ids", "artifact_ids",
+    }  # fmt: skip
+    page = ok(
+        client.get(
+            "/api/tasks",
+            params={"view": "compact", "limit": 30, "q": "compact-marker"},
+        )
+    )
+    assert page["total"] == 30
+    assert len(page["items"]) == 30
+    assert all(set(t) == COMPACT_KEYS for t in page["items"])
+    assert "spec" in page["omitted"]
+    assert len(client.get("/api/tasks?view=compact&limit=30").text) < 12_000
+    batch = ok(
+        client.get(
+            "/api/tasks",
+            params={"view": "compact", "ids": page["items"][0]["id"]},
+        )
+    )
+    assert set(batch["items"][0]) == COMPACT_KEYS
+    mcp = tool(client, ADMIN_TOKEN, "list_tasks", view="compact", limit=2)
+    assert set(mcp["items"][0]) == COMPACT_KEYS

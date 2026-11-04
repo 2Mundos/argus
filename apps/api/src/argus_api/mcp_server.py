@@ -332,6 +332,7 @@ class Runtime(BaseModel):
 
 
 ViewArg = Literal["summary", "detail"]
+TaskViewArg = Literal["summary", "detail", "compact"]
 InboxState = Literal["blocked", "in_review", "awaiting_approval", "pending", "claimed"]
 TaskStateArg = Literal[
     "awaiting_approval",
@@ -445,9 +446,12 @@ async def get_task_changes(
 
 
 @tool(ANYONE)
-async def get_tasks(ctx: Context, ids: list[str], view: ViewArg = "summary") -> dict:
+async def get_tasks(
+    ctx: Context, ids: list[str], view: TaskViewArg = "summary"
+) -> dict:
     """Read up to 50 tasks in one call, in the order given; unknown ids come back in
-    `missing`. view=detail adds spec and result (long text cut, see `truncated`)."""
+    `missing`. view=detail adds spec and result (long text cut, see `truncated`);
+    view=compact keeps only id, title, state, attempt, progress and timestamps."""
     return await _call(
         ctx, "GET", "/tasks", params={"ids": ",".join(ids), "view": view}
     )
@@ -1269,7 +1273,7 @@ async def list_tasks(
     project: str | None = None,
     kind: str | None = None,
     assignee: str | None = None,
-    view: ViewArg = "summary",
+    view: TaskViewArg = "summary",
     limit: int = 25,
     cursor: str | None = None,
     q: str | None = None,
@@ -1279,7 +1283,10 @@ async def list_tasks(
     `assignee` (an agent id) narrows to the tasks that agent holds now.
     Optional `q` is literal case-insensitive substring search over title and spec
     (at most 8 whitespace-separated terms ≤ 64 chars); matching rows carry
-    `matches` snippets. Text match is not duplicate detection."""
+    `matches` snippets. Text match is not duplicate detection. view=compact is the
+    cheapest scan: rows carry only id, title, state, attempt, max_attempts,
+    block_reason, progress_message, created_at, updated_at (no ids, models or
+    `matches`); use it for large pages, then get_tasks for the ones you need."""
     return await _call(
         ctx,
         "GET",
