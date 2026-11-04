@@ -2545,7 +2545,16 @@ async def release_claim(tx: Tx, row: aiosqlite.Row, actor: str, reason: str) -> 
 
 async def cancel(tx: Tx, task_id: str, actor: str) -> Task:
     row = await _row(tx.conn, task_id)
-    await _apply(tx, row, Action.CANCEL, actor)
+    data: dict[str, Any] = {"cancelled_by": actor}
+    set_: dict[str, Any] = {}
+    if row["state"] == S.BLOCKED and row["block_reason"]:
+        # Name the cause: a cancelled task keeps its block reason, so say who
+        # cancelled it and why it was blocked.
+        data["block_reason"] = row["block_reason"]
+        set_["progress_message"] = (
+            f"cancelled by {actor} while blocked as {row['block_reason']}"[:500]
+        )
+    await _apply(tx, row, Action.CANCEL, actor, set_=set_, data=data)
     return await get_task(tx.conn, task_id)
 
 

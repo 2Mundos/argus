@@ -69,7 +69,7 @@ reasons and adds `failure_class` to each failure row and a count per class.
   Migration `0047_task_retry_at.sql`.
 - **Gave up.** A `worker_fail` that leaves attempts in the budget blocks the task
   as `worker_gave_up` instead of requeueing it, with the worker's text as `error`.
-  The inbox shows it like any block; unblock retries it, cancel ends it. A
+  The inbox shows it like any block; unblock retries it, cancel ends it, keeping the block reason and naming the actor in `progress_message` and the `task.cancel` event. A
   `worker_fail` on the last attempt fails the task, as today.
 - **Session resume.** `session_lost` and `agent_ended` are the unexpected exits
   and follow the rule below. `stalled`, `timeout` and `lease_expired` are not
