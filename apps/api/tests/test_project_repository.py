@@ -444,3 +444,101 @@ async def test_delivery_resolves_repositories_only_from_usable_values(
         "neighbor": "https://git.example/a/neighbor",
         "both": "https://git.example/b/record",
     }
+
+
+SECRET = "hunter2-token"
+
+
+def test_repository_read_and_checkout_tell_every_state_apart(
+    client: TestClient,
+) -> None:
+    db = client.app.state.db
+
+    async def seed() -> None:
+        async with db.write() as tx:
+            await fleet.upsert_pool(
+                tx, "one", pool({"split": "https://git.example/a/x"}), "t"
+            )
+            await fleet.upsert_pool(
+                tx, "two", pool({"split": "https://git.example/a/y"}), "t"
+            )
+            for slug in ("split", "absent", "own", "legacy"):
+                await kn.upsert_project(
+                    tx,
+                    slug,
+                    ProjectUpsert(name=slug, repository_url=None),
+                    "t",
+                    admin=True,
+                )
+            for slug, raw in (
+                ("own", URL),
+                ("legacy", f"https://user:{SECRET}@git.example/a/legacy"),
+            ):
+                await tx.conn.execute(
+                    "UPDATE projects SET repository_url = ? WHERE slug = ?", (raw, slug)
+                )
+
+    client.portal.call(seed)  # in the app's own event loop
+    orchestrator = register(client, "orchestrator")
+    worker = register(client)
+
+    def read(slug: str) -> dict:
+        return ok(client.get(f"/api/projects/{slug}/repository", headers=orchestrator))
+
+    assert read("own")["status"] == "configured"
+    assert read("own")["repository_url"] == URL
+    for slug, status in (
+        ("absent", "unset"),
+        ("split", "ambiguous"),
+        ("legacy", "invalid"),
+        ("global", "unset"),
+    ):
+        got = read(slug)
+        assert (got["status"], got["repository_url"]) == (status, None)
+        assert got["detail"]
+    unknown = client.get("/api/projects/nope/repository", headers=orchestrator)
+    assert unknown.json()["detail"]["code"] == "unknown_project"
+    # A worker reads only projects it has leased.
+    denied = client.get("/api/projects/own/repository", headers=worker)
+    assert denied.json()["detail"]["code"] == "project_scope"
+
+    # Checkout: a read-only task in its own workspace, no capability, no credential.
+    done = client.post(
+        "/api/projects/own/checkout", json={"ref": "release/1.x"}, headers=orchestrator
+    )
+    assert done.status_code == 201, done.text
+    co = done.json()
+    assert co["repository_url"] == URL and co["ref"] == "release/1.x"
+    assert co["access"] == "read"
+    assert co["workspace"] == f"task-workspaces/{co['task_id']}"
+    assert co["branch"] == f"argus/task-{co['task_id'][:8]}"
+    task = ok(client.get(f"/api/tasks/{co['task_id']}"))
+    assert task["project"] == "own" and task["required_capabilities"] == []
+    assert task["deliverable"] == "response"
+    assert "release/1.x" in task["spec"]
+    again = client.post(
+        "/api/projects/own/checkout", json={}, headers=orchestrator
+    ).json()
+    assert again["task_id"] != co["task_id"]  # one isolated workspace per checkout
+
+    for slug, code in (
+        ("absent", "repository_unset"),
+        ("split", "repository_ambiguous"),
+        ("legacy", "repository_invalid"),
+        ("global", "repository_unset"),
+    ):
+        res = client.post(
+            f"/api/projects/{slug}/checkout", json={}, headers=orchestrator
+        )
+        assert res.status_code == 409 and res.json()["detail"]["code"] == code
+        assert SECRET not in res.text
+    assert SECRET not in client.get("/api/projects/legacy/repository").text
+    for bad in ("--upload-pack=x", "a..b", "a b"):
+        res = client.post(
+            "/api/projects/own/checkout", json={"ref": bad}, headers=orchestrator
+        )
+        assert res.status_code == 422
+    assert (
+        client.post("/api/projects/own/checkout", json={}, headers=worker).status_code
+        == 403
+    )

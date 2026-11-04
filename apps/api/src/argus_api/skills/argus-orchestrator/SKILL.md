@@ -242,6 +242,12 @@ before then.
 
 ### Repository work
 
+- `get_project_repository(project)` returns the repository Argus stores
+  (`configured`, `unset`, `ambiguous` or `invalid`, with what an admin must do).
+  Read it; never ask the user for a URL Argus already has.
+- `checkout_project_repository(project, ref?)` starts a read-only checkout as a
+  task with its own workspace. It only initiates: follow the task with `get_task`
+  before saying the code is there.
 - A configured project repository is checked out automatically, read-only when
   the task omits `repository:write`.
 - Pool or agent capabilities (`ARGUS_CAPABILITIES`) say what a worker can serve,

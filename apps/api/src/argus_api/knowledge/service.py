@@ -22,6 +22,7 @@ from argus_core.knowledge import (
     PageListItem,
     PageRestore,
     Project,
+    ProjectRepository,
     ProjectStats,
     ProjectUpsert,
     Proposal,
@@ -86,21 +87,9 @@ async def project_stats(conn: aiosqlite.Connection) -> list[ProjectStats]:
     stats = []
     for project in await list_projects(conn):
         slug = project.slug
-        url: str | None = None
-        source: RepositorySource | None = None
-        if slug != "global":
-            named = pool_sets.get(slug, set())
-            if project.repository_url and (
-                url := delivery.canonical_repository_url(project.repository_url)
-            ):
-                source = "project"
-            elif len(named) == 1:
-                host, owner, name = next(iter(named))
-                url, source = f"https://{host}/{owner}/{name}", "pools"
-            elif project.repository_url:
-                source = "invalid"  # a stored value no worker can use
-            elif len(named) > 1:
-                source = "conflict"  # pools name different repositories
+        url, source = _resolve_repository(
+            slug, project.repository_url, pool_sets.get(slug, set()), delivery
+        )
         stats.append(
             ProjectStats(
                 slug=slug,
@@ -113,6 +102,77 @@ async def project_stats(conn: aiosqlite.Connection) -> list[ProjectStats]:
             )
         )
     return stats
+
+
+def _resolve_repository(
+    slug: str, stored: str | None, named: set[tuple[str, str, str]], delivery: Any
+) -> tuple[str | None, RepositorySource | None]:
+    """The repository a worker resolves for `project` and how: its record, else the
+    one repository every pool names. `global` never has one."""
+    if slug == "global":
+        return None, None
+    if stored and (url := delivery.canonical_repository_url(stored)):
+        return url, "project"
+    if len(named) == 1:
+        host, owner, name = next(iter(named))
+        return f"https://{host}/{owner}/{name}", "pools"
+    if stored:
+        return None, "invalid"  # a stored value no worker can use
+    if len(named) > 1:
+        return None, "conflict"  # pools name different repositories
+    return None, None
+
+
+async def project_repository(
+    conn: aiosqlite.Connection, slug: str
+) -> ProjectRepository:
+    """What the project's repository is, or precisely why there is none."""
+    from argus_api.tasks import delivery
+
+    # The raw column, not `get_project`: a legacy value with credentials must be
+    # reported as invalid, never raised (and echoed) by model validation.
+    async with conn.execute(
+        "SELECT repository_url FROM projects WHERE slug = ?", (slug,)
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise NotFoundError(f"unknown project: {slug}", code="unknown_project")
+    named = (await delivery.pool_repository_sets(conn)).get(slug, set())
+    url, source = _resolve_repository(slug, row[0], named, delivery)
+    if url:
+        return ProjectRepository(
+            project=slug,
+            status="configured",
+            repository_url=url,
+            repository_source=source,
+            detail="",
+        )
+    if slug == "global":
+        status, detail = "unset", "global holds knowledge and settings, never code"
+    elif source == "conflict":
+        status = "ambiguous"
+        detail = (
+            "pools name different repositories for this project: an admin sets the "
+            "one with set_project_repository"
+        )
+    elif source == "invalid":
+        status = "invalid"
+        detail = (
+            "the stored repository is not a usable HTTPS owner/repository URL: an "
+            "admin replaces it with set_project_repository"
+        )
+    else:
+        status = "unset"
+        detail = (
+            "no repository is configured: an admin sets one with set_project_repository"
+        )
+    return ProjectRepository(
+        project=slug,
+        status=status,  # type: ignore[arg-type]
+        repository_url=None,
+        repository_source=source,
+        detail=detail,
+    )
 
 
 async def set_repository(

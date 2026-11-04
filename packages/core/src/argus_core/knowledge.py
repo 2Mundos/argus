@@ -1,5 +1,6 @@
 """Projects and knowledge pages (docs/specs/knowledge.spec.md)."""
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
@@ -56,6 +57,53 @@ class ProjectStats(BaseModel):
     archived_tasks: int
     last_task_activity_at: datetime | None  # newest task update; None: no tasks
     knowledge_pages: int  # active pages
+
+
+class ProjectRepository(BaseModel):
+    """The repository Argus resolves for one project, and why. `status`: `configured`
+    (`repository_url` is what a worker clones), `unset` (nothing names one),
+    `ambiguous` (pools name different repositories and the project has no record)
+    or `invalid` (the stored value is unusable). `source` is as in `ProjectStats`.
+    `detail` says what to do next; a stored value is never echoed when unusable,
+    because it may carry a credential."""
+
+    project: str
+    status: Literal["configured", "unset", "ambiguous", "invalid"]
+    repository_url: str | None
+    repository_source: Literal["project", "pools", "conflict", "invalid"] | None
+    detail: str
+
+
+_REF = re.compile(r"[A-Za-z0-9._/-]{1,200}")
+
+
+class ProjectCheckoutRequest(BaseModel):
+    """`ref`: the branch, tag or commit to base the work on; None is the
+    repository's default branch."""
+
+    ref: str | None = None
+
+    @field_validator("ref")
+    @classmethod
+    def ref_shape(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not _REF.fullmatch(value) or value.startswith("-") or ".." in value
+        ):
+            raise ValueError("ref must be a plain branch, tag or commit name")
+        return value
+
+
+class ProjectCheckout(BaseModel):
+    """A checkout in progress: a read-only task whose workspace the worker channel
+    prepares from the project's repository (project code availability spec)."""
+
+    project: str
+    repository_url: str
+    ref: str | None
+    task_id: str
+    workspace: str  # relative to the worker's agent group dir, one per task
+    branch: str
+    access: Literal["read"] = "read"
 
 
 class Source(BaseModel):

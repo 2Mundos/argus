@@ -12,6 +12,9 @@ from argus_core.knowledge import (
     PageListItem,
     PageRestore,
     Project,
+    ProjectCheckout,
+    ProjectCheckoutRequest,
+    ProjectRepository,
     ProjectRepositoryChange,
     ProjectStats,
     ProjectUpsert,
@@ -20,6 +23,7 @@ from argus_core.knowledge import (
     Revision,
     SearchHit,
 )
+from argus_core.tasks import TaskCreate
 from fastapi import APIRouter, Path, Query, status
 
 from argus_api.access import (
@@ -33,7 +37,7 @@ from argus_api.auth import Identity
 from argus_api.config import Settings
 from argus_api.db import Database, utcnow
 from argus_api.deps import AdminDep, CallerDep, DbDep, ManagerDep, SettingsDep
-from argus_api.errors import ForbiddenError, NotFoundError
+from argus_api.errors import ConflictError, ForbiddenError, NotFoundError
 from argus_api.knowledge import service
 
 router = APIRouter(tags=["knowledge"])
@@ -99,6 +103,61 @@ async def upsert_project(
         return await service.upsert_project(
             tx, slug, body, caller.actor, admin=caller.scope == Scope.ADMIN
         )
+
+
+@router.get("/projects/{slug}/repository")
+async def get_project_repository(
+    slug: Slug, db: DbDep, caller: CallerDep
+) -> ProjectRepository:
+    """The repository Argus resolves for the project (its record, else the one every
+    pool names), or why there is none: `unset`, `ambiguous` or `invalid`. Workers
+    only read projects they have leased."""
+    async with db.read() as conn:
+        await require_project_readable(conn, caller, slug)
+        return await service.project_repository(conn, slug)
+
+
+@router.post("/projects/{slug}/checkout", status_code=status.HTTP_201_CREATED)
+async def checkout_project(
+    slug: Slug, body: ProjectCheckoutRequest, db: DbDep, caller: ManagerDep
+) -> ProjectCheckout:
+    """Start a checkout of the project's configured repository: a read-only task
+    with no capability and no deliverable beyond a summary. The worker channel
+    prepares its isolated workspace through the task-scoped repository lease, so
+    this grants no write access and no credential reaches the caller."""
+    # Lazy: the task service imports the knowledge service.
+    from argus_api.tasks import service as tasks
+
+    async with db.write() as tx:
+        repo = await service.project_repository(tx.conn, slug)
+        if repo.repository_url is None:
+            raise ConflictError(repo.detail, code=f"repository_{repo.status}")
+        where = f" at {body.ref}" if body.ref else ""
+        task = await tasks.create_task(
+            tx,
+            TaskCreate(
+                title=f"Check out {repo.repository_url.removeprefix('https://')}"[:200],
+                project=slug,
+                spec=(
+                    f"Read-only checkout of {repo.repository_url}{where}. Fetch "
+                    f"{body.ref or 'the default branch'} into the prepared "
+                    "workspace, confirm HEAD and the remote, and report the commit "
+                    "SHA. Do not push or open a PR."
+                ),
+            ),
+            caller.actor,
+            as_worker=None,
+            hourly_limit=None,
+            idempotency_key=None,
+        )
+    return ProjectCheckout(
+        project=slug,
+        repository_url=repo.repository_url,
+        ref=body.ref,
+        task_id=task.id,
+        workspace=f"task-workspaces/{task.id}",
+        branch=f"argus/task-{task.id[:8]}",
+    )
 
 
 @router.patch("/projects/{slug}/repository")

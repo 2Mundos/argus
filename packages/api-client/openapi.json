@@ -15406,6 +15406,76 @@
         "title": "Project",
         "type": "object"
       },
+      "ProjectCheckout": {
+        "description": "A checkout in progress: a read-only task whose workspace the worker channel\nprepares from the project's repository (project code availability spec).",
+        "properties": {
+          "access": {
+            "const": "read",
+            "default": "read",
+            "title": "Access",
+            "type": "string"
+          },
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "repository_url": {
+            "title": "Repository Url",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "repository_url",
+          "ref",
+          "task_id",
+          "workspace",
+          "branch"
+        ],
+        "title": "ProjectCheckout",
+        "type": "object"
+      },
+      "ProjectCheckoutRequest": {
+        "description": "`ref`: the branch, tag or commit to base the work on; None is the\nrepository's default branch.",
+        "properties": {
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          }
+        },
+        "title": "ProjectCheckoutRequest",
+        "type": "object"
+      },
       "ProjectCost": {
         "properties": {
           "attempts": {
@@ -15519,6 +15589,66 @@
           "project"
         ],
         "title": "ProjectCost",
+        "type": "object"
+      },
+      "ProjectRepository": {
+        "description": "The repository Argus resolves for one project, and why. `status`: `configured`\n(`repository_url` is what a worker clones), `unset` (nothing names one),\n`ambiguous` (pools name different repositories and the project has no record)\nor `invalid` (the stored value is unusable). `source` is as in `ProjectStats`.\n`detail` says what to do next; a stored value is never echoed when unusable,\nbecause it may carry a credential.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "repository_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "project",
+                  "pools",
+                  "conflict",
+                  "invalid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Source"
+          },
+          "repository_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Url"
+          },
+          "status": {
+            "enum": [
+              "configured",
+              "unset",
+              "ambiguous",
+              "invalid"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "status",
+          "repository_url",
+          "repository_source",
+          "detail"
+        ],
+        "title": "ProjectRepository",
         "type": "object"
       },
       "ProjectRepositoryChange": {
@@ -30027,7 +30157,113 @@
         ]
       }
     },
+    "/api/projects/{slug}/checkout": {
+      "post": {
+        "description": "Start a checkout of the project's configured repository: a read-only task\nwith no capability and no deliverable beyond a summary. The worker channel\nprepares its isolated workspace through the task-scoped repository lease, so\nthis grants no write access and no credential reaches the caller.",
+        "operationId": "checkout_project_api_projects__slug__checkout_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCheckoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectCheckout"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Checkout Project",
+        "tags": [
+          "knowledge"
+        ]
+      }
+    },
     "/api/projects/{slug}/repository": {
+      "get": {
+        "description": "The repository Argus resolves for the project (its record, else the one every\npool names), or why there is none: `unset`, `ambiguous` or `invalid`. Workers\nonly read projects they have leased.",
+        "operationId": "get_project_repository_api_projects__slug__repository_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRepository"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Project Repository",
+        "tags": [
+          "knowledge"
+        ]
+      },
       "patch": {
         "description": "Admin only: set (or with null clear) just the repository. Unlike the full PUT it\nnever touches name or description, so it cannot overwrite a concurrent edit.",
         "operationId": "set_project_repository_api_projects__slug__repository_patch",
