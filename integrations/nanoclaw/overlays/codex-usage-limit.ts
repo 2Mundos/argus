@@ -24,6 +24,8 @@ const STRUCTURED_QUOTA_CODES = new Set([
 const LIMIT_TEXT =
   /^(?:usage_limit_(?:reached|exceeded)|usagelimitexceeded|insufficient_quota|you(?:'|’)ve (?:hit|reached) your usage limit|you have (?:hit|reached) your usage limit|you exceeded your current quota)\b/i;
 const RESET_WORDS = /\btry again at ([^\n]{3,60}?)\s*(?:\.(?:\s|$)|$)/i;
+/** Same bounded capture as `quota.py` `_RESETS` — provider's words inside `(resets …)`. */
+const RESETS_PAREN = /\(resets ([^()]{1,64})\)/i;
 const NOTICE_MAX = 300;
 
 export interface CodexRateLimitFailure {
@@ -33,6 +35,19 @@ export interface CodexRateLimitFailure {
   notice?: string;
   /** The reset as the provider wrote it; never normalised. */
   reset_text?: string;
+}
+
+/** First reset marker in source order (`quota.py` `_RESET_MARKER`, `argus-accounts` `RESET_MARKER`). */
+function firstResetCapture(flat: string): string | undefined {
+  let at = Infinity;
+  let words: string | undefined;
+  for (const re of [RESETS_PAREN, RESET_WORDS]) {
+    const m = re.exec(flat);
+    if (!m?.[1] || m.index >= at) continue;
+    at = m.index;
+    words = m[1];
+  }
+  return words;
 }
 
 function oneLine(text: string): string {
@@ -79,13 +94,13 @@ export function codexUsageLimitFailure(
   const candidate = unwrapped.replace(NOTICE_PREFIX, "").trim();
   if (!isStructuredLimit && !LIMIT_TEXT.test(candidate)) return undefined;
 
-  const resetTarget = unwrapped || error;
-  const reset = RESET_WORDS.exec(resetTarget.replace(/[\r\n]+/g, " ").trim());
+  const flat = (unwrapped || error).replace(/[\r\n]+/g, " ").trim();
+  const capture = firstResetCapture(flat);
   const notice = oneLine(unwrapped || error).slice(0, NOTICE_MAX);
   return {
     provider: "codex",
     kind: "rate_limit",
     ...(notice ? { notice } : {}),
-    ...(reset?.[1] ? { reset_text: oneLine(reset[1]) } : {}),
+    ...(capture ? { reset_text: oneLine(capture) } : {}),
   };
 }
