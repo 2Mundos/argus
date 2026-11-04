@@ -455,6 +455,10 @@ def test_wrapper_rejects_core_hooks_path_override(tmp_path: Path) -> None:
     (repo / "a").write_text("1\n")
     subprocess.run([REAL, "add", "a"], cwd=repo, check=True)
     env = _env()
+    status = _run_git(repo, env, "-c", "core.hooksPath=/dev/null", "status", "--short")
+    assert status.returncode == 0
+    add = _run_git(repo, env, "-c", "core.hooksPath=/dev/null", "add", "a")
+    assert add.returncode == 0
     with_msg = _run_git(
         repo,
         env,

@@ -590,12 +590,12 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
 
 
 def gate_git(default_cwd: str, argv: list[str]) -> str | None:
-    cfg_err = _forbidden_git_config(argv)
-    if cfg_err:
-        return cfg_err
     inv = parse_git_argv(argv, default_cwd)
     if not inv:
         return None
+    cfg_err = _forbidden_git_config(argv)
+    if cfg_err:
+        return cfg_err
     ctx_err = _git_context_error(inv)
     if ctx_err:
         return ctx_err
