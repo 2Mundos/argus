@@ -380,7 +380,14 @@ if "GIT_HTTP_PROXY_AUTHMETHOD" not in s:
     new = "  'GIT_SSL_CAINFO',\n  'GIT_HTTP_PROXY_AUTHMETHOD',\n  'GIT_TERMINAL_PROMPT',\n  'HOME',"
     assert old in s, "codex-app-server CODEX_ENV_ALLOWLIST shape changed upstream"
     s = s.replace(old, new, 1)
-runtime_keys = ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME", "ARGUS_REPOSITORIES_JSON", "ARGUS_CODEX_TURN_TIMEOUT_MS"]
+runtime_keys = [
+    "CURSOR_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "ARGUS_REPOSITORIES_JSON",
+    "ARGUS_GIT_AUTHOR_NAME",
+    "ARGUS_GIT_AUTHOR_EMAIL",
+    "ARGUS_CODEX_TURN_TIMEOUT_MS",
+]
 missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
 if missing:
     insert = "".join(f"  '{k}',\n" for k in missing)
@@ -414,6 +421,10 @@ new = """  const contributedEnv: Record<string, string> = {
   const argusRepositoriesJson = process.env.ARGUS_REPOSITORIES_JSON?.trim();
   if (argusRepositoriesJson) {
     contributedEnv.ARGUS_REPOSITORIES_JSON = argusRepositoriesJson;
+  }
+  for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL']) {
+    const value = process.env[key];
+    if (value?.trim()) contributedEnv[key] = value;
   }"""
 assert old in s, "container-runner composeSessionSpec contributedEnv block changed upstream"
 open(p, "w").write(s.replace(old, new, 1))
@@ -438,6 +449,8 @@ if marker not in s:
       GIT_SSL_CAINFO: '/tmp/onecli-ca.pem',
       GIT_HTTP_PROXY_AUTHMETHOD: 'basic',
       GIT_TERMINAL_PROMPT: '0',
+      ARGUS_GIT_AUTHOR_NAME: 'Argus Test',
+      ARGUS_GIT_AUTHOR_EMAIL: 'test@example.invalid',
       OPENAI_API_KEY: 'sk-test',""",
         1,
     )
@@ -449,6 +462,8 @@ if marker not in s:
     expect(env.GIT_SSL_CAINFO).toBe('/tmp/onecli-ca.pem');
     expect(env.GIT_HTTP_PROXY_AUTHMETHOD).toBe('basic');
     expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env.ARGUS_GIT_AUTHOR_NAME).toBe('Argus Test');
+    expect(env.ARGUS_GIT_AUTHOR_EMAIL).toBe('test@example.invalid');
     expect(env.OPENAI_API_KEY).toBeUndefined();""",
         1,
     )
@@ -462,6 +477,8 @@ if runtime_marker not in s:
       CURSOR_CONFIG_DIR: '/home/node/.config/cursor',
       XDG_CONFIG_HOME: '/home/node/.config',
       ARGUS_REPOSITORIES_JSON: '{"radar":"https://git.example.test/radar/radar.git"}',
+      ARGUS_GIT_AUTHOR_NAME: 'Argus Test',
+      ARGUS_GIT_AUTHOR_EMAIL: 'test@example.invalid',
       OPENAI_API_KEY: 'sk-test',""",
         1,
     )
@@ -475,6 +492,8 @@ if runtime_marker not in s:
     expect(env.ARGUS_REPOSITORIES_JSON).toBe(
       '{"radar":"https://git.example.test/radar/radar.git"}',
     );
+    expect(env.ARGUS_GIT_AUTHOR_NAME).toBe('Argus Test');
+    expect(env.ARGUS_GIT_AUTHOR_EMAIL).toBe('test@example.invalid');
     expect(env.OPENAI_API_KEY).toBeUndefined();""",
         1,
     )
