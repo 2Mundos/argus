@@ -570,9 +570,7 @@ def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> Non
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run([REAL, "init", "-q"], cwd=repo, check=True)
-    subprocess.run(
-        [REAL, "config", "user.name", "Ambient User"], cwd=repo, check=True
-    )
+    subprocess.run([REAL, "config", "user.name", "Ambient User"], cwd=repo, check=True)
     subprocess.run(
         [REAL, "config", "user.email", "ambient@example.invalid"],
         cwd=repo,

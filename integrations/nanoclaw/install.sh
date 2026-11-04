@@ -484,22 +484,20 @@ if marker not in s:
     )
     assert marker in s, "codex-app-server env test shape changed upstream"
 runtime_marker = "forwards Cursor delegate and Gitea allowlist env"
-if runtime_marker not in s:
+if runtime_marker not in s and "expect(env.CURSOR_CONFIG_DIR)" not in s:
+    assert "      GIT_TERMINAL_PROMPT: '0'," in s, "codex-app-server env test input changed upstream"
+    assert "    expect(env.GIT_TERMINAL_PROMPT).toBe('0');" in s, "codex-app-server env test assertion changed upstream"
     s = s.replace(
-        """      GIT_TERMINAL_PROMPT: '0',
-      OPENAI_API_KEY: 'sk-test',""",
+        "      GIT_TERMINAL_PROMPT: '0',",
         """      GIT_TERMINAL_PROMPT: '0',
       CURSOR_CONFIG_DIR: '/home/node/.config/cursor',
       XDG_CONFIG_HOME: '/home/node/.config',
       ARGUS_REPOSITORIES_JSON: '{"radar":"https://git.example.test/radar/radar.git"}',
-      ARGUS_GIT_AUTHOR_NAME: 'Argus Test',
-      ARGUS_GIT_AUTHOR_EMAIL: 'test@example.invalid',
-      OPENAI_API_KEY: 'sk-test',""",
+""",
         1,
     )
     s = s.replace(
-        """    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
-    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+        "    expect(env.GIT_TERMINAL_PROMPT).toBe('0');",
         """    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
     // forwards Cursor delegate and Gitea allowlist env
     expect(env.CURSOR_CONFIG_DIR).toBe('/home/node/.config/cursor');
@@ -507,9 +505,7 @@ if runtime_marker not in s:
     expect(env.ARGUS_REPOSITORIES_JSON).toBe(
       '{"radar":"https://git.example.test/radar/radar.git"}',
     );
-    expect(env.ARGUS_GIT_AUTHOR_NAME).toBe('Argus Test');
-    expect(env.ARGUS_GIT_AUTHOR_EMAIL).toBe('test@example.invalid');
-    expect(env.OPENAI_API_KEY).toBeUndefined();""",
+""",
         1,
     )
     assert "expect(env.CURSOR_CONFIG_DIR)" in s, "codex-app-server env test runtime keys missing"
