@@ -383,6 +383,19 @@ the `io` controller, and a busybox image (pulled by the test daemon, or
   its teardown then left the tmpfs, the ext4 mount and a loop device behind.
   `create` now refuses such a path and teardown proves ownership first; that
   fix is covered only by the unit tests with fakes.
+- **Status of the privileged run: NOT verified; pending operator execution on a
+  host that meets the prerequisites above.** On 2026-11-04 (main `371a5038`) the
+  unprivileged checks were: `uv run pytest -q -p no:cacheprovider
+  apps/api/tests/test_disk_guard_runtime.py` — 55 passed, 0 skipped; and
+  `ARGUS_DISK_GUARD_REAL_RUNTIME=1 uv run pytest -q -p no:cacheprovider
+  apps/api/tests/integration/test_disk_guard_real_runtime.py` — 1 failed, by
+  design, naming the missing prerequisites (`dockerd`, `containerd`,
+  `containerd-shim-runc-v2`, `runc`, root or `CAP_SYS_ADMIN`, writable
+  `/sys/fs/cgroup`, `/dev/loop-control`), with `outcome: missing_prerequisites`
+  in the evidence file. Nothing was created or paused. Real pause and resume,
+  guard lease renewal, hysteresis, and `io.stat` writer ranking are therefore
+  **not observed**; a follow-up change records the evidence file from the
+  operator's run.
 
 ### Open questions (owner decisions)
 
