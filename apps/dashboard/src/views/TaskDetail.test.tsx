@@ -117,6 +117,19 @@ describe("TaskDetail blocked reason", () => {
   });
 });
 
+describe("TaskDetail retry", () => {
+  it("titles the Retry button with failures, not claims, against max_attempts", async () => {
+    mock.task = { ...base, state: "failed", attempt: 8, failures: 1, max_attempts: 3 };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    const title = screen.getByRole("button", { name: "Retry" }).getAttribute("title");
+    expect(title).toContain("1/3");
+    expect(title).not.toContain("8/3");
+  });
+});
+
 describe("TaskDetail model trace", () => {
   it("renders attempt grouped harness and delegate executions, evidence, accounts, usage and switches", async () => {
     mock.task = base;
