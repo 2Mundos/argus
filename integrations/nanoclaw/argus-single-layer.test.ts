@@ -520,11 +520,28 @@ describe("default and fallback paths", () => {
   it("the delegated arm runs the default path and is marked", async () => {
     const off = view(await run({}));
     await Promise.all(live.splice(0).map((a) => a.teardown()));
-    const delegated = view(await run({ arms: { [REPO_ID]: "delegated" } }));
+    const r = await run({ arms: { [REPO_ID]: "delegated" } });
+    const delegated = view(r);
     expect({ ...delegated, harness: { ...delegated.harness, explanation: undefined } }).toEqual(
       off,
     );
     expect(delegated.harness.explanation).toBe("single-layer experiment p7-test: arm=delegated");
+
+    await r.say(`PROGRESS: opened ${PR}`);
+    await until(
+      () => r.posts("/progress").some((c) => c.body.kind === "pr_opened"),
+      8000,
+      "pr_opened",
+    );
+    const prOpened = r.posts("/progress").filter((c) => c.body.kind === "pr_opened");
+    expect(prOpened.map((c) => c.body)).toEqual([
+      {
+        attempt: 1,
+        message: `Pull request opened: ${PR}`,
+        kind: "pr_opened",
+        data: { number: 7, url: PR },
+      },
+    ]);
   });
 
   it.each<[Parameters<typeof run>[0], string]>([

@@ -25,8 +25,20 @@ The scope:
 
 # 2. Non-Goals
 
-- No change to the default path. With the flag off, the claim, prompt, model
-  selection and reports are byte-for-byte today's.
+- No change to the default path's behaviour. With the flag off, routing, lease and
+  account handling, prompt and model selection are today's. The progress stream
+  is not byte-for-byte: the channel's `pr_opened` relay (`relayPullRequests`,
+  `argus.ts:4353`, called from `argus.ts:4525`) runs in every execution mode,
+  including the default path.
+  - The delegated arm and the default path are identical in routing, lease and
+    account handling, prompt rendering and model selection. The arm is decided
+    after the engine lease is held (`argus.ts:3406`) and is read only to prepare
+    models (`argus.ts:3014`), to record it (`argus.ts:3436`) and to render the
+    prompt (`argus.ts:3491`). The delegated arm adds only records (3.5).
+  - The single-layer arm shares the default path's routing and lease code. Its
+    prompt and model selection differ by design (3.3).
+  - The `pr_opened` relay is a report-stream difference, not a behaviour
+    difference in the arm under test, so it does not invalidate the experiment.
 - No engine other than the Claude harness on an `anthropic` lease (3.2).
 - No move of push, PR or CI work from the prompt into adapter code. That is the
   second half of P7 and waits for a result.
