@@ -55,7 +55,10 @@ its call in `runTask`) and the new block reasons in Argus.
   variables are dropped, `GIT_CEILING_DIRECTORIES` is the workspaces root,
   system config is off, hooks go to `/dev/null`, fsmonitor is off, `git init`
   uses an empty template, and origin is read with `git config --file` (no
-  includes).
+  includes). Each workspace sets `core.hooksPath` to
+  `/usr/local/lib/argus/git-hooks` (the image directory that contains
+  `commit-msg`) so the agent image's commit-msg hook runs for worker commits; the host still passes `-c core.hooksPath=/dev/null` on its
+  own git invocations so preparation never executes worker hooks.
 
 ## 3.2 Lifecycle
 
@@ -70,8 +73,13 @@ its call in `runTask`) and the new block reasons in Argus.
    directory into place. A workspace is therefore either absent or complete.
    When a concurrent prepare of the same task wins the rename, the loser
    removes only its own temporary directory and validates the winner's.
-4. Later attempts: the workspace exists and is validated read-only (3.4). It is
-   reported with `created: false` and nothing in it changes.
+4. Later attempts: the workspace exists. Validation (3.4) runs read-only first;
+   on failure nothing changes. When validation passes, the channel may set
+   `core.hooksPath` to `/usr/local/lib/argus/git-hooks` if it is missing or
+   wrong (worker-facing config only; host git still disables hooks). A
+   concurrent first prepare that loses the rename runs the same adoption step
+   after validation so mixed-version races still pick up the hook path. The
+   workspace is reported with `created: false`.
 5. Then the continuation preflight and injection run as before. The prompt
    carries: `Workspace: <container path>, branch <branch>, remote origin <url>;
    run git fetch and work in this directory; do not create another checkout.`
@@ -96,7 +104,10 @@ its call in `runTask`) and the new block reasons in Argus.
 
 ## 3.4 Validation and failure reasons
 
-Validation reads and never writes. In order: the workspace is a real directory
+Validation reads only and never writes. A failed prepare leaves the workspace
+tree unchanged (including `.git/config`). After validation succeeds on an
+existing workspace, the channel may update `core.hooksPath` when needed (3.2
+step 4). In order: the workspace is a real directory
 (not a symlink) whose real path is directly under the real workspaces root;
 `.git` is a real directory and `git rev-parse --absolute-git-dir` names it;
 origin is set exactly once and equals the expected URL; HEAD is

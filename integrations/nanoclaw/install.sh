@@ -599,6 +599,7 @@ python3 "$here/patch-no-session-ceiling.py" "$target"
 # Raise-only OOM priority and CPU-count shims for harness command shells (agent-resource-hygiene.spec.md).
 # The shim files ship in the agent image (engines/Dockerfile.tools-layer); this wires session containers to them.
 python3 "$here/patch-agent-resource-hygiene.py" "$target"
+python3 "$here/patch-git-worker-attribution.py" "$target"
 
 # Harness system prompt: no Co-Authored-By / attribution trailers in commit messages (worker-lifecycle spec 3.8).
 python3 "$here/patch-commit-trailers.py" "$target"

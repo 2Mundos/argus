@@ -15,6 +15,8 @@ const run = promisify(execFile);
 
 /** Below the agent group directory; the session container sees it under /workspace/agent. */
 export const TASK_WORKSPACES_DIR = "task-workspaces";
+/** Commit-msg hook directory baked into the agent image (worker-lifecycle 3.8). */
+export const WORKER_GIT_HOOKS_PATH = "/usr/local/lib/argus/git-hooks";
 const CONTAINER_GROUP_DIR = "/workspace/agent";
 const DEFAULT_MAX_WORKSPACES = 200;
 const GIT_TIMEOUT_MS = 30_000;
@@ -152,6 +154,22 @@ async function validate(
   return null;
 }
 
+/** After validation succeeds, ensure worker hooksPath (idempotent). */
+async function adoptExistingWorkspace(ws: string, realRoot: string, git: GitRunner): Promise<void> {
+  await ensureWorkerGitHooks(await realpath(ws), realRoot, git);
+}
+
+/** Point the workspace at the image-managed commit-msg hook (host git keeps hooks disabled). */
+async function ensureWorkerGitHooks(ws: string, realRoot: string, git: GitRunner): Promise<void> {
+  const cfg = await git(
+    ["config", "--file", path.join(ws, ".git", "config"), "--get", "core.hooksPath"],
+    ws,
+    realRoot,
+  ).catch(() => "");
+  if (cfg.trim() === WORKER_GIT_HOOKS_PATH) return;
+  await git(["config", "core.hooksPath", WORKER_GIT_HOOKS_PATH], ws, realRoot);
+}
+
 /** Task directories only: hidden temporary directories of a prepare in flight do not count. */
 async function countWorkspaces(root: string): Promise<number> {
   const entries = await readdir(root, { withFileTypes: true });
@@ -213,7 +231,12 @@ export async function prepareTaskWorkspace(opts: {
         throw err;
       },
     );
-    if (exists) return (await validate(ws, realRoot, repositoryUrl, branch, git)) ?? done(false);
+    if (exists) {
+      const validationError = await validate(ws, realRoot, repositoryUrl, branch, git);
+      if (validationError) return validationError;
+      await adoptExistingWorkspace(ws, realRoot, git);
+      return done(false);
+    }
     const max = opts.maxWorkspaces ?? maxWorkspacesFromEnv();
     const count = await countWorkspaces(realRoot);
     if (count >= max)
@@ -227,6 +250,7 @@ export async function prepareTaskWorkspace(opts: {
       await git(["init", "-q", "--template=", tmp], realRoot, realRoot);
       await git(["symbolic-ref", "HEAD", `refs/heads/${branch}`], tmp, realRoot);
       await git(["remote", "add", "origin", repositoryUrl], tmp, realRoot);
+      await ensureWorkerGitHooks(tmp, realRoot, git);
       try {
         await rename(tmp, ws);
         return done(true);
@@ -237,7 +261,10 @@ export async function prepareTaskWorkspace(opts: {
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
-    return (await validate(ws, realRoot, repositoryUrl, branch, git)) ?? done(false);
+    const validationError = await validate(ws, realRoot, repositoryUrl, branch, git);
+    if (validationError) return validationError;
+    await adoptExistingWorkspace(ws, realRoot, git);
+    return done(false);
   } catch (err) {
     if (isPermission(err)) return fail("env_workspace_permission", String(err));
     return fail("env_workspace_invalid", String(err));

@@ -39,6 +39,7 @@ import {
   TASK_WORKSPACES_DIR,
   taskBranch,
   taskWorkspacePath,
+  WORKER_GIT_HOOKS_PATH,
 } from "./argus-workspace.js";
 
 const run = promisify(execFile);
@@ -378,7 +379,8 @@ async function openWorkspace(
 
 // The workspace's own git config is written by the worker, yet git runs on the host here:
 // `diff` runs `filter.*.clean`, `log` runs `gpg.program` under `log.showSignature`,
-// `core.worktree` points git at host files. Only keys known to be inert are accepted.
+// `core.worktree` points git at host files. Only inert keys or the fixed worker hook path
+// (always overridden by host git) are accepted.
 const INERT_CONFIG = [
   /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|quotepath|checkstat|trustctime|untrackedcache)$/,
   /^remote\..+\.(url|pushurl|fetch|push|tagopt|prune)$/,
@@ -402,7 +404,8 @@ async function assertInertGit(ctx: WorkspaceCtx, git: GitRunner): Promise<void> 
     throw new Failure("env_checkpoint_invalid", "the workspace git config is unreadable");
   });
   for (const entry of z(listed)) {
-    const key = entry.split("\n", 1)[0];
+    const [key, value] = entry.split("\n", 2);
+    if (key === "core.hookspath" && value === WORKER_GIT_HOOKS_PATH) continue;
     if (!INERT_CONFIG.some((re) => re.test(key)))
       throw new Failure(
         "env_checkpoint_invalid",

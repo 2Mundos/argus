@@ -71,6 +71,7 @@ def test_missing_canon_fails_closed(tmp_path: Path) -> None:
 def test_install_sh_runs_the_patch() -> None:
     script = (SCRIPT.parent / "install.sh").read_text()
     assert 'python3 "$here/patch-commit-trailers.py" "$target"' in script
+    assert 'python3 "$here/patch-git-worker-attribution.py" "$target"' in script
 
 
 def test_harness_paths_reach_the_rule_or_name_the_delegate_gap(tmp_path: Path) -> None:
