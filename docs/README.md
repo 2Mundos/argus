@@ -302,6 +302,9 @@ every new dependency is judged against it.
 
 ### Reports
 
+- [Single-layer experiment QA receipt (2026-11-04)](reports/2026-11-04.single-layer-experiment-qa.ref.md) —
+  independent verification of merged PR #200 on `82581df`: exact-head CI, gates,
+  each acceptance criterion, and the two `pr_opened` emitters; no host run, no result
 - [Session quota recovery (2026-10-30)](reports/2026-10-30.session-quota-recovery.ref.md) —
   commit `64b8d8c` unrecoverable; reimplemented pool→`CONTAINER_*_LIMIT` propagation,
   `session_quota` evidence, Docker ASSIST runbook; live daemon still a blocker
