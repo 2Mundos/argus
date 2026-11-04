@@ -25,5 +25,7 @@ describe("parseRoute", () => {
     expect(parseRoute()).toEqual({ tab: "tasks", taskId: "abc" });
     window.location.hash = "#inbox";
     expect(parseRoute()).toEqual({ tab: "inbox" });
+    window.location.hash = "#projects";
+    expect(parseRoute()).toEqual({ tab: "projects" });
   });
 });

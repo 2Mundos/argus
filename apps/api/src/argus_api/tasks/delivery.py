@@ -155,6 +155,15 @@ def canonical_repository_url(raw: str) -> str | None:
     return url
 
 
+def canonical_identity(raw: str) -> tuple[str, str, str] | None:
+    """The (host, owner, repo) of a repository value Argus can use: it must survive
+    `canonical_repository_url` (HTTPS, no credentials, a real `owner/repo`). Every
+    resolver of a project's repository goes through this, so a value one accepts
+    (create, delivery) is one the others (claim, stats) accept too."""
+    canonical = canonical_repository_url(raw)
+    return parse_repository(canonical) if canonical else None
+
+
 def _from_url(text: str, allowed: set[tuple[str, str, str]]) -> list[PrRef]:
     out = []
     for m in _URL.finditer(text):
@@ -204,10 +213,11 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
-async def repositories(conn: aiosqlite.Connection) -> dict[str, tuple[str, str, str]]:
-    """project -> repository. A project's own record is authoritative; otherwise the
-    pools' explicit allowlist, where a project the pools disagree on is dropped:
-    the repository is not proven."""
+async def pool_repository_sets(
+    conn: aiosqlite.Connection,
+) -> dict[str, set[tuple[str, str, str]]]:
+    """project -> every distinct repository identity the pools' allowlists name for it
+    (invalid legacy values and `global` skipped). One pool read for all projects."""
     found: dict[str, set[tuple[str, str, str]]] = {}
     for pool in await fleet.list_pools(conn):
         if pool.nanoclaw is None:
@@ -215,8 +225,16 @@ async def repositories(conn: aiosqlite.Connection) -> dict[str, tuple[str, str, 
         for project, url in pool.nanoclaw.repositories.items():
             if project == "global":
                 continue
-            if repo := parse_repository(url):
+            if repo := canonical_identity(url):
                 found.setdefault(project, set()).add(repo)
+    return found
+
+
+async def repositories(conn: aiosqlite.Connection) -> dict[str, tuple[str, str, str]]:
+    """project -> repository. A project's own record is authoritative; otherwise the
+    pools' explicit allowlist, where a project the pools disagree on is dropped:
+    the repository is not proven."""
+    found = await pool_repository_sets(conn)
     proven = {p: next(iter(r)) for p, r in found.items() if len(r) == 1}
     async with conn.execute(
         "SELECT slug, repository_url FROM projects WHERE repository_url IS NOT NULL"
@@ -224,7 +242,7 @@ async def repositories(conn: aiosqlite.Connection) -> dict[str, tuple[str, str, 
         for slug, url in await cur.fetchall():
             if slug == "global":
                 continue
-            if repo := parse_repository(url):
+            if repo := canonical_identity(url):
                 proven[slug] = repo
     return proven
 
@@ -249,14 +267,7 @@ async def pool_repository(conn: aiosqlite.Connection, project: str) -> str | Non
     """The one URL every pool allowlist that names `project` agrees on, else None."""
     if project == "global":
         return None
-    repos: set[tuple[str, str, str]] = set()
-    for pool in await fleet.list_pools(conn):
-        if (
-            pool.nanoclaw
-            and project in pool.nanoclaw.repositories
-            and (repo := parse_repository(pool.nanoclaw.repositories[project]))
-        ):
-            repos.add(repo)
+    repos = (await pool_repository_sets(conn)).get(project, set())
     if len(repos) != 1:
         return None
     host, owner, name = next(iter(repos))

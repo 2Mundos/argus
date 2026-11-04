@@ -1860,6 +1860,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Project Stats
+         * @description Per-project counts and the repository workers would resolve (not for workers:
+         *     it spans every project).
+         */
+        get: operations["project_stats_api_projects_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{slug}": {
         parameters: {
             query?: never;
@@ -1875,6 +1896,27 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/repository": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set Project Repository
+         * @description Admin only: set (or with null clear) just the repository. Unlike the full PUT it
+         *     never touches name or description, so it cannot overwrite a concurrent edit.
+         */
+        patch: operations["set_project_repository_api_projects__slug__repository_patch"];
         trace?: never;
     };
     "/api/projects/{slug}/routines": {
@@ -7504,7 +7546,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "answer_decision" | "escalate_to_human" | "unblock_task" | "retry_dependency" | "inspect_stall" | "reread" | "none";
+            action: "answer_decision" | "escalate_to_human" | "unblock_task" | "set_project_repository" | "retry_dependency" | "inspect_stall" | "reread" | "none";
             /** Args */
             args: {
                 [key: string]: string;
@@ -8465,6 +8507,41 @@ export interface components {
             runs: number;
             /** Unpriced Runs */
             unpriced_runs: number;
+        };
+        /**
+         * ProjectRepositoryChange
+         * @description Change only a project's repository; name and description are untouched.
+         */
+        ProjectRepositoryChange: {
+            /** Repository Url */
+            repository_url: string | null;
+        };
+        /**
+         * ProjectStats
+         * @description What Argus holds for one project, counted from its own tables (never
+         *     estimated). `repository_url` is the one Argus resolves at claim and
+         *     `repository_source` says how: `project` (its record), `pools` (every pool that
+         *     names it agrees), `conflict` (pools name different repositories, so Argus picks
+         *     none; a worker whose own pool names it may still use that), `invalid` (the
+         *     stored value is unusable and no pool supplies one) or None (nothing names one).
+         */
+        ProjectStats: {
+            /** Archived Tasks */
+            archived_tasks: number;
+            /** Knowledge Pages */
+            knowledge_pages: number;
+            /** Last Task Activity At */
+            last_task_activity_at: string | null;
+            /** Repository Source */
+            repository_source: ("project" | "pools" | "conflict" | "invalid") | null;
+            /** Repository Url */
+            repository_url: string | null;
+            /** Slug */
+            slug: string;
+            /** Tasks */
+            tasks: {
+                [key: string]: number;
+            };
         };
         /** ProjectUpsert */
         ProjectUpsert: {
@@ -14626,6 +14703,26 @@ export interface operations {
             };
         };
     };
+    project_stats_api_projects_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectStats"][];
+                };
+            };
+        };
+    };
     upsert_project_api_projects__slug__put: {
         parameters: {
             query?: never;
@@ -14638,6 +14735,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ProjectUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_repository_api_projects__slug__repository_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectRepositoryChange"];
             };
         };
         responses: {

@@ -12897,6 +12897,7 @@
               "answer_decision",
               "escalate_to_human",
               "unblock_task",
+              "set_project_repository",
               "retry_dependency",
               "inspect_stall",
               "reread",
@@ -15498,6 +15499,102 @@
           "project"
         ],
         "title": "ProjectCost",
+        "type": "object"
+      },
+      "ProjectRepositoryChange": {
+        "description": "Change only a project's repository; name and description are untouched.",
+        "properties": {
+          "repository_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Url"
+          }
+        },
+        "required": [
+          "repository_url"
+        ],
+        "title": "ProjectRepositoryChange",
+        "type": "object"
+      },
+      "ProjectStats": {
+        "description": "What Argus holds for one project, counted from its own tables (never\nestimated). `repository_url` is the one Argus resolves at claim and\n`repository_source` says how: `project` (its record), `pools` (every pool that\nnames it agrees), `conflict` (pools name different repositories, so Argus picks\nnone; a worker whose own pool names it may still use that), `invalid` (the\nstored value is unusable and no pool supplies one) or None (nothing names one).",
+        "properties": {
+          "archived_tasks": {
+            "title": "Archived Tasks",
+            "type": "integer"
+          },
+          "knowledge_pages": {
+            "title": "Knowledge Pages",
+            "type": "integer"
+          },
+          "last_task_activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Task Activity At"
+          },
+          "repository_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "project",
+                  "pools",
+                  "conflict",
+                  "invalid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Source"
+          },
+          "repository_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Url"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "tasks": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tasks",
+            "type": "object"
+          }
+        },
+        "required": [
+          "slug",
+          "repository_url",
+          "repository_source",
+          "tasks",
+          "archived_tasks",
+          "last_task_activity_at",
+          "knowledge_pages"
+        ],
+        "title": "ProjectStats",
         "type": "object"
       },
       "ProjectUpsert": {
@@ -29782,6 +29879,37 @@
         ]
       }
     },
+    "/api/projects/stats": {
+      "get": {
+        "description": "Per-project counts and the repository workers would resolve (not for workers:\nit spans every project).",
+        "operationId": "project_stats_api_projects_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectStats"
+                  },
+                  "title": "Response Project Stats Api Projects Stats Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Project Stats",
+        "tags": [
+          "knowledge"
+        ]
+      }
+    },
     "/api/projects/{slug}": {
       "put": {
         "operationId": "upsert_project_api_projects__slug__put",
@@ -29835,6 +29963,65 @@
           }
         ],
         "summary": "Upsert Project",
+        "tags": [
+          "knowledge"
+        ]
+      }
+    },
+    "/api/projects/{slug}/repository": {
+      "patch": {
+        "description": "Admin only: set (or with null clear) just the repository. Unlike the full PUT it\nnever touches name or description, so it cannot overwrite a concurrent edit.",
+        "operationId": "set_project_repository_api_projects__slug__repository_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectRepositoryChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Project Repository",
         "tags": [
           "knowledge"
         ]

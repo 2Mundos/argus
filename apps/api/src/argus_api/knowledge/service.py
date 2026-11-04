@@ -8,7 +8,7 @@ revision. The FTS index is updated in the same transaction as each publish.
 import json
 import re
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import aiosqlite
@@ -22,6 +22,7 @@ from argus_core.knowledge import (
     PageListItem,
     PageRestore,
     Project,
+    ProjectStats,
     ProjectUpsert,
     Proposal,
     ProposalState,
@@ -34,11 +35,12 @@ from argus_core.tasks import Task
 
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
-from argus_api.errors import ConflictError, NotFoundError
+from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.events import record
 
 DEFAULT_STALE_AFTER = timedelta(days=30)
 REFS_ON_CLAIM = 5
+RepositorySource = Literal["project", "pools", "conflict", "invalid"]
 
 # -- projects ----------------------------------------------------------------------
 
@@ -54,6 +56,90 @@ async def get_project(conn: aiosqlite.Connection, slug: str) -> Project:
     if row is None:
         raise NotFoundError(f"unknown project: {slug}", code="unknown_project")
     return Project.model_validate(dict(row))
+
+
+async def project_stats(conn: aiosqlite.Connection) -> list[ProjectStats]:
+    """Counts per project, straight from the tables, plus the repository a worker
+    would resolve at claim (the project's record, else the pools' agreement)."""
+    # Lazy: the delivery module imports the fleet, which imports the task service.
+    from argus_api.tasks import delivery
+
+    live: dict[str, dict[str, int]] = {}
+    archived: dict[str, int] = {}
+    last: dict[str, str] = {}
+    async with conn.execute(
+        "SELECT project, state, archived_at IS NOT NULL, count(*), max(updated_at)"
+        " FROM tasks GROUP BY project, state, archived_at IS NOT NULL"
+    ) as cur:
+        for project, state, is_archived, n, newest in await cur.fetchall():
+            if is_archived:
+                archived[project] = archived.get(project, 0) + n
+            else:
+                live.setdefault(project, {})[state] = n
+            last[project] = max(last.get(project, ""), newest)
+    async with conn.execute(
+        "SELECT project, count(*) FROM knowledge_pages WHERE state = 'active'"
+        " GROUP BY project"
+    ) as cur:
+        pages = {str(slug): int(n) for slug, n in await cur.fetchall()}
+    pool_sets = await delivery.pool_repository_sets(conn)  # one pool read for all
+    stats = []
+    for project in await list_projects(conn):
+        slug = project.slug
+        url: str | None = None
+        source: RepositorySource | None = None
+        if slug != "global":
+            named = pool_sets.get(slug, set())
+            if project.repository_url and (
+                url := delivery.canonical_repository_url(project.repository_url)
+            ):
+                source = "project"
+            elif len(named) == 1:
+                host, owner, name = next(iter(named))
+                url, source = f"https://{host}/{owner}/{name}", "pools"
+            elif project.repository_url:
+                source = "invalid"  # a stored value no worker can use
+            elif len(named) > 1:
+                source = "conflict"  # pools name different repositories
+        stats.append(
+            ProjectStats(
+                slug=slug,
+                repository_url=url,
+                repository_source=source,
+                tasks=live.get(slug, {}),
+                archived_tasks=archived.get(slug, 0),
+                last_task_activity_at=last.get(slug) or None,
+                knowledge_pages=pages.get(slug, 0),
+            )
+        )
+    return stats
+
+
+async def set_repository(
+    tx: Tx, slug: str, repository_url: str | None, actor: str
+) -> Project:
+    """Change only `repository_url`, in the caller's transaction: the row's name and
+    description are never read or written, so a concurrent edit of them survives."""
+    if slug == "global":
+        raise ValidationFailedError(
+            "global holds knowledge and settings only; it has no repository",
+            code="project_global",
+        )
+    cur = await tx.conn.execute(
+        "UPDATE projects SET repository_url = ?, updated_at = ? WHERE slug = ?",
+        (repository_url, ts(tx.now), slug),
+    )
+    if cur.rowcount == 0:
+        raise NotFoundError(f"unknown project: {slug}", code="unknown_project")
+    await record(
+        tx,
+        actor,
+        "project",
+        slug,
+        "project.repository_set",
+        {"repository_url": repository_url},
+    )
+    return await get_project(tx.conn, slug)
 
 
 async def upsert_project(

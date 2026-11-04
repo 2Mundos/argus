@@ -13,15 +13,17 @@ const mock = vi.hoisted(() => ({
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
   call: async (path: string) =>
-    path.includes("/models")
-      ? mock.trace
-      : path.includes("delivery")
-        ? null
-        : path.includes("artifacts")
-          ? mock.artifacts
-          : path.includes("events")
-            ? mock.events
-            : mock.task,
+    path.includes("projects/stats")
+      ? []
+      : path.includes("/models")
+        ? mock.trace
+        : path.includes("delivery")
+          ? null
+          : path.includes("artifacts")
+            ? mock.artifacts
+            : path.includes("events")
+              ? mock.events
+              : mock.task,
   download: vi.fn(),
 }));
 vi.mock("../live", async () => {

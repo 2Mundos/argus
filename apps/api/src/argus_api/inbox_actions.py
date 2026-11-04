@@ -61,6 +61,7 @@ Action = Literal[
     "answer_decision",
     "escalate_to_human",
     "unblock_task",
+    "set_project_repository",
     "retry_dependency",
     "inspect_stall",
     "reread",
@@ -460,6 +461,21 @@ def _next(
     args = {"task_id": task.id}
     if task.state is TaskState.BLOCKED:
         why, _ = _short(task.block_reason or "unknown")
+        if task.block_reason == "env_repository_unconfigured":
+            # Only an admin may point a project at a repository (it decides where a
+            # credential is sent); anyone else hands it to a human.
+            args = {"task_id": task.id, "project": task.project}
+            if authority.caller_role is Scope.ADMIN:
+                return NextAction(
+                    action="set_project_repository",
+                    args=args,
+                    reason="the project has no repository: set one, then unblock_task",
+                )
+            return NextAction(
+                action="escalate_to_human",
+                args=args,
+                reason="the project has no repository and only an admin can set one",
+            )
         return NextAction(
             action="unblock_task",
             args=args,

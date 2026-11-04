@@ -24,10 +24,38 @@ class ProjectUpsert(BaseModel):
         return None if value is None else validate_repository_url(value)
 
 
+class ProjectRepositoryChange(BaseModel):
+    """Change only a project's repository; name and description are untouched."""
+
+    repository_url: str | None  # required: null clears it
+
+    @field_validator("repository_url")
+    @classmethod
+    def repository_url_shape(cls, value: str | None) -> str | None:
+        return None if value is None else validate_repository_url(value)
+
+
 class Project(ProjectUpsert):
     slug: str
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectStats(BaseModel):
+    """What Argus holds for one project, counted from its own tables (never
+    estimated). `repository_url` is the one Argus resolves at claim and
+    `repository_source` says how: `project` (its record), `pools` (every pool that
+    names it agrees), `conflict` (pools name different repositories, so Argus picks
+    none; a worker whose own pool names it may still use that), `invalid` (the
+    stored value is unusable and no pool supplies one) or None (nothing names one)."""
+
+    slug: str
+    repository_url: str | None
+    repository_source: Literal["project", "pools", "conflict", "invalid"] | None
+    tasks: dict[str, int]  # live (unarchived) tasks by state; absent state: none
+    archived_tasks: int
+    last_task_activity_at: datetime | None  # newest task update; None: no tasks
+    knowledge_pages: int  # active pages
 
 
 class Source(BaseModel):

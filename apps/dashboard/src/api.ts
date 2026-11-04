@@ -15,6 +15,7 @@ export type ArgusEvent = components["schemas"]["EventOut"];
 export type Artifact = components["schemas"]["Artifact"];
 export type TaskKind = components["schemas"]["TaskKind"];
 export type Project = components["schemas"]["Project"];
+export type ProjectStats = components["schemas"]["ProjectStats"];
 export type Page = components["schemas"]["Page"];
 export type PageListItem = components["schemas"]["PageListItem"];
 export type Revision = components["schemas"]["Revision"];
