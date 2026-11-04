@@ -30,7 +30,7 @@ gspec.loader.exec_module(guard)
 
 ARGUS_GIT = ENGINES / "argus-git"
 HOOK = ENGINES / "git-hooks" / "commit-msg"
-REAL = shutil.which("git") or "/usr/bin/git"
+REAL = "/usr/bin/git" if Path("/usr/bin/git").exists() else shutil.which("git")
 
 
 def _env() -> dict[str, str]:
@@ -473,3 +473,90 @@ def test_wrapper_rejects_core_hooks_path_override(tmp_path: Path) -> None:
     editor = _run_git(repo, env, "-c", "core.hooksPath=/dev/null", "commit")
     assert editor.returncode != 0
     assert "hooksPath" in editor.stderr
+
+
+@pytest.mark.parametrize(
+    ("argv", "blocked"),
+    [
+        (["commit", "-m", "ok"], False),
+        (["-c", "user.email=x", "commit", "-m", "ok"], True),
+        (["-c", "Committer.Name=x", "status"], True),
+        (["commit", "--author=A <a@b.c>", "-m", "ok"], True),
+        (["commit", "--author", "A <a@b.c>", "-m", "ok"], True),
+        (["config", "user.name", "X"], True),
+        (["config", "--global", "--unset", "author.email"], True),
+        (["config", "set", "user.name", "X"], True),
+        (["config", "--get", "user.name"], False),
+        (["config", "--list"], False),
+        (["config", "get", "user.name"], False),
+    ],
+)
+def test_gate_identity_overrides(argv: list[str], blocked: bool) -> None:
+    err = attribution.gate_git(".", argv)
+    assert (err is not None) == blocked
+    if err:
+        assert err.startswith("Argus rejects this git command:")
+
+
+def test_gate_rejects_identity_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "")
+    err = attribution.gate_git(".", ["commit", "-m", "ok"])
+    assert err and err.startswith("Argus rejects this git command:")
+
+
+@pytest.mark.parametrize(
+    ("command", "blocked"),
+    [
+        ("git commit -m ok", False),
+        ("GIT_COMMITTER_EMAIL=x git commit -m ok", True),
+        ("export GIT_AUTHOR_NAME=x", True),
+        ("git config user.email x@y.z && git status", True),
+        ("git config --get user.email", False),
+    ],
+)
+def test_bash_identity_overrides(command: str, blocked: bool) -> None:
+    assert (attribution.check_bash_command(command) is not None) == blocked
+
+
+def test_wrapper_pins_configured_identity(tmp_path: Path) -> None:
+    if not REAL:
+        pytest.skip("git not installed")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run([REAL, "init", "-q"], cwd=repo, check=True)
+    (repo / "a").write_text("1\n")
+    subprocess.run([REAL, "add", "a"], cwd=repo, check=True)
+    env = {
+        k: v
+        for k, v in _env().items()
+        if not k.startswith(("GIT_", "ARGUS_GIT_AUTHOR"))
+    }
+    env.update(
+        ARGUS_GIT_AUTHOR_NAME="Configured Author",
+        ARGUS_GIT_AUTHOR_EMAIL="configured@example.invalid",
+        GIT_CONFIG_GLOBAL="/dev/null",
+        GIT_CONFIG_NOSYSTEM="1",
+    )
+    bad = _run_git(repo, {**env, "GIT_AUTHOR_NAME": "Mallory"}, "commit", "-m", "msg")
+    assert bad.returncode != 0
+    assert (
+        subprocess.run(
+            [REAL, "rev-parse", "-q", "--verify", "HEAD"],
+            cwd=repo,
+            env=env,
+            check=False,
+        ).returncode
+        != 0
+    )
+    ok = _run_git(repo, env, "commit", "-m", "msg")
+    assert ok.returncode == 0, ok.stderr
+    log = subprocess.run(
+        [REAL, "log", "-1", "--format=%an|%ae|%cn|%ce"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    who = "Configured Author|configured@example.invalid"
+    assert log.stdout.strip() == f"{who}|{who}"
