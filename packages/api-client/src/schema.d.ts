@@ -3587,6 +3587,7 @@ export interface components {
             /** Stall Cause */
             stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "paused_disk" | "unknown") | null;
             state: components["schemas"]["TaskState"] | null;
+            stuck?: components["schemas"]["Stuck"] | null;
             /** Subject Id */
             subject_id: string;
             /** Subject Type */
@@ -6565,6 +6566,7 @@ export interface components {
             /** Stall Cause */
             stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "paused_disk" | "unknown") | null;
             state: components["schemas"]["TaskState"] | null;
+            stuck?: components["schemas"]["Stuck"] | null;
             /** Subject Id */
             subject_id: string;
             /** Subject Type */
@@ -9592,6 +9594,29 @@ export interface components {
             attempt: number;
             /** Items */
             items?: components["schemas"]["Steer"][];
+        };
+        /**
+         * Stuck
+         * @description A task that kept the same block reason or progress past the threshold.
+         *     Advisory and derived on read; nothing sets or clears it.
+         */
+        Stuck: {
+            /** Age S */
+            age_s: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "block_reason" | "progress";
+            /** Reason */
+            reason: string;
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
+            /** Threshold S */
+            threshold_s: number;
         };
         /** SystemSummary */
         SystemSummary: {

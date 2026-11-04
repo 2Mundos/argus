@@ -1,6 +1,6 @@
 """Stuck-block flag on inbox rows (MCP operations 3.2): derived, read-only."""
 
-import asyncio
+import sqlite3
 from collections.abc import Generator
 from datetime import timedelta
 from pathlib import Path
@@ -24,7 +24,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestCli
         yield c
 
 
-def blocked_for(client: TestClient, hours: float) -> str:
+def blocked_for(client: TestClient, data_dir: Path, hours: float) -> str:
     """A task blocked as worker_env, its block backdated by `hours`."""
     worker = register(client)
     task = create(client)
@@ -35,16 +35,9 @@ def blocked_for(client: TestClient, hours: float) -> str:
         headers=worker,
     )
     assert res.status_code == 200, res.text
-    db = client.app.state.db  # ty: ignore[unresolved-attribute]
-
-    async def backdate() -> None:
-        async with db.write() as tx:
-            at = ts(utcnow() - timedelta(hours=hours))
-            await tx.conn.execute(
-                "UPDATE tasks SET updated_at = ? WHERE id = ?", (at, task["id"])
-            )
-
-    asyncio.run_coroutine_threadsafe(backdate(), client.portal.loop).result()  # ty: ignore[unresolved-attribute]
+    at = ts(utcnow() - timedelta(hours=hours))
+    with sqlite3.connect(data_dir / "argus.db") as conn:
+        conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (at, task["id"]))
     return task["id"]
 
 
@@ -54,9 +47,14 @@ def stuck_of(client: TestClient, task_id: str, **params) -> dict | None:
     return row["stuck"]
 
 
-def test_default_threshold_flags_old_blocks_only(client: TestClient) -> None:
-    assert ok(client.get("/api/settings/inbox.stuck_after_s"))["value"] == 21600
-    old, fresh = blocked_for(client, 7), blocked_for(client, 5)
+def test_default_threshold_flags_old_blocks_only(
+    client: TestClient, tmp_path: Path
+) -> None:
+    [definition] = [
+        d for d in ok(client.get("/api/settings/registry")) if d["key"] == KEY
+    ]
+    assert definition["default"] == 21600
+    old, fresh = blocked_for(client, tmp_path, 7), blocked_for(client, tmp_path, 5)
     stuck = stuck_of(client, old)
     assert stuck["kind"] == "block_reason" and stuck["reason"] == "worker_env"
     assert stuck["threshold_s"] == 21600
@@ -68,8 +66,8 @@ def test_default_threshold_flags_old_blocks_only(client: TestClient) -> None:
     assert row["stuck"]["reason"] == "worker_env"
 
 
-def test_setting_moves_the_cutoff(client: TestClient) -> None:
-    task = blocked_for(client, 2)
+def test_setting_moves_the_cutoff(client: TestClient, tmp_path: Path) -> None:
+    task = blocked_for(client, tmp_path, 2)
     assert stuck_of(client, task) is None
     res = client.put(f"/api/settings/{KEY}", json={"value": 3600})
     assert res.status_code == 200, res.text

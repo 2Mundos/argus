@@ -1214,7 +1214,8 @@ async def get_inbox(
     has `blocks` (the tasks it holds up) and `impact`; `groups` count open decisions,
     oldest age and stalled tasks per project/task. blocking_only=true keeps rows that
     block a task. `stuck` {kind, reason, since, age_s, threshold_s} marks a task that kept the
-    same block reason or progress for inbox.stuck_after_s (default 6h). Totals by state and decision kind cover every match. view=detail
+    same block reason or progress for inbox.stuck_after_s (default 6h). Totals by state and
+    decision kind cover every match. view=detail
     adds each task and decision in full. view=actionable adds `actionable` per row
     (at most 25 rows, 64 KB): the question and spec excerpt (cut text names its
     full read), authority (`caller_may_attempt` is not a grant; the real call is

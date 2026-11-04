@@ -24,8 +24,8 @@ from argus_api.paging import (
     decode_cursor,
     encode_cursor,
 )
-from argus_api.tasks import service as tasks_service
 from argus_api.settings import service as settings_service
+from argus_api.tasks import service as tasks_service
 from argus_api.tasks import views as tasks
 from argus_api.tasks.views import TaskDetail
 
@@ -407,7 +407,7 @@ async def _stuck(snap: Snapshot, rows: list[Any], threshold_s: int) -> dict[str,
             age = max(0, int((snap.now - _at(at)).total_seconds()))
             if age >= threshold_s:
                 found[t["id"]] = Stuck(
-                    kind=kind,  # ty: ignore[invalid-argument-type]
+                    kind=kind,
                     reason=reason[:200],
                     since=_at(at),
                     age_s=age,
