@@ -311,7 +311,7 @@ class DockerTarget:
             TimeoutError
         ) as exc:  # the worker thread cannot be cancelled and finishes alone
             raise TargetError(f"docker call timed out after {deadline:g} s") from exc
-        except DockerException as exc:
+        except (DockerException, OSError) as exc:
             raise TargetError(str(exc)[:500]) from exc
 
     def _start(self, spec: ContainerSpec) -> str:
@@ -412,15 +412,19 @@ class DockerTarget:
         """Create a bind-mount source owned by the instance user.
 
         Prefer host-side mkdir/chown when this process shares the daemon's
-        filesystem (local unix socket). For a remote daemon, run a one-shot
-        container that mounts only the parent directory and invokes mkdir/chown
-        as argv (no shell).
+        filesystem (local unix socket) and may write there. Otherwise (a remote
+        daemon, or an unprivileged process such as the launcher's container) run
+        a one-shot container that mounts only the parent directory and invokes
+        mkdir/chown as argv (no shell).
         """
         if not mount.create_owner:
             return
         if self._local_unix_daemon():
-            self._prepare_dir_on_host(mount)
-            return
+            try:
+                self._prepare_dir_on_host(mount)
+                return
+            except PermissionError:
+                pass
         self._prepare_dir_remote(client, image, mount)
 
     def _local_unix_daemon(self) -> bool:

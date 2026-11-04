@@ -239,6 +239,40 @@ def test_prepare_dir_uses_host_side_on_local_daemon(
     assert client.containers.run.call_count == 0
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_prepare_dir_falls_back_to_a_helper_when_the_host_side_is_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The launcher's API container runs as nobody on a local socket: it cannot
+    # create the instance directory under the operator's instances root.
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    root = tmp_path / "i"
+    root.mkdir(mode=0o555)
+    work = root / "i-1"
+    mount = Mount(str(work), str(work), "rw", create_owner="1000:1000")
+    client = MagicMock()
+    DockerTarget(host=None)._prepare_dir(client, "img:1", mount)
+    entrypoints = [c.kwargs["entrypoint"] for c in client.containers.run.call_args_list]
+    assert entrypoints == [
+        ["/bin/mkdir", "-p", str(work)],
+        ["/bin/chown", "1000:1000", str(work)],
+    ]
+
+
+async def test_an_os_error_in_a_start_is_a_target_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argus_api.fleet.targets import ContainerSpec, TargetError
+
+    def denied(_spec: ContainerSpec) -> str:
+        raise PermissionError(13, "Permission denied", "/srv/nc/i/i-1")
+
+    target = DockerTarget(host=None)
+    monkeypatch.setattr(target, "_start", denied)
+    with pytest.raises(TargetError, match="Permission denied"):
+        await target.start(MagicMock(spec=ContainerSpec))
+
+
 def test_prepare_dir_remote_avoids_shell() -> None:
     target = DockerTarget(host="tcp://remote:2375?tls=true")
     client = MagicMock()
