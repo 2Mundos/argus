@@ -436,6 +436,10 @@ label.check input {
   font-weight: 600;
   line-height: 1;
 }
+a.brand {
+  color: inherit;
+  text-decoration: none;
+}
 .brand img {
   display: block;
   width: 2.35rem;
@@ -1884,9 +1888,94 @@ main > section.chat-page.chat-off {
   flex: 1;
 }
 .chat-thread-head {
+  /* Room for the corner delete button, so a long title never runs under it. */
+  padding: 0 2.4rem;
   display: grid;
   justify-items: center;
   gap: 0.15rem;
+}
+.chat-deleted {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+}
+.chat-deleted .error {
+  flex: 1 0 100%;
+}
+.chat-deleted-group {
+  margin-top: 0.6rem;
+}
+.chat-deleted-group summary {
+  padding: 0.35rem 0.6rem;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chat-deleted-group .chat-list-item {
+  color: var(--muted);
+}
+.chat-list-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+/* Appears on hover or keyboard focus; always there on touch, which cannot hover. */
+.chat-row-action {
+  position: absolute;
+  right: 0.3rem;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-2) 90%, var(--text));
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+  box-shadow: none;
+}
+.chat-list-row:hover .chat-row-action,
+.chat-row-action:focus-visible,
+.chat-row-action.is-pending {
+  opacity: 1;
+}
+.chat-row-action:hover {
+  color: var(--text);
+}
+@media (hover: none) {
+  .chat-row-action {
+    opacity: 1;
+  }
+}
+.chat-stage.chat-thread {
+  position: relative;
+}
+.chat-thread-delete {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.75rem;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+  cursor: pointer;
+}
+.chat-thread-delete:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 .chat-status {
   margin: 0;
@@ -2030,6 +2119,10 @@ main > section.chat-page.chat-off {
   }
   .chat-list-item {
     width: auto;
+    flex: 0 0 auto;
+    max-width: 14rem;
+  }
+  .chat-list-row {
     flex: 0 0 auto;
     max-width: 14rem;
   }

@@ -16,6 +16,21 @@ function deferred<T = void>() {
 }
 
 describe("ActionButton", () => {
+  it("swaps an icon-only button's icon for the spinner instead of showing both", () => {
+    const gate = deferred();
+    render(
+      <ActionButton iconOnly aria-label="Delete" action={() => gate.promise}>
+        <svg data-testid="icon" />
+      </ActionButton>,
+    );
+    const btn = screen.getByRole("button", { name: "Delete" });
+    expect(btn.querySelector("[data-testid=icon]")).not.toBeNull();
+    fireEvent.click(btn);
+    expect(btn.querySelector("[data-testid=icon]")).toBeNull();
+    expect(btn.querySelectorAll(".spinner")).toHaveLength(1);
+    gate.resolve();
+  });
+
   it("disables and sets aria-busy while the action runs", async () => {
     const gate = deferred();
     const action = vi.fn(() => gate.promise);

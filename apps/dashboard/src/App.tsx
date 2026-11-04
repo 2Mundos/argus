@@ -120,11 +120,16 @@ export function parseRoute(): Route {
 
 const ROUTE_HEADS = new Set(["tasks", "workers", "setup", ...Object.keys(TABS)]);
 
-/** The hash to rewrite an empty or invalid one to (onboarding 3.4), else null. */
+/** Where the app lands: Chat with the orchestrator on, the Dashboard without it (onboarding 3.4). */
+export function homeHash(orchestrator: boolean): string {
+  return orchestrator ? "#chat" : "#dashboard";
+}
+
+/** The hash to rewrite an empty or invalid one to, else null. */
 export function defaultHash(hash: string, orchestrator: boolean): string | null {
   const head = hash.replace(/^#/, "").split("/")[0] ?? "";
   if (ROUTE_HEADS.has(head) || head in LEGACY) return null;
-  return orchestrator ? "#chat" : "#dashboard";
+  return homeHash(orchestrator);
 }
 
 export function App() {
@@ -270,7 +275,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
     <WorkerPanelProvider selectedId={selectedWorker} openWorker={setSelectedWorker}>
       <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
         <aside className="nav-side">
-          <Brand as="strong" />
+          <Brand as="a" href={homeHash(onboarding?.orchestrator ?? false)} />
           <nav aria-label="Primary">
             <NavLink href="#chat" current={isCurrent("#chat", route)} label="Chat" />
             <NavLink href="#dashboard" current={isCurrent("#dashboard", route)} label="Dashboard" />

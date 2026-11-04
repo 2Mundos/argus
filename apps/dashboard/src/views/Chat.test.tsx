@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, Conversation, EngineCatalog, Instance, Message, Pool } from "../api";
 import { LiveProvider } from "../live";
@@ -9,7 +9,12 @@ type Req = { method: "GET" | "POST"; path: string; opts?: { body?: unknown; para
 
 const net = vi.hoisted(() => ({
   onboarding: { orchestrator: true } as { orchestrator: boolean },
-  conversations: [] as { id: string; title: string; cost_usd?: number | null }[],
+  conversations: [] as {
+    id: string;
+    title: string;
+    cost_usd?: number | null;
+    archived_at?: string | null;
+  }[],
   messages: {} as Record<string, unknown[]>,
   pools: [] as unknown[],
   instances: [] as unknown[],
@@ -38,6 +43,14 @@ vi.mock("../api", () => ({
         net.conversations = [conv, ...net.conversations];
         net.messages[id] = [];
         return conv;
+      }
+      if (req.path.endsWith("/archive") || req.path.endsWith("/unarchive")) {
+        const archiving = req.path.endsWith("/archive");
+        const id = req.opts?.params?.path?.conversation_id as string;
+        net.conversations = net.conversations.map((c) =>
+          c.id === id ? { ...c, archived_at: archiving ? "2026-10-30T00:00:00Z" : null } : c,
+        );
+        return {};
       }
       if (net.failMessages) throw new Error("orchestrator unavailable");
       const id = req.opts?.params?.path?.conversation_id as string;
@@ -322,6 +335,60 @@ describe("Chat thread", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Plan the release" }));
     expect(await screen.findByText("All green.")).toBeTruthy();
     expect(screen.queryByText(/this thread/)).toBeNull();
+  });
+});
+
+describe("Chat delete", () => {
+  const archivePosts = () => net.posts.filter((p) => /\/(un)?archive$/.test(p.path));
+  beforeEach(() => {
+    net.conversations = [conversation];
+    net.messages.c0 = [message("m1", "admin:tester", "Status?")];
+  });
+
+  it.each([
+    [
+      "the row",
+      (row: HTMLElement) => within(row).getByRole("button", { name: "Delete Plan the release" }),
+    ],
+    ["the thread", () => screen.getByRole("button", { name: "Delete chat" })],
+  ])(
+    "deletes from %s: archives the chat, goes home, lists it under Deleted",
+    async (_where, pick) => {
+      renderChat();
+      const open = await screen.findByRole("button", { name: "Plan the release" });
+      fireEvent.click(open);
+      expect(await screen.findByText("Status?")).toBeTruthy();
+      fireEvent.click(pick(open.parentElement as HTMLElement));
+      expect(await screen.findByText("What should we work on?")).toBeTruthy();
+      expect(archivePosts().map((p) => p.path)).toEqual([
+        "/api/conversations/{conversation_id}/archive",
+      ]);
+      expect(await screen.findByText("Deleted (1)")).toBeTruthy();
+    },
+  );
+
+  it("shows a deleted chat read-only and restores it", async () => {
+    net.conversations = [{ ...conversation, archived_at: "2026-10-30T00:00:00Z" }];
+    renderChat();
+    fireEvent.click(await screen.findByRole("button", { name: "Plan the release" }));
+    expect(await screen.findByText("This chat was deleted.")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete chat" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(await messageBox()).toBeTruthy();
+    expect(archivePosts().map((p) => p.path)).toEqual([
+      "/api/conversations/{conversation_id}/unarchive",
+    ]);
+    expect(screen.queryByText(/^Deleted \(/)).toBeNull();
+  });
+
+  it("does not offer Delete on the Updates conversation", async () => {
+    net.conversations = [{ ...conversation, kind: "updates", title: "Updates" } as never];
+    renderChat();
+    fireEvent.click(await screen.findByRole("button", { name: /Updates/ }));
+    expect(await screen.findByText("Status?")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Delete/ })).toBeNull();
   });
 });
 
