@@ -37,6 +37,20 @@ otherwise). `PATCH /api/projects/{slug}/repository` (admin only, body
 `{"repository_url": url|null}`, field required) changes just the repository in one
 write: it never reads or writes name or description, so it cannot overwrite a
 concurrent edit of them; the dashboard and MCP `set_project_repository` use it.
+`GET /api/projects/{slug}/repository` (MCP `get_project_repository`; workers only
+for leased projects) returns the repository Argus resolves (record, else the one
+every pool names) with `status` `configured`, `unset`, `ambiguous` or `invalid` and
+a `detail` naming the admin action, so an orchestrator never asks the user for a
+URL Argus stores; a stored value that is unusable is never echoed.
+`POST /api/projects/{slug}/checkout` (MCP `checkout_project_repository`;
+orchestrator and admin) starts a checkout: it creates a read-only task (no
+capability, response deliverable) whose isolated workspace
+`task-workspaces/<task id>` on branch `argus/task-<8 hex>` the worker channel
+prepares through the task-scoped repository lease ([project code
+availability](project-code-availability.spec.md)). It grants no write access and
+no credential reaches the caller; the caller follows the task to see the checkout
+finish. An unset, ambiguous or invalid repository is `409 repository_unset`,
+`repository_ambiguous` or `repository_invalid`.
 `global` has none (422 `project_global`); an unknown project is 404. `repository_url` is the project's code, the
 authoritative source for its repository: an HTTPS `owner/repository` URL without
 credentials, query or fragment (422 otherwise). Omitted from a PUT it is kept; an

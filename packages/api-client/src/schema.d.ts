@@ -1898,7 +1898,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{slug}/repository": {
+    "/api/projects/{slug}/checkout": {
         parameters: {
             query?: never;
             header?: never;
@@ -1906,6 +1906,35 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        put?: never;
+        /**
+         * Checkout Project
+         * @description Start a checkout of the project's configured repository: a read-only task
+         *     with no capability and no deliverable beyond a summary. The worker channel
+         *     prepares its isolated workspace through the task-scoped repository lease, so
+         *     this grants no write access and no credential reaches the caller.
+         */
+        post: operations["checkout_project_api_projects__slug__checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/repository": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Repository
+         * @description The repository Argus resolves for the project (its record, else the one every
+         *     pool names), or why there is none: `unset`, `ambiguous` or `invalid`. Workers
+         *     only read projects they have leased.
+         */
+        get: operations["get_project_repository_api_projects__slug__repository_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8472,6 +8501,40 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * ProjectCheckout
+         * @description A checkout in progress: a read-only task whose workspace the worker channel
+         *     prepares from the project's repository (project code availability spec).
+         */
+        ProjectCheckout: {
+            /**
+             * Access
+             * @default read
+             * @constant
+             */
+            access?: "read";
+            /** Branch */
+            branch: string;
+            /** Project */
+            project: string;
+            /** Ref */
+            ref: string | null;
+            /** Repository Url */
+            repository_url: string;
+            /** Task Id */
+            task_id: string;
+            /** Workspace */
+            workspace: string;
+        };
+        /**
+         * ProjectCheckoutRequest
+         * @description `ref`: the branch, tag or commit to base the work on; None is the
+         *     repository's default branch.
+         */
+        ProjectCheckoutRequest: {
+            /** Ref */
+            ref?: string | null;
+        };
         /** ProjectCost */
         ProjectCost: {
             /**
@@ -8509,6 +8572,30 @@ export interface components {
             runs: number;
             /** Unpriced Runs */
             unpriced_runs: number;
+        };
+        /**
+         * ProjectRepository
+         * @description The repository Argus resolves for one project, and why. `status`: `configured`
+         *     (`repository_url` is what a worker clones), `unset` (nothing names one),
+         *     `ambiguous` (pools name different repositories and the project has no record)
+         *     or `invalid` (the stored value is unusable). `source` is as in `ProjectStats`.
+         *     `detail` says what to do next; a stored value is never echoed when unusable,
+         *     because it may carry a credential.
+         */
+        ProjectRepository: {
+            /** Detail */
+            detail: string;
+            /** Project */
+            project: string;
+            /** Repository Source */
+            repository_source: ("project" | "pools" | "conflict" | "invalid") | null;
+            /** Repository Url */
+            repository_url: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "configured" | "unset" | "ambiguous" | "invalid";
         };
         /**
          * ProjectRepositoryChange
@@ -14770,6 +14857,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    checkout_project_api_projects__slug__checkout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCheckoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCheckout"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_repository_api_projects__slug__repository_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRepository"];
                 };
             };
             /** @description Validation Error */

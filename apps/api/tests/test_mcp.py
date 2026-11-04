@@ -1060,3 +1060,35 @@ def test_list_accounts_reports_auth_health_through_mcp(client: TestClient) -> No
     assert listed[lease]["last_accepted_at"] is None
     [other] = [a for i, a in listed.items() if i != lease]
     assert (other["last_rejected_at"], other["last_accepted_at"]) == (None, None)
+
+
+def test_orchestrator_reads_the_project_repository_and_starts_a_checkout(
+    client: TestClient,
+) -> None:
+    h = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+    url = "https://git.example/acme/api"
+    client.put(
+        "/api/projects/acme", json={"name": "Acme", "repository_url": url}, headers=h
+    )
+    client.put("/api/projects/bare", json={"name": "Bare"}, headers=h)
+    orchestrator = register(client, "orchestrator")
+    worker = register(client)
+    names = {"get_project_repository", "checkout_project_repository"}
+    assert names <= listed(client, orchestrator) and names <= listed(
+        client, ADMIN_TOKEN
+    )
+    assert listed(client, worker) & names == {"get_project_repository"}
+
+    read = tool(client, orchestrator, "get_project_repository", project="acme")
+    assert (read["status"], read["repository_url"]) == ("configured", url)
+    bare = tool(client, orchestrator, "get_project_repository", project="bare")
+    assert bare["status"] == "unset" and "set_project_repository" in bare["detail"]
+
+    done = tool(client, orchestrator, "checkout_project_repository", project="acme")
+    assert done["repository_url"] == url and done["access"] == "read"
+    assert done["workspace"] == f"task-workspaces/{done['task_id']}"
+    refused = tool(client, orchestrator, "checkout_project_repository", project="bare")
+    assert "no repository is configured" in refused["error"]
+    assert "error" in tool(
+        client, worker, "checkout_project_repository", project="acme"
+    )

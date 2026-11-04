@@ -2063,6 +2063,29 @@ async def run_local(
     )
 
 
+@tool(ANYONE)
+async def get_project_repository(ctx: Context, project: str) -> dict:
+    """The repository Argus resolves for a project: `status` configured (use
+    `repository_url`), unset, ambiguous (pools disagree) or invalid, with `detail`
+    saying what an admin must do. Read this instead of asking the user for a URL
+    Argus already stores. Workers may read only projects they have leased."""
+    return await _call(ctx, "GET", f"/projects/{project}/repository")
+
+
+@tool(MANAGERS)
+async def checkout_project_repository(
+    ctx: Context, project: str, ref: str | None = None
+) -> dict:
+    """Start a read-only checkout of the project's configured repository (`ref`:
+    branch, tag or commit; default the repository's default branch). It creates a
+    task that gets its own isolated workspace through the task-scoped repository
+    lease; the result names the repository, ref, task_id, workspace and branch.
+    It is initiated, not finished: follow the task with get_task before saying the
+    code is there. Refused with repository_unset, repository_ambiguous or
+    repository_invalid when the project has no usable repository."""
+    return await _call(ctx, "POST", f"/projects/{project}/checkout", json={"ref": ref})
+
+
 @tool(ADMINS)
 async def set_project_repository(
     ctx: Context, project: str, repository_url: str | None
