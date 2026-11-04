@@ -403,10 +403,19 @@ async def get_prerequisites(
 async def complete_task(
     task_id: str,
     body: CompleteRequest,
+    request: Request,
     db: DbDep,
     agent_id: AgentDep,
     settings: SettingsDep,
 ) -> Task:
+    # The forge is read here, before the write, for a PR the worker did not report.
+    search = await pr_binding.find_pr(
+        db,
+        request.app.state.pr_checker,
+        task_id,
+        agent_id,
+        body.attempt,
+    )
     async with db.write() as tx:
         return await service.complete(
             tx,
@@ -415,6 +424,7 @@ async def complete_task(
             body.attempt,
             body.result,
             model_policy_path=settings.model_policy_path,
+            pr_search=search,
         )
 
 

@@ -13,24 +13,127 @@ import aiosqlite
 from argus_core.continuation import (
     ArtifactKind,
     ArtifactState,
+    Continuation,
     ContinuationArtifact,
     ContinuationProvenance,
     clean,
 )
 from argus_core.delivery import DeliveryReconciliation, PrBinding, PrState
-from argus_core.tasks import Task
+from argus_core.tasks import Deliverable, Task
 
 from argus_api.db import Database
 from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.events import record
 from argus_api.tasks import continuation as cont
-from argus_api.tasks import delivery, service
+from argus_api.tasks import deliverable, delivery, service
 
-EVENT = "task.pr_reconciled"
+EVENT = deliverable.BOUND_EVENT
 DELIVERY_EVENT = "task.delivery_reconciled"
 # What the channel sends when Argus refuses a COMPLETE for want of the deliverable
 # (failure classes 3.1: a `channel_error` fail). Its text is fixed by the channel.
 _DELIVERABLE_MISSING = re.compile(r"\(422 deliverable_missing\)")
+
+
+def task_branch(task_id: str) -> str:
+    """The branch the channel creates for a task (task workspace spec 3)."""
+    return f"argus/task-{task_id[:8]}"
+
+
+async def find_pr(
+    db: Database,
+    checker: delivery.PrChecker,
+    task_id: str,
+    agent_id: str,
+    attempt: int,
+) -> deliverable.PrSearch | None:
+    """The one automatic attempt to bind a PR before a completion is refused for want
+    of one (task deliverable spec 3.4). One forge read, here and outside the write,
+    lists the project's repository's recent PRs; none when no search is due (another
+    deliverable, a PR already reported, a caller that is not the assignee). A PR
+    counts only when it is on the task's branch or at a commit the task pushed, and
+    its head is not past what the task pushed. A list that cannot be read binds
+    nothing."""
+    async with db.read() as conn:
+        row = await service.task_row(conn, task_id)
+        if (
+            Deliverable(row["deliverable"]) not in deliverable.PR_DELIVERABLES
+            or row["state"] != "claimed"
+            or row["assignee_agent_id"] != agent_id
+            or row["attempt"] != attempt
+        ):
+            return None
+        have = cont.load(row)
+        if deliverable.has_pr(have):
+            return None
+        proven = (await delivery.repositories(conn)).get(row["project"])
+        branch = task_branch(task_id)
+        if proven is None:
+            return deliverable.PrSearch(
+                None, f"Argus found no repository configured for {row['project']}."
+            )
+        pushed = _pushed_heads(have)
+        listed = await checker.list_recent(conn, proven)
+    where = f"https://{'/'.join(proven)}"
+    searched = f"Argus searched {where} for a pull request from {branch}"
+    if pushed:
+        searched += (
+            f" or a head you pushed ({', '.join(sorted(h[:12] for h in pushed))})"
+        )
+    if listed is None:
+        return deliverable.PrSearch(
+            None,
+            f"{searched}; the search could not be completed (the forge list was unreadable).",
+        )
+    notes = [f"{len(listed)} recent pull requests read"]
+    matches: list[tuple[delivery.PrRef, delivery.ForgeSnapshot]] = []
+    for ref, snap in listed:
+        at_pushed = snap.head_sha is not None and any(
+            snap.head_sha.startswith(h) or h.startswith(snap.head_sha) for h in pushed
+        )
+        if snap.head_ref != branch and not at_pushed:
+            continue  # not a candidate: another branch's PR is not worth a note
+        why = _verdict(snap, branch, pushed)
+        notes.append(f"#{ref.number} {why or 'matches'}")
+        if why is None:
+            matches.append((ref, snap))
+    report = f"{searched}; {', '.join(notes)}."
+    if len(matches) != 1:
+        if matches:
+            report += " More than one matches, so Argus bound none."
+        return deliverable.PrSearch(None, report)
+    ref, snap = matches[0]
+    assert snap.head_sha is not None
+    return deliverable.PrSearch(
+        deliverable.PrMatch(where, ref.number, ref.url, snap.head_sha, snap.pr_state),
+        report,
+    )
+
+
+def _pushed_heads(have: Continuation) -> set[str]:
+    heads = {
+        a.head_sha
+        for a in have.artifacts
+        if a.kind in (ArtifactKind.COMMIT, ArtifactKind.BRANCH) and a.head_sha
+    }
+    if have.wip and have.wip.ref:
+        heads.add(have.wip.ref)
+    return {h.lower() for h in heads}
+
+
+def _verdict(snap: delivery.ForgeSnapshot, branch: str, pushed: set[str]) -> str | None:
+    """Why a PR is not this attempt's, or None when it is."""
+    if snap.pr_state is PrState.UNKNOWN or snap.head_sha is None:
+        return "unreadable"
+    if snap.pr_state is PrState.CLOSED:
+        return "closed"
+    at_pushed = any(
+        snap.head_sha.startswith(h) or h.startswith(snap.head_sha) for h in pushed
+    )
+    if snap.head_ref != branch and not at_pushed:
+        return f"is from {snap.head_ref or 'an unknown branch'}, not this attempt's"
+    if pushed and not at_pushed:
+        return f"head {snap.head_sha[:12]} is not one you pushed"
+    return None
 
 
 async def bind(

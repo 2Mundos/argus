@@ -136,6 +136,18 @@ def fence(have: Continuation, expected: int | None) -> None:
         )
 
 
+def _restates_host_pr(held: ContinuationArtifact, new: ContinuationArtifact) -> bool:
+    """A worker repeating a PR Argus bound itself adds nothing: the report stays a
+    no-op unless it carries a state or head the binding lacks."""
+    return (
+        held.kind is ArtifactKind.PR
+        and held.provenance is ContinuationProvenance.ARGUS
+        and new.provenance is ContinuationProvenance.WORKER
+        and new.state in (ArtifactState.UNKNOWN, held.state)
+        and new.head_sha in (None, held.head_sha)
+    )
+
+
 def upsert_artifact(
     items: list[ContinuationArtifact], new: ContinuationArtifact
 ) -> list[ContinuationArtifact]:
@@ -148,7 +160,7 @@ def upsert_artifact(
             out.append(a)
             continue
         placed = True
-        if new.observed_at < a.observed_at:
+        if new.observed_at < a.observed_at or _restates_host_pr(a, new):
             out.append(a)
             continue
         out.append(

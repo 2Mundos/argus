@@ -649,6 +649,16 @@ earlier tasks neither inflate its cost nor contaminate its replies
 - The worker's agent group runs with `cli_scope: "disabled"`. The worker never
   uses `ncl`, and NanoClaw then leaves the `cli` and `scheduling` module
   instructions (about 7.7 KB) out of the composed `CLAUDE.md`.
+- **PR attribution (host-derived).** A worker that opens its PR through the forge
+  gateway has no way to write the structured `pr_opened` progress kind, and its
+  `COMPLETE` must not be refused for that. Before refusing a PR deliverable for a
+  missing PR, Argus binds the PR itself when exactly one PR of the project's
+  repository is on the task's branch (`argus/task-<first 8 characters of the task
+  id>`) or at a head the attempt pushed. It records the artifact as `argus_event`
+  (host-derived), not `worker_reported`; an explicit report of the same PR is a
+  no-op, and with none or several candidates the refusal names what was searched
+  and found. State and checks still decide the gate
+  ([task deliverable](task-deliverable.spec.md) 3.4).
 - **Commit attribution (prompt plus enforcement).** The harness's system-level
   instruction still forbids `Co-Authored-By:` (and other co-author or
   attribution) trailers in commit messages workers create. It is installed into
