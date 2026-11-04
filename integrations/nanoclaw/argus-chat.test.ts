@@ -13,6 +13,7 @@ import {
   parseChatThread,
   renderChatInbound,
   renderChatSeed,
+  splitChatTitle,
 } from "./argus-chat.js";
 import { until } from "./argus-test-until.js";
 
@@ -79,6 +80,54 @@ describe("renderChatInbound", () => {
     expect(text).not.toContain("Trusted operator instruction");
     expect(text).toContain("decision_id: d1");
     expect(text).toContain("untrusted DATA");
+  });
+});
+
+describe("chat titles", () => {
+  const claim = (kind: "chat" | "updates", source?: "orchestrator" | "admin") => ({
+    message: {
+      id: "m1",
+      conversation_id: "c1",
+      author: "admin:alice",
+      body: "Ship the fix",
+      state: "delivered",
+      turn_id: "t1",
+      created_at: "2026-10-20T12:00:00Z",
+    },
+    conversation: {
+      id: "c1",
+      kind,
+      title: "Ship the fix",
+      title_source: source,
+      session_ref: null,
+    },
+  });
+
+  it("asks for a title only where the orchestrator may set one", () => {
+    expect(renderChatInbound(claim("chat", "orchestrator"))).toContain("`TITLE:");
+    expect(renderChatInbound(claim("chat", "admin"))).not.toContain("TITLE:");
+    expect(renderChatInbound(claim("updates", "orchestrator"))).not.toContain("TITLE:");
+    expect(renderChatInbound(claim("chat"))).not.toContain("TITLE:"); // an older server
+  });
+
+  it.each([
+    ["TITLE: Login bug\nFixed it.", "Login bug", "Fixed it."],
+    ["  title :  “quoted”  \n\nFixed it.\nSecond line.", "quoted", "Fixed it.\nSecond line."],
+    ['TITLE: "Login   bug"\nFixed it.', "Login bug", "Fixed it."],
+    ["TITLE: " + "w".repeat(200) + "\nFixed it.", "w".repeat(80), "Fixed it."],
+  ])("splits the leading line of %j", (reply, title, text) => {
+    expect(splitChatTitle(reply)).toEqual({ title, text });
+  });
+
+  it.each([
+    "Fixed it.",
+    "TITLE: only a title",
+    "TITLE:\nFixed it.",
+    "TITLE:  \nFixed it.",
+    "Fixed it.\nTITLE: not first",
+    "My TITLE: is here\nFixed it.",
+  ])("leaves %j as plain text", (reply) => {
+    expect(splitChatTitle(reply)).toEqual({ title: null, text: reply });
   });
 });
 
@@ -468,6 +517,7 @@ function fakeChatArgus(
         id: "c1",
         kind: "chat",
         title: "Rollout",
+        title_source: "orchestrator",
         session_ref: chatThread("c1"),
       },
     },
@@ -574,13 +624,18 @@ describe("createArgusAdapter orchestrator mode", () => {
     await vi.waitFor(() => expect(inbound.length).toBe(1));
     expect(thread).toBe(chatThread("c1"));
     expect(inbound[0].content.text).toContain("Plan the rollout");
+    expect(inbound[0].content.text).toContain("`TITLE:");
 
     await adapter.deliver!("local", thread, {
-      content: { text: "Here is the plan.", usage: { input_tokens: 1, output_tokens: 2 } },
+      content: {
+        text: "TITLE: Rollout plan\nHere is the plan.",
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
     } as any);
     const posted = fake.calls.find((c) => c.method === "POST" && c.path === "/agents/me/chat/c1");
     expect(posted?.body).toMatchObject({
       body: "Here is the plan.",
+      title: "Rollout plan",
       turn_id: "turn-1",
       usage: { input_tokens: 1, output_tokens: 2 },
     });

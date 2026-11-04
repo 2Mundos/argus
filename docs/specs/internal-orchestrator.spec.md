@@ -138,9 +138,15 @@ Getting a first account, worker and orchestrator is the
   at 32 KB; a longer reply is cut and stored with `truncated: true`.
 - Bodies pass through the same redaction as the [task live log](task-live-log.spec.md)
   before storage.
-- **Titles:** the first orchestrator reply proposes a title; an admin may rename
-  (`PATCH /api/conversations/{id}` `{title}`), after which the orchestrator never
-  renames it.
+- **Titles:** a chat never shows a placeholder. The moment its first human message
+  is stored, the title becomes that message's first line (whitespace collapsed, at
+  most 60 characters). The orchestrator replaces it with a better one by starting a
+  reply with a `TITLE:` line ([3.3](#33-transport-the-argus-channel)); the reply's
+  `title` field carries it. An admin may rename (`PATCH /api/conversations/{id}`
+  `{title}`), after which neither of the above changes it. `New chat` is only the
+  name of the button that starts a conversation, never a conversation's title. A
+  chat with that placeholder and no message is not listed: it exists only once
+  someone has spoken in it.
 - **Archive:** `POST /api/conversations/{id}/archive` and `.../unarchive`. Archived
   conversations leave the list; their messages stay.
 - Events: `conversation.created`, `conversation.updated`, `chat.message`,
@@ -158,6 +164,11 @@ Getting a first account, worker and orchestrator is the
   (`state: delivered`). Delivery is idempotent by message id.
 - **Outbound:** `deliver()` posts to `POST /api/agents/me/chat/{conversation_id}`,
   which stores the reply and marks the human messages of that turn `answered`.
+  A reply may begin with one line `TITLE: <2 to 6 words>`: the channel removes it
+  from the text and sends it as `title`. A line elsewhere, a title with nothing
+  after it, or an empty one is ordinary text. Inbound prompts of a conversation
+  whose title is still the orchestrator's to set (`title_source: orchestrator`) ask
+  for the line once, on the reply that first settles what the chat is about.
 - **Trust:** a human chat message is a **trusted operator instruction** from an
   admin, framed as such. A `system` message is a server notice, not an admin
   instruction. Everything the orchestrator reads through tools (task
@@ -256,7 +267,9 @@ Getting a first account, worker and orchestrator is the
   orchestrator off, `#chat` shows an empty state that opens onboarding step 3.
 - Layout inside the existing three-column shell: the left nav stays; a
   conversation list (Updates pinned first, then by recency, with **New chat**)
-  sits beside the thread; the thread and composer are centred with the
+  sits beside the thread; messages show only their text, as in any agent chat:
+  the admin's right-aligned, the orchestrator's plain, system notices muted, with
+  no author or time; the thread and composer are centred with the
   orchestrator status and conversation cost in the header; the right worker rail
   stays. At 390 px the conversation list becomes a drawer.
 - **Verification limit.** The header status is registration and heartbeat

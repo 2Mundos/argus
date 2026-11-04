@@ -74,6 +74,7 @@ import {
   createChatLoop,
   DEFAULT_MAX_CONCURRENT_TURNS,
   parseChatThread,
+  splitChatTitle,
 } from "./argus-chat.js";
 
 import {
@@ -4484,8 +4485,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           return undefined;
         }
         const usage = meta?.usage as ChatTurnUsage | undefined;
-        const title = typeof meta?.title === "string" ? meta.title : null;
-        await chat.deliverChat(threadId, text.trim(), usage ?? null, title);
+        const { text: answer, title } = splitChatTitle(text.trim());
+        await chat.deliverChat(threadId, answer, usage ?? null, title);
         return undefined;
       }
       const task = current; // the claim this reply is judged against, fixed for the whole delivery

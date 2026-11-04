@@ -134,10 +134,17 @@ async def conversation_cost(conn: aiosqlite.Connection, conv_id: str) -> float |
 async def list_conversations(
     conn: aiosqlite.Connection, *, include_archived: bool = False
 ) -> list[Conversation]:
-    where = "" if include_archived else " WHERE archived_at IS NULL"
+    # A chat that was started and never spoken in is not a conversation yet.
+    where = (
+        " WHERE (title != ? OR EXISTS (SELECT 1 FROM messages"
+        " WHERE conversation_id = conversations.id))"
+    )
+    if not include_archived:
+        where += " AND archived_at IS NULL"
     async with conn.execute(
         f"SELECT * FROM conversations{where}"  # noqa: S608
-        " ORDER BY CASE kind WHEN 'updates' THEN 0 ELSE 1 END, updated_at DESC, id"
+        " ORDER BY CASE kind WHEN 'updates' THEN 0 ELSE 1 END, updated_at DESC, id",
+        (PLACEHOLDER_TITLE,),
     ) as cur:
         rows = await cur.fetchall()
     return [
@@ -145,12 +152,25 @@ async def list_conversations(
     ]
 
 
+PLACEHOLDER_TITLE = "New chat"
+DRAFT_TITLE_MAX = 60
+
+
+def draft_title(text: str) -> str:
+    """A chat's title until the orchestrator proposes one: the first line of the
+    first message, whitespace collapsed, cut with an ellipsis."""
+    line = " ".join(next((ln for ln in text.splitlines() if ln.strip()), "").split())
+    if len(line) <= DRAFT_TITLE_MAX:
+        return line
+    return line[: DRAFT_TITLE_MAX - 1].rstrip() + "…"
+
+
 async def create_conversation(
     tx: Tx, body: ConversationCreate, actor: str
 ) -> Conversation:
     conv_id = str(uuid4())
     now = ts(tx.now)
-    title = (body.title or "New chat").strip() or "New chat"
+    title = (body.title or PLACEHOLDER_TITLE).strip() or PLACEHOLDER_TITLE
     source = TitleSource.ADMIN if body.title else TitleSource.ORCHESTRATOR
     # Untitled chats start with a placeholder; the first orchestrator reply may rename
     # when title_source is still orchestrator.
@@ -287,9 +307,24 @@ async def post_human_message(
         " turn_id, created_at, delivered_at) VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, NULL)",
         (msg_id, conv_id, actor, text, int(truncated), now),
     )
-    await tx.conn.execute(
-        "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id)
-    )
+    draft = draft_title(text) if conv.title == PLACEHOLDER_TITLE else ""
+    if draft and conv.title_source == TitleSource.ORCHESTRATOR:
+        await tx.conn.execute(
+            "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+            (draft, now, conv_id),
+        )
+        await record(
+            tx,
+            actor,
+            "conversation",
+            conv_id,
+            "conversation.updated",
+            {"title": draft, "title_source": "orchestrator"},
+        )
+    else:
+        await tx.conn.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id)
+        )
     await record(
         tx,
         actor,

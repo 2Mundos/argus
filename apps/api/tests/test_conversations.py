@@ -12,7 +12,12 @@ from argus_api.conversations import service as conversations
 from argus_api.db import Database, ts
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
-from argus_core.conversations import ConversationCreate, MessageCreate
+from argus_core.conversations import (
+    AgentChatReply,
+    ConversationCreate,
+    ConversationPatch,
+    MessageCreate,
+)
 from fastapi.testclient import TestClient
 from test_launch import ADMIN, agent_token, bearer
 
@@ -134,6 +139,95 @@ async def chat(db: Database, clock: Clock, title: str, text: str = "hi") -> str:
     async with db.write() as tx:
         conv = await conversations.create_conversation(
             tx, ConversationCreate(title=title), "admin:t"
+        )
+        await conversations.post_human_message(
+            tx, conv.id, MessageCreate(body=text), "admin:t"
+        )
+    return conv.id
+
+
+async def title_of(db: Database, conv: str) -> str:
+    async with db.read() as conn:
+        return (await conversations.get_conversation(conn, conv)).title
+
+
+async def test_title_follows_first_message_then_orchestrator_then_admin(svc) -> None:
+    db, clock, _ = svc
+    async with db.write() as tx:
+        conv = await conversations.create_conversation(
+            tx, ConversationCreate(), "admin:t"
+        )
+    assert await title_of(db, conv.id) == "New chat"  # nothing to name it after yet
+
+    async def say(text: str) -> None:
+        clock.now += timedelta(seconds=2)
+        async with db.write() as tx:
+            await conversations.post_human_message(
+                tx, conv.id, MessageCreate(body=text), "admin:t"
+            )
+
+    async def reply(title: str | None) -> None:
+        async with db.write() as tx:
+            await conversations.post_reply(
+                tx, conv.id, AgentChatReply(body="ok", title=title), "agent-1"
+            )
+
+    await say("  Fix the\n login   bug  ")
+    assert await title_of(db, conv.id) == "Fix the"  # first line only
+    await say("something else entirely")
+    assert await title_of(db, conv.id) == "Fix the"  # later messages never retitle
+    await reply("Login bug")
+    assert await title_of(db, conv.id) == "Login bug"
+    async with db.write() as tx:
+        await conversations.patch_conversation(
+            tx, conv.id, ConversationPatch(title="Mine"), "admin:t"
+        )
+    await reply("Orchestrator again")
+    assert await title_of(db, conv.id) == "Mine"  # an admin's title is final
+
+
+async def test_a_chat_nobody_spoke_in_is_not_listed(svc) -> None:
+    db, _, _ = svc
+
+    async def listed() -> set[str]:
+        async with db.read() as conn:
+            return {c.id for c in await conversations.list_conversations(conn)}
+
+    async with db.write() as tx:
+        empty = await conversations.create_conversation(
+            tx, ConversationCreate(), "admin:t"
+        )
+        named = await conversations.create_conversation(
+            tx, ConversationCreate(title="Plan"), "admin:t"
+        )
+    assert await listed() == {
+        named.id
+    }  # an admin's own title is already a conversation
+    async with db.write() as tx:
+        await conversations.post_human_message(
+            tx, empty.id, MessageCreate(body="hello"), "admin:t"
+        )
+    assert await listed() == {named.id, empty.id}
+
+
+async def test_long_first_message_is_cut_with_an_ellipsis(svc) -> None:
+    db, _, _ = svc
+    conv = await chat_untitled(db, "word " * 40)
+    title = await title_of(db, conv)
+    assert len(title) == 60
+    assert title.endswith("…")
+
+
+async def test_admin_title_survives_the_first_message(svc) -> None:
+    db, clock, _ = svc
+    conv = await chat(db, clock, "Plan", "a different first message")
+    assert await title_of(db, conv) == "Plan"
+
+
+async def chat_untitled(db: Database, text: str) -> str:
+    async with db.write() as tx:
+        conv = await conversations.create_conversation(
+            tx, ConversationCreate(), "admin:t"
         )
         await conversations.post_human_message(
             tx, conv.id, MessageCreate(body=text), "admin:t"
@@ -397,3 +491,49 @@ def test_enable_and_reset_converge_the_system_pool(
     assert reset.status_code == 200, reset.text
     assert reset.json()["value"] is False
     assert desired() == 0
+
+
+async def test_0072_titles_placeholder_chats_from_their_first_message(
+    tmp_path: Path,
+) -> None:
+    from argus_api.db.migrate import load_migrations
+
+    path, migrations = tmp_path / "argus.db", load_migrations()
+    t0 = "2026-10-01T00:00:00+00:00"
+    db = await Database.open(path, migrations=migrations[:71])
+    rows = [  # id, title, source, first admin message
+        ("plain", "New chat", "orchestrator", "Fix the login\nand more"),
+        ("long", "New chat", "orchestrator", "word " * 40),
+        ("renamed", "New chat", "admin", "ignored"),
+        ("proposed", "Login bug", "orchestrator", "ignored"),
+        ("empty", "New chat", "orchestrator", None),
+    ]
+    async with db.write() as tx:
+        for cid, title, source, first in rows:
+            await tx.conn.execute(
+                "INSERT INTO conversations (id, kind, title, title_source, created_by,"
+                " created_at, updated_at) VALUES (?, 'chat', ?, ?, 'admin:t', ?, ?)",
+                (cid, title, source, t0, t0),
+            )
+            if first is not None:
+                await tx.conn.execute(
+                    "INSERT INTO messages (id, conversation_id, author, body, state,"
+                    " truncated, created_at) VALUES (?, ?, 'admin:t', ?, 'answered', 0, ?)",
+                    (f"m-{cid}", cid, first.strip(), t0),
+                )
+    await db.close()
+    db = await Database.open(path, migrations=migrations)
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT id, title FROM conversations") as cur,
+    ):
+        got = {r["id"]: r["title"] for r in await cur.fetchall()}
+    await db.close()
+    assert got["plain"] == "Fix the login"
+    assert len(got["long"]) == 60
+    assert got["long"].endswith("…")
+    assert (got["renamed"], got["proposed"], got["empty"]) == (
+        "New chat",
+        "Login bug",
+        "New chat",
+    )

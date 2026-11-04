@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useWorkingWhile } from "./working";
 
 /** Existing CSS ring spinner; sized by the parent. */
 export function Spinner({ className }: { className?: string }) {
@@ -84,6 +85,7 @@ export function ActionButton({
   }, []);
 
   const pending = pendingProp === true || ownBusy;
+  useWorkingWhile(pending);
   const label = pending && pendingLabel !== undefined ? pendingLabel : children;
 
   async function handleClick(e: MouseEvent<HTMLButtonElement>) {
