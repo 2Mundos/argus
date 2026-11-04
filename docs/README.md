@@ -72,6 +72,8 @@ every new dependency is judged against it.
   that awaits a server mutation disables and shows an in-button spinner
 - [Dashboard working indicator](specs/dashboard-working.spec.md) — the ARGUS wordmark
   gradient rolls while a mutation runs or the orchestrator is answering
+- [Dashboard navigation](specs/dashboard-navigation.spec.md) — a nine-entry menu, Workers
+  and Setup as tab groups, and the menu moving to the top on narrow screens
 - [Agent hygiene](specs/agent-hygiene.spec.md) — lost/gone identities by pool and
   heartbeat age, bounded opt-in archiving, and the lost-holding-claims and
   lost-spike alerts
