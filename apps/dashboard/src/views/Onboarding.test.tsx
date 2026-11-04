@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingStatus, TemplateCatalog } from "../api";
 import {
   firstIncompleteStep,
+  NO_BUILTIN_ACCOUNT,
   OnboardingWizard,
   orchestratorBlockers,
   shouldAutoOpen,
@@ -205,5 +206,38 @@ describe("OnboardingWizard", () => {
     expect(screen.queryByRole("button", { name: "Enable orchestrator" })).toBeNull();
     expect(screen.queryByLabelText(/Daily budget/)).toBeNull();
     expect(mock.put).not.toHaveBeenCalled();
+  });
+
+  it("offers the built-in runtime with no template check", async () => {
+    mock.status = {
+      account: true,
+      worker: false,
+      orchestrator: false,
+      dismissed: false,
+      orchestrator_runtime: "builtin",
+      builtin_account: "anthropic-key",
+    };
+    mock.catalog = orchestratorCatalog(false, [["no docker socket"]]);
+    render(<OnboardingWizard open initialStep={3} onClose={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Enable orchestrator" })).toBeTruthy();
+    expect(screen.getByText("anthropic-key")).toBeTruthy();
+    expect(screen.queryByText("no docker socket")).toBeNull();
+    expect(screen.getByText(/wait until a worker exists/)).toBeTruthy();
+  });
+
+  it("names both reasons when neither runtime can run", async () => {
+    mock.status = {
+      account: false,
+      worker: false,
+      orchestrator: false,
+      dismissed: false,
+      orchestrator_runtime: null,
+    };
+    mock.catalog = orchestratorCatalog(false, [["no docker socket"]]);
+    render(<OnboardingWizard open initialStep={3} onClose={() => {}} />);
+    expect(await screen.findByText("no docker socket")).toBeTruthy();
+    expect(screen.getByText(NO_BUILTIN_ACCOUNT)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /step 1/ }));
+    expect(await screen.findByRole("button", { name: "Add local model" })).toBeTruthy();
   });
 });

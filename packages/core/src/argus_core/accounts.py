@@ -159,6 +159,28 @@ def local_lease_settings(credential: dict[str, Any]) -> LeaseSettings | None:
     )
 
 
+def is_model_name(value: object) -> bool:
+    """A plain model name, as a local account's `model` must be."""
+    return isinstance(value, str) and _MODEL_NAME.fullmatch(value) is not None
+
+
+class LocalCandidate(BaseModel):
+    """A model server that answered `/v1/models` on this node
+    (builtin-orchestrator spec 3.11)."""
+
+    base_url: str
+    server_hint: Literal["ollama", "lmstudio", "llamacpp"]
+    models: list[str]
+    # The host.docker.internal address: both the API and workers can reach it.
+    preferred: bool
+    note: str | None = None
+
+
+class LocalDetection(BaseModel):
+    candidates: list[LocalCandidate]
+    hint: str | None = None
+
+
 class AccountKind(StrEnum):
     API_KEY = "api_key"
     SUBSCRIPTION = "subscription"
@@ -447,6 +469,10 @@ class LeaseRequest(BaseModel):
     # engine without one (internal orchestrator spec 3.1).
     task_id: str | None = None
     attempt: int | None = Field(default=None, ge=1)
+    # Narrows eligibility to accounts of these credential kinds and never orders
+    # them, like `runtime_providers` (the built-in orchestrator sends `api_key`,
+    # builtin-orchestrator spec 3.4). Absent: every kind.
+    credential_kinds: list[AccountKind] | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def claim_given_whole(self) -> "LeaseRequest":
@@ -504,6 +530,9 @@ class ExhaustedReport(BaseModel):
     reset_status: Literal["stated", "ambiguous", "absent"] | None = None
     reset_text: str | None = Field(default=None, max_length=120)  # provider's words
     native_session: NativeSessionReport | None = None
+    # The same narrowing as on the lease, so the named next account is one the
+    # reporting runtime can lease (builtin-orchestrator spec 3.4).
+    credential_kinds: list[AccountKind] | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _reset_status_matches_until(self) -> "ExhaustedReport":

@@ -6,6 +6,7 @@ import { onboardingEvent } from "../liveEvents";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 import { NewWorker } from "./GuidedWorker";
+import { LocalAccount } from "./LocalAccount";
 
 type Step = 1 | 2 | 3;
 
@@ -62,6 +63,7 @@ export function OnboardingWizard({
   const [step, setStep] = useState<Step>(initialStep ?? 1);
   const [addingClaude, setAddingClaude] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
+  const [addingLocal, setAddingLocal] = useState(false);
   const [error, setError] = useState<string>();
   const [budget, setBudget] = useState("5");
   const [enabling, setEnabling] = useState(false);
@@ -186,6 +188,7 @@ export function OnboardingWizard({
               done={accountDone}
               onClaude={() => setAddingClaude(true)}
               onCodex={() => setAddingCodex(true)}
+              onLocal={() => setAddingLocal(true)}
               onSkip={() => setStep(2)}
             />
           )}
@@ -195,12 +198,16 @@ export function OnboardingWizard({
           {step === 3 && (
             <OrchestratorStep
               done={orchDone}
+              runtime={status?.orchestrator_runtime}
+              account={status?.builtin_account ?? undefined}
+              workerDone={workerDone}
               catalog={catalog}
               budget={budget}
               setBudget={setBudget}
               enabling={enabling}
               onEnable={() => void enableOrchestrator()}
               onSkip={() => void close()}
+              onAccount={() => setStep(1)}
             />
           )}
         </div>
@@ -219,6 +226,15 @@ export function OnboardingWizard({
           onClose={() => setAddingCodex(false)}
           onDone={() => {
             setAddingCodex(false);
+            void reload();
+          }}
+        />
+      )}
+      {addingLocal && (
+        <LocalAccount
+          onClose={() => setAddingLocal(false)}
+          onDone={() => {
+            setAddingLocal(false);
             void reload();
           }}
         />
@@ -253,14 +269,15 @@ function AccountStep(props: {
   done: boolean;
   onClaude: () => void;
   onCodex: () => void;
+  onLocal: () => void;
   onSkip: () => void;
 }) {
   return (
     <div className="onboarding-panel">
       <h3>Add an account</h3>
       <p>
-        Workers need a harness-capable account. Claude and Codex can carry a worker on their own;
-        other providers (Cursor, Copilot, custom) are available from{" "}
+        Workers need a harness-capable account. Claude and Codex can carry a worker on their own; a
+        local model runs on this node. Other providers (Cursor, Copilot, custom) are available from{" "}
         <a href="#setup/accounts">Accounts</a>.
       </p>
       {props.done ? (
@@ -272,6 +289,9 @@ function AccountStep(props: {
           </button>
           <button type="button" className="primary" onClick={props.onCodex}>
             Add Codex account
+          </button>
+          <button type="button" onClick={props.onLocal}>
+            Add local model
           </button>
         </div>
       )}
@@ -303,23 +323,44 @@ function WorkerStep(props: { done: boolean; onDone: () => void; onSkip: () => vo
   );
 }
 
+/** Why no runtime can run: no built-in-capable account, and the template's blockers. */
+export const NO_BUILTIN_ACCOUNT =
+  "No Anthropic or OpenAI API key, custom account with an engine model, or local model.";
+
 function OrchestratorStep(props: {
   done: boolean;
+  runtime: OnboardingStatus["orchestrator_runtime"] | undefined;
+  account: string | undefined;
+  workerDone: boolean;
   catalog: TemplateCatalog | undefined;
   budget: string;
   setBudget: (v: string) => void;
   enabling: boolean;
   onEnable: () => void;
   onSkip: () => void;
+  onAccount: () => void;
 }) {
-  const blockers = props.catalog && orchestratorBlockers(props.catalog);
+  const builtin = props.runtime === "builtin";
+  // The built-in needs no template check (builtin-orchestrator spec 3.14).
+  const blockers = !builtin && props.catalog ? orchestratorBlockers(props.catalog) : undefined;
+  const checking = !builtin && !props.catalog;
   return (
     <div className="onboarding-panel">
       <h3>Start the internal orchestrator</h3>
       <p>
-        Argus hosts a NanoClaw orchestrator as a system pool (size 1). Chat with it becomes the main
-        page. It spends against a daily USD budget; disable anytime in Settings.
+        {builtin ? (
+          <>
+            Runs inside Argus on <strong>{props.account}</strong>: no container, image or gateway.
+          </>
+        ) : (
+          "Argus hosts a NanoClaw orchestrator as a system pool (size 1)."
+        )}{" "}
+        Chat with it becomes the main page. It spends against a daily USD budget; disable anytime in
+        Settings.
       </p>
+      {!props.workerDone && !props.done && (
+        <p className="muted small">Tasks it creates wait until a worker exists (step 2).</p>
+      )}
       {props.done ? (
         <p className="small">
           Orchestrator enabled. Open <a href="#chat">Chat</a> to send a goal.
@@ -327,9 +368,9 @@ function OrchestratorStep(props: {
       ) : props.enabling ? (
         <p className="busy" role="status" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
-          Enabling the orchestrator… starting its container can take a moment.
+          Enabling the orchestrator…
         </p>
-      ) : !props.catalog ? (
+      ) : checking ? (
         <p className="busy" role="status" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
           Checking whether the orchestrator can start on this node…
@@ -338,10 +379,16 @@ function OrchestratorStep(props: {
         <>
           <p className="error">The orchestrator cannot start on this node yet:</p>
           <ul>
+            {props.runtime === null && <li>{NO_BUILTIN_ACCOUNT}</li>}
             {blockers.map((b) => (
               <li key={b}>{b}</li>
             ))}
           </ul>
+          {props.runtime === null && (
+            <button type="button" className="link" onClick={props.onAccount}>
+              Add an API key or a local model (step 1)
+            </button>
+          )}
         </>
       ) : (
         <>

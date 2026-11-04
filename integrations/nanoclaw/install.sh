@@ -69,6 +69,9 @@ cp "$here/argus-claim-isolation.test.ts" "$target/src/channels/argus-claim-isola
 mkdir -p "$target/src/channels/fixtures"
 rm -rf "$target/src/channels/fixtures/continuation"
 cp -r "$here/fixtures/continuation" "$target/src/channels/fixtures/continuation"
+# Chat framing shared with the built-in orchestrator (builtin-orchestrator spec 3.5).
+rm -rf "$target/src/channels/fixtures/chat-framing"
+cp -r "$here/fixtures/chat-framing" "$target/src/channels/fixtures/chat-framing"
 cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.ts"
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
 cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub.ts"

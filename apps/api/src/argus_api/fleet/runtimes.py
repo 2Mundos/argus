@@ -27,6 +27,8 @@ NANOCLAW_HOST_PIDS_LIMIT = 4096
 # agent containers (another network) reach it as host.docker.internal:<host port>
 # (custom harness spec, "Bridge reachable from agent containers").
 CUSTOM_BRIDGE_PORT = 3141
+# What a built-in instance gets as ARGUS_URL: it never uses a URL.
+BUILTIN_URL = "inprocess"
 
 
 def descendant_label(pool: Pool) -> str | None:
@@ -96,7 +98,27 @@ def container_spec(
     `model_policy` (canonical JSON) becomes its ARGUS_MODEL_POLICY, fixed for the
     life of the container. `git_identity` (name, email) becomes the pinned
     ARGUS_GIT_AUTHOR_NAME/EMAIL; unset, the worker's git refuses to commit.
+    `builtin`: the in-process orchestrator loop; its env names only who it is and
+    how to register, and it reaches the app through an ASGI transport
+    (builtin-orchestrator spec 3.2).
     """
+    if pool.runtime == "builtin":
+        return ContainerSpec(
+            instance_id=instance_id,
+            image=pool.image,
+            env={
+                "ARGUS_URL": BUILTIN_URL,
+                "ARGUS_BOOTSTRAP_TOKENS": ",".join(bootstrap_tokens),
+                "ARGUS_INSTANCE_ID": instance_id,
+                "ARGUS_POOL": pool.name,
+                "ARGUS_AGENT_ROLE": "orchestrator",
+            },
+            labels={
+                MANAGED_LABEL: "true",
+                POOL_LABEL: pool.name,
+                INSTANCE_LABEL: instance_id,
+            },
+        )
     env = {
         **pool.env,
         "ARGUS_URL": argus_url,
@@ -208,6 +230,8 @@ def container_spec(
 
 def target_location(pool: Pool) -> tuple[str | None, str | None]:
     """(host/context, namespace) that select this pool's target client."""
+    if pool.target == "inprocess":
+        return None, None
     if pool.target == "kubernetes" and pool.kubernetes:
         return pool.kubernetes.context, pool.kubernetes.namespace
     return pool.docker.host, None

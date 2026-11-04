@@ -287,7 +287,7 @@ async def _scale(tx: Tx, pool: Pool, settings: FleetSettings) -> list[_Start | _
         if hold := await _crash_loop_hold(tx, pool.name, settings):
             await _set_status(tx, pool.name, "failing", hold)
             return []
-        if settings.argus_url is None:
+        if settings.argus_url is None and pool.target != "inprocess":
             await _set_status(
                 tx,
                 pool.name,
@@ -463,13 +463,16 @@ async def _act(
             (ts(tx.now), pool.image, action.instance_id),
         )
         identity = await settings_service.global_value(tx.conn, "git.identity")
-    assert settings.argus_url is not None
+    argus_url = (
+        runtimes.BUILTIN_URL if pool.target == "inprocess" else settings.argus_url
+    )
+    assert argus_url is not None
     try:
         spec = runtimes.container_spec(
             pool,
             action.instance_id,
             tokens,
-            settings.argus_url,
+            argus_url,
             model_policy=_model_policy(pool, settings),
             worker_name=worker_name,
             git_identity=(identity["name"], identity["email"]) if identity else None,

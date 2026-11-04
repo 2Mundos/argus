@@ -193,6 +193,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/local/detect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Detect Local Models
+         * @description Model servers already running on this node: `GET /v1/models` on 127.0.0.1
+         *     and host.docker.internal at 11434 (Ollama), 1234 (LM Studio) and 8080
+         *     (llama.cpp, Strata). No credential is sent and nothing is stored
+         *     (builtin-orchestrator spec 3.11).
+         */
+        post: operations["detect_local_models_api_accounts_local_detect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/release": {
         parameters: {
             query?: never;
@@ -626,6 +649,28 @@ export interface paths {
          */
         put: operations["put_chat_session_api_agents_me_chat__conversation_id__session_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/me/chat/{conversation_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Chat Usage
+         * @description Usage of one model call in a turn still in flight (builtin-orchestrator
+         *     3.9). The answer says whether the daily cap is reached counting it; a
+         *     runtime reports a turn's usage here or with its reply, never both.
+         */
+        post: operations["post_chat_usage_api_agents_me_chat__conversation_id__usage_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1750,7 +1795,8 @@ export interface paths {
         };
         /**
          * Get Onboarding
-         * @description Whether a fresh install has an account, a worker pool and the orchestrator.
+         * @description Whether a fresh install has an account, a worker pool and the orchestrator,
+         *     and which orchestrator runtime `auto` would pick now.
          */
         get: operations["get_onboarding_api_onboarding_get"];
         put?: never;
@@ -1818,6 +1864,8 @@ export interface paths {
          * @description Create or replace a pool definition, including its replica cap (admin only).
          *     The reconciler converges instances to it within seconds. This replaces `env`
          *     whole; PATCH changes single variables without resending the others.
+         *     `422 inprocess_system_only` for the in-process target: only enabling the
+         *     built-in orchestrator writes one.
          */
         put: operations["upsert_pool_api_pools__name__put"];
         post?: never;
@@ -4507,6 +4555,20 @@ export interface components {
             /** Session Ref */
             session_ref: string;
         };
+        /** ChatUsageAck */
+        ChatUsageAck: {
+            /** Cap Reached */
+            cap_reached: boolean;
+        };
+        /**
+         * ChatUsageReport
+         * @description One model call of a built-in orchestrator turn (builtin-orchestrator 3.9).
+         */
+        ChatUsageReport: {
+            /** Turn Id */
+            turn_id: string;
+            usage: components["schemas"]["TurnUsage"];
+        };
         /**
          * Check
          * @description One measured fact about a pool's readiness. `ok` is None when it could not
@@ -6301,6 +6363,8 @@ export interface components {
         ExhaustedReport: {
             /** Attempt */
             attempt?: number | null;
+            /** Credential Kinds */
+            credential_kinds?: components["schemas"]["AccountKind"][] | null;
             native_session?: components["schemas"]["NativeSessionReport"] | null;
             /**
              * Reason
@@ -7223,6 +7287,8 @@ export interface components {
         LeaseRequest: {
             /** Attempt */
             attempt?: number | null;
+            /** Credential Kinds */
+            credential_kinds?: components["schemas"]["AccountKind"][] | null;
             /**
              * Reuse Held
              * @default false
@@ -7270,6 +7336,33 @@ export interface components {
             prompt_tokens: number | null;
             /** Text */
             text: string | null;
+        };
+        /**
+         * LocalCandidate
+         * @description A model server that answered `/v1/models` on this node
+         *     (builtin-orchestrator spec 3.11).
+         */
+        LocalCandidate: {
+            /** Base Url */
+            base_url: string;
+            /** Models */
+            models: string[];
+            /** Note */
+            note?: string | null;
+            /** Preferred */
+            preferred: boolean;
+            /**
+             * Server Hint
+             * @enum {string}
+             */
+            server_hint: "ollama" | "lmstudio" | "llamacpp";
+        };
+        /** LocalDetection */
+        LocalDetection: {
+            /** Candidates */
+            candidates: components["schemas"]["LocalCandidate"][];
+            /** Hint */
+            hint?: string | null;
         };
         /**
          * LocalModelInfo
@@ -7750,10 +7843,14 @@ export interface components {
         OnboardingStatus: {
             /** Account */
             account: boolean;
+            /** Builtin Account */
+            builtin_account?: string | null;
             /** Dismissed */
             dismissed: boolean;
             /** Orchestrator */
             orchestrator: boolean;
+            /** Orchestrator Runtime */
+            orchestrator_runtime?: ("builtin" | "nanoclaw") | null;
             /** Worker */
             worker: boolean;
         };
@@ -9479,7 +9576,7 @@ export interface components {
          * RuntimeKind
          * @enum {string}
          */
-        RuntimeKind: "plain" | "nanoclaw";
+        RuntimeKind: "plain" | "nanoclaw" | "builtin";
         /** RuntimeSpec */
         RuntimeSpec: {
             /** Codex Turn Timeout S */
@@ -9879,7 +9976,7 @@ export interface components {
          * TargetKind
          * @enum {string}
          */
-        TargetKind: "docker" | "kubernetes";
+        TargetKind: "docker" | "kubernetes" | "inprocess";
         /** Task */
         Task: {
             /** Acceptance */
@@ -10978,6 +11075,8 @@ export interface components {
         };
         /** TurnUsage */
         TurnUsage: {
+            /** Cached Input Tokens */
+            cached_input_tokens?: number | null;
             /** Input Tokens */
             input_tokens?: number | null;
             /** Model */
@@ -12077,6 +12176,26 @@ export interface operations {
             };
         };
     };
+    detect_local_models_api_accounts_local_detect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalDetection"];
+                };
+            };
+        };
+    };
     release_account_api_accounts_release_post: {
         parameters: {
             query?: {
@@ -12806,6 +12925,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Conversation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_chat_usage_api_agents_me_chat__conversation_id__usage_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatUsageReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatUsageAck"];
                 };
             };
             /** @description Validation Error */

@@ -148,7 +148,10 @@ async def upsert_pool(
 ) -> Pool:
     """Create or replace a pool definition, including its replica cap (admin only).
     The reconciler converges instances to it within seconds. This replaces `env`
-    whole; PATCH changes single variables without resending the others."""
+    whole; PATCH changes single variables without resending the others.
+    `422 inprocess_system_only` for the in-process target: only enabling the
+    built-in orchestrator writes one."""
+    service.require_not_inprocess(body)
     policy.enforce_nanoclaw_image_roles(body, settings)
     policy.enforce_nanoclaw_socket_policy(body, settings)
     from argus_api.errors import NotFoundError

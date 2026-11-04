@@ -278,14 +278,22 @@ def quota_notice_from_response(
     only the status and a reset time reach the notice (and so a log or an event)."""
     if status not in (402, 429):
         return None
-    base = (now or datetime.now(UTC)).astimezone(UTC)
-    lowered = {k.lower(): v for k, v in headers.items()}
-    until = _retry_after(lowered.get("retry-after"), base) or _epoch(
-        lowered.get("x-ratelimit-reset"), base
-    )
+    until = quota_reset_from_headers(headers, now)
     what = "insufficient credits" if status == 402 else "rate limited"
     suffix = f" (resets {until.isoformat()})" if until else ""
     return f"HTTP {status} {what}{suffix}"
+
+
+def quota_reset_from_headers(
+    headers: Mapping[str, str], now: datetime | None = None
+) -> datetime | None:
+    """The reset a 402/429 states: `Retry-After` (seconds or an HTTP date), else
+    `X-RateLimit-Reset` (epoch seconds or milliseconds); None when absent."""
+    base = (now or datetime.now(UTC)).astimezone(UTC)
+    lowered = {k.lower(): v for k, v in headers.items()}
+    return _retry_after(lowered.get("retry-after"), base) or _epoch(
+        lowered.get("x-ratelimit-reset"), base
+    )
 
 
 def _retry_after(value: str | None, base: datetime) -> datetime | None:

@@ -136,6 +136,17 @@ REGISTRY: dict[str, SettingDefinition] = {
         scopes=["global"],
         description="Host Argus's internal orchestrator (system pool) and chat.",
     ),
+    "orchestrator.runtime": SettingDefinition(
+        key="orchestrator.runtime",
+        schema={"type": "string", "enum": ["auto", "builtin", "nanoclaw"]},
+        default="auto",
+        scopes=["global"],
+        description=(
+            "Where the internal orchestrator runs: builtin (inside Argus, on an"
+            " API-key, custom or local account), nanoclaw (a container), or auto."
+            " Applied when it is enabled."
+        ),
+    ),
     "orchestrator.model": SettingDefinition(
         key="orchestrator.model",
         schema={

@@ -43,7 +43,7 @@ export function Pools() {
         <PoolCard
           key={pool.name}
           pool={pool}
-          onEdit={() => setEditing(pool)}
+          onEdit={pool.runtime === "builtin" ? undefined : () => setEditing(pool)}
           onDelete={pool.system ? undefined : () => setDeleting(pool)}
         />
       ))}
@@ -74,7 +74,8 @@ function PoolCard({
   onDelete,
 }: {
   pool: Pool;
-  onEdit: () => void;
+  /** Absent for the built-in orchestrator: it has no image or node to edit. */
+  onEdit?: () => void;
   onDelete?: () => void;
 }) {
   const [error, setError] = useState<string>();
@@ -123,7 +124,9 @@ function PoolCard({
           {pool.name} <span className={`badge pool-${pool.status}`}>{pool.status}</span>
         </h3>
         <span className="muted small">
-          {pool.image} · {pool.target}/{pool.runtime}
+          {pool.runtime === "builtin"
+            ? "Built-in (in Argus)"
+            : `${pool.image} · ${pool.target}/${pool.runtime}`}
         </span>
         <span className="scale">
           <ActionButton
@@ -145,9 +148,11 @@ function PoolCard({
           </ActionButton>
           <span className="muted small">max {pool.max_replicas}</span>
         </span>
-        <button type="button" className="link" onClick={onEdit}>
-          Edit
-        </button>
+        {onEdit && (
+          <button type="button" className="link" onClick={onEdit}>
+            Edit
+          </button>
+        )}
         {onDelete && (
           <button type="button" className="link danger" onClick={onDelete}>
             Delete

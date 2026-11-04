@@ -141,6 +141,14 @@ function orchestratorRegistration(
   };
 }
 
+/** Which runtime the system pool runs (builtin-orchestrator spec 3.14). */
+function runtimeName(pools: Pool[] | undefined): string | undefined {
+  const runtime = pools?.find((p) => p.system === "orchestrator")?.runtime;
+  if (runtime === "builtin") return "Built-in";
+  if (runtime === "nanoclaw") return "NanoClaw";
+  return undefined;
+}
+
 function Glyph({ d }: { d: string }) {
   return (
     <svg viewBox="0 0 24 24" width={14} height={14} aria-hidden="true">
@@ -349,9 +357,13 @@ export function Chat({ onOpenSetup }: { onOpenSetup?: (step?: 1 | 2 | 3) => void
   }
 
   const registration = orchestratorRegistration(pools, instances, agents, engines, now);
+  const runtime = runtimeName(pools);
   const status = (
     <p className={`chat-status${registration.ok ? " registered" : ""}`} role="status">
-      <span className="chat-status-word">Orchestrator: {registration.word}</span>
+      <span className="chat-status-word">
+        Orchestrator: {runtime && `${runtime} · `}
+        {registration.word}
+      </span>
       <span className="muted small"> · {registration.reason}</span>
     </p>
   );

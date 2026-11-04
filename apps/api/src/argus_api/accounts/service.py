@@ -6,6 +6,7 @@ store and are only ever handed to the agent holding a lease.
 
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -329,6 +330,7 @@ async def lease(
     task_id: str | None,
     attempt: int | None,
     prefer: HarnessModel | None = None,
+    credential_kinds: Sequence[str] | None = None,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
     least leased, then name); the local model is a tier below every cloud account,
@@ -341,7 +343,9 @@ async def lease(
     Without `task_id` (the internal orchestrator's engine; the route checks who may)
     no task narrows the providers. `prefer` (its `orchestrator.model`) is tried
     first on its own provider; when that cannot serve, the plain ranking applies.
-    A lease on the preferred provider carries the preferred `model`."""
+    A lease on the preferred provider carries the preferred `model`.
+    `credential_kinds` narrows eligibility to those kinds, never the order
+    (builtin-orchestrator spec 3.4)."""
     if not runtime_providers:
         raise ValidationFailedError("runtime_providers must be non-empty")
     if task_id is None or attempt is None:
@@ -355,7 +359,9 @@ async def lease(
     await release(tx, agent_id, "replaced", role)
     result = None
     if prefer is not None and allowed is not None and prefer.provider in allowed:
-        result = await _try_lease(tx, agent_id, store, role, [prefer.provider])
+        result = await _try_lease(
+            tx, agent_id, store, role, [prefer.provider], kinds=credential_kinds
+        )
         if result is not None:
             result = result.model_copy(update={"model": prefer.model})
     if result is None:
@@ -368,6 +374,7 @@ async def lease(
             reuse_held=reuse_held,
             prefer_local=prefer_local,
             only_account=scope.account,
+            kinds=credential_kinds,
         )
     if result is None:
         reset = await earliest_reset(tx, role, allowed)
@@ -579,7 +586,14 @@ async def exhausted(
         prefer_local = await _prefer_local(tx, task_id, role)
     allowed = scope.providers
     next_candidate = _only(
-        await _ranked(tx, agent_id, role, allowed, prefer_local=prefer_local),
+        await _ranked(
+            tx,
+            agent_id,
+            role,
+            allowed,
+            prefer_local=prefer_local,
+            kinds=report.credential_kinds,
+        ),
         scope.account,
     )
     # The switch itself happens at the next claim, through a lease bound to it.
@@ -1195,6 +1209,7 @@ async def _try_lease(
     reuse_held: bool = False,
     prefer_local: bool = False,
     only_account: str | None = None,
+    kinds: Sequence[str] | None = None,
 ) -> AccountLease | None:
     """The best usable account for `role` across every provider: cloud before the
     local model (the reverse with `prefer_local`, whose fallback is the cloud in this
@@ -1210,7 +1225,13 @@ async def _try_lease(
     account is the only candidate: when it cannot serve, nothing is leased."""
     reuse = reuse_held and role == "executor"
     candidates = await _ranked(
-        tx, agent_id, role, runtime_providers, reuse=reuse, prefer_local=prefer_local
+        tx,
+        agent_id,
+        role,
+        runtime_providers,
+        reuse=reuse,
+        prefer_local=prefer_local,
+        kinds=kinds,
     )
     candidates = _only(candidates, only_account)
     for row in candidates:
@@ -1297,6 +1318,7 @@ async def _ranked(
     *,
     reuse: bool = False,
     prefer_local: bool = False,
+    kinds: Sequence[str] | None = None,
 ) -> list[aiosqlite.Row]:
     """The usable accounts for `role` in lease order (cloud before the local
     model, or the reverse with `prefer_local`, then priority, least leased, then provider/name/id). An exhausted
@@ -1317,6 +1339,7 @@ async def _ranked(
             for r in rows
             if role_accepts(role, r["provider"], runtime_providers)
             and _serves(r, role)
+            and (kinds is None or r["kind"] in kinds)
             and (
                 (reuse and r["mine"] is not None)
                 or r["max_leases"] is None

@@ -35,6 +35,8 @@ def test_fresh_install_facts_are_false(client: TestClient) -> None:
         "worker": False,
         "orchestrator": False,
         "dismissed": False,
+        "orchestrator_runtime": None,
+        "builtin_account": None,
     }
 
 

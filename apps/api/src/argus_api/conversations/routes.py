@@ -15,6 +15,8 @@ from argus_core.conversations import (
     ChatContext,
     ChatOriginTask,
     ChatSessionPut,
+    ChatUsageAck,
+    ChatUsageReport,
     Conversation,
     ConversationCreate,
     ConversationList,
@@ -287,6 +289,30 @@ async def post_chat_reply(
             secrets=(token,) if token else (),
             pricing_file=settings.pricing_file,
         )
+
+
+@router.post("/agents/me/chat/{conversation_id}/usage")
+async def post_chat_usage(
+    conversation_id: str,
+    body: ChatUsageReport,
+    db: DbDep,
+    settings: SettingsDep,
+    agent_id: AgentDep,
+) -> ChatUsageAck:
+    """Usage of one model call in a turn still in flight (builtin-orchestrator
+    3.9). The answer says whether the daily cap is reached counting it; a
+    runtime reports a turn's usage here or with its reply, never both."""
+    await _require_internal_orchestrator(db, agent_id)
+    async with db.write() as tx:
+        capped = await service.record_step_usage(
+            tx,
+            conversation_id,
+            body.turn_id,
+            body.usage,
+            settings.pricing_file,
+            settings.model_policy_path,
+        )
+    return ChatUsageAck(cap_reached=capped)
 
 
 @router.get("/agents/me/chat/{conversation_id}/context")

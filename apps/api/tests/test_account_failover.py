@@ -1106,3 +1106,30 @@ def test_the_internal_orchestrator_prefers_its_model(
     # A value that names no harness engine is no preference.
     client.put("/api/settings/orchestrator.model", json={"value": "gemini/pro"})
     assert lease()["name"] == "claude-main"
+
+
+async def test_credential_kinds_narrow_without_reordering(
+    db: Database, store: MemorySecretStore
+) -> None:
+    """The built-in orchestrator leases API keys only (builtin-orchestrator 3.4)."""
+    await add(db, store, "sub", kind="subscription", priority=9)
+    await add(db, store, "low", priority=1)
+    await add(db, store, "high", priority=5)
+
+    async def leased(kinds: list[str] | None) -> str:
+        async with db.write() as tx:
+            got = await accounts.lease(
+                tx,
+                A,
+                ["anthropic"],
+                store,
+                task_id=None,
+                attempt=None,
+                credential_kinds=kinds,
+            )
+            await accounts.release(tx, A, "released", "engine")
+        return got.name
+
+    assert await leased(None) == "sub"
+    assert await leased(["api_key"]) == "high"  # the same order without `sub`
+    assert await leased(["api_key", "subscription"]) == "sub"

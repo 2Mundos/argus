@@ -143,6 +143,7 @@ async def create_task(
     hourly_limit: int | None = None,
     untrusted: bool = False,
     idempotency_key: str | None = None,
+    chat_turn: str | None = None,
 ) -> Task:
     """Create a task.
 
@@ -156,7 +157,13 @@ async def create_task(
     """
     if idempotency_key is None:
         return await _create_task(
-            tx, body, actor, as_worker, hourly_limit=hourly_limit, untrusted=untrusted
+            tx,
+            body,
+            actor,
+            as_worker,
+            hourly_limit=hourly_limit,
+            untrusted=untrusted,
+            chat_turn=chat_turn,
         )
     digest = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
     async with tx.conn.execute(
@@ -173,7 +180,13 @@ async def create_task(
             )
         return await get_task(tx.conn, seen["task_id"])
     task = await _create_task(
-        tx, body, actor, as_worker, hourly_limit=hourly_limit, untrusted=untrusted
+        tx,
+        body,
+        actor,
+        as_worker,
+        hourly_limit=hourly_limit,
+        untrusted=untrusted,
+        chat_turn=chat_turn,
     )
     await tx.conn.execute(
         "INSERT INTO task_creation_keys (actor, idempotency_key, request_digest,"
@@ -191,6 +204,7 @@ async def _create_task(
     *,
     hourly_limit: int | None,
     untrusted: bool,
+    chat_turn: str | None = None,
 ) -> Task:
     if body.parent_id is not None:
         parent = await _row(tx.conn, body.parent_id)
@@ -251,7 +265,9 @@ async def _create_task(
         else DifficultySource.INFERRED
     )
     origin_conversation_id = (
-        await orchestrator.task_origin(tx.conn, tx.now, actor.removeprefix("agent:"))
+        await orchestrator.task_origin(
+            tx.conn, tx.now, actor.removeprefix("agent:"), chat_turn
+        )
         if actor.startswith("agent:")
         else None
     )
@@ -3381,6 +3397,11 @@ async def _apply(
         await _promote_dependents(tx, row["id"])
     elif new in (S.FAILED, S.CANCELLED):
         await _flag_dependents(tx, row["id"], new)
+    if new in (S.SUCCEEDED, S.FAILED, S.CANCELLED) and row["origin_conversation_id"]:
+        # Imported here: conversations import the orchestrator, which imports us.
+        from argus_api.conversations import service as conversations
+
+        await conversations.queue_task_update(tx, row["origin_conversation_id"])
     if new is S.FAILED and row["created_by"].startswith("routine:"):
         await routine_failures.after_failed_run(
             tx, row["created_by"].removeprefix("routine:")

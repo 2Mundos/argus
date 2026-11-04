@@ -3660,6 +3660,39 @@
         "title": "ChatSessionPut",
         "type": "object"
       },
+      "ChatUsageAck": {
+        "properties": {
+          "cap_reached": {
+            "title": "Cap Reached",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cap_reached"
+        ],
+        "title": "ChatUsageAck",
+        "type": "object"
+      },
+      "ChatUsageReport": {
+        "description": "One model call of a built-in orchestrator turn (builtin-orchestrator 3.9).",
+        "properties": {
+          "turn_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Turn Id",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/TurnUsage"
+          }
+        },
+        "required": [
+          "turn_id",
+          "usage"
+        ],
+        "title": "ChatUsageReport",
+        "type": "object"
+      },
       "Check": {
         "description": "One measured fact about a pool's readiness. `ok` is None when it could not\nbe verified from here (`detail` says why); only False blocks a launch.",
         "properties": {
@@ -9024,6 +9057,21 @@
             ],
             "title": "Attempt"
           },
+          "credential_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AccountKind"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Kinds"
+          },
           "native_session": {
             "anyOf": [
               {
@@ -11802,6 +11850,21 @@
             ],
             "title": "Attempt"
           },
+          "credential_kinds": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AccountKind"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Kinds"
+          },
           "reuse_held": {
             "default": false,
             "title": "Reuse Held",
@@ -11954,6 +12017,81 @@
           "failures"
         ],
         "title": "LocalAttempt",
+        "type": "object"
+      },
+      "LocalCandidate": {
+        "description": "A model server that answered `/v1/models` on this node\n(builtin-orchestrator spec 3.11).",
+        "properties": {
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "preferred": {
+            "title": "Preferred",
+            "type": "boolean"
+          },
+          "server_hint": {
+            "enum": [
+              "ollama",
+              "lmstudio",
+              "llamacpp"
+            ],
+            "title": "Server Hint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url",
+          "server_hint",
+          "models",
+          "preferred"
+        ],
+        "title": "LocalCandidate",
+        "type": "object"
+      },
+      "LocalDetection": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/LocalCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "title": "LocalDetection",
         "type": "object"
       },
       "LocalModelInfo": {
@@ -13287,6 +13425,17 @@
             "title": "Account",
             "type": "boolean"
           },
+          "builtin_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Builtin Account"
+          },
           "dismissed": {
             "title": "Dismissed",
             "type": "boolean"
@@ -13294,6 +13443,21 @@
           "orchestrator": {
             "title": "Orchestrator",
             "type": "boolean"
+          },
+          "orchestrator_runtime": {
+            "anyOf": [
+              {
+                "enum": [
+                  "builtin",
+                  "nanoclaw"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator Runtime"
           },
           "worker": {
             "title": "Worker",
@@ -17964,7 +18128,8 @@
       "RuntimeKind": {
         "enum": [
           "plain",
-          "nanoclaw"
+          "nanoclaw",
+          "builtin"
         ],
         "title": "RuntimeKind",
         "type": "string"
@@ -19149,7 +19314,8 @@
       "TargetKind": {
         "enum": [
           "docker",
-          "kubernetes"
+          "kubernetes",
+          "inprocess"
         ],
         "title": "TargetKind",
         "type": "string"
@@ -22595,6 +22761,17 @@
       },
       "TurnUsage": {
         "properties": {
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
           "input_tokens": {
             "anyOf": [
               {
@@ -25318,6 +25495,33 @@
         ]
       }
     },
+    "/api/accounts/local/detect": {
+      "post": {
+        "description": "Model servers already running on this node: `GET /v1/models` on 127.0.0.1\nand host.docker.internal at 11434 (Ollama), 1234 (LM Studio) and 8080\n(llama.cpp, Strata). No credential is sent and nothing is stored\n(builtin-orchestrator spec 3.11).",
+        "operationId": "detect_local_models_api_accounts_local_detect_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalDetection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Detect Local Models",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/release": {
       "post": {
         "description": "End the agent's leases: one `role`, or all of them.",
@@ -26547,6 +26751,64 @@
           }
         ],
         "summary": "Put Chat Session",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/api/agents/me/chat/{conversation_id}/usage": {
+      "post": {
+        "description": "Usage of one model call in a turn still in flight (builtin-orchestrator\n3.9). The answer says whether the daily cap is reached counting it; a\nruntime reports a turn's usage here or with its reply, never both.",
+        "operationId": "post_chat_usage_api_agents_me_chat__conversation_id__usage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatUsageReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatUsageAck"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Chat Usage",
         "tags": [
           "conversations"
         ]
@@ -30014,7 +30276,7 @@
     },
     "/api/onboarding": {
       "get": {
-        "description": "Whether a fresh install has an account, a worker pool and the orchestrator.",
+        "description": "Whether a fresh install has an account, a worker pool and the orchestrator,\nand which orchestrator runtime `auto` would pick now.",
         "operationId": "get_onboarding_api_onboarding_get",
         "responses": {
           "200": {
@@ -30262,7 +30524,7 @@
         ]
       },
       "put": {
-        "description": "Create or replace a pool definition, including its replica cap (admin only).\nThe reconciler converges instances to it within seconds. This replaces `env`\nwhole; PATCH changes single variables without resending the others.",
+        "description": "Create or replace a pool definition, including its replica cap (admin only).\nThe reconciler converges instances to it within seconds. This replaces `env`\nwhole; PATCH changes single variables without resending the others.\n`422 inprocess_system_only` for the in-process target: only enabling the\nbuilt-in orchestrator writes one.",
         "operationId": "upsert_pool_api_pools__name__put",
         "parameters": [
           {

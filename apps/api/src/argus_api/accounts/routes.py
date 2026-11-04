@@ -26,6 +26,7 @@ from argus_core.accounts import (
     FallbackResult,
     LeaseRequest,
     LeaseRole,
+    LocalDetection,
     QuotaRefresh,
     UsageReport,
     UsageSeries,
@@ -34,7 +35,7 @@ from argus_core.cost import CostReport, CostWindow
 from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field
 
-from argus_api.accounts import cost, custom, pricing, service, usage
+from argus_api.accounts import cost, custom, local_detect, pricing, service, usage
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -454,6 +455,17 @@ async def delete_account(
         raise
 
 
+@router.post("/local/detect")
+async def detect_local_models(request: Request, _: AdminDep) -> LocalDetection:
+    """Model servers already running on this node: `GET /v1/models` on 127.0.0.1
+    and host.docker.internal at 11434 (Ollama), 1234 (LM Studio) and 8080
+    (llama.cpp, Strata). No credential is sent and nothing is stored
+    (builtin-orchestrator spec 3.11)."""
+    return await local_detect.detect(
+        getattr(request.app.state, "local_detect_transport", None)
+    )
+
+
 @router.post("/lease")
 async def lease_account(
     request: Request,
@@ -495,6 +507,7 @@ async def lease_account(
             task_id=body.task_id,
             attempt=body.attempt,
             prefer=prefer,
+            credential_kinds=body.credential_kinds,
         )
     return await with_local_context(request, leased)
 
@@ -509,9 +522,14 @@ async def _require_orchestrator_engine(
 
 
 async def with_local_context(request: Request, leased: AccountLease) -> AccountLease:
-    """Fill a local lease's `context_tokens` from the probe (cached; outside the
-    transaction). Unknown stays absent: the harness then assumes a small window."""
-    if leased.provider != LOCAL_PROVIDER or "context_tokens" in leased.credential:
+    """Fill a local lease's `context_tokens`, and its model when the account names
+    none, from the probe (cached; outside the transaction). Unknown stays absent:
+    the harness then assumes a small window (builtin-orchestrator spec 3.4)."""
+    if leased.provider != LOCAL_PROVIDER:
+        return leased
+    needs_ctx = "context_tokens" not in leased.credential
+    needs_model = leased.settings is not None and leased.settings.model is None
+    if not (needs_ctx or needs_model):
         return leased
     local_model = getattr(request.app.state, "local_model", None)
     if local_model is None:
@@ -521,11 +539,12 @@ async def with_local_context(request: Request, leased: AccountLease) -> AccountL
     except Exception:  # a probe problem never fails the lease
         log.exception("local model probe failed while leasing")
         return leased
-    if not info.n_ctx:
-        return leased
-    return leased.model_copy(
-        update={"credential": {**leased.credential, "context_tokens": info.n_ctx}}
-    )
+    update: dict = {}
+    if needs_ctx and info.n_ctx:
+        update["credential"] = {**leased.credential, "context_tokens": info.n_ctx}
+    if needs_model and info.reachable and info.model and leased.settings is not None:
+        update["settings"] = leased.settings.model_copy(update={"model": info.model})
+    return leased.model_copy(update=update) if update else leased
 
 
 @router.post("/release", status_code=status.HTTP_204_NO_CONTENT)

@@ -195,6 +195,9 @@ async def create_task(
     caller: CallerDep,
     settings: SettingsDep,
     idempotency_key: Annotated[str | None, Header(min_length=1, max_length=200)] = None,
+    x_argus_chat_turn: Annotated[
+        str | None, Header(min_length=1, max_length=80, include_in_schema=False)
+    ] = None,
 ) -> Task:
     """Orchestrators and admins create any task; workers only subtasks of a task
     they hold. Past the per-agent hourly limit, an agent's new tasks wait for
@@ -212,6 +215,7 @@ async def create_task(
             as_worker=as_worker,
             hourly_limit=hourly_limit,
             idempotency_key=idempotency_key,
+            chat_turn=x_argus_chat_turn,
         )
 
 

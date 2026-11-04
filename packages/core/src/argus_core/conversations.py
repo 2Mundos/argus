@@ -6,6 +6,10 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Sent by the built-in orchestrator with each tool call of a turn: the turn id,
+# so a task it creates gets that turn's conversation (builtin-orchestrator 3.6).
+CHAT_TURN_HEADER = "X-Argus-Chat-Turn"
+
 
 class ConversationKind(StrEnum):
     CHAT = "chat"
@@ -101,9 +105,22 @@ class AgentChatReply(BaseModel):
 
 
 class TurnUsage(BaseModel):
+    # Uncached input; cache reads are `cached_input_tokens`, priced at the cached rate.
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cached_input_tokens: int | None = None
     model: str | None = None
+
+
+class ChatUsageReport(BaseModel):
+    """One model call of a built-in orchestrator turn (builtin-orchestrator 3.9)."""
+
+    turn_id: str = Field(min_length=1, max_length=80)
+    usage: TurnUsage
+
+
+class ChatUsageAck(BaseModel):
+    cap_reached: bool
 
 
 class ConversationList(BaseModel):
