@@ -34,6 +34,9 @@ FS_MIB = 512
 BACKING_SLACK_MIB = 16
 CAP_SYS_ADMIN = 21
 INSTANCES_ROOT_MAX = 56  # NanoclawOptions.instances_root
+TMPDIR_ENV = "ARGUS_DISK_GUARD_RT_TMPDIR"
+BASE_PREFIX = "argus-dg-"
+MKDTEMP_RANDOM_CHARS = 8  # tempfile's random name length
 TOOLS = (
     "dockerd",
     "containerd",
@@ -365,6 +368,51 @@ def mounts_under(base: Path, mounts: list[MountEntry]) -> list[str]:
     return sorted(points, key=lambda p: (-p.count("/"), p))
 
 
+def is_canonical(path: Path | str) -> bool:
+    """Absolute, normalised and free of symlink components: what mountinfo and
+    `losetup` report for it."""
+    p = str(path)
+    return os.path.isabs(p) and os.path.realpath(p) == os.path.normpath(p) == p
+
+
+def canonical_parent(given: str) -> Path:
+    """The directory the harness directory goes in, refused unless canonical."""
+    if not os.path.isabs(given) or not os.path.isdir(given):
+        raise Refused(f"{TMPDIR_ENV} {given!r} is not an existing absolute directory")
+    real, norm = os.path.realpath(given), os.path.normpath(given)
+    if real != norm:
+        raise Refused(
+            f"{TMPDIR_ENV} {given!r} goes through a symlink to {real!r}; mountinfo"
+            f" reports canonical paths, so pass the canonical path"
+            f" ({TMPDIR_ENV}=$(realpath -e {given}))"
+        )
+    return Path(norm)
+
+
+def mount_points_within(root: Path) -> list[str]:
+    """Directories under `root` on another device or mounted, found without
+    entering them (a tree removal must never descend into a mount)."""
+    dev, found = os.lstat(root).st_dev, []
+    for dirpath, dirnames, _ in os.walk(root):
+        for d in list(dirnames):
+            p = os.path.join(dirpath, d)
+            if os.lstat(p).st_dev != dev or os.path.ismount(p):
+                found.append(p)
+                dirnames.remove(d)
+    return found
+
+
+def loop_devices_for(losetup_j: str, image: Path) -> list[str]:
+    """Devices in `losetup -j` output whose backing file is exactly `image`."""
+    devs = []
+    for line in losetup_j.splitlines():
+        dev, _, rest = line.partition(":")
+        backing = rest.rpartition("(")[2].removesuffix(")")
+        if dev.startswith("/dev/loop") and dev[9:].isdigit() and backing == str(image):
+            devs.append(dev)
+    return devs
+
+
 # -- the harness ------------------------------------------------------------------
 
 
@@ -419,21 +467,27 @@ class Harness:
 
     @classmethod
     def create(cls, token: str, **kw: Any) -> Harness:
-        base = Path(
-            tempfile.mkdtemp(
-                prefix="argus-dg-", dir=os.environ.get("ARGUS_DISK_GUARD_RT_TMPDIR")
-            )
-        )
-        (base / MARKER_FILE).write_text(token)
-        layout = Layout(base)
-        if len(str(layout.instances)) > INSTANCES_ROOT_MAX:
-            shutil.rmtree(base)
+        # Everything is checked before the directory exists, so a refusal
+        # leaves nothing behind.
+        parent = canonical_parent(os.environ.get(TMPDIR_ENV) or tempfile.gettempdir())
+        name = BASE_PREFIX + "x" * MKDTEMP_RANDOM_CHARS
+        instances = Layout(parent / name).instances
+        if len(str(instances)) > INSTANCES_ROOT_MAX:
             raise ValueError(
-                f"{layout.instances} is longer than the {INSTANCES_ROOT_MAX}"
-                " characters a pool's instances_root allows; use a shorter"
-                " ARGUS_DISK_GUARD_RT_TMPDIR"
+                f"{instances} is longer than the {INSTANCES_ROOT_MAX} characters a"
+                f" pool's instances_root allows; use a shorter {TMPDIR_ENV}"
             )
-        return cls(layout, token, **kw)
+        base = Path(tempfile.mkdtemp(prefix=BASE_PREFIX, dir=parent))
+        try:
+            if not is_canonical(base):
+                raise Refused(f"{base} is not canonical ({os.path.realpath(base)})")
+            (base / MARKER_FILE).write_text(token)
+        except BaseException:
+            # Only the directory just made, which holds at most a partial marker.
+            (base / MARKER_FILE).unlink(missing_ok=True)
+            base.rmdir()
+            raise
+        return cls(Layout(base), token, **kw)
 
     def mounts(self) -> list[MountEntry]:
         return parse_mountinfo(self.mountinfo())
@@ -580,62 +634,120 @@ class Harness:
             proc.wait(timeout=STOP_TIMEOUT_S)
             problems.append(f"{name} ignored SIGTERM and was killed")
 
-    def _try(self, problems: list[str], what: str, argv: list[str]) -> None:
+    def _try(self, problems: list[str], what: str, argv: list[str]) -> str | None:
         try:
-            self.run(argv)
-        except (OSError, subprocess.CalledProcessError) as exc:
+            return self.run(argv).stdout
+        except Exception as exc:
             problems.append(f"{what}: {exc}")
+            return None
+
+    def _mounts_under_base(self, problems: list[str]) -> list[str] | None:
+        try:
+            return mounts_under(self.layout.base, self.mounts())
+        except Exception as exc:
+            problems.append(f"reading mountinfo: {exc}")
+            return None
+
+    def _ownership_problems(self) -> list[str]:
+        base, problems = self.layout.base, []
+        if not is_canonical(base):
+            problems.append(
+                f"{base} is not canonical (resolves to {os.path.realpath(base)});"
+                " its mounts cannot be matched"
+            )
+        elif read_text(str(base / MARKER_FILE)) != self.token:
+            problems.append(f"{base} lacks the harness marker")
+        return problems
 
     def teardown(self) -> list[str]:
-        """Remove what the harness created; return what it could not."""
+        """Remove what the harness created; return what it could not.
+
+        Never raises: it runs in a `finally` and must not hide the failure that
+        got there."""
         problems: list[str] = []
+        try:
+            self._teardown(problems)
+        except Exception as exc:
+            problems.append(f"teardown stopped: {exc!r}")
+        return problems
+
+    def _teardown(self, problems: list[str]) -> None:
         lay = self.layout
+        if not os.path.lexists(lay.base):
+            return
+        # Ownership first: nothing is unmounted, detached or removed under a
+        # directory not proven to be the harness's own canonical one.
+        if refused := self._ownership_problems():
+            problems.extend(refused)
+            problems.append(
+                f"nothing unmounted, detached or removed; inspect {lay.base} by hand"
+            )
+            return
         if self.client is not None:
             # Containers only on a daemon re-proven to be ours, only with our label.
-            fails = self._failures(fresh=False) if self.verified else ["unverified"]
-            if fails:
-                problems.append(
-                    "containers left: daemon not re-verified: " + "; ".join(fails)
-                )
-            else:
-                for c in self.client.containers.list(
-                    all=True, filters={"label": f"{MARKER_LABEL}={self.token}"}
-                ):
-                    try:
-                        c.remove(force=True)
-                    except Exception as exc:
-                        problems.append(f"container {c.id[:12]}: {exc}")
-            self.client.close()
-        self._stop(self.dockerd, problems, "dockerd")
-        self._stop(self.containerd, problems, "containerd")
-        for point in mounts_under(lay.base, self.mounts()):
-            if point == str(lay.backing):
-                continue
-            self._try(problems, f"unmount {point}", ["umount", point])
-        if lay.image.exists():
             try:
-                found = self.run(["losetup", "-j", str(lay.image)]).stdout
-            except (OSError, subprocess.CalledProcessError) as exc:
-                problems.append(f"losetup -j: {exc}")
-                found = ""
-            for line in found.splitlines():
-                dev = line.split(":", 1)[0]
+                fails = self._failures(fresh=False) if self.verified else ["unverified"]
+                if fails:
+                    problems.append(
+                        "containers left: daemon not re-verified: " + "; ".join(fails)
+                    )
+                else:
+                    for c in self.client.containers.list(
+                        all=True, filters={"label": f"{MARKER_LABEL}={self.token}"}
+                    ):
+                        try:
+                            c.remove(force=True)
+                        except Exception as exc:
+                            problems.append(f"container {c.id[:12]}: {exc}")
+            except Exception as exc:
+                problems.append(f"containers left: {exc}")
+            try:
+                self.client.close()
+            except Exception as exc:
+                problems.append(f"closing the docker client: {exc}")
+        for proc, name in ((self.dockerd, "dockerd"), (self.containerd, "containerd")):
+            try:
+                self._stop(proc, problems, name)
+            except Exception as exc:
+                problems.append(f"stopping {name}: {exc}")
+        mounted = self._mounts_under_base(problems)
+        if mounted is None:
+            problems.append(f"mounts unknown; nothing detached, {lay.base} kept")
+            return
+        for point in mounted:
+            # The harness never mounts on base itself; such a mount is not ours.
+            if point not in (str(lay.backing), str(lay.base)):
+                self._try(problems, f"unmount {point}", ["umount", point])
+        if lay.image.exists():
+            found = self._try(problems, "losetup -j", ["losetup", "-j", str(lay.image)])
+            for dev in loop_devices_for(found or "", lay.image):
                 self._try(problems, f"detach {dev}", ["losetup", "-d", dev])
-        if str(lay.backing) in mounts_under(lay.base, self.mounts()):
+        if str(lay.backing) in mounted:
             self._try(problems, f"unmount {lay.backing}", ["umount", str(lay.backing)])
         if self.created_cgroup_parent:
             try:
                 CGROUP_PARENT.rmdir()  # only succeeds when empty
             except OSError as exc:
                 problems.append(f"cgroup {CGROUP_PARENT}: {exc}")
-        left = mounts_under(lay.base, self.mounts())
-        if left:
+        left = self._mounts_under_base(problems)
+        if left is None or left or os.path.ismount(lay.base):
             problems.append(f"mounts left, directory kept: {left}")
-        elif read_text(str(lay.base / MARKER_FILE)) != self.token:
-            problems.append(f"{lay.base} lacks the harness marker; not removed")
+        elif refused := self._ownership_problems():
+            problems.extend(refused)
         else:
-            shutil.rmtree(lay.base)
-        return problems
+            self._remove_tree(problems)
+
+    def _remove_tree(self, problems: list[str]) -> None:
+        base = self.layout.base
+        try:
+            if inside := mount_points_within(base):
+                problems.append(f"mount points inside, directory kept: {inside}")
+                return
+            shutil.rmtree(
+                base, onexc=lambda _f, p, exc: problems.append(f"remove {p}: {exc}")
+            )
+        except OSError as exc:
+            problems.append(f"remove {base}: {exc}")
 
 
 @dataclass

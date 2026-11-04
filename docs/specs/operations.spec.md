@@ -293,8 +293,11 @@ paths or identifiers.
 injected `stat` / `statvfs` / clock / Docker-info / `io.stat` / directory-size
 fixtures, a fake container target and temporary directories.
 `test_disk_guard_runtime.py` covers the real-runtime harness itself without
-privilege: prerequisite detection, the isolation preflight, teardown ownership
-and evidence outcomes.
+privilege, with a fake host (recorded commands, scripted mountinfo and
+`losetup -j` output): prerequisite detection, the canonical-path and length
+checks in `create`, the isolation preflight, teardown ownership, cleanup after
+each failed mount phase, failures reported instead of raised, foreign mounts and
+loop devices left alone, and evidence outcomes.
 
 **Real runtime (opt-in).** `sudo -E make test-disk-guard-runtime`
 (`ARGUS_DISK_GUARD_REAL_RUNTIME=1`,
@@ -308,19 +311,48 @@ the `io` controller, and a busybox image (pulled by the test daemon, or
 (`ARGUS_DISK_GUARD_RT_EVIDENCE`), with each check as observed and outcome
 `verified` only if every check held.
 
-- **Isolation.** The harness makes a marked temp directory, mounts a tmpfs there
-  and on it a 512 MiB ext4 loop filesystem. That filesystem holds the database,
-  the instance directories and the Docker data root. It then starts its own
+- **Where it runs.** The harness directory is `argus-dg-` plus 8 random
+  characters, made by `mkdtemp` in `ARGUS_DISK_GUARD_RT_TMPDIR` (default: the
+  system temp directory). That parent must be an existing absolute directory
+  with no symlink in any component, because mountinfo and `losetup` report
+  canonical paths and teardown matches its mounts by path. Pass it through
+  `realpath`:
+  `sudo -E env ARGUS_DISK_GUARD_RT_TMPDIR=$(realpath -e /path) make test-disk-guard-runtime`.
+  The instances root, `<parent>/argus-dg-XXXXXXXX/fs/instances`, may be at most
+  56 characters (a pool's `instances_root` limit), so the parent may be at most
+  25 characters (56 − 13 for `/fs/instances` − 10 for `/argus-dg-` − 8). Both
+  checks run before the directory is created; a refusal creates nothing.
+- **Isolation.** The harness marks its directory, mounts a tmpfs there and on it
+  a 512 MiB ext4 loop filesystem. That filesystem holds the database, the
+  instance directories and the Docker data root. It then starts its own
   containerd and dockerd: their sockets, data root, exec root and pidfile are in
   that directory, with an ownership label and no networking setup. Before it
   creates a container or fills a byte, a preflight proves the setup is its own:
   the socket is under the directory and is neither the host default nor
   `DOCKER_HOST`; the pidfile names the spawned process; `DockerRootDir`, the
   engine ID and the label match; and the daemon has no containers. Otherwise it
-  refuses. Teardown (in `finally`) re-proves the daemon's identity, then removes
-  only labelled containers, its own mounts and loop device, and the directory,
-  and only if the marker matches. It reports anything it leaves behind. The
-  live Argus database, the host daemon and production flags are never touched.
+  refuses. The live Argus database, the host daemon and production flags are
+  never touched.
+- **Teardown** runs in `finally` and never raises, so it cannot hide the failure
+  that led there; whatever it cannot do comes back as a problem string, recorded
+  in the evidence as `teardown_problems`, and fails the test. Before any
+  destructive command it proves ownership: if the directory is not canonical
+  or its marker is missing or holds another token, it unmounts, detaches and
+  removes nothing. Otherwise it removes containers only from a daemon whose
+  identity it re-proves and only with its label, stops the daemons it spawned,
+  unmounts only mounts strictly below its directory (deepest first, the tmpfs
+  last), and detaches only loop devices `losetup -j` lists for its own image.
+  It works from whatever a failed mount phase left (tmpfs, `mkfs.ext4` or loop
+  mount). It keeps the directory when mountinfo cannot be read, a mount stays,
+  the directory is itself a mount point, or a mount point is found inside it,
+  and reports a removal error (such as `EBUSY`) instead of raising it.
+- **Recovery after a failed run.** Read `teardown_problems` and `base` in the
+  evidence file. Inspect with `findmnt -R <base>` and
+  `losetup -j <base>/backing/fs.img`. Unmount only paths under that reported
+  `argus-dg-*` directory, deepest first (`<base>/fs` before `<base>/backing`),
+  detach only the loop devices `losetup -j` names for that image, and remove the
+  directory only once `findmnt -R <base>` lists nothing. Never unmount or detach
+  anything outside it.
 - **What it checks.** The production `DiskGuard.run_pass` and `PauseController`
   run on a real `DockerTarget`, real `statvfs` and the real `io.stat` reader.
   Thresholds are scaled (warn 192 MiB, clear 224, refuse 96, resume 128).
@@ -339,12 +371,18 @@ the `io` controller, and a busybox image (pulled by the test daemon, or
   NanoClaw sessions (busybox stand-ins carry its labels); the systemd cgroup
   driver path (cgroupfs is used); the failed-measurement pause and stale
   snapshot; adoption after an API restart; remote daemons and Kubernetes.
-- **Not yet run.** The harness is implemented, but the real-runtime run has not
-  been performed. Its first environment, the Argus agent sandbox (Linux 6.17,
-  uid 1000, cgroup v2 with `io`, 2026-11-04), failed closed. Missing there:
-  `dockerd`, `containerd`, `containerd-shim-runc-v2` and `runc` on PATH; root or
-  `CAP_SYS_ADMIN`; a writable `/sys/fs/cgroup`; and `/dev/loop-control`. No
-  real-runtime behaviour has been observed yet.
+- **Unverified.** No real-runtime run has completed; CI runs only the unit tests
+  with fakes, so neither the harness's privileged path nor the guard's real
+  `docker pause` and `io.stat` behaviour has observed evidence. The Argus agent
+  sandbox (Linux 6.17, uid 1000, cgroup v2 with `io`, 2026-11-04) failed closed,
+  lacking `dockerd`, `containerd`, `containerd-shim-runc-v2` and `runc` on
+  PATH, root or `CAP_SYS_ADMIN`, a writable `/sys/fs/cgroup` and
+  `/dev/loop-control`. One operator run as root used a
+  `ARGUS_DISK_GUARD_RT_TMPDIR` that was a symlink: the harness compared
+  lexical paths with mountinfo's canonical ones, refused the filesystem, and
+  its teardown then left the tmpfs, the ext4 mount and a loop device behind.
+  `create` now refuses such a path and teardown proves ownership first; that
+  fix is covered only by the unit tests with fakes.
 
 ### Open questions (owner decisions)
 
