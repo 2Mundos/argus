@@ -106,6 +106,10 @@ reload-preview: ## Safely fast-forward clean main, preflight migrations, back up
 bench: ## MCP inbox journey benchmark (docs/specs/mcp-operations.spec.md 3.5).
 	$(UV) run python apps/api/bench/mcp_inbox.py
 
+.PHONY: tool-tokens
+tool-tokens: ## Token cost of the MCP tool text per role (docs/drafts/2026-11-04.tool-description-rules.draft.md).
+	$(UV) run python scripts/tool_tokens.py
+
 .PHONY: openapi openapi-check openapi-client-check
 openapi: ## Regenerate openapi.json and the TS client types from the API.
 	$(UV) run python scripts/export_openapi.py
