@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { claimedGitIdentity, poolGitIdentity, scopeCommandGuard, scopeGitIdentity } from "./argus-git-identity.js";
+import {
+  claimedGitIdentity,
+  poolGitIdentity,
+  scopeCommandGuard,
+  scopeGitIdentity,
+} from "./argus-git-identity.js";
 
 const POOL = { ARGUS_GIT_AUTHOR_NAME: "Pool", ARGUS_GIT_AUTHOR_EMAIL: "pool@example.invalid" };
 const TASK = { name: "Project Dev", email: "dev@example.invalid" };
