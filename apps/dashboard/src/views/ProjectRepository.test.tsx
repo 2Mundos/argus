@@ -68,6 +68,11 @@ const net = vi.hoisted(() => {
       return json(project);
     }
     if (path === "/api/task-kinds") return json(state.kinds);
+    if (path === "/api/projects/bare/settings")
+      return json({
+        scope: "bare",
+        settings: [{ key: "task_default_budget_usd", value: 3, source: "project" }],
+      });
     if (path === "/api/tasks" && input.method === "POST") {
       state.tasks.push((await input.json()) as Record<string, unknown>);
       return json({ id: "new" }, 201);
@@ -203,6 +208,27 @@ describe("new task with a project that has no repository", () => {
     await user.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(net.tasks).toHaveLength(1));
     expect(net.puts).toEqual([]);
+  });
+
+  it("prefills the budget from the project setting and sends a cleared one as no budget", async () => {
+    const user = userEvent.setup();
+    await openForm(user);
+    await user.type(screen.getByLabelText("Title"), "Summarise");
+    const budget = screen.getByLabelText(/^Budget \(USD/) as HTMLInputElement;
+    await waitFor(() => expect(budget.value).toBe("3"));
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(net.tasks).toHaveLength(1));
+    expect(net.tasks[0]).not.toHaveProperty("budget_usd");
+
+    cleanup();
+    await openForm(user);
+    await user.type(screen.getByLabelText("Title"), "Unbounded");
+    const typed = screen.getByLabelText(/^Budget \(USD/) as HTMLInputElement;
+    await waitFor(() => expect(typed.value).toBe("3"));
+    fireEvent.change(typed, { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(net.tasks).toHaveLength(2));
+    expect(net.tasks[1]).toMatchObject({ budget_usd: null });
   });
 
   it("cancel leaves the form and the project untouched", async () => {

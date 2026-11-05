@@ -18,6 +18,7 @@ const task = {
     "spec",
     "acceptance",
     "priority",
+    "budget_usd",
     "required_capabilities",
     "knowledge",
     "depends_on",
@@ -53,6 +54,21 @@ describe("buildChanges", () => {
   it("reports what the browser can tell is wrong", () => {
     const draft = { ...toDraft(task), title: "  ", priority: "1.5" };
     expect(Object.keys(buildChanges(task, draft).errors).sort()).toEqual(["priority", "title"]);
+  });
+
+  it("raises, clears and checks the budget", () => {
+    const budgeted = { ...task, budget_usd: 2 } as Task;
+    expect(toDraft(budgeted).budget_usd).toBe("2");
+    expect(buildChanges(budgeted, { ...toDraft(budgeted), budget_usd: "4.5" }).changes).toEqual({
+      budget_usd: 4.5,
+    });
+    expect(buildChanges(budgeted, { ...toDraft(budgeted), budget_usd: " " }).changes).toEqual({
+      budget_usd: null,
+    });
+    for (const bad of ["0", "-1", "10000.01", "abc"])
+      expect(Object.keys(buildChanges(task, { ...toDraft(task), budget_usd: bad }).errors)).toEqual(
+        ["budget_usd"],
+      );
   });
 
   it("pins a model, clears a pin back to the policy and checks the model ID", () => {

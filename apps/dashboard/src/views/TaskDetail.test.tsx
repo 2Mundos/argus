@@ -61,6 +61,7 @@ vi.mock("./EventList", () => ({
 }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
 vi.mock("./TaskTerminal", () => ({ TaskTerminal: () => null }));
+vi.mock("./TaskCost", () => ({ TaskCostTile: () => null }));
 vi.mock("../delivery", () => ({ TaskDelivery: () => null }));
 vi.mock("../failover", () => ({ TaskFailover: () => null }));
 
@@ -134,6 +135,17 @@ describe("TaskDetail blocked reason", () => {
     const state = screen.getByText("blocked").closest("dd");
     expect(state?.textContent).toMatch(/keep running out of memory/);
     expect(state?.textContent).toMatch(/OOM-killed/);
+  });
+
+  it("offers Raise budget instead of an Unblock the API would refuse", async () => {
+    mock.task = { ...base, state: "blocked", block_reason: "budget_exhausted", budget_usd: 2 };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    expect(screen.getByText(/its budget is spent/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Raise budget" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Unblock" })).toBeNull();
   });
 });
 

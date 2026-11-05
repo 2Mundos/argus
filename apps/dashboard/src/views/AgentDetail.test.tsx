@@ -12,6 +12,25 @@ const mock = vi.hoisted(() => ({
   taskLog: { attempt: 2, lines: [] as unknown[], last_seq: 0 },
   fetchText: undefined as unknown as (path: string) => Promise<string>,
   listener: undefined as undefined | ((e: unknown) => void),
+  cost: {
+    task_id: "task-1",
+    budget_usd: 2,
+    budget_state: "warning",
+    partial: false,
+    pricing: { currency: "USD", as_of: "2026-10-01", version: "v1", source: "shipped" },
+    totals: {
+      runs: 1,
+      measured_runs: 1,
+      not_reported_runs: 0,
+      input_tokens: 1000,
+      output_tokens: 100,
+      cached_input_tokens: 0,
+      estimated_cost_usd: 1.7,
+      reported_cost_usd: null,
+      unpriced_runs: 0,
+    },
+    by_attempt: [],
+  },
 }));
 
 vi.mock("../api", () => ({
@@ -24,6 +43,7 @@ vi.mock("../api", () => ({
     if (path === "/api/events") return mock.events;
     if (path === "/api/tasks/{task_id}/log") return mock.taskLog;
     if (path === "/api/tasks/{task_id}/steers") return { attempt: 2, items: [] };
+    if (path === "/api/tasks/{task_id}/cost") return mock.cost;
     throw new Error(`unexpected ${path}`);
   },
   fetchText: (path: string) => mock.fetchText(path),
@@ -146,6 +166,9 @@ describe("AgentDetail", () => {
     expect(screen.getByLabelText("Live")).toBeTruthy();
     expect(screen.getByText("thinking about the canary")).toBeTruthy();
     expect(screen.getByText("No model reports.")).toBeTruthy();
+    expect(screen.getByRole("meter", { name: "Budget used" }).getAttribute("aria-valuetext")).toBe(
+      "1.70 USD of 2.00 USD budget",
+    );
     expect(mock.fetchText).not.toHaveBeenCalled();
   });
 

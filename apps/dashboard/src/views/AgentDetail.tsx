@@ -13,6 +13,7 @@ import { TaskLabel, taskLabelText } from "../TaskLabel";
 import { renderTerminalText } from "../terminalLog";
 import { useNow } from "./Activity";
 import { ModelChip } from "./ModelChip";
+import { TaskCostTile } from "./TaskCost";
 import { TaskTerminal } from "./TaskTerminal";
 
 const LOG_TAIL = 200;
@@ -272,6 +273,9 @@ export function AgentDetail({
               )}
             </tbody>
           </table>
+          {data.work.map((task) => (
+            <TaskCostTile key={task.id} taskId={task.id} />
+          ))}
         </>
       )}
     </div>

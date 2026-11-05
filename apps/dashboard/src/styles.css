@@ -976,6 +976,42 @@ main > section.home > .page-header {
   color: var(--muted);
   line-height: 1.2;
 }
+.task-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.task-cost-figures {
+  margin: 0;
+}
+.task-budget {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  --tone: var(--accent);
+}
+.task-budget.budget-warning {
+  --tone: var(--warn);
+}
+.task-budget.budget-exhausted {
+  --tone: var(--danger);
+}
+.task-budget-bar {
+  flex: 0 1 12rem;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.task-budget-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--tone);
+}
+.task-cost-attempts {
+  font-size: 0.85em;
+}
 .task-models {
   display: flex;
   flex-direction: column;
@@ -4249,7 +4285,8 @@ button.link.account-name {
 /* -- project repository ----------------------------------------------------- */
 
 .repo-notice,
-.repo-block-action {
+.repo-block-action,
+.budget-block-action {
   display: grid;
   gap: 0.4rem;
   padding: 0.6rem 0.75rem;
@@ -4259,11 +4296,15 @@ button.link.account-name {
   background: var(--surface-2);
 }
 .repo-notice p,
-.repo-block-action p {
+.repo-block-action p,
+.budget-block-action p {
   margin: 0;
 }
 .repo-notice button {
   justify-self: start;
+}
+.budget-block-action input {
+  max-width: 10rem;
 }
 .project-list {
   display: grid;

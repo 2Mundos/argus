@@ -15,8 +15,10 @@ import { pinText } from "../taskEdit";
 import { WorkerChip } from "../WorkerChip";
 import { Activity } from "./Activity";
 import { AttemptStrip } from "./AttemptStrip";
+import { BudgetBlockAction } from "./BudgetBlockAction";
 import { EventList } from "./EventList";
 import { RepositoryBlockAction } from "./RepositoryBlockAction";
+import { TaskCostTile } from "./TaskCost";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskSteers, useSteersSource } from "./TaskSteers";
 import { TaskTerminal } from "./TaskTerminal";
@@ -209,7 +211,7 @@ export function TaskDetail({
               Edit
             </button>
           )}
-          {task.state === "blocked" && (
+          {task.state === "blocked" && task.block_reason !== "budget_exhausted" && (
             <ActionButton
               pending={action.is("unblock")}
               disabled={action.busy}
@@ -317,6 +319,9 @@ export function TaskDetail({
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
           {task.state === "blocked" && task.block_reason === "env_repository_unconfigured" && (
             <RepositoryBlockAction taskId={taskId} project={task.project} onUnblocked={reload} />
+          )}
+          {task.state === "blocked" && task.block_reason === "budget_exhausted" && (
+            <BudgetBlockAction task={task} onChanged={reload} />
           )}
           <dl className="facts task-facts">
             <dt>State</dt>
@@ -428,6 +433,7 @@ export function TaskDetail({
               <DateChip at={task.created_at} /> by {task.created_by}
             </dd>
           </dl>
+          <TaskCostTile taskId={taskId} />
           {!!modelTrace?.executions.length && (
             <section className="task-models" aria-label="Models">
               <div className="task-models-list">
