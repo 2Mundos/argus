@@ -51,6 +51,9 @@ cp "$here/argus-repo-preflight.docker.test.ts" "$target/src/channels/argus-repo-
 # Command guard presence check (command-guard spec 3): the channel imports it at claim.
 cp "$here/argus-guard.ts" "$target/src/channels/argus-guard.ts"
 cp "$here/argus-guard.test.ts" "$target/src/channels/argus-guard.test.ts"
+# The guard test asserts the shipped manifest registers the hook; keep the pair together.
+mkdir -p "$target/src/channels/engines"
+cp "$here/engines/claude-managed-settings.json" "$target/src/channels/engines/claude-managed-settings.json"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 # Unknown steer outcomes (task steering spec 3.3-3.6), run by scripts/steer-unknown-e2e.sh.
 cp "$here/argus-steer-unknown.e2e.test.ts" "$target/src/channels/argus-steer-unknown.e2e.test.ts"
