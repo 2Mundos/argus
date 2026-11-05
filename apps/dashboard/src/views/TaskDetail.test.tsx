@@ -137,6 +137,34 @@ describe("TaskDetail blocked reason", () => {
   });
 });
 
+describe("TaskDetail workspace", () => {
+  const show = async (workspace: Record<string, unknown> | null) => {
+    mock.task = { ...base, workspace };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+  };
+
+  it.each([
+    ["available", /work can be restored/],
+    ["unavailable", /work cannot be restored or inspected/],
+    ["unknown", /none recorded yet, still running, or state not recognised/],
+  ])("shows the owner and a %s checkpoint", async (checkpoint, text) => {
+    await show({ owner_agent_id: "agent-7", checkpoint });
+    expect(screen.getByText("Workspace")).toBeTruthy();
+    expect(screen.getByText("agent-7")).toBeTruthy();
+    expect(screen.getByText(text)).toBeTruthy();
+    expect(screen.getByText(/newest attempt's worker/)).toBeTruthy();
+  });
+
+  it("explains a null workspace instead of hiding the row", async () => {
+    await show(null);
+    expect(screen.getByText("Workspace")).toBeTruthy();
+    expect(screen.getByText(/has not started an attempt/)).toBeTruthy();
+  });
+});
+
 describe("TaskDetail retry", () => {
   it("titles the Retry button with failures, not claims, against max_attempts", async () => {
     mock.task = { ...base, state: "failed", attempt: 8, failures: 1, max_attempts: 3 };
