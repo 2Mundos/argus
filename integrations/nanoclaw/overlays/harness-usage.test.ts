@@ -4,11 +4,13 @@ import os from "os";
 import path from "path";
 
 import {
+  codexLogLines,
   createClaudeUsageTracker,
   createCodexUsageTracker,
   HARNESS_LOG_FILE,
   harnessLogLines,
   readHarnessContext,
+  recordHarnessCodexLog,
   recordHarnessLog,
   recordHarnessUsage,
   USAGE_RELAY_FILE,
@@ -348,5 +350,276 @@ describe("recordHarnessLog", () => {
     const ok = world(ctx);
     expect(recordHarnessLog({ type: "assistant", message: { content: [] } }, ok.env)).toBe(false);
     expect(fs.existsSync(ok.file)).toBe(false);
+  });
+});
+
+// Codex app-server notifications: method + params as in `codex app-server
+// generate-json-schema` (codex-cli 0.162.1): ItemCompletedNotification {item, threadId, turnId},
+// ThreadItem types agentMessage / commandExecution / fileChange / mcpToolCall / dynamicToolCall /
+// webSearch / reasoning / userMessage, ErrorNotification {error, willRetry}, TurnCompletedNotification.
+const done = (item: Record<string, unknown>) => ({
+  threadId: "th",
+  turnId: "tu",
+  completedAtMs: 1,
+  item: { id: "i1", ...item },
+});
+
+describe("codexLogLines", () => {
+  it("renders assistant text, tool calls with short args, results and errors", () => {
+    expect(
+      codexLogLines("item/completed", done({ type: "agentMessage", text: "Looking.\n\nFixing." })),
+    ).toEqual(["Looking.", "Fixing."]);
+    expect(
+      codexLogLines(
+        "item/completed",
+        done({
+          type: "commandExecution",
+          command: "ls  -la\n/tmp",
+          aggregatedOutput: "a\nb\n",
+          exitCode: 0,
+          status: "completed",
+        }),
+      ),
+    ).toEqual(["▸ shell ls -la /tmp", "  ↳ a b"]);
+    expect(
+      codexLogLines(
+        "item/completed",
+        done({
+          type: "commandExecution",
+          command: "false",
+          aggregatedOutput: "",
+          exitCode: 2,
+          status: "failed",
+        }),
+      ),
+    ).toEqual(["▸ shell false", "  ✗ error: exit 2"]);
+    expect(
+      codexLogLines(
+        "item/completed",
+        done({
+          type: "fileChange",
+          status: "completed",
+          changes: [{ path: "a.py", kind: "update", diff: "SECRETDIFF" }],
+        }),
+      ),
+    ).toEqual(["▸ patch a.py", "  ↳ completed"]);
+    expect(
+      codexLogLines(
+        "item/completed",
+        done({
+          type: "mcpToolCall",
+          server: "gh",
+          tool: "search",
+          arguments: { query: "x" },
+          status: "failed",
+          error: { message: "denied" },
+        }),
+      ),
+    ).toEqual(["▸ gh/search x", "  ✗ error: denied"]);
+    expect(
+      codexLogLines(
+        "item/completed",
+        done({
+          type: "dynamicToolCall",
+          tool: "t",
+          arguments: {},
+          status: "completed",
+          success: true,
+        }),
+      ),
+    ).toEqual(["▸ t"]);
+    expect(
+      codexLogLines("item/completed", done({ type: "webSearch", query: "codex  docs" })),
+    ).toEqual(["▸ web_search codex docs"]);
+    const long = codexLogLines(
+      "item/completed",
+      done({
+        type: "commandExecution",
+        command: "x",
+        aggregatedOutput: "y".repeat(500),
+        exitCode: 0,
+        status: "completed",
+      }),
+    );
+    expect(long[1]!.length).toBeLessThan(210);
+  });
+
+  it("renders errors and the final status", () => {
+    expect(
+      codexLogLines("error", {
+        error: { message: "stream lost" },
+        willRetry: true,
+        threadId: "t",
+        turnId: "u",
+      }),
+    ).toEqual(["codex error (retrying): stream lost"]);
+    expect(codexLogLines("error", { error: { message: "bad" }, willRetry: false })).toEqual([
+      "codex error: bad",
+    ]);
+    expect(
+      codexLogLines("turn/completed", {
+        threadId: "t",
+        turn: { id: "u", status: "completed", items: [] },
+      }),
+    ).toEqual(["codex finished"]);
+    expect(
+      codexLogLines("turn/completed", { turn: { status: "failed", error: { message: "quota" } } }),
+    ).toEqual(["codex finished with an error: quota"]);
+    expect(codexLogLines("turn/completed", { turn: { status: "interrupted" } })).toEqual([
+      "codex finished with an error: interrupted",
+    ]);
+    expect(codexLogLines("turn/completed", { turn: { status: "inProgress" } })).toEqual([]);
+  });
+
+  it("never renders the echoed prompt, reasoning, or unknown and malformed events", () => {
+    const hidden = [
+      done({ type: "userMessage", content: [{ type: "text", text: "PROMPT SECRET" }] }),
+      done({ type: "hookPrompt", fragments: [{ text: "PROMPT SECRET" }] }),
+      done({ type: "reasoning", content: ["THINKING"], summary: ["THINKING"] }),
+      done({ type: "functionCallOutput", name: "x", output: "RAW OUTPUT" }),
+      done({ type: "somethingNew", text: "x" }),
+      done({ type: "agentMessage", text: 5 }),
+      done({ type: "commandExecution" }),
+      { item: "x" },
+      {},
+    ];
+    for (const params of hidden) expect(codexLogLines("item/completed", params)).toEqual([]);
+    for (const method of [
+      "item/started",
+      "item/agentMessage/delta",
+      "item/reasoning/textDelta",
+      "turn/started",
+      "thread/tokenUsage/updated",
+      "nope",
+    ])
+      expect(codexLogLines(method, done({ type: "agentMessage", text: "x" }))).toEqual([]);
+    for (const bad of [null, undefined, "x", 5, []]) {
+      expect(codexLogLines("item/completed", bad)).toEqual([]);
+      expect(codexLogLines(bad, {})).toEqual([]);
+    }
+    expect(codexLogLines("turn/completed", { turn: "x" })).toEqual([]);
+  });
+
+  it("redacts secrets in rendered lines", () => {
+    const lines = codexLogLines(
+      "item/completed",
+      done({
+        type: "commandExecution",
+        command: "curl -H '" + "Authorization: Bearer abcdef1234567890" + "' x",
+        aggregatedOutput: "token=hunter2hunter2 mysecretvalue9",
+        exitCode: 0,
+        status: "completed",
+      }),
+      ["mysecretvalue9"],
+    );
+    const text = lines.join("\n");
+    expect(text).not.toContain("abcdef1234567890");
+    expect(text).not.toContain("hunter2hunter2");
+    expect(text).not.toContain("mysecretvalue9");
+    expect(text).toContain("[redacted]");
+  });
+});
+
+describe("recordHarnessCodexLog and the writer", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  });
+  const world = (
+    context: Record<string, unknown> | null,
+    extraEnv: Record<string, string> = {},
+  ) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argus-codex-log-"));
+    dirs.push(dir);
+    const policy = path.join(dir, "argus-model-policy.json");
+    if (context) fs.writeFileSync(policy, JSON.stringify({ policy: {}, revision: "r", context }));
+    return {
+      dir,
+      env: { ARGUS_MODEL_POLICY_FILE: policy, ...extraEnv } as NodeJS.ProcessEnv,
+      file: path.join(dir, HARNESS_LOG_FILE),
+    };
+  };
+  const ctx = { task_id: "t1", attempt: 2, engine_account_id: "acc-1" };
+  const msg = (text: string) => done({ type: "agentMessage", text });
+
+  it("appends a task and attempt scoped record, redacted before it is written", () => {
+    const w = world(ctx, { MY_API_TOKEN: "envsecretvalue1" });
+    expect(
+      recordHarnessCodexLog(
+        "item/completed",
+        msg("see envsecretvalue1 ghp_" + "a".repeat(36)),
+        w.env,
+      ),
+    ).toBe(true);
+    const text = fs.readFileSync(w.file, "utf8");
+    const rec = JSON.parse(text);
+    expect(rec).toMatchObject({
+      v: 1,
+      task_id: "t1",
+      attempt: 2,
+      lines: ["see [redacted] [redacted]"],
+    });
+    expect(text).not.toContain("envsecretvalue1");
+    expect(text).not.toContain("ghp_");
+  });
+
+  it("redacts Claude lines before they are written too", () => {
+    const w = world(ctx);
+    expect(
+      recordHarnessLog(
+        {
+          type: "assistant",
+          message: { content: [{ type: "text", text: "password=hunter2hunter2" }] },
+        },
+        w.env,
+      ),
+    ).toBe(true);
+    expect(fs.readFileSync(w.file, "utf8")).not.toContain("hunter2hunter2");
+  });
+
+  it("writes nothing outside a pinned task, for a bad context, or for a silent event", () => {
+    const none = world(null);
+    expect(recordHarnessCodexLog("item/completed", msg("hi"), none.env)).toBe(false);
+    expect(fs.existsSync(none.file)).toBe(false);
+    const bad = world({ task_id: "", attempt: 0, engine_account_id: "" });
+    expect(recordHarnessCodexLog("item/completed", msg("hi"), bad.env)).toBe(false);
+    const ok = world(ctx);
+    expect(
+      recordHarnessCodexLog("item/completed", done({ type: "reasoning", content: ["x"] }), ok.env),
+    ).toBe(false);
+    expect(recordHarnessCodexLog("turn/started", {}, ok.env)).toBe(false);
+    expect(fs.existsSync(ok.file)).toBe(false);
+  });
+
+  it("refuses a symlink, a hard link and a non-regular target, without throwing", () => {
+    const w = world(ctx);
+    const victim = path.join(w.dir, "victim");
+    fs.writeFileSync(victim, "keep\n");
+    fs.symlinkSync(victim, w.file);
+    expect(recordHarnessCodexLog("item/completed", msg("hi"), w.env)).toBe(false);
+    expect(fs.readFileSync(victim, "utf8")).toBe("keep\n");
+    fs.unlinkSync(w.file);
+    fs.linkSync(victim, w.file);
+    expect(recordHarnessCodexLog("item/completed", msg("hi"), w.env)).toBe(false);
+    expect(fs.readFileSync(victim, "utf8")).toBe("keep\n");
+    fs.unlinkSync(w.file);
+    fs.mkdirSync(w.file);
+    expect(recordHarnessCodexLog("item/completed", msg("hi"), w.env)).toBe(false);
+    expect(recordHarnessLog({ type: "result", is_error: false }, w.env)).toBe(false);
+  });
+
+  it("keeps the file under 8 MiB and an unwritable directory is not an error", () => {
+    const w = world(ctx);
+    fs.writeFileSync(w.file, "");
+    fs.truncateSync(w.file, 8 * 1024 * 1024 - 10);
+    expect(recordHarnessCodexLog("item/completed", msg("hi"), w.env)).toBe(false);
+    expect(fs.statSync(w.file).size).toBe(8 * 1024 * 1024 - 10);
+    const blocked = world(ctx);
+    fs.writeFileSync(path.join(blocked.dir, "notadir"), "");
+    const env = {
+      ...blocked.env,
+      ARGUS_HARNESS_LOG_FILE: path.join(blocked.dir, "notadir", "x.jsonl"),
+    };
+    expect(recordHarnessCodexLog("item/completed", msg("hi"), env)).toBe(false);
   });
 });

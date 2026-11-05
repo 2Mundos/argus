@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,9 @@ import { fileURLToPath } from "node:url";
 
 import {
   agentEventLines,
+  appendRelayRecord,
   claudeEventLines,
+  codexEventLines,
   createBatcher,
   createFileRelay,
   createStreamParser,
@@ -16,6 +19,15 @@ import {
   startLiveLog,
 } from "./livelog.mjs";
 
+/** Await `p` with a ref'd timer: the follower's own timer is unref'd, so nothing else keeps the loop alive. */
+const held = async (p) => {
+  const keep = setInterval(() => {}, 1000);
+  try {
+    return await p;
+  } finally {
+    clearInterval(keep);
+  }
+};
 const ev = (o) => `${JSON.stringify(o)}\n`;
 const assistant = (...content) => ({ type: "assistant", message: { content } });
 
@@ -71,11 +83,16 @@ test("the parser handles split chunks, noise and a final line without newline", 
   assert.deepEqual(got, ["one", "two"]);
 });
 
-test("other executors give no lines (only keepalives)", () => {
-  const got = [];
-  const p = createStreamParser({ executor: "codex", onLines: (l) => got.push(...l) });
-  p.push('{"type":"x"}\nraw text\n');
-  assert.deepEqual(got, []);
+test("unverified executors give no lines (only keepalives), even for Codex-shaped events", () => {
+  for (const executor of ["opencode", "copilot", "other"]) {
+    const got = [];
+    const p = createStreamParser({ executor, onLines: (l) => got.push(...l) });
+    p.push(
+      `{"type":"x"}\nraw text\n${ev({ type: "item.completed", item: { type: "agent_message", text: "hi" } })}`,
+    );
+    p.end();
+    assert.deepEqual(got, [], executor);
+  }
 });
 
 test("obvious secrets are redacted before anything leaves the delegate", () => {
@@ -322,7 +339,7 @@ test("startLiveLog follows a growing stdout file and flushes on stop", async () 
     flushMs: 40,
   });
   fs.writeFileSync(out, ev(assistant({ type: "text", text: "first" })));
-  await first; // the follower picked up the first line
+  await held(first); // the follower picked up the first line
   assert.deepEqual(sent, ["first"]);
   fs.appendFileSync(out, ev(assistant({ type: "text", text: "héllo wörld" })));
   live.stop();
@@ -472,7 +489,9 @@ test("cursor agent stream parser: fragmented chunks, malformed, empty and secret
   assert.equal(got.length, 1);
   const tool = ev(
     cursorTool("started", {
-      shellToolCall: { args: { command: "curl -H 'Authorization: Bearer abcdef1234567890xyz' x" } },
+      shellToolCall: {
+        args: { command: "curl -H '" + "Authorization: Bearer abcdef1234567890xyz" + "' x" },
+      },
     }),
   );
   p.push(tool);
@@ -498,7 +517,7 @@ test("cursor agent: progress reaches the relay before the process ends", async (
       flushMs: 10,
     });
     fs.appendFileSync(out, ev({ type: "system", subtype: "init", model: "m" }));
-    await first; // the follower sent the init line
+    await held(first); // the follower sent the init line
     assert.deepEqual(sent, ["agent started (m)"]); // before any result exists
     fs.appendFileSync(out, ev({ type: "result", is_error: false, result: "ok" }));
     live.stop();
@@ -506,4 +525,236 @@ test("cursor agent: progress reaches the relay before the process ends", async (
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// `codex exec --json` events: thread.started, turn.*, item.started|completed, error. Names are
+// those of the pinned codex-cli binary (strings: thread.started, turn.started, turn.completed,
+// turn.failed, item.started, item.updated, item.completed, command_execution, agent_message,
+// mcp_tool_call, file_change, web_search, todo_list); the repo's usage.test.mjs pins the
+// thread.started / turn.completed / item.completed agent_message shapes.
+const item = (type, extra, kind = "item.completed") => ({
+  type: kind,
+  item: { id: `i-${type}`, type, ...extra },
+});
+
+test("codex exec events become short readable lines without reasoning or prompt", () => {
+  const state = { started: new Set() };
+  const lines = (e) => codexEventLines(e, [], state);
+  assert.deepEqual(lines({ type: "thread.started", thread_id: "t" }), ["codex started"]);
+  assert.deepEqual(lines({ type: "turn.started" }), []);
+  assert.deepEqual(lines(item("reasoning", { text: "secret plan" })), []);
+  assert.deepEqual(lines(item("todo_list", { items: [{ text: "x", completed: false }] })), []);
+  assert.deepEqual(lines(item("agent_message", { text: "Looking.\n\nFixing." })), [
+    "Looking.",
+    "Fixing.",
+  ]);
+  assert.deepEqual(
+    lines(
+      item(
+        "command_execution",
+        { command: "ls  -la\n/tmp", status: "in_progress" },
+        "item.started",
+      ),
+    ),
+    ["▸ shell ls -la /tmp"],
+  );
+  // completed after started: only the result, no repeated call line
+  assert.deepEqual(
+    lines(
+      item("command_execution", {
+        command: "ls -la /tmp",
+        aggregated_output: "a\nb\n",
+        exit_code: 0,
+        status: "completed",
+      }),
+    ),
+    ["  ↳ a b"],
+  );
+  assert.deepEqual(
+    lines({
+      type: "item.completed",
+      item: {
+        id: "i2",
+        type: "command_execution",
+        command: "false",
+        aggregated_output: "",
+        exit_code: 1,
+        status: "failed",
+      },
+    }),
+    ["▸ shell false", "  ✗ error: exit 1"],
+  );
+  assert.deepEqual(
+    lines({
+      type: "item.completed",
+      item: {
+        id: "i3",
+        type: "file_change",
+        status: "completed",
+        changes: [
+          { path: "a.py", kind: "update" },
+          { path: "b.py", kind: "add" },
+        ],
+      },
+    }),
+    ["▸ patch a.py, b.py"],
+  );
+  assert.deepEqual(
+    lines({
+      type: "item.completed",
+      item: {
+        id: "i4",
+        type: "mcp_tool_call",
+        server: "gh",
+        tool: "search",
+        arguments: { query: "x" },
+        status: "failed",
+        error: { message: "denied" },
+      },
+    }),
+    ["▸ gh/search x", "  ✗ error: denied"],
+  );
+  assert.deepEqual(lines(item("web_search", { query: "codex  docs" })), [
+    "▸ web_search codex docs",
+  ]);
+  assert.deepEqual(lines(item("error", { message: "bad" })), ["  ✗ error: bad"]);
+  assert.deepEqual(lines({ type: "error", message: "stream lost" }), ["codex error: stream lost"]);
+  assert.deepEqual(lines({ type: "turn.failed", error: { message: "quota" } }), [
+    "codex finished with an error: quota",
+  ]);
+  assert.deepEqual(lines({ type: "turn.completed", usage: { input_tokens: 1 } }), [
+    "codex finished",
+  ]);
+  const long = codexEventLines(
+    item("command_execution", { command: "x", aggregated_output: "y".repeat(500), exit_code: 0 }),
+  );
+  assert.ok(long[1].length < 210 && long[1].endsWith("…"));
+});
+
+test("codex exec: unknown and malformed events give no lines", () => {
+  for (const e of [
+    null,
+    "str",
+    [],
+    {},
+    { type: "nope" },
+    { type: "item.completed" },
+    { type: "item.completed", item: "x" },
+    { type: "item.completed", item: { type: "unknown_item", text: "x" } },
+    { type: "item.completed", item: { type: "agent_message", text: 5 } },
+    { type: "item.completed", item: { type: "command_execution" } },
+    { type: "item.completed", item: { type: "mcp_tool_call" } },
+    { type: "item.updated", item: { type: "agent_message", text: "partial" } },
+  ])
+    assert.deepEqual(codexEventLines(e), [], JSON.stringify(e));
+});
+
+test("codex stream parser: fragmented chunks, noise, errors, final status and redaction", () => {
+  const got = [];
+  const p = createStreamParser({
+    executor: "codex",
+    secrets: ["supersecretvalue1"],
+    onLines: (l) => got.push(...l),
+  });
+  const msg = ev(
+    item("agent_message", { text: "token is supersecretvalue1 and ghp_" + "a".repeat(36) }),
+  );
+  p.push('{"type":"thread.');
+  assert.deepEqual(got, []);
+  p.push(`started"}\n${msg.slice(0, 20)}`);
+  assert.deepEqual(got, ["codex started"]);
+  p.push(`${msg.slice(20)}Reading config\n{"broken":\n\n`);
+  assert.deepEqual(got, ["codex started", "token is [redacted] and [redacted]"]);
+  p.push(ev({ type: "error", message: "Authorization: Bearer abcdef1234567890" }));
+  p.push(JSON.stringify({ type: "turn.failed", error: { message: "boom" } })); // no newline yet
+  assert.equal(got.length, 3);
+  assert.equal(got[2], "codex error: [redacted]");
+  p.end();
+  assert.deepEqual(got.at(-1), "codex finished with an error: boom");
+  assert.ok(!got.join("\n").includes("supersecretvalue1"));
+});
+
+test("codex delegate: events reach the relay before the process ends, with keepalives", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-live-"));
+  const stdoutFile = path.join(dir, "out");
+  const sent = [];
+  let t = 0;
+  let onStarted;
+  let onAlive;
+  const started = new Promise((r) => (onStarted = r));
+  const alive = new Promise((r) => (onAlive = r));
+  const live = startLiveLog({
+    stdoutFile,
+    executor: "codex",
+    send: (l) => {
+      sent.push(l);
+      if (l.includes("codex started")) onStarted();
+      if (l.some((x) => x.startsWith("delegate alive"))) onAlive();
+    },
+    intervalMs: 5,
+    flushMs: 0,
+    keepaliveMs: 1000,
+    now: () => t,
+  });
+  fs.writeFileSync(stdoutFile, ev({ type: "thread.started", thread_id: "t" }));
+  await held(started);
+  t = 5000; // silence since the last output: a keepalive
+  await held(alive);
+  fs.appendFileSync(stdoutFile, ev({ type: "turn.completed", usage: {} }));
+  live.stop();
+  const flat = sent.flat();
+  assert.equal(flat[0], "codex started");
+  assert.ok(flat.some((l) => l.startsWith("delegate alive")));
+  assert.equal(flat.at(-1), "codex finished");
+  fs.rmSync(dir, { recursive: true });
+});
+
+test("claude and cursor parsers keep their exact output through createStreamParser", () => {
+  const claude = [];
+  const c = createStreamParser({ executor: "claude", onLines: (l) => claude.push(...l) });
+  c.push(ev({ type: "system", subtype: "init", model: "m" }));
+  c.push(ev({ type: "result", is_error: false }));
+  assert.deepEqual(claude, ["claude started (m)", "claude finished"]);
+  const agent = [];
+  const a = createStreamParser({ executor: "agent", onLines: (l) => agent.push(...l) });
+  a.push(ev({ type: "system", subtype: "init", model: "m" }));
+  a.push(
+    ev({
+      type: "tool_call",
+      subtype: "started",
+      tool_call: { readToolCall: { args: { path: "x" } } },
+    }),
+  );
+  a.push(ev({ type: "result", is_error: false }));
+  assert.deepEqual(agent, ["agent started (m)", "▸ read x", "agent finished"]);
+});
+
+test("relay writer refuses symlinks, hard links and non-regular targets, and never throws", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-safe-"));
+  const victim = path.join(dir, "victim");
+  fs.writeFileSync(victim, "keep\n");
+  const link = path.join(dir, "link.jsonl");
+  fs.symlinkSync(victim, link);
+  createFileRelay({ file: link, taskId: "t", attempt: 1 })(["x"]);
+  assert.equal(fs.readFileSync(victim, "utf8"), "keep\n");
+  assert.throws(() => appendRelayRecord(link, "x\n"));
+  const hard = path.join(dir, "hard.jsonl");
+  fs.linkSync(victim, hard);
+  assert.equal(appendRelayRecord(hard, "x\n"), false);
+  assert.equal(fs.readFileSync(victim, "utf8"), "keep\n");
+  const sub = path.join(dir, "isdir.jsonl");
+  fs.mkdirSync(sub);
+  assert.doesNotThrow(() => createFileRelay({ file: sub, taskId: "t", attempt: 1 })(["x"]));
+  const fifo = path.join(dir, "fifo.jsonl");
+  if (spawnSync("mkfifo", [fifo]).status === 0) {
+    // O_NONBLOCK: a fifo never blocks the run (no reader: ENXIO; with one: not a regular file)
+    assert.doesNotThrow(() => createFileRelay({ file: fifo, taskId: "t", attempt: 1 })(["x"]));
+  }
+  // 8 MiB cap counts bytes already in the file
+  const big = path.join(dir, "big.jsonl");
+  fs.writeFileSync(big, "");
+  fs.truncateSync(big, 8 * 1024 * 1024 - 3);
+  assert.equal(appendRelayRecord(big, "abcd\n"), false);
+  assert.equal(appendRelayRecord(big, "a\n"), true);
+  fs.rmSync(dir, { recursive: true });
 });

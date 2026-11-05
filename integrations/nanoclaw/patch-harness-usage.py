@@ -6,7 +6,9 @@ usage: patch-harness-usage.py /path/to/nanoclaw
 claude.ts and codex.ts hand each finished turn to overlays/harness-usage.ts (copied next to
 them first), which appends a usage record for the NanoClaw host to post (account usage spec
 3.9). Claude's SDK message loop also calls recordHarnessLog so the host can post the
-harness stream as task-log source `worker` (task-live-log spec 3.8). Idempotent: every
+harness stream as task-log source `worker` (task-live-log spec 3.8); codex.ts does the same for
+the Codex app-server notifications `item/completed`, `error` and `turn/completed` through
+recordHarnessCodexLog. Idempotent: every
 hook is "ensure this exact text"; an anchor that is missing or ambiguous stops the install
 (the upstream shape changed).
 """
@@ -64,7 +66,11 @@ CLAUDE_RESULT = (
 )
 CLAUDE_RECORD = "          recordHarnessUsage('claude', usageTracker.observe(message), usageQuery, ++usageSeq);\n"
 
-CODEX_IMPORT = "import { createCodexUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
+CODEX_IMPORT_OLD = "import { createCodexUsageTracker, newQueryId, recordHarnessUsage } from './harness-usage.js';\n"
+CODEX_IMPORT = (
+    "import { createCodexUsageTracker, newQueryId, recordHarnessCodexLog, "
+    "recordHarnessUsage } from './harness-usage.js';\n"
+)
 CODEX_FN = "async function* runOneTurn(\n"
 CODEX_STATE = (
     "// Argus: token usage per thread and per process, for the NanoClaw host (harness-usage.ts).\n"
@@ -73,14 +79,22 @@ CODEX_STATE = (
     "let codexUsageSeq = 0;\n\n"
 )
 CODEX_COMPLETED = "      case 'turn/completed': {\n"
+CODEX_UPDATED_HEAD = "      case 'thread/tokenUsage/updated': {\n"
 CODEX_UPDATED = (
-    "      case 'thread/tokenUsage/updated': {\n"
-    "        const tracker = codexUsage.get(threadId) ?? createCodexUsageTracker();\n"
+    CODEX_UPDATED_HEAD
+    + "        const tracker = codexUsage.get(threadId) ?? createCodexUsageTracker();\n"
     "        codexUsage.set(threadId, tracker);\n"
     "        tracker.update(params.tokenUsage);\n"
     "        break;\n"
     "      }\n"
 )
+
+
+def codex_log(method: str) -> str:
+    return f"        recordHarnessCodexLog('{method}', params);\n"
+
+
+CODEX_LOG_TURN = codex_log("turn/completed")
 CODEX_RECORD = (
     "        recordHarnessUsage(\n"
     "          'codex',\n"
@@ -89,6 +103,37 @@ CODEX_RECORD = (
     "          ++codexUsageSeq,\n"
     "        );\n"
 )
+
+
+def log_codex_notifications(root: Path) -> None:
+    """Live-log hooks for `item/completed` and `error`: join the case when upstream has one
+    (block form), add one when it has none, stop when the shape is anything else."""
+    p = root / PROVIDERS / "codex.ts"
+    if not p.is_file():
+        return
+    s = original = p.read_text()
+    # New cases go before the usage case, so the usage hook text stays contiguous.
+    for method in ("item/completed", "error"):
+        head = f"      case '{method}': {{\n"
+        if head in s:
+            if s.count(head) != 1:
+                raise SystemExit(f"{p}: {method}: upstream shape changed")
+            if head + codex_log(method) not in s:
+                s = s.replace(head, head + codex_log(method), 1)
+        elif f"case '{method}'" in s:
+            raise SystemExit(f"{p}: {method}: upstream shape changed")
+        else:
+            add = f"      case '{method}': {{\n{codex_log(method)}        break;\n      }}\n"
+            if s.count(CODEX_UPDATED_HEAD) != 1:
+                raise SystemExit(f"{p}: {method}: upstream shape changed")
+            s = s.replace(CODEX_UPDATED_HEAD, add + CODEX_UPDATED_HEAD, 1)
+    if CODEX_RECORD + CODEX_LOG_TURN not in s:
+        if s.count(CODEX_RECORD) != 1:
+            raise SystemExit(f"{p}: turn/completed: upstream shape changed")
+        s = s.replace(CODEX_RECORD, CODEX_RECORD + CODEX_LOG_TURN, 1)
+    if s != original:
+        p.write_text(s)
+        print(f"patched {p} (live log)")
 
 
 def main(root: Path) -> None:
@@ -109,6 +154,7 @@ def main(root: Path) -> None:
         "codex.ts",
         [
             ("import", REGISTER, REGISTER + CODEX_IMPORT),
+            ("import upgrade", CODEX_IMPORT_OLD, CODEX_IMPORT),
             ("usage state", CODEX_FN, CODEX_STATE + CODEX_FN),
             (
                 "usage update",
@@ -117,6 +163,7 @@ def main(root: Path) -> None:
             ),
         ],
     )
+    log_codex_notifications(root)
 
 
 if __name__ == "__main__":
