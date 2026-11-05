@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-10-29
+updated: 2026-11-05
 ---
 
 # Cost view
@@ -19,7 +19,8 @@ task that produced the run) and a cross-account **window** with a daily series.
 
 # 2. Non-Goals
 
-- No billing, invoicing or budget enforcement; no alerts or thresholds.
+- No billing or invoicing. The Cost tab enforces no budget and raises no alerts;
+  per-task budgets live in [task cost](task-cost.spec.md).
 - No call to any provider's billing API. Prices are a local file.
 - No cost for subscription quota: a price turns tokens into dollars at API
   rates, which is what the same tokens would cost, not what was paid. The

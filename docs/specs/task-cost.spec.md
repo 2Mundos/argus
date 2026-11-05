@@ -1,5 +1,5 @@
 ---
-status: draft
+status: implemented
 created: 2026-10-29
 updated: 2026-11-05
 ---
@@ -81,11 +81,13 @@ This spec adds two things:
 - [Task edit](task-edit.spec.md): `budget_usd` is editable in **every** non-terminal
   state, including `claimed` and `blocked`, because raising it is how a manager
   continues a task (3.6). Clearing it (`null`) removes the cap. A change records
-  `task.edited` with `{budget_usd: {from, to}}`.
+  `task.edited` with `{budget_usd: {from, to}}`. On a task blocked `budget_exhausted`,
+  an edit that leaves the budget no longer exhausted unblocks it in the same
+  transaction; a raise still below the estimate saves and stays blocked.
 - [Settings](settings.spec.md): `task_default_budget_usd` (global, per-project
   override; default unset) fills `budget_usd` for a new task that omits it. An
   explicit `null` in the request keeps "no budget".
-- Migration `NNNN_task_budget.sql` (the next free number): `tasks.budget_usd`
+- Migration `0076_task_budget.sql`: `tasks.budget_usd`
   (nullable real), `tasks.budget_steered_attempt` (nullable integer, 3.5).
 
 ## 3.5 Crossing the budget during an attempt
@@ -112,9 +114,11 @@ This spec adds two things:
   `budget_state` is `exhausted`, the task goes to `blocked` with reason
   `budget_exhausted` instead, and spends no attempt.
 - `budget_exhausted` is a block, not a failure: it is outside `FAILURE_CLASS`. The
-  inbox shows it like any block, with the figures and the actions **Raise budget**
-  (an edit, 3.4) and **Cancel**. Unblock is refused (`409 budget_exhausted`) while
-  the budget is still exhausted.
+  inbox shows it like any block, with the figures, the next action
+  `raise_task_budget`, and the actions **Raise budget** (an edit, 3.4) and
+  **Cancel task**; the task view offers the same pair. Unblock is refused
+  (`409 budget_exhausted`) while the budget is still exhausted, and the dashboard
+  hides it for this reason.
 - A `COMPLETE:` is never refused for budget: finished work over budget still lands
   in review or succeeds. An `ASK:` blocks as usual.
 - A partial task (unpriced or unreported runs) is judged on its known figure only.
@@ -126,7 +130,8 @@ This spec adds two things:
   reported figure beside it when present, tokens, "partial" when it applies, and,
   with a budget, a bar against it (amber at warning, red at exhausted). A table
   per attempt with model and runs. Refreshed by `task.cost`.
-- Task create and edit forms: a `Budget (USD)` field, prefilled from the setting.
+- Task create and edit forms: a `Budget (USD)` field. The create form prefills it
+  from the project's `task_default_budget_usd`; emptying it sends "no budget".
 - The Cost tab is unchanged.
 
 # 4. Open Questions

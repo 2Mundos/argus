@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-01
+updated: 2026-11-05
 ---
 
 # Task edit
@@ -46,6 +46,7 @@ thin callers of the same function with only `depends_on` set.
 | `spec` | string | any length; `null` or `""` clears it to `""` |
 | `acceptance` | list of strings | `null` or `[]` clears |
 | `priority` | integer | cannot be cleared (send `0` to reset) |
+| `budget_usd` | number | `> 0` and `≤ 10000`; `null` removes the cap; an edit that leaves a `budget_exhausted` task under its budget unblocks it ([task cost](task-cost.spec.md) 3.4) |
 | `required_capabilities` | list of strings | de-duplicated and sorted, as at creation; `null` or `[]` clears |
 | `knowledge` | list of page ids | replaces the pinned set; every page must exist and belong to the task's project or to `global` (`422 knowledge: …`); `null` or `[]` unpins all. Pins a *kind* adds at creation are not re-added |
 | `difficulty` | `trivial` \| `simple` \| `standard` \| `hard` | cannot be cleared; sets `difficulty_source` to `declared` ([task difficulty](task-difficulty.spec.md)) |
@@ -73,7 +74,7 @@ operations (approve, cancel, retry, …).
   An empty `changes` is `422 validation_failed` (`changes: nothing to change`).
 - `null` is the explicit **clear** for `spec`, `acceptance`,
   `required_capabilities`, `knowledge` and `depends_on` (equivalent to `""` or
-  `[]`). `null` for `title` or `priority` is `422`.
+  `[]`), and for `budget_usd` (no budget). `null` for `title` or `priority` is `422`.
 - A list is replaced as a whole, never merged.
 - A patch whose values all equal the current ones is a no-op: nothing is
   written, no event, the version does not change, the current task comes back.
@@ -100,8 +101,8 @@ and the MCP tool description are driven by it.
 | State | Editable fields | Why |
 | --- | --- | --- |
 | `awaiting_approval`, `pending`, `ready` | all | nothing has run; the next claim sees the saved definition |
-| `blocked`, `claimed` | `priority` | queue order only; the title, spec, criteria, capabilities, pins or dependencies may already be in use by an attempt |
-| `in_review` | `priority`, `deliverable` | queue order; and a deliverable that proved unreachable can be lowered ([task deliverable](task-deliverable.spec.md) 3.6); nothing else the reviewer may be reading changes |
+| `blocked`, `claimed` | `priority`, `budget_usd` | queue order, and the budget, whose raise continues a `budget_exhausted` task; the title, spec, criteria, capabilities, pins or dependencies may already be in use by an attempt |
+| `in_review` | `priority`, `deliverable`, `budget_usd` | queue order; the budget; and a deliverable that proved unreachable can be lowered ([task deliverable](task-deliverable.spec.md) 3.6); nothing else the reviewer may be reading changes |
 | `succeeded`, `failed`, `cancelled` | none | the record of what ran stays as it was |
 | archived (any) | none | archived tasks are read-only |
 
@@ -142,7 +143,7 @@ Every edit that changes something records one `task.edited` event in the
 transaction: actor (`admin:<label>` or `agent:<id>`), time, `from_version`,
 `to_version` and `changes`, a diff per changed field:
 
-- `title`, `priority`, `complexity`: `{from, to}`;
+- `title`, `priority`, `complexity`, `budget_usd`: `{from, to}`;
 - `required_capabilities`, `knowledge`, `depends_on`: `{added, removed}` ids;
 - `spec`, `acceptance`: only lengths/counts and a SHA-256 digest of the old and
   new text. The text itself is never copied into the event log, which is

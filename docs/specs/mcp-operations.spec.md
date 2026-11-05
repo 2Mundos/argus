@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # MCP operations
@@ -36,6 +36,7 @@ admin, about 18.7 KB of schema. The largest are `create_task` (1.4 KB),
 | List tasks | `GET /tasks?state&limit` (≤500) | `list_tasks(state, limit)` | no project/kind filter, cursor, total, or projection; every row carries full `spec` and `result` |
 | Read tasks | `GET /tasks/{id}` | `get_task` | one per call; no projection |
 | Edit a task | `PATCH /tasks/{id}` | `edit_task` | covered by [task edit](task-edit.spec.md): same fields, version precondition and errors |
+| Task cost | `GET /tasks/{id}/cost` | `get_task_cost` | covered by [task cost](task-cost.spec.md): same figures and task read scope |
 | Draft and publish tasks | `/task-drafts`, `POST /task-drafts/publish` | `create_task_draft` … `publish_task_drafts` | covered by [task drafts](task-drafts.spec.md): versioned drafts, idempotent publish, `atomic` or `partial` on both surfaces |
 | Unblock / retry | `POST /tasks/{id}/unblock`, `/retry` | — | **not exposed** |
 | Decisions | `GET /decisions?state&subject_id`, `GET /decisions/{id}` | `list_decisions()` (open only, no args) | filters **not exposed**; no project/kind filter; no `get_decision` |
@@ -195,6 +196,8 @@ Findings outside the gap list:
     `set_project_repository` (a task blocked with `env_repository_unconfigured` and
     an admin caller: set the project's repository, then `unblock_task`; any other
     caller gets `escalate_to_human`, because only an admin may change it),
+    `raise_task_budget` (a task blocked with `budget_exhausted`: `edit_task` with a
+    higher `budget_usd`, or `cancel_task`; [task cost](task-cost.spec.md) 3.6),
     `retry_dependency` (a failed or cancelled dependency), `inspect_stall` (a
     quiet claim: `get_task_log`, `steer_task` or `release_task`), `reread` (the
     decision changed during the read) or `none`. A merged PR never yields
