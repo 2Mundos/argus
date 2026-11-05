@@ -76,8 +76,10 @@ bypass. Background: draft (removed; in git history),
   shipped. Do not claim Codex coverage until a probe confirms it.
 - **Visibility (intended).** Each block is an informational, persistent
   `task.command_blocked` event with the reason and a redacted, truncated command.
-  It is not a failure class and not an inbox item. **Not implemented**; the hook
-  currently only returns the deny decision.
+  It is not a failure class and not an inbox item. The event type and its data
+  shape (`tool`, `rule`, `reason`) exist in `argus_core` (`events.py`); the hook
+  emission, the worker route and the feed presentation are **not implemented**;
+  the hook currently only returns the deny decision.
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
@@ -90,7 +92,8 @@ bypass. Background: draft (removed; in git history),
 
 Not built yet (section 3 marks each **not implemented**):
 
-- `task.command_blocked` events (visibility) and their feed/Fleet presentation.
+- `task.command_blocked` visibility: the event type and data shape exist; still
+  missing are the hook emission, the worker route and the feed/Fleet presentation.
 - Delivery of `command_guard.enabled` to the hook at claim (the setting is
   registered; the hook already honours `ARGUS_COMMAND_GUARD`).
 - `env_guard_missing` when a guarded engine starts without the hook.
