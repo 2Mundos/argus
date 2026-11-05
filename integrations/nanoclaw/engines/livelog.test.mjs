@@ -489,7 +489,9 @@ test("cursor agent stream parser: fragmented chunks, malformed, empty and secret
   assert.equal(got.length, 1);
   const tool = ev(
     cursorTool("started", {
-      shellToolCall: { args: { command: "curl -H '" + "Authorization: Bearer abcdef1234567890xyz" + "' x" } },
+      shellToolCall: {
+        args: { command: "curl -H '" + "Authorization: Bearer abcdef1234567890xyz" + "' x" },
+      },
     }),
   );
   p.push(tool);
