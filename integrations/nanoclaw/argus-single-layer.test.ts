@@ -6,6 +6,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { type ArgusTask, createArgusAdapter, type HeldAccounts, renderTask } from "./argus.js";
@@ -419,6 +420,10 @@ async function run(opts: {
     heartbeatMs: 50,
     probeRepository: async () => {},
     workspaceRoot: async () => groupDir,
+    // The image's managed settings: a claude lease must see the guard hook (argus-guard.ts).
+    managedSettingsPath: fileURLToPath(
+      new URL("./engines/claude-managed-settings.json", import.meta.url),
+    ),
     ...(opts.withPolicy === false ? {} : { selectModels }),
     singleLayer: assignmentFile ? { engine: "claude", assignmentFile } : null,
     accounts: {
