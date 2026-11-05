@@ -3254,7 +3254,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       },
       // A probe answered as public proves the gateway attached no credential: OneCLI has
       // not published the assignment's policy rule yet (its rematerialize can fail), so
-      // re-apply the lease to publish it and let the preflight probe once more.
+      // re-apply the lease to publish it and let the preflight probe again (bounded, with backoff).
       rearm: async () => {
         const active = activeRepositoryLease;
         if (!active) return;
