@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-18
+updated: 2026-11-04
+---
+
 # MCP operations
 
 # 1. Purpose and Scope

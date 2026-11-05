@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-30
+updated: 2026-10-31
+---
+
 # Task inputs: hand bytes to a later attempt through the NanoClaw channel
 
 # 1. Purpose and Scope

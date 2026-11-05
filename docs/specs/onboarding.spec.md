@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-30
+updated: 2026-11-04
+---
+
 # Onboarding
 
 # 1. Purpose and Scope

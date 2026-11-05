@@ -1,3 +1,9 @@
+---
+status: partial
+created: 2026-11-01
+updated: 2026-11-05
+---
+
 # Command guard
 
 # 1. Purpose and Scope
@@ -78,6 +84,16 @@ bypass. Background: [draft](../drafts/2026-10-29.command-guard.draft.md),
   and its delivery at claim are **not implemented**.
 
 # 4. Open Questions
+
+## Open items
+
+Not built yet (section 3 marks each **not implemented**):
+
+- `task.command_blocked` events (visibility) and their feed/Fleet presentation.
+- The `command_guard.enabled` setting and its delivery to the hook at claim; the
+  hook already honours `ARGUS_COMMAND_GUARD`.
+- `env_guard_missing` when a guarded engine starts without the hook.
+- Codex coverage (hook support and trusted-hash registration).
 
 - **Open item: settings and event plumbing.** `command_guard.enabled`
   ([settings](settings.spec.md)), passing it to the hook as

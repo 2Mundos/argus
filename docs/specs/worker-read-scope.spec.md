@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-21
+updated: 2026-11-03
+---
+
 # Worker Read Scope
 
 # 1. Purpose and Scope

@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-30
+updated: 2026-11-05
+---
+
 # Internal Orchestrator
 
 # 1. Purpose and Scope

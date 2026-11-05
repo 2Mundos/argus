@@ -1,13 +1,19 @@
+---
+status: partial
+created: 2026-10-20
+updated: 2026-11-05
+---
+
 # Codex worker sandbox profile (default on; profiles candidate)
 
-> **Status.** The profile switch is **implemented in code and tested offline**, and now
-> **defaults on** (`codex-bwrap`) for native Codex agent containers. The AppArmor and
-> seccomp profiles it applies are **candidates and have NOT passed a runtime test**: the
-> first real probe (profile v1, enforce mode, Docker) failed on the positive check,
-> `bwrap: Failed to make / slave: Permission denied`, and no task ever ran under the
-> profile. Profile v2 corrects the cause but is not loaded yet. Nothing here approves a
-> deploy, and the contract as a whole is **not met** until the probe passes. Pools that
-> cannot enforce the profile must set `ARGUS_CODEX_SANDBOX_PROFILE=off` explicitly.
+The profile switch is **implemented in code and tested offline**, and now
+**defaults on** (`codex-bwrap`) for native Codex agent containers. The AppArmor and
+seccomp profiles it applies are **candidates and have NOT passed a runtime test**: the
+first real probe (profile v1, enforce mode, Docker) failed on the positive check,
+`bwrap: Failed to make / slave: Permission denied`, and no task ever ran under the
+profile. Profile v2 corrects the cause but is not loaded yet. Nothing here approves a
+deploy, and the contract as a whole is **not met** until the probe passes. Pools that
+cannot enforce the profile must set `ARGUS_CODEX_SANDBOX_PROFILE=off` explicitly.
 
 # 1. Purpose and Scope
 
@@ -131,6 +137,13 @@ In scope:
    stays as an extra guard when the profile is on.
 
 # 4. Open Questions
+
+## Open items
+
+- Decisions on the AppArmor/seccomp profiles (3) are not met at runtime: profile v1
+  failed the first real probe (`Failed to make / slave`) and v2 has never been
+  loaded or probed. The spec moves to `implemented` when an operator loads v2 and a
+  probe reaching `ALL-AS-EXPECTED` on the real image is attached as evidence.
 
 - Does the probe reach `ALL-AS-EXPECTED` on the real image? One run: **no**. v1 failed to bootstrap
   (`Failed to make / slave`); v2 is untested. Evidence: `2026-10-20` probe log in the evidence folder.

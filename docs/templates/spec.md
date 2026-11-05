@@ -1,3 +1,9 @@
+---
+status: draft
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+---
+
 # Topic Spec
 
 # 1. Purpose and Scope
@@ -7,6 +13,10 @@
 # 3. Decisions Made
 
 # 4. Open Questions
+
+## Open items
+
+- For a `partial` spec: the numbered decisions not built yet. Delete otherwise.
 
 # 5. Constraints
 

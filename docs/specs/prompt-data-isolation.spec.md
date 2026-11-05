@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-21
+updated: 2026-10-31
+---
+
 # Prompt-data isolation (task spec, knowledge, child tasks)
 
 # 1. Purpose and Scope

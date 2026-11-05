@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-17
+updated: 2026-10-28
+---
+
 # Preferred models
 
 # 1. Purpose and Scope

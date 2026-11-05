@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-24
+updated: 2026-10-30
+---
+
 # Workspace cleanup: terminated NanoClaw instance directories
 
 # 1. Purpose and Scope

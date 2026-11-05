@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-27
+updated: 2026-11-04
+---
+
 # Task workspace: a stable per-task git workspace, checked before the model
 
 # 1. Purpose and Scope
