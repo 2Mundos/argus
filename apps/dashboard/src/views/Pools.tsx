@@ -128,26 +128,37 @@ function PoolCard({
             ? "Built-in (in Argus)"
             : `${pool.image} · ${pool.target}/${pool.runtime}`}
         </span>
-        <span className="scale">
-          <ActionButton
-            pending={action.is("scale-down")}
-            disabled={action.busy}
-            action={() => scale(pool.desired_replicas - 1, "scale-down")}
-          >
-            −
-          </ActionButton>
-          <strong>
-            {pool.live_instances} / {pool.desired_replicas}
-          </strong>
-          <ActionButton
-            pending={action.is("scale-up")}
-            disabled={action.busy || pool.desired_replicas >= pool.max_replicas}
-            action={() => scale(pool.desired_replicas + 1, "scale-up")}
-          >
-            +
-          </ActionButton>
-          <span className="muted small">max {pool.max_replicas}</span>
-        </span>
+        {pool.system ? (
+          <span className="scale">
+            <strong>
+              {pool.live_instances} / {pool.desired_replicas}
+            </strong>
+            <span className="muted small">
+              Managed by <a href="#setup/settings">Settings → Internal orchestrator</a>
+            </span>
+          </span>
+        ) : (
+          <span className="scale">
+            <ActionButton
+              pending={action.is("scale-down")}
+              disabled={action.busy}
+              action={() => scale(pool.desired_replicas - 1, "scale-down")}
+            >
+              −
+            </ActionButton>
+            <strong>
+              {pool.live_instances} / {pool.desired_replicas}
+            </strong>
+            <ActionButton
+              pending={action.is("scale-up")}
+              disabled={action.busy || pool.desired_replicas >= pool.max_replicas}
+              action={() => scale(pool.desired_replicas + 1, "scale-up")}
+            >
+              +
+            </ActionButton>
+            <span className="muted small">max {pool.max_replicas}</span>
+          </span>
+        )}
         {onEdit && (
           <button type="button" className="link" onClick={onEdit}>
             Edit

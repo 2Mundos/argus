@@ -24,6 +24,7 @@ import {
 } from "../settings";
 import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ModelPreferences, ModelPreferencesEditor } from "./ModelPreferences";
+import { OrchestratorModelPicker } from "./OrchestratorModel";
 
 /** Global settings with per-project overrides (docs/specs/settings.spec.md). */
 export function Settings() {
@@ -39,6 +40,7 @@ export function Settings() {
   const gitIdentity = byKey.get("git.identity");
   const orchestratorEnabled = byKey.get("orchestrator.enabled");
   const orchestratorRuntime = byKey.get("orchestrator.runtime");
+  const orchestratorModel = byKey.get("orchestrator.model");
 
   return (
     <section className="settings-page">
@@ -76,6 +78,10 @@ export function Settings() {
               <OrchestratorSection
                 enabled={orchestratorEnabled?.value === true}
                 runtime={(orchestratorRuntime?.value as Runtime | undefined) ?? "auto"}
+                onChanged={() => reload()}
+              />
+              <OrchestratorModelPicker
+                value={orchestratorModel?.value}
                 onChanged={() => reload()}
               />
             </div>

@@ -1108,6 +1108,48 @@ def test_the_internal_orchestrator_prefers_its_model(
     assert lease()["name"] == "claude-main"
 
 
+def test_the_internal_orchestrator_prefers_a_local_model(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """internal-orchestrator.spec.md 3.1: `local[/<model>]` prefers the local
+    provider and puts the model on the lease, never on the stored account."""
+    agent = register(client)
+    _as_internal_orchestrator(monkeypatch)
+    _account(client, "claude-main", "anthropic", 100)
+    created = client.post(
+        "/api/accounts",
+        json={
+            "name": "box",
+            "provider": "local",
+            "priority": 1,
+            "credential": {"base_url": "http://127.0.0.1:11434", "model": "qwen3"},
+        },
+    )
+    assert created.status_code in (200, 201), created.text
+    body = {"runtime_providers": ["anthropic", "local"]}
+
+    def lease() -> tuple[str, str | None, str | None, str | None]:
+        res = client.post("/api/accounts/lease", json=body, headers=agent)
+        assert res.status_code == 200, res.text
+        got = res.json()
+        return (
+            got["name"],
+            got["model"],
+            (got["settings"] or {}).get("model"),
+            got["credential"].get("model"),
+        )
+
+    assert lease()[0] == "claude-main"
+    client.put("/api/settings/orchestrator.model", json={"value": "local"})
+    assert lease() == ("box", None, "qwen3", "qwen3")
+    client.put("/api/settings/orchestrator.model", json={"value": "local/gemma4"})
+    assert lease() == ("box", None, "gemma4", "gemma4")
+    client.put("/api/settings/orchestrator.model", json={"value": None})
+    assert lease()[0] == "claude-main"
+    client.put("/api/settings/orchestrator.model", json={"value": "local"})
+    assert lease() == ("box", None, "qwen3", "qwen3")  # the account kept its model
+
+
 async def test_credential_kinds_narrow_without_reordering(
     db: Database, store: MemorySecretStore
 ) -> None:

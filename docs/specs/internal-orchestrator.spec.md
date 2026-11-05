@@ -71,7 +71,9 @@ Getting a first account, worker and orchestrator is the
   of always `Role.WORKER`.
 - The pool is **system-owned** (`pools.system = 'orchestrator'`): `max_replicas: 1`,
   it cannot be deleted, and `scale_pool`, `launch_worker` and pool deletion answer
-  `409 system_pool`. An admin may change its image in the pool editor; nothing else.
+  `409 system_pool`, naming `orchestrator.enabled` as the way to stop it. The
+  Pools tab shows no scale controls for it, only a link to that switch in
+  Settings. An admin may change its image in the pool editor; nothing else.
   It is excluded from the "first worker" fact in onboarding and from worker-pool
   totals, and listed apart on the Pools tab.
 - **Enable switch (both runtimes):** the global setting `orchestrator.enabled`
@@ -88,12 +90,19 @@ Getting a first account, worker and orchestrator is the
   applies the account to its OneCLI agent (selective mode) before it claims the
   first chat message, and retries with backoff while none is usable, so a turn
   never runs on whatever the vault would inject by default.
-- **Model preference.** `orchestrator.model` is `<engine>/<model>` with a harness
-  engine (`claude`, `codex`). The task-less lease first tries that engine's
-  provider; when none of its accounts can serve, the ordinary ranking applies.
-  A lease on the preferred provider carries `model`, and the channel configures
-  it; otherwise it configures the host model policy's default harness model for
-  the leased engine. Any other value is no preference.
+- **Model preference.** `orchestrator.model` is one of:
+  - `<engine>/<model>` with a harness engine (`claude`, `codex`): the lease on
+    that engine's provider carries `model`, and the channel configures it;
+  - `local` or `custom`, optionally `/<model>`: the lease on that provider has
+    the model in `settings.model` (and, for `local`, in the returned
+    credential's `model`; nothing stored changes), replacing the account's own.
+    Without a model the account's own applies.
+
+  The task-less lease first tries the preferred provider; when none of its
+  accounts can serve, the ordinary ranking applies, with no preferred model.
+  Without a preferred model on the leased harness provider, the channel
+  configures the host model policy's default harness model for the leased
+  engine. Any other value is no preference.
 - **Failover.** A chat turn whose run fails on a provider limit reports the
   account exhausted with no `task_id` (system pool engine only, like the lease),
   leases the next account, applies it and sends that turn again once, prefixed
@@ -378,7 +387,7 @@ fails on a tool name that does not exist. It gains:
 | --- | --- | --- |
 | `orchestrator.enabled` | bool | `false` |
 | `orchestrator.runtime` | `auto` \| `builtin` \| `nanoclaw` | `auto` ([built-in orchestrator](builtin-orchestrator.spec.md) 3.1) |
-| `orchestrator.model` | engine/model or null | `null` (best-priority harness account) |
+| `orchestrator.model` | `<engine>/<model>`, `local[/<model>]`, `custom[/<model>]` or null | `null` (best-priority account) |
 | `orchestrator.daily_budget_usd` | number ≥ 0 | `5` |
 | `orchestrator.max_concurrent_turns` | int 1–4 | `2` |
 | `orchestrator.confirm_above_tasks` | int ≥ 0 | `3` |

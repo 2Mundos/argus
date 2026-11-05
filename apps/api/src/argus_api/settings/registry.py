@@ -155,7 +155,11 @@ REGISTRY: dict[str, SettingDefinition] = {
         },
         default=None,
         scopes=["global"],
-        description="Preferred harness engine/model for the internal orchestrator.",
+        description=(
+            "Preferred provider and model for the internal orchestrator:"
+            " <engine>/<model> (claude, codex), or local or custom with an optional"
+            " /<model>."
+        ),
     ),
     "orchestrator.daily_budget_usd": SettingDefinition(
         key="orchestrator.daily_budget_usd",
