@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claimedGitIdentity, poolGitIdentity, scopeGitIdentity } from "./argus-git-identity.js";
+import { claimedGitIdentity, poolGitIdentity, scopeCommandGuard, scopeGitIdentity } from "./argus-git-identity.js";
 
 const POOL = { ARGUS_GIT_AUTHOR_NAME: "Pool", ARGUS_GIT_AUTHOR_EMAIL: "pool@example.invalid" };
 const TASK = { name: "Project Dev", email: "dev@example.invalid" };
@@ -37,5 +37,24 @@ describe("task git identity", () => {
 
   it("accepts a complete claimed identity", () => {
     expect(claimedGitIdentity({ name: " A ", email: "a@b" })).toEqual({ name: "A", email: "a@b" });
+  });
+});
+
+describe("task command guard", () => {
+  it("turns the guard off for a disabled claim and restores the pool's value after", () => {
+    const env: NodeJS.ProcessEnv = {};
+    scopeCommandGuard(env, undefined, false);
+    expect(env.ARGUS_COMMAND_GUARD).toBe("off");
+    scopeCommandGuard(env, undefined, undefined);
+    expect("ARGUS_COMMAND_GUARD" in env).toBe(false);
+  });
+
+  it.each([[true], [undefined], [null]])("leaves the environment unchanged for %j", (enabled) => {
+    const env: NodeJS.ProcessEnv = { ARGUS_COMMAND_GUARD: "on" };
+    scopeCommandGuard(env, "on", enabled);
+    expect(env.ARGUS_COMMAND_GUARD).toBe("on");
+    const bare: NodeJS.ProcessEnv = {};
+    scopeCommandGuard(bare, undefined, enabled);
+    expect("ARGUS_COMMAND_GUARD" in bare).toBe(false);
   });
 });

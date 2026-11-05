@@ -95,6 +95,7 @@ import {
   claimedGitIdentity,
   type GitIdentity,
   poolGitIdentity,
+  scopeCommandGuard,
   scopeGitIdentity,
 } from "./argus-git-identity.js";
 import {
@@ -543,6 +544,7 @@ export interface ArgusTask {
   difficulty_executors?: string[] | null;
   /** Effective git author for the task's project (settings 3.8); null/missing: use the pool's. */
   git_identity?: { name: string; email: string } | null;
+  command_guard_enabled?: boolean;
 }
 
 /** Empty difficulty executor chain and no pin: NanoClaw does the work (task difficulty / local harness). */
@@ -1979,6 +1981,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     process.env.ARGUS_REPOSITORIES_JSON = JSON.stringify({ ...base, ...extra });
   }
   let poolGit: ReturnType<typeof poolGitIdentity> | undefined;
+  /** The claim's command-guard opt-out for this task; the pool's value otherwise. */
+  const poolCommandGuard = process.env.ARGUS_COMMAND_GUARD;
+  function scopeTaskCommandGuard(enabled: unknown) {
+    scopeCommandGuard(process.env, poolCommandGuard, enabled);
+  }
   /** The claimed task's git author in the host env for this task; the pool's value otherwise. */
   function scopeTaskGitIdentity(identity: GitIdentity | null) {
     poolGit ??= poolGitIdentity(process.env);
@@ -3521,6 +3528,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     await reportHarness(task, "running");
     try {
       scopeTaskGitIdentity(claimedGitIdentity(task.git_identity));
+      scopeTaskCommandGuard(task.command_guard_enabled);
       let envBlock: { reason: string; error: string } | null = await repositoryPreflight(task);
       let workspace: TaskWorkspace | null = null;
       let inputs: MaterializedInput[] = [];
@@ -3604,6 +3612,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       finishTask();
     } finally {
       scopeTaskGitIdentity(null);
+      scopeTaskCommandGuard(undefined);
       if (repositoryLeaseHeld && cfg.accounts) {
         repositoryLeaseHeld = false;
         activeRepositoryLease = null;

@@ -427,6 +427,53 @@ def test_git_identity_save_override_reset_and_claim_delivery(
     assert claim("alpha") == glob
 
 
+def test_command_guard_enabled_claim_delivery(client: TestClient) -> None:
+    for slug in ("alpha", "beta"):
+        client.put(
+            f"/api/projects/{slug}",
+            json={"name": slug, "description": "d"},
+            headers=ADMIN,
+        )
+
+    def claim(project: str) -> bool:
+        client.post(
+            "/api/tasks",
+            json={"title": "t", "project": project, "spec": "do it"},
+            headers=ADMIN,
+        )
+        boot = client.post(
+            "/api/agents/bootstrap-tokens", json={"role": "worker"}, headers=ADMIN
+        ).json()
+        agent = client.post(
+            "/api/agents/register",
+            json={"bootstrap_token": boot["token"], "capabilities": []},
+        ).json()
+        res = client.post(
+            "/api/tasks/claim",
+            json={"capabilities": [], "wait_s": 0},
+            headers=bearer(agent["token"]),
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["project"] == project
+        return res.json()["command_guard_enabled"]
+
+    def put(url: str, value: bool) -> None:
+        res = client.put(url, json={"value": value}, headers=ADMIN)
+        assert res.status_code == 200, res.text
+
+    assert claim("alpha") is True  # default on
+    put("/api/settings/command_guard.enabled", False)
+    assert claim("alpha") is False
+    put("/api/projects/alpha/settings/command_guard.enabled", True)
+    assert claim("alpha") is True  # project override beats global
+    assert claim("beta") is False
+    res = client.delete(
+        "/api/projects/alpha/settings/command_guard.enabled", headers=ADMIN
+    )
+    assert res.status_code == 200, res.text
+    assert claim("alpha") is False
+
+
 @pytest.mark.parametrize(
     "value",
     [

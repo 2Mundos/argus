@@ -81,8 +81,11 @@ bypass. Background: draft (removed; in git history),
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
-  is registered ([settings](settings.spec.md) 3.9); its delivery at claim is
-  **not implemented**.
+  is registered ([settings](settings.spec.md) 3.9). The claim carries the
+  effective value (project override over global) as `command_guard_enabled`;
+  when false the NanoClaw channel sets `ARGUS_COMMAND_GUARD=off` for that attempt
+  only and restores the pool's value afterwards. The `install.sh` container-runner
+  patch forwards the variable to the agent container.
 
 # 4. Open Questions
 
@@ -91,14 +94,10 @@ bypass. Background: draft (removed; in git history),
 Not built yet (section 3 marks each **not implemented**):
 
 - `task.command_blocked` events (visibility) and their feed/Fleet presentation.
-- Delivery of `command_guard.enabled` to the hook at claim (the setting is
-  registered; the hook already honours `ARGUS_COMMAND_GUARD`).
 - `env_guard_missing` when a guarded engine starts without the hook.
 - Codex coverage (hook support and trusted-hash registration).
 
-- **Open item: settings and event plumbing.** Passing `command_guard.enabled`
-  ([settings](settings.spec.md), registered) to the hook as
-  `ARGUS_COMMAND_GUARD`, a worker route or channel to carry
+- **Open item: event plumbing.** A worker route or channel to carry
   `task.command_blocked`, its feed/Fleet presentation, and `env_guard_missing`
   in [failure classes](failure-classes.spec.md).
 - Codex: hook support, trusted-hash registration, whether the hook runs inside

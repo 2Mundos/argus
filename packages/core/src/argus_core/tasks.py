@@ -636,3 +636,6 @@ class ClaimedTask(Task):
     # over global, settings 3.8); null when neither is set, and the worker's git
     # then refuses commit-class commands.
     git_identity: dict[str, str] | None = None
+    # Effective `command_guard.enabled` for this task's project (settings 3.9); the
+    # worker turns the command-guard hook off for the attempt when false.
+    command_guard_enabled: bool = True
