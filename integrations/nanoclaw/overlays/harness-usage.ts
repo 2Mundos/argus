@@ -377,30 +377,213 @@ export function harnessLogLines(ev: unknown): string[] {
   return lines;
 }
 
+// Best-effort masking, the same rules as engines/livelog.mjs (this file is copied into the
+// agent runner alone, so it cannot import that one). The server and the channel redact again.
+const MASK = "[redacted]";
+const REDACT_PATTERNS: RegExp[] = [
+  /-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]{0,32}PRIVATE KEY-----|$)/g,
+  /\b(?:authorization|proxy-authorization)\s*[:=]\s*\S+(?:[ \t]+\S+)?/gi,
+  /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g,
+  /\bsk-[A-Za-z0-9_-]{16,}/g,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  /\bglpat-[A-Za-z0-9_-]{16,}/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+  /\bAIza[A-Za-z0-9_-]{30,}/g,
+  /(\b[a-z][a-z0-9+.-]{0,16}:\/\/[^\s/:@]+:)[^\s/@]+(?=@)/gi,
+  /((?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?)[^\s"',;]+/gi,
+  /(?<![\w-])(\w*--(?=[\w-]*?(?:token|secret|password|api-key))[\w-]*[ =])\S+/gi,
+];
+
+/** Values of secret-looking variables, to mask exactly. */
+function envSecrets(env: NodeJS.ProcessEnv): string[] {
+  return Object.entries(env)
+    .filter(([k, v]) => /KEY|TOKEN|SECRET|PASSWORD/i.test(k) && typeof v === "string")
+    .map(([, v]) => (v as string).trim())
+    .filter((v) => v.length >= 8);
+}
+
+export function redactLogText(text: string, secrets: string[] = []): string {
+  let out = String(text);
+  for (const sec of secrets) if (sec.length >= 6) out = out.split(sec).join(MASK);
+  for (const re of REDACT_PATTERNS)
+    out = out.replace(re, (...m) => (typeof m[1] === "string" ? `${m[1]}${MASK}` : MASK));
+  return out;
+}
+
+/** Redact a message before it is split into lines, so a line break cannot split a secret. */
+function textLogLines(text: string, secrets: string[]): string[] {
+  return redactLogText(text.replace(/\r\n/g, "\n"), secrets)
+    .split(/[\r\n]/)
+    .filter((l) => l.trim())
+    .map((l) => cut(l, LOG_LINE_MAX));
+}
+
+const BAD_STATUS = new Set(["failed", "declined"]);
+const errText = (e: unknown): string => cut(oneLine(isObject(e) ? e.message : e), LOG_RESULT_MAX);
+
 /**
- * Append readable lines for one harness SDK message. Returns true when anything was
- * written. Outside a pinned task context, or for a message with nothing to show, writes
- * nothing. Best effort: never throws into the runner.
+ * Short lines for one Codex app-server notification (`method`, `params`; schema from
+ * `codex app-server generate-json-schema`). Only `item/completed` (agentMessage,
+ * commandExecution, fileChange, mcpToolCall, dynamicToolCall, webSearch), `error` and
+ * `turn/completed` give lines. Never the echoed userMessage / hookPrompt, reasoning, or
+ * unknown notifications and items.
  */
-export function recordHarnessLog(ev: unknown, env: NodeJS.ProcessEnv = process.env): boolean {
+export function codexLogLines(method: unknown, params: unknown, secrets: string[] = []): string[] {
+  if (typeof method !== "string" || !isObject(params)) return [];
+  const lines: string[] = [];
+  switch (method) {
+    case "item/completed": {
+      const item = params.item;
+      if (!isObject(item)) break;
+      const call = (label: string, detail: string, failed: boolean, text: string) => {
+        lines.push(`▸ ${label}${detail ? ` ${detail}` : ""}`);
+        if (failed) lines.push(`  ✗ error: ${text}`.trimEnd());
+        else if (text) lines.push(`  ↳ ${text}`);
+      };
+      switch (item.type) {
+        case "agentMessage":
+          if (typeof item.text === "string") lines.push(...textLogLines(item.text, secrets));
+          break;
+        case "commandExecution": {
+          if (typeof item.command !== "string") break;
+          const code = Number.isInteger(item.exitCode) ? (item.exitCode as number) : null;
+          const out = cut(oneLine(item.aggregatedOutput), LOG_RESULT_MAX);
+          const failed = BAD_STATUS.has(String(item.status)) || (code !== null && code !== 0);
+          call(
+            "shell",
+            cut(oneLine(item.command), LOG_ARG_MAX),
+            failed,
+            failed && code !== null ? `exit ${code} ${out}`.trim() : out,
+          );
+          break;
+        }
+        case "fileChange": {
+          const paths = (Array.isArray(item.changes) ? item.changes : [])
+            .map((c) => (isObject(c) && typeof c.path === "string" ? c.path : ""))
+            .filter(Boolean);
+          call(
+            "patch",
+            cut(oneLine(paths.join(", ")), LOG_ARG_MAX),
+            BAD_STATUS.has(String(item.status)),
+            String(item.status),
+          );
+          break;
+        }
+        case "mcpToolCall": {
+          if (typeof item.tool !== "string") break;
+          const name = `${typeof item.server === "string" && item.server ? `${item.server}/` : ""}${item.tool}`;
+          const failed = Boolean(item.error) || BAD_STATUS.has(String(item.status));
+          call(
+            cut(name, 60),
+            toolArgs(item.arguments),
+            failed,
+            failed ? errText(item.error) || String(item.status) : "",
+          );
+          break;
+        }
+        case "dynamicToolCall": {
+          if (typeof item.tool !== "string") break;
+          const failed = item.success === false || BAD_STATUS.has(String(item.status));
+          call(cut(item.tool, 60), toolArgs(item.arguments), failed, failed ? "failed" : "");
+          break;
+        }
+        case "webSearch":
+          if (typeof item.query === "string")
+            lines.push(`▸ web_search ${cut(oneLine(item.query), LOG_ARG_MAX)}`);
+          break;
+        default:
+      }
+      break;
+    }
+    case "error":
+      lines.push(
+        `codex ${params.willRetry === true ? "error (retrying)" : "error"}: ${errText(params.error)}`,
+      );
+      break;
+    case "turn/completed": {
+      const turn = params.turn;
+      if (!isObject(turn)) break;
+      if (turn.status === "completed") lines.push("codex finished");
+      else if (turn.status === "failed" || turn.status === "interrupted")
+        lines.push(`codex finished with an error: ${errText(turn.error) || String(turn.status)}`);
+      break;
+    }
+    default:
+  }
+  return lines.map((l) => redactLogText(l, secrets)).map((l) => cut(l, LOG_LINE_MAX));
+}
+
+/**
+ * Append one record of lines for the pinned task. Returns true when it is on disk. The
+ * file sits in a directory the container can write, so a symlink, a hard link or any
+ * non-regular file at the path is refused, and the file stays under 8 MiB. Nothing is
+ * written outside a pinned task context, or for no lines. Best effort: never throws.
+ */
+function writeHarnessLog(lines: string[], env: NodeJS.ProcessEnv): boolean {
+  let fd: number | null = null;
   try {
     const ctx = readHarnessContext(env);
-    if (!ctx) return false;
-    const lines = harnessLogLines(ev);
-    if (!lines.length) return false;
+    if (!ctx || !lines.length) return false;
+    const secrets = envSecrets(env);
+    const clean = lines.map((l) => redactLogText(l, secrets)).filter((l) => l.trim());
+    if (!clean.length) return false;
     const file = harnessLogFile(env);
     const rec = `${JSON.stringify({
       v: 1,
       task_id: ctx.task_id,
       attempt: ctx.attempt,
       at: new Date().toISOString(),
-      lines,
+      lines: clean,
     })}\n`;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (fs.existsSync(file) && fs.statSync(file).size + rec.length > LOG_MAX_FILE_BYTES)
-      return false;
-    fs.appendFileSync(file, rec, { mode: 0o660 });
+    const c = fs.constants;
+    fd = fs.openSync(
+      file,
+      c.O_WRONLY | c.O_APPEND | c.O_CREAT | c.O_NOFOLLOW | c.O_NONBLOCK,
+      0o660,
+    );
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.nlink !== 1) return false;
+    if (st.size + Buffer.byteLength(rec) > LOG_MAX_FILE_BYTES) return false;
+    fs.writeSync(fd, rec);
     return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/**
+ * Append readable lines for one Claude Agent SDK message. Returns true when anything was
+ * written. Outside a pinned task context, or for a message with nothing to show, writes
+ * nothing. Best effort: never throws into the runner.
+ */
+export function recordHarnessLog(ev: unknown, env: NodeJS.ProcessEnv = process.env): boolean {
+  try {
+    return writeHarnessLog(harnessLogLines(ev), env);
+  } catch {
+    return false;
+  }
+}
+
+/** The same for one Codex app-server notification (`method`, `params`). */
+export function recordHarnessCodexLog(
+  method: unknown,
+  params: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  try {
+    return writeHarnessLog(codexLogLines(method, params, envSecrets(env)), env);
   } catch {
     return false;
   }

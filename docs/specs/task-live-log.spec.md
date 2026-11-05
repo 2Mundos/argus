@@ -142,10 +142,22 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   the delegate passes `--background-shell-timeout` (120 s, `ARGUS_AGENT_BG_SHELL_TIMEOUT_S`
   to change) to bound that wait. The final report, usage and exit status are read from
   the stream's `result` event.
+- `argus-delegate codex` runs `codex exec --json` and follows its stdout the same way,
+  one JSON event per line (a line split across reads is joined). Shown: the agent's
+  messages (`item.completed` `agent_message`), `▸ shell <command>`, `▸ patch <paths>`,
+  `▸ server/tool arg` for an MCP call and `▸ web_search <query>`, a bounded
+  result (`  ↳ …`) or error (`  ✗ error: …`, with the exit code of a failed command),
+  `codex error: …` for an `error` event, and `codex finished` or
+  `codex finished with an error: …` on `turn.completed` / `turn.failed`. Never shown:
+  `reasoning`, `todo_list`, the prompt, or unknown events and unparsable lines. The
+  Codex command, auth, usage accounting and attribution are unchanged. The event names
+  are not yet checked against a captured credential-free run or a pinned schema in this
+  repo (open question); unknown or differently shaped events are ignored, not guessed.
 - The batches are appended as JSON lines `{v, task_id, attempt, at, lines}` to
   `argus-task-log.jsonl` in the agent group directory (beside the model-policy
-  snapshot, no new mount). The file is capped at 8 MiB per run; a relay failure is
-  silent and never fails or slows the run. The token is never in that environment;
+  snapshot, no new mount). The file is capped at 8 MiB per run, counting what it
+  already holds; the delegate opens it `O_NOFOLLOW|O_NONBLOCK` and writes only to a
+  regular file with one link. A relay failure is silent and never fails or slows the run. The token is never in that environment;
   environment values whose names contain `KEY`, `TOKEN`, `SECRET` or `PASSWORD` (8+
   characters) are masked as exact secrets.
 - The directory is writable by the container, so the channel never follows a link:
@@ -171,20 +183,33 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   lines). The harness therefore posts its own live log.
 - Each SDK message of a claimed attempt is turned into short lines the same way as
   the Claude executor in 3.7 (assistant text, `▸ Tool arg`, truncated tool results,
-  `claude finished` / error on `result`; never the echoed prompt or thinking). Lines
-  are redacted best effort and appended as JSON lines `{v, task_id, attempt, at,
+  `claude finished` / error on `result`; never the echoed prompt or thinking).
+  The Codex app-server harness does the same from its notifications: on
+  `item/completed` the `agentMessage` text, `▸ shell <command>`, `▸ patch <paths>`,
+  `▸ server/tool arg` (`mcpToolCall`, `dynamicToolCall`), `▸ web_search <query>` and a
+  bounded result or error; `error` (`codex error: …`, `(retrying)` when it will
+  retry); and `codex finished` / `codex finished with an error: …` on `turn/completed`.
+  Never shown: `userMessage` and `hookPrompt` (the prompt), `reasoning`, raw function
+  output, patch diffs, or unknown notifications and items. Lines
+  are redacted best effort before they are written (with the 3.2 patterns and
+  secret-looking environment values) and appended as JSON lines `{v, task_id, attempt, at,
   lines}` to `argus-harness-log.jsonl` beside the model-policy snapshot (same
-  directory and safety rules as 3.7: exclusive create, `O_NOFOLLOW`, 8 MiB cap, silent
-  on failure). Outside a pinned task context nothing is written.
+  directory and safety rules as 3.7: the channel creates it exclusively, the harness
+  opens it `O_NOFOLLOW` and writes only to a regular file with one link, 8 MiB cap,
+  silent on failure, never failing the turn). Outside a pinned task context nothing is
+  written.
 - The channel recreates that file at task start, polls it with the same cadence and
   batching as 3.7, and posts with `source: "worker"`. Before COMPLETE/FAIL/ASK it
-  drains the harness file together with the delegate file. Codex and other harness
-  engines are not parsed yet (open question).
+  drains the harness file together with the delegate file. The Codex hooks are
+  installed by `patch-harness-usage.py` next to the usage hooks. Harness engines other
+  than Claude and Codex write no log (open question).
 
 # 4. Open Questions
 
-- Only the `claude` executor is parsed into readable lines; other executors give
-  keepalive lines only. The harness live log is Claude-only for the same reason.
+- The `claude`, `agent` (Cursor) and `codex` delegate executors are parsed into
+  readable lines; `opencode` and `copilot` give keepalive lines only, as their output
+  formats are not verified. The harness live log covers the Claude Agent SDK and the
+  Codex app-server; other harness engines (Cursor, Copilot, custom, local) write none.
 - Retention: no path deletes tasks, so a task's log lives as long as the task, bounded
   to 2000 lines for each of three attempts. A future task purge must delete its
   `task_log` rows first (the foreign key refuses otherwise).
