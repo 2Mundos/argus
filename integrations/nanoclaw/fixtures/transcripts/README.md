@@ -3,9 +3,9 @@
 Real engine output, recorded once and replayed in tests without Docker, a model
 or the network. Design: [engine transcript replay](../../../../docs/drafts/2026-11-04.engine-transcript-replay.draft.md).
 
-**Status:** no recordings are committed yet, and the table test
-(`transcripts.test.ts`) is not yet implemented. This file fixes the layout the
-recorder and the test will use.
+**Status:** one recording is committed (`claude/success-result`, a lone result
+event, not a full stream) and `transcripts.test.ts` replays it. Other cases are
+still to record.
 
 ## Layout
 
