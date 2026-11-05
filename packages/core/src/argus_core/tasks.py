@@ -310,6 +310,7 @@ ENV_BLOCK_REASONS = frozenset(
         "env_input_unavailable",
         "env_input_invalid",
         "env_input_limit",
+        "env_guard_missing",
         "worker_env",
     }
 )

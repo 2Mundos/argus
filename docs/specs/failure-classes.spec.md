@@ -244,6 +244,7 @@ task. No model session starts and no attempt is spent.
 | A required task input is listed, shared and downloadable ([task inputs](task-inputs.spec.md) 3.6) | `env_input_unavailable` |
 | A required task input has a safe name and destination, and its size and SHA-256 match after the retry | `env_input_invalid` |
 | The task inputs stay within the per-input, per-task and file-count limits | `env_input_limit` |
+| A guarded engine's managed settings register the command guard hook, when the guard is enabled ([command guard](command-guard.spec.md) 3) | `env_guard_missing` |
 
 - The workspace checks run for every task whose project has a configured
   repository, after the repository checks; [task workspace](task-workspace.spec.md)

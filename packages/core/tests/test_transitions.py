@@ -72,3 +72,10 @@ def test_failures_count_toward_max_attempts(
 def test_single_attempt_task_fails_immediately() -> None:
     ctx = TransitionContext(max_attempts=1)
     assert transition(S.CLAIMED, A.FAIL, ctx) is S.FAILED
+
+
+def test_env_guard_missing_is_an_environment_failure() -> None:
+    from argus_core.tasks import ENV_BLOCK_REASONS, FAILURE_CLASS, RetryClass
+
+    assert "env_guard_missing" in ENV_BLOCK_REASONS
+    assert FAILURE_CLASS["env_guard_missing"] is RetryClass.ENVIRONMENT
