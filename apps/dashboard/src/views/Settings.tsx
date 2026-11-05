@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import { ApiError } from "../api";
 import { useLiveData } from "../live";
-import { compactDraft, type Draft, emptyChains, toDraft } from "../models";
+import { compactDraft, type Draft, emptyChains, MODEL_ID, toDraft } from "../models";
 import { PageHeader } from "../PageHeader";
 import {
   chainFromSelect,
@@ -39,6 +39,7 @@ export function Settings() {
   const gitIdentity = byKey.get("git.identity");
   const orchestratorEnabled = byKey.get("orchestrator.enabled");
   const orchestratorRuntime = byKey.get("orchestrator.runtime");
+  const orchestratorModel = byKey.get("orchestrator.model");
 
   return (
     <section className="settings-page">
@@ -78,6 +79,7 @@ export function Settings() {
                 runtime={(orchestratorRuntime?.value as Runtime | undefined) ?? "auto"}
                 onChanged={() => reload()}
               />
+              <OrchestratorModelSection setting={orchestratorModel} onChanged={() => reload()} />
             </div>
           )}
           <div className="card">
@@ -195,6 +197,104 @@ function OrchestratorSection(props: { enabled: boolean; runtime: Runtime; onChan
           )}
         </p>
       )}
+    </section>
+  );
+}
+
+/** Harness engines `orchestrator.model` can name, with the account provider each
+ * one leases (internal-orchestrator spec 3.1). */
+const ORCHESTRATOR_ENGINES: { engine: string; label: string }[] = [
+  { engine: "claude", label: "Anthropic (claude)" },
+  { engine: "codex", label: "OpenAI (codex)" },
+];
+
+/** `orchestrator.model`: preferred provider and model (builtin-orchestrator spec 3.14). */
+function OrchestratorModelSection(props: { setting?: SettingValue; onChanged: () => void }) {
+  const { setting, onChanged } = props;
+  const stored = typeof setting?.value === "string" ? setting.value : "";
+  const [storedEngine, storedModel] = stored.includes("/")
+    ? [stored.slice(0, stored.indexOf("/")), stored.slice(stored.indexOf("/") + 1)]
+    : ["", ""];
+  const [engine, setEngine] = useState(storedEngine);
+  const [model, setModel] = useState(storedModel);
+  const action = useAction();
+  const [failure, setFailure] = useState<string>();
+  const [done, setDone] = useState<string>();
+
+  useEffect(() => {
+    setEngine(storedEngine);
+    setModel(storedModel);
+  }, [storedEngine, storedModel]);
+
+  async function save() {
+    await action.run(async () => {
+      setFailure(undefined);
+      setDone(undefined);
+      try {
+        if (engine === "") await resetSetting("orchestrator.model", null);
+        else await putSetting("orchestrator.model", `${engine}/${model.trim()}`, null);
+        setDone(
+          "Saved. It applies when the orchestrator next leases an account; Disable and Enable it to apply it now.",
+        );
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, "save");
+  }
+
+  const invalid = engine !== "" && !MODEL_ID.test(model.trim());
+  return (
+    <section>
+      <p className="muted small">
+        Preferred provider and model. Automatic uses the best-ranked account and the model policy's
+        harness chain. When the preferred provider has no usable account, the ordinary ranking
+        applies. Custom and local accounts use the model set on the account.
+      </p>
+      <div className="toolbar">
+        <label>
+          Provider{" "}
+          <select
+            aria-label="orchestrator provider"
+            value={engine}
+            disabled={action.busy}
+            onChange={(e) => setEngine(e.target.value)}
+          >
+            <option value="">Automatic</option>
+            {ORCHESTRATOR_ENGINES.map((o) => (
+              <option key={o.engine} value={o.engine}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {engine !== "" && (
+          <label>
+            Model{" "}
+            <input
+              aria-label="orchestrator model"
+              value={model}
+              placeholder={engine === "claude" ? "claude-sonnet-5-5" : "gpt-5.5-codex"}
+              disabled={action.busy}
+              onChange={(e) => setModel(e.target.value)}
+            />
+          </label>
+        )}
+        <ActionButton
+          type="button"
+          disabled={action.busy || invalid || (engine === storedEngine && model === storedModel)}
+          pending={action.is("save")}
+          action={() => void save()}
+        >
+          Save
+        </ActionButton>
+      </div>
+      {failure && (
+        <p className="error" role="alert">
+          {failure}
+        </p>
+      )}
+      {done && <p className="small">{done}</p>}
     </section>
   );
 }

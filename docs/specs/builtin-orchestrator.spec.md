@@ -646,7 +646,11 @@ model server already running on the node.
   so does the Accounts tab.
 - **Settings.** An Internal orchestrator section (global scope only) with Enable
   or Disable for `orchestrator.enabled` and a runtime picker (`Automatic`,
-  `Built-in`, `NanoClaw`) for `orchestrator.runtime`. A refusal is shown with its
+  `Built-in`, `NanoClaw`) for `orchestrator.runtime`. Below them, a Provider
+  picker (`Automatic`, `Anthropic (claude)`, `OpenAI (codex)`) and a Model field
+  write `orchestrator.model` as `<engine>/<model>`; `Automatic` resets it. The
+  change applies at the orchestrator's next lease (a failover or a restart), and
+  the saved notice says Disable and Enable apply it now. A refusal is shown with its
   text and details; a `409 orchestrator_running` adds a Disable action.
 - **Chat header.** "Built-in" or "NanoClaw" before the registration state.
 - **Pools tab.** The system pool card shows `Built-in (in Argus)`, with no image,
