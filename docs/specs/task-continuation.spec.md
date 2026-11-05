@@ -106,7 +106,11 @@ made outside any Argus transaction; Argus only stores it. The response carries
 the updated contract, which the channel renders. A recorded merge that is no
 longer a merge, or a head that moved, becomes a bounded `reconciliation` entry
 (phase `reconcile`) instead of a silent overwrite; an advance (open -> merged)
-is progress. With no observer, no network or a failed report, the recorded
+is progress, and the first time it is recorded for a claimed task Argus steers the
+holder's attempt (a merge is not acceptance: checklist, evidence and review still
+apply) and queues one `Task update.` on the origin conversation. A repeat
+observation, a stale attempt or a task that is not claimed wakes nobody, and the task
+state never changes. With no observer, no network or a failed report, the recorded
 contract stands and unknown stays unknown. Reconciliation is settled by an
 explicit orchestrator update. Argus never creates branches or PRs for the worker.
 

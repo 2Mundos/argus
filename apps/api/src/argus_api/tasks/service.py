@@ -3,6 +3,7 @@
 See docs/specs/worker-lifecycle.spec.md 3.2 and 3.3.
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -18,7 +19,10 @@ from argus_core.accounts import ENGINE_PROVIDERS, LOCAL_PROVIDER
 from argus_core.agents import LIVE, AgentState
 from argus_core.auth import Scope
 from argus_core.continuation import (
+    ArtifactKind,
+    ArtifactState,
     ChecklistItem,
+    Continuation,
     ContinuationArtifact,
     ContinuationProvenance,
     ContinuationUpdate,
@@ -2363,6 +2367,13 @@ def _artifact(
     )
 
 
+MERGE_STEER = (
+    "The pull request for this task is merged. A merge is not acceptance: the "
+    "checklist, evidence and review requirements still apply. Re-check them and "
+    "finish the task."
+)
+
+
 async def observe(
     tx: Tx, agent_id: str, task_id: str, body: ObservationRequest
 ) -> Task:
@@ -2414,8 +2425,37 @@ async def observe(
             "reconciliation": cont.reconcile(have, seen, tx.now),
         }
     )
-    await cont.store(tx, task_id, have, want, f"agent:{agent_id}", "observation")
+    stored = await cont.store(
+        tx, task_id, have, want, f"agent:{agent_id}", "observation"
+    )
+    if _newly_merged(have, stored):
+        await _announce_merge(tx, row, f"agent:{agent_id}")
     return await get_task(tx.conn, task_id)
+
+
+def _newly_merged(have: Continuation, now: Continuation) -> bool:
+    """A pull request the record held as anything but merged is merged now."""
+    before = {a.key: a.state for a in have.artifacts}
+    return any(
+        a.kind is ArtifactKind.PR
+        and a.state is ArtifactState.MERGED
+        and before.get(a.key) is not ArtifactState.MERGED
+        for a in now.artifacts
+    )
+
+
+async def _announce_merge(tx: Tx, row: aiosqlite.Row, actor: str) -> None:
+    """The first time a claimed task's PR is recorded merged, tell its holder (a steer
+    on the attempt it holds) and the origin conversation. Once per merge: a repeat
+    observation records no change. Merged is not acceptance; nothing else moves."""
+    # The holder takes no steers, or one just went out: the record stands.
+    with contextlib.suppress(ConflictError, RateLimitedError):
+        await steers.create(tx, row["id"], MERGE_STEER, actor)
+    if row["origin_conversation_id"]:
+        # Imported here: conversations import the orchestrator, which imports us.
+        from argus_api.conversations import service as conversations
+
+        await conversations.queue_task_update(tx, row["origin_conversation_id"])
 
 
 async def update_continuation(

@@ -20,7 +20,9 @@ from argus_api.db import Database
 from argus_api.decisions import service as decisions
 from argus_api.errors import ConflictError, LeaseConflictError, ValidationFailedError
 from argus_api.main import app
+from argus_api.settings import service as settings_service
 from argus_api.tasks import service as tasks
+from argus_api.tasks import steers
 from argus_core.auth import Scope
 from argus_core.continuation import (
     ArtifactState,
@@ -31,6 +33,7 @@ from argus_core.continuation import (
     classify_answer,
     split_spec,
 )
+from argus_core.conversations import ConversationCreate
 from argus_core.decisions import Ask, DecisionAnswer
 from argus_core.tasks import ClaimedTask, TaskCreate, TaskResult
 from argus_core.tasks import TaskState as S
@@ -897,3 +900,96 @@ def test_the_contract_over_http_is_scoped_fenced_and_survives_a_release(
     assert c["decisions"][0]["category"] == "assistance"
     assert c["interruption"]["reason"] == "asked"
     assert client.get(base, headers=w2).json()["revision"] == c["revision"]
+
+
+# -- a merge seen on a claimed task reaches the holder and the origin conversation ---
+
+
+async def merge_setup(db: Database, *, orchestrator: bool = True):
+    """A claimed task with an open PR on record, steerable, with an origin chat."""
+    # Imported here: conversations import the orchestrator, which imports tasks.
+    from argus_api.conversations import service as conversations
+
+    async with db.write() as tx:
+        await settings_service.put_setting(
+            tx,
+            Path(),
+            settings_service.GLOBAL,
+            "orchestrator.enabled",
+            orchestrator,
+            "admin:test",
+        )
+        conv = await conversations.create_conversation(
+            tx, ConversationCreate(title="chat"), "admin:test"
+        )
+    task_id = await new_task(db)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET origin_conversation_id = ? WHERE id = ?",
+            (conv.id, task_id),
+        )
+        await tx.conn.execute(
+            "UPDATE agents SET runtime = ? WHERE id = ?",
+            ('{"features": ["steer"]}', A),
+        )
+    t = await claim(db)
+    t = await observe(db, A, t, artifacts=[{"kind": "pr", "ref": "7", "state": "open"}])
+    return t, conv.id
+
+
+async def merge_effects(db: Database, task, conv_id: str) -> tuple[list[str], int]:
+    async with db.read() as conn:
+        page = await steers.list_steers(conn, task.id, task.attempt)
+        async with conn.execute(
+            "SELECT count(*) FROM messages WHERE conversation_id = ?"
+            " AND author = 'system'",
+            (conv_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    assert row is not None
+    return [s.message for s in page.items], row[0]
+
+
+MERGED = {"kind": "pr", "ref": "7", "state": "merged"}
+
+
+async def test_a_merge_seen_on_a_claimed_task_steers_the_holder_and_notes_the_chat_once(
+    db: Database,
+) -> None:
+    t, conv = await merge_setup(db)
+    assert await merge_effects(db, t, conv) == ([], 0)  # open PR: nothing
+    t = await observe(db, A, t, artifacts=[MERGED])
+    [message], notes = await merge_effects(db, t, conv)
+    assert notes == 1
+    assert "merged" in message and "not acceptance" in message
+    assert t.state is S.CLAIMED and t.attempt == 1
+    await observe(db, A, t, artifacts=[MERGED])  # the same merge again
+    assert await merge_effects(db, t, conv) == ([message], 1)
+
+
+async def test_a_merge_wakes_nobody_when_the_orchestrator_is_off(db: Database) -> None:
+    t, conv = await merge_setup(db, orchestrator=False)
+    t = await observe(db, A, t, artifacts=[MERGED])
+    [_], notes = await merge_effects(db, t, conv)
+    assert notes == 0  # the holder is still told
+
+
+async def test_a_merge_seen_by_a_stale_attempt_changes_nothing(db: Database) -> None:
+    t, conv = await merge_setup(db)
+    await release(db, t.id)
+    t2 = await claim(db)
+    with pytest.raises(LeaseConflictError):
+        await observe(db, A, t, artifacts=[MERGED])
+    assert await merge_effects(db, t2, conv) == ([], 0)
+    t2 = await observe(db, A, t2, artifacts=[MERGED])
+    assert len((await merge_effects(db, t2, conv))[0]) == 1
+
+
+async def test_a_merge_on_a_task_that_is_not_claimed_wakes_nobody(db: Database) -> None:
+    t, conv = await merge_setup(db)
+    async with db.write() as tx:
+        await tasks.cancel(tx, t.id, "admin:test")
+    cancelled = (await merge_effects(db, t, conv))[1]
+    with pytest.raises(LeaseConflictError):
+        await observe(db, A, t, artifacts=[MERGED])
+    assert await merge_effects(db, t, conv) == ([], cancelled)
