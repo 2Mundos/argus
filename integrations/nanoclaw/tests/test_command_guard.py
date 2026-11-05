@@ -100,7 +100,9 @@ CASES = {
 
 def test_every_rule_has_both_cases():
     assert set(CASES) == set(guard.REASONS)
-    assert all(c["block"] and c["allow"] for c in CASES.values())
+    for rule in guard.REASONS:
+        assert any(guard.check(c) == rule for c in CASES[rule]["block"]), rule
+        assert any(guard.check(c) is None for c in CASES[rule]["allow"]), rule
 
 
 @pytest.mark.parametrize(
