@@ -4,6 +4,7 @@ reconciler, adapters, usage, detection, notices and framing
 
 import asyncio
 import json
+import socket
 from datetime import timedelta
 from pathlib import Path
 
@@ -27,7 +28,6 @@ from argus_api.orchestrator_builtin import prompt, tools
 from argus_api.orchestrator_builtin.models import (
     Endpoint,
     Failure,
-    Reply,
     anthropic,
     openai_compat,
 )
@@ -352,19 +352,59 @@ async def test_failures_are_classified_from_status_and_token_only(
         assert got.reset is not None
 
 
-async def test_a_transport_error_is_transient() -> None:
-    def refuse(_: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("refused")
+def _raise(exc: BaseException, cause: BaseException | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if cause is None:
+            raise exc
+        raise exc from cause
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as client:
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("handler", "kind", "label"),
+    [
+        # DNS cannot fix itself in 10 s: the endpoint is wrong for this runtime.
+        (
+            _raise(
+                httpx.ConnectError("[Errno -2] Name or service not known"),
+                socket.gaierror(-2, "Name or service not known"),
+            ),
+            "unreachable",
+            "dns_failed",
+        ),
+        (
+            _raise(
+                httpx.ConnectError("All connection attempts failed"),
+                ConnectionRefusedError(111, "Connect call failed"),
+            ),
+            "transient",
+            "connection_refused",
+        ),
+        (_raise(httpx.ReadTimeout("timed out")), "transient", "timeout"),
+        (_raise(httpx.ConnectError("closed")), "transient", "connect_failed"),
+        (_raise(httpx.RemoteProtocolError("bad")), "invalid", "invalid_response"),
+        (
+            lambda _: httpx.Response(200, content=b"<html>not json</html>"),
+            "invalid",
+            "200 invalid_response",
+        ),
+        (
+            lambda _: httpx.Response(307, headers={"location": "http://evil.test/"}),
+            "unreachable",
+            "307 redirect_refused",
+        ),
+    ],
+)
+async def test_transport_failures_are_classified_by_type_never_text(
+    handler, kind: str, label: str
+) -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         got = await send_model(
             client, Endpoint("https://m.test", {}, 5), anthropic.AnthropicAdapter(), {}
         )
-    assert isinstance(got, Failure) and (got.kind, got.label) == (
-        "transient",
-        "ConnectError",
-    )
-    assert not isinstance(got, Reply)
+    assert isinstance(got, Failure) and (got.kind, got.label) == (kind, label)
+    assert "Name or service" not in got.label and "html" not in got.label
 
 
 def test_results_are_cut_at_a_code_point_boundary() -> None:
@@ -457,6 +497,37 @@ async def test_detection_finds_servers_and_follows_no_redirect() -> None:
     lmstudio = by_url["http://127.0.0.1:1234"]
     assert (lmstudio.preferred, lmstudio.note) == (False, local_detect.LOOPBACK_NOTE)
     assert found.hint is None  # something answered
+
+
+@pytest.mark.parametrize("in_container", [False, True])
+async def test_a_host_api_offers_the_worker_name_for_a_loopback_server(
+    in_container: bool,
+) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if (request.url.host, request.url.port) == ("127.0.0.1", 8080):
+            return httpx.Response(200, json={"data": [{"id": "spark-x2.6"}]})
+        raise httpx.ConnectError("closed")  # host.docker.internal does not resolve
+
+    found = await local_detect.detect(
+        httpx.MockTransport(answer), in_container=in_container
+    )
+    by_url = {c.base_url: c for c in found.candidates}
+    loopback = by_url.pop("http://127.0.0.1:8080")
+    assert (loopback.api_endpoint, loopback.preferred) == (
+        "http://127.0.0.1:8080",
+        False,
+    )
+    if in_container:
+        # Inside a container 127.0.0.1 is the container itself: no forwarder guess.
+        assert by_url == {}
+        return
+    [forwarded] = by_url.values()
+    assert (forwarded.base_url, forwarded.api_endpoint) == (
+        "http://host.docker.internal:8080",
+        "http://127.0.0.1:8080",
+    )
+    assert forwarded.preferred and forwarded.note == local_detect.FORWARDER_NOTE
+    assert found.candidates[0] is forwarded  # preferred first
 
 
 async def test_detection_hints_only_inside_a_container() -> None:
@@ -649,34 +720,3 @@ async def test_a_cancelled_claim_cancels_its_poll() -> None:
     with pytest.raises(asyncio.CancelledError):
         await claim
     assert argus.cancelled == ["/agents/me/chat"]
-
-
-async def test_the_probe_names_the_model_only_of_its_own_endpoint() -> None:
-    from types import SimpleNamespace
-
-    from argus_api.accounts.routes import with_local_context
-    from argus_api.engines.local import LocalModelInfo
-    from argus_core.accounts import AccountLease
-    from argus_core.custom_accounts import LeaseSettings
-
-    class Probe:
-        url = "http://127.0.0.1:8080/v1"
-
-        async def probe(self) -> LocalModelInfo:
-            return LocalModelInfo(reachable=True, model="served", n_ctx=8192)
-
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(local_model=Probe()))
-    )
-
-    def lease(base_url: str) -> AccountLease:
-        return AccountLease(
-            lease_id="l", account_id="a", name="a", provider="local", kind="api_key",
-            credential={"base_url": base_url},
-            settings=LeaseSettings(base_url=base_url, label="local", model=None, provider=None),
-        )  # fmt: skip
-
-    same = await with_local_context(request, lease("http://127.0.0.1:8080"))  # ty: ignore[invalid-argument-type]
-    other = await with_local_context(request, lease("http://127.0.0.1:11434"))  # ty: ignore[invalid-argument-type]
-    assert same.settings is not None and same.settings.model == "served"
-    assert other.settings is not None and other.settings.model is None

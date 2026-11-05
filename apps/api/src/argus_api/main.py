@@ -18,9 +18,11 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from argus_api import mcp_server, reaper
+from argus_api.accounts import local_health
 from argus_api.accounts import service as accounts
 from argus_api.accounts.claude_login import ClaudeLoginManager
 from argus_api.accounts.codex_login import CodexLoginManager
+from argus_api.accounts.local_health import LocalHealth
 from argus_api.accounts.quota_probe import QuotaProber
 from argus_api.accounts.routes import router as accounts_router
 from argus_api.admin.routes import router as admin_router
@@ -187,23 +189,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             except Exception:
                 disk_guard_stats.record(time.monotonic() - started, ok=False)
                 raise
-        local_model = app.state.local_model
+        # Local accounts as this process reaches them (local harness spec).
+        app.state.local_health = LocalHealth()
+        local_due = time.monotonic() + settings.local_health_interval_s
 
-        async def local_probe() -> tuple[bool | None, str]:
-            """What the reaper tells the account registry about the local model:
-            `local` accounts are available exactly while it answers."""
-            if local_model is None:
-                return None, ""
-            info = await local_model.probe()
-            ok = info.reachable and info.model == local_model.model
-            return ok, info.error or f"serves {info.model}"
+        async def local_probe() -> dict[str, tuple[bool | None, str]]:
+            """What the reaper tells the registry about each local account: its own
+            API endpoint and models, once per interval (the first one interval
+            after start; the stored state stands until then)."""
+            nonlocal local_due
+            if time.monotonic() < local_due:
+                return {}
+            local_due = time.monotonic() + settings.local_health_interval_s
+            return await local_health.probe_all(
+                db,
+                app.state.secrets,
+                app.state.local_health,
+                settings.model_policy_path,
+            )
 
         loops = [
             asyncio.create_task(
                 reaper.run(
                     db,
                     stats=app.state.loops["reaper"],
-                    local_probe=local_probe if local_model else None,
+                    local_probe=local_probe,
                     quiet_claim_s=settings.quiet_claim_s,
                     stall_fail_s=settings.stall_fail_s,
                 )

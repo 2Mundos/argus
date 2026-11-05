@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 
 from argus_api.accounts import service as accounts
@@ -38,9 +38,12 @@ class ReapResult:
         )
 
 
+LocalHealth = Mapping[str, tuple[bool | None, str]]
+
+
 async def reap(
     tx: Tx,
-    local: tuple[bool | None, str] = (None, ""),
+    local: LocalHealth | None = None,
     *,
     quiet_claim_s: int = tasks.QUIET_CLAIM_S,
     stall_fail_s: int = 0,
@@ -49,8 +52,8 @@ async def reap(
     runs in a savepoint, and so does every task or agent inside lease/timeout
     expiry and loss, so one bad row or stage never keeps leases from expiring.
 
-    `local` is the local model's probe, taken before the transaction opened:
-    reachable (or not), with the detail. `(None, "")` means it was not probed.
+    `local` is each local account's probe, taken before the transaction opened:
+    account id to (healthy or not, reason). Absent or None: not probed.
     `quiet_claim_s` flags silent claims; `stall_fail_s` (0: off) then expires a flagged
     claim that stays silent that long (stall visibility 3.6)."""
     failed_tasks: list[str] = []
@@ -85,7 +88,8 @@ async def reap(
     )
     recovered = await stage("accounts.recover", lambda: accounts.recover(tx))
     recovered += await stage(
-        "accounts.local_health", lambda: accounts.sync_local_health(tx, *local)
+        "accounts.local_health",
+        lambda: accounts.sync_local_health(tx, local or {}),
     )
     return ReapResult(
         expired,
@@ -103,14 +107,14 @@ async def run(
     db: Database,
     interval: float = REAP_INTERVAL_S,
     stats: LoopStats | None = None,
-    local_probe: Callable[[], Awaitable[tuple[bool | None, str]]] | None = None,
+    local_probe: Callable[[], Awaitable[LocalHealth]] | None = None,
     quiet_claim_s: int = tasks.QUIET_CLAIM_S,
     stall_fail_s: int = 0,
 ) -> None:
     while True:
         started = time.monotonic()
         try:
-            local: tuple[bool | None, str] = (None, "")
+            local: LocalHealth = {}
             if local_probe is not None:
                 # Outside the write transaction by design: no network call in one.
                 try:

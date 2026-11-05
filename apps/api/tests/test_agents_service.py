@@ -222,7 +222,7 @@ async def test_reaper_loop_runs_passes_and_survives_errors(
     real_reap, calls = reaper.reap, []
     third_pass = asyncio.Event()
 
-    async def flaky_reap(tx, local=(None, ""), **kw):
+    async def flaky_reap(tx, local=None, **kw):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("transient")

@@ -1,8 +1,9 @@
 """Model adapters: plain HTTP to the provider with the leased key
 (builtin-orchestrator spec 3.4). No vendor SDK.
 
-`send` classifies a failure only from the HTTP status, headers and the provider's
-error `type` or `code` token; error message text is never read, logged or replied.
+`send` classifies a failure only from the HTTP status, headers, the provider's
+error `type` or `code` token and, for transport errors, the local harness failure
+class of Argus's own client; error message text is never read, logged or replied.
 """
 
 import json
@@ -16,6 +17,7 @@ from argus_core.accounts import LOCAL_AUTH_TOKEN, validate_local_base_url
 from argus_core.custom_accounts import check_base_url
 from argus_core.quota import quota_reset_from_headers
 
+from argus_api.accounts.local_health import classify, origin
 from argus_api.orchestrator_builtin.transcript import ToolCall, Transcript
 
 MAX_OUTPUT_TOKENS = 4096
@@ -48,7 +50,12 @@ class Reply:
     usage: Usage | None = None
 
 
-FailureKind = Literal["quota", "auth", "transient", "too_long", "request"]
+FailureKind = Literal[
+    "quota", "auth", "transient", "unreachable", "invalid", "too_long", "request"
+]
+# Transport failures that another try cannot fix: the endpoint is wrong for this
+# runtime (builtin-orchestrator spec 3.4).
+UNREACHABLE = frozenset({"dns_failed", "tls_failed"})
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,11 @@ class Endpoint:
     url: str
     headers: dict[str, str]
     timeout: float
+
+    @property
+    def origin(self) -> str:
+        """Scheme, host and port: what a reply or log line may name."""
+        return origin(self.url)
 
 
 class Adapter(Protocol):
@@ -156,13 +168,20 @@ async def send(
             target.url, json=body, headers=target.headers, timeout=target.timeout
         )
     except (httpx.HTTPError, OSError) as exc:
-        return Failure("transient", error_type=type(exc).__name__)
+        failure = classify(exc)
+        if failure in UNREACHABLE:
+            return Failure("unreachable", error_type=failure)
+        if failure == "invalid_response":
+            return Failure("invalid", error_type=failure)
+        return Failure("transient", error_type=failure)
     status = res.status_code
     if status == 200:
         try:
             return adapter.parse(res.json())
         except (ValueError, KeyError, TypeError, IndexError):
-            return Failure("request", status, "unreadable_response")
+            return Failure("invalid", status, "invalid_response")
+    if res.is_redirect:
+        return Failure("unreachable", status, "redirect_refused")
     try:
         data = res.json()
     except ValueError:

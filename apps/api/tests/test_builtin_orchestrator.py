@@ -6,6 +6,7 @@ import asyncio
 import itertools
 import json
 import os
+import socket
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -160,8 +161,10 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Env]:
     # As conftest sets them: claims must not depend on this host's free space.
     monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "false")
     monkeypatch.setenv("ARGUS_CLIENT_DOWNLOADS", "0")
-    # Nothing but the test starts a loop: the reconciler's next pass is an hour away.
+    # Nothing but the test starts a loop: the reconciler's next pass is an hour away,
+    # and so is the first local health probe (tests call it themselves).
     monkeypatch.setenv("ARGUS_RECONCILE_INTERVAL_S", "3600")
+    monkeypatch.setenv("ARGUS_LOCAL_HEALTH_INTERVAL_S", "3600")
     model, sleeps = FakeModel(), []
 
     async def no_sleep(seconds: float) -> None:
@@ -292,6 +295,10 @@ def reply_of(env: Env, conv: str) -> str:
     last = messages(env, conv)[-1]
     assert last["author"].startswith("orchestrator:"), last
     return last["body"]
+
+
+def turn_of(env: Env, conv: str) -> str:
+    return next(m["turn_id"] for m in messages(env, conv) if m["turn_id"])
 
 
 # -- runtime resolution ----------------------------------------------------------
@@ -650,7 +657,9 @@ def test_transient_errors_are_retried_twice_then_replied(env: Env) -> None:
     env.model.script = [env.model.error(503)] * 3
     run_turn(env, loop)
     assert reply_of(env, conv) == (
-        "The model provider did not answer (`503`). Send the message again."
+        "The model provider did not answer (`503`). Account `a`, endpoint"
+        f" `https://api.anthropic.com`, runtime builtin, turn `{turn_of(env, conv)}`."
+        " Send the message again."
     )
     assert env.sleeps == [2.0, 8.0]
 
@@ -798,7 +807,9 @@ def test_a_local_429_is_load_not_a_quota(env: Env) -> None:
     env.model.script = [env.model.error(429)] * 3
     run_turn(env, loop)
     assert reply_of(env, conv) == (
-        "The model provider did not answer (`429`). Send the message again."
+        "The model provider did not answer (`429`). Account `local`, endpoint"
+        f" `http://127.0.0.1:11434`, runtime builtin, turn `{turn_of(env, conv)}`."
+        " Send the message again."
     )
     assert env.sleeps == [2.0, 8.0]
     accounts = env.client.get("/api/accounts", headers=ADMIN).json()
@@ -883,3 +894,79 @@ def test_published_drafts_keep_their_origin(env: Env) -> None:
         return row[0] if row else None
 
     assert env.call(origin) == mine != other
+
+
+# -- local endpoints per runtime (local harness spec) ---------------------------
+
+
+def _local(env: Env, *, container: bool, **credential: Any) -> str:
+    app.state.local_health.container = container
+    return add_account(
+        env,
+        "spark",
+        provider="local",
+        credential={"base_url": "http://host.docker.internal:8080", **credential},
+    )
+
+
+@pytest.mark.parametrize(
+    ("container", "url"),
+    [
+        # The API on the host, workers in Docker: loopback, no hosts entry.
+        (False, "http://127.0.0.1:8080/v1/chat/completions"),
+        # The API in a container resolves the Docker host name itself.
+        (True, "http://host.docker.internal:8080/v1/chat/completions"),
+    ],
+    ids=["host-api", "container-api"],
+)
+def test_the_builtin_calls_the_account_api_endpoint_with_the_override_model(
+    env: Env, container: bool, url: str
+) -> None:
+    _local(env, container=container, model="qwen-stale")
+    put_setting(env, "orchestrator.model", "local/spark-x2.6")
+    enable(env)
+    loop = boot(env)
+    conv = chat(env, "hello")
+    env.model.script = [env.model.oa_text("Hi.")]
+    run_turn(env, loop)
+    [request] = env.model.requests
+    assert request.url == url
+    assert (
+        request.body["model"] == "spark-x2.6"
+    )  # orchestrator.model, not the stale one
+    assert reply_of(env, conv) == "Hi."
+
+
+def test_an_unresolvable_endpoint_replies_once_with_what_to_change(env: Env) -> None:
+    # A stated API endpoint the API process cannot resolve (no hosts entry).
+    _local(
+        env,
+        container=False,
+        model="qwen3",
+        api_base_url="http://host.docker.internal:8080",
+    )
+    enable(env)
+    loop = boot(env)
+    conv = chat(env, "hello")
+
+    def no_dns(_: dict) -> Any:
+        try:
+            raise socket.gaierror(-2, "Name or service not known")
+        except socket.gaierror as exc:
+            raise httpx.ConnectError("[Errno -2] Name or service not known") from exc
+
+    env.model.script = [no_dns]
+    run_turn(env, loop)
+    reply = reply_of(env, conv)
+    assert reply == (
+        "The model provider could not be reached (`dns_failed`)."
+        " `host.docker.internal` does not resolve from the Argus API process. Set the"
+        " account's API endpoint in Accounts → Local endpoints, then test it there."
+        " Account `spark`, endpoint `http://host.docker.internal:8080`, runtime"
+        f" builtin, turn `{turn_of(env, conv)}`."
+    )
+    assert env.sleeps == []  # not retried: another try cannot fix DNS
+    assert "Errno" not in reply and "argus-local-harness" not in reply
+    logged = "\n".join(loop.handle.tail(50))
+    assert "error: unreachable dns_failed account=spark" in logged
+    assert "argus-local-harness" not in logged

@@ -115,6 +115,16 @@
             ],
             "title": "Last Rejected At"
           },
+          "local": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocalAccountView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "max_leases": {
             "anyOf": [
               {
@@ -11964,6 +11974,186 @@
         "title": "LeaseSettings",
         "type": "object"
       },
+      "LocalAccountUpdate": {
+        "description": "The local editor: a field left out is kept; `null` clears an optional one\n(`api_base_url`, `model`, `context_tokens`). `base_url` cannot be cleared.",
+        "properties": {
+          "api_base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Base Url"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Tokens"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "title": "LocalAccountUpdate",
+        "type": "object"
+      },
+      "LocalAccountView": {
+        "description": "A local account's endpoints, health and last test (local harness spec,\n\"Account view\"). Never the placeholder token.",
+        "properties": {
+          "api_base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Base Url"
+          },
+          "api_endpoint": {
+            "title": "Api Endpoint",
+            "type": "string"
+          },
+          "api_endpoint_source": {
+            "enum": [
+              "api_base_url",
+              "derived",
+              "base_url"
+            ],
+            "title": "Api Endpoint Source",
+            "type": "string"
+          },
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Tokens"
+          },
+          "discovery": {
+            "$ref": "#/components/schemas/LocalCheck"
+          },
+          "inference": {
+            "$ref": "#/components/schemas/LocalCheck"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "orchestrator": {
+            "$ref": "#/components/schemas/LocalCheck"
+          },
+          "orchestrator_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator Model"
+          },
+          "orchestrator_model_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "orchestrator.model",
+                  "account",
+                  "served"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orchestrator Model Source"
+          },
+          "served_models": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Served Models"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "base_url",
+          "api_base_url",
+          "api_endpoint",
+          "api_endpoint_source",
+          "model",
+          "context_tokens",
+          "orchestrator_model",
+          "orchestrator_model_source",
+          "served_models",
+          "discovery",
+          "inference",
+          "orchestrator"
+        ],
+        "title": "LocalAccountView",
+        "type": "object"
+      },
       "LocalAttempt": {
         "properties": {
           "completion_tokens": {
@@ -12036,6 +12226,10 @@
       "LocalCandidate": {
         "description": "A model server that answered `/v1/models` on this node\n(builtin-orchestrator spec 3.11).",
         "properties": {
+          "api_endpoint": {
+            "title": "Api Endpoint",
+            "type": "string"
+          },
           "base_url": {
             "title": "Base Url",
             "type": "string"
@@ -12074,11 +12268,111 @@
         },
         "required": [
           "base_url",
+          "api_endpoint",
           "server_hint",
           "models",
           "preferred"
         ],
         "title": "LocalCandidate",
+        "type": "object"
+      },
+      "LocalCheck": {
+        "description": "One check of a local account, from the Argus API process. `detail` is\nArgus's own sentence, never the server's text.",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dns_failed",
+                  "connection_refused",
+                  "timeout",
+                  "tls_failed",
+                  "connect_failed",
+                  "redirect_refused",
+                  "http_error",
+                  "invalid_response",
+                  "model_not_served",
+                  "no_models",
+                  "no_tool_call",
+                  "empty_answer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Status"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "status": {
+            "default": "not_run",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped",
+              "not_run"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "LocalCheck",
         "type": "object"
       },
       "LocalDetection": {
@@ -12270,6 +12564,106 @@
           "cost"
         ],
         "title": "LocalRunResult",
+        "type": "object"
+      },
+      "LocalTestRequest": {
+        "description": "An admin's explicit test. Discovery always runs; the two completions run\nonly when asked (no automatic inference).",
+        "properties": {
+          "inference": {
+            "default": false,
+            "title": "Inference",
+            "type": "boolean"
+          },
+          "tool_calling": {
+            "default": false,
+            "title": "Tool Calling",
+            "type": "boolean"
+          }
+        },
+        "title": "LocalTestRequest",
+        "type": "object"
+      },
+      "LocalTestResult": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_name": {
+            "title": "Account Name",
+            "type": "string"
+          },
+          "discovery": {
+            "$ref": "#/components/schemas/LocalCheck"
+          },
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "endpoint_source": {
+            "enum": [
+              "api_base_url",
+              "derived",
+              "base_url"
+            ],
+            "title": "Endpoint Source",
+            "type": "string"
+          },
+          "inference": {
+            "$ref": "#/components/schemas/LocalCheck"
+          },
+          "orchestrator": {
+            "$ref": "#/components/schemas/LocalCheck"
+          },
+          "runtime": {
+            "const": "api",
+            "default": "api",
+            "title": "Runtime",
+            "type": "string"
+          },
+          "served_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Served Models",
+            "type": "array"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "worker_endpoint": {
+            "title": "Worker Endpoint",
+            "type": "string"
+          },
+          "worker_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Note"
+          }
+        },
+        "required": [
+          "account_id",
+          "account_name",
+          "endpoint",
+          "endpoint_source",
+          "worker_endpoint",
+          "served_models",
+          "discovery",
+          "inference",
+          "orchestrator"
+        ],
+        "title": "LocalTestResult",
         "type": "object"
       },
       "LogAccepted": {
@@ -25464,7 +25858,7 @@
     },
     "/api/accounts/lease": {
       "post": {
-        "description": "Lease the best usable account and deliver its credential to a claimed task.\n\n`runtime_providers` is required and states what the runtime can apply. The\ncaller must hold the live claim identified by `task_id` and `attempt`; only the\ninternal orchestrator may leave them out, for its engine (internal orchestrator\nspec 3.1). One active lease per role; `409 no_account` when none is usable. A `local` lease\nwhose credential names no `context_tokens` carries the window the local model's\nprobe measured, so the harness can compact in time (local harness spec, \"Harness orchestrates only\").",
+        "description": "Lease the best usable account and deliver its credential to a claimed task.\n\n`runtime_providers` is required and states what the runtime can apply. The\ncaller must hold the live claim identified by `task_id` and `attempt`; only the\ninternal orchestrator may leave them out, for its engine (internal orchestrator\nspec 3.1). One active lease per role; `409 no_account` when none is usable. A `local` lease\nwhose credential names no `context_tokens` carries the window the local model's\nprobe measured, so the harness can compact in time (local harness spec, \"Harness orchestrates only\").\nA `local` lease names the endpoint of the runtime holding it: the API endpoint\nfor a built-in agent, the worker endpoint otherwise (local harness spec, \"One\nendpoint per runtime\").",
         "operationId": "lease_account_api_accounts_lease_post",
         "requestBody": {
           "content": {
@@ -26000,6 +26394,122 @@
           }
         ],
         "summary": "Report Exhausted",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/local": {
+      "put": {
+        "description": "Change a local account's worker endpoint, API endpoint, model or context\nwindow; `null` clears an optional field (local harness spec, \"Editor\"). The\nanswer carries a fresh discovery (no inference), so a model the server no\nlonger lists shows as a stale model warning.",
+        "operationId": "update_local_account_api_accounts__account_id__local_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalAccountUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Local Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/local/test": {
+      "post": {
+        "description": "Test a local account from the Argus API process against its own API\nendpoint: discovery always; a short completion only with `inference`, and a\ntool-call completion on the built-in orchestrator's model only with\n`tool_calling` (local harness spec, \"Admin test\"). Three separate statuses;\ndiscovery never marks the other two passed.",
+        "operationId": "test_local_account_api_accounts__account_id__local_test_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalTestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Test Local Account",
         "tags": [
           "accounts"
         ]

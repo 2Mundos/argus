@@ -6,7 +6,7 @@ store and are only ever handed to the agent holding a lease.
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
@@ -50,6 +50,7 @@ from pydantic import TypeAdapter
 
 from argus_api.accounts import usage
 from argus_api.accounts.eligibility import engine_pool
+from argus_api.accounts.local_health import HEALTH_REASONS
 from argus_api.db import Tx, ts
 from argus_api.disk_guard import DiskGuard
 from argus_api.errors import (
@@ -67,9 +68,6 @@ from argus_api.tasks import service as tasks
 log = logging.getLogger(__name__)
 DEFAULT_COOLDOWN = timedelta(hours=1)
 NO_ACCOUNT = "no_account"  # the lease error code; tasks wait as `awaiting_quota`
-# The one reason a local account is disabled by Argus itself, and the only one the
-# local probe may undo (a missing secret stays for `reconcile_secrets`).
-LOCAL_UNREACHABLE = "local model unreachable"
 
 
 class NoAccountError(ConflictError):
@@ -306,8 +304,8 @@ async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:
             present
             and row["state"] == "disabled"
             and row["auto_disabled"]
-            # An unreachable local model is only brought back by its own probe.
-            and not (row["disabled_reason"] or "").startswith(LOCAL_UNREACHABLE)
+            # An unhealthy local model is only brought back by its own probe.
+            and not (row["disabled_reason"] or "").startswith(HEALTH_REASONS)
         ):
             await tx.conn.execute(
                 "UPDATE accounts SET state = 'available', disabled_reason = NULL,"
@@ -1054,32 +1052,41 @@ async def recover(tx: Tx) -> list[str]:
 
 
 async def sync_local_health(
-    tx: Tx, reachable: bool | None, detail: str = ""
+    tx: Tx, health: Mapping[str, tuple[bool | None, str]]
 ) -> list[str]:
-    """The local model's own probe is the only availability signal for `local`
-    accounts (they have no quota and no credential to lose): an unreachable server
-    disables them, a reachable one brings back exactly the ones Argus disabled for
-    that reason. Not probed (`None`) changes nothing. The probe itself runs before
-    the transaction: no network call happens in here."""
+    """Each local account's own probe is its only availability signal (they have
+    no quota and no credential to lose; local harness spec, "Health per account"):
+    `health` maps an account id to (healthy, reason). An unhealthy one is disabled
+    with its reason; a healthy one brings back exactly an account Argus disabled
+    for a health reason. Not probed (`None`, or absent) changes nothing. The probes
+    ran before the transaction: no network call happens in here."""
+    if not health:
+        return []
     async with tx.conn.execute(
         "SELECT id, state, auto_disabled, disabled_reason FROM accounts"
         " WHERE provider = ?",
         (LOCAL_PROVIDER,),
     ) as cur:
         rows = list(await cur.fetchall())
-    if reachable is None or not rows:
-        return []
     changed: list[str] = []
+    woke = False
     for row in rows:
-        if not reachable and row["state"] != "disabled":
-            await _disable(tx, row["id"], f"{LOCAL_UNREACHABLE}: {detail}"[:500])
+        healthy, reason = health.get(row["id"], (None, ""))
+        if healthy is None:
+            continue
+        ours = row["auto_disabled"] and (row["disabled_reason"] or "").startswith(
+            HEALTH_REASONS
+        )
+        if not healthy and row["state"] != "disabled":
+            await _disable(tx, row["id"], reason[:500])
             changed.append(row["id"])
-        elif (
-            reachable
-            and row["state"] == "disabled"
-            and row["auto_disabled"]
-            and (row["disabled_reason"] or "").startswith(LOCAL_UNREACHABLE)
-        ):
+        elif not healthy and ours and row["disabled_reason"] != reason[:500]:
+            # Still down, for another reason: keep the reason current, no event.
+            await tx.conn.execute(
+                "UPDATE accounts SET disabled_reason = ? WHERE id = ?",
+                (reason[:500], row["id"]),
+            )
+        elif healthy and row["state"] == "disabled" and ours:
             await tx.conn.execute(
                 "UPDATE accounts SET state = 'available', disabled_reason = NULL,"
                 " auto_disabled = 0, updated_at = ? WHERE id = ?",
@@ -1087,7 +1094,8 @@ async def sync_local_health(
             )
             await record(tx, "system", "account", row["id"], "account.available")
             changed.append(row["id"])
-    if changed and reachable:
+            woke = True
+    if woke:
         await release_waiting_tasks(tx)
     return changed
 

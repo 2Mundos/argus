@@ -65,7 +65,7 @@ export function LocalAccount({ onClose, onDone }: { onClose: () => void; onDone:
         <p className="muted small">
           A model server already running on this node: Ollama, LM Studio or llama.cpp. Nothing
           leaves the node. The built-in orchestrator needs a model with tool calling; detection does
-          not test that.
+          not test that. After saving, test it from the account's Endpoints.
         </p>
         <ActionButton type="button" action={() => detect()}>
           Detect
@@ -91,6 +91,12 @@ export function LocalAccount({ onClose, onDone }: { onClose: () => void; onDone:
                   <span>
                     <code>{c.base_url}</code> ({c.server_hint}
                     {c.preferred ? ", reachable by workers" : ""})
+                    {c.api_endpoint !== c.base_url && (
+                      <span className="muted small">
+                        {" "}
+                        The Argus API uses <code>{c.api_endpoint}</code>.
+                      </span>
+                    )}
                     {c.note && <span className="muted small"> {c.note}</span>}
                   </span>
                 </label>

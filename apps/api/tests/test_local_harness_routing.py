@@ -255,11 +255,12 @@ async def test_claim_skips_restricted_task_when_runtime_lacks_provider(
 async def test_unreachable_local_parks_tasks_and_wakes_one_per_slot(
     db: Database, store, agent
 ) -> None:
-    await add_local(db, store, "strata")
+    local = await add_local(db, store, "strata")
     restricted = await make_task(db, ["local"], "restricted")
     plain = await make_task(db, None, "plain")
+    down = "local model unreachable: dns_failed at http://127.0.0.1:8080"
     async with db.write() as tx:
-        await accounts.sync_local_health(tx, False, "down")
+        await accounts.sync_local_health(tx, {local: (False, down)})
     # the local model is the only account and it is down: neither task can run, so
     # both wait for an account without spending an attempt
     assert await claim_one(db) is None
@@ -272,7 +273,9 @@ async def test_unreachable_local_parks_tasks_and_wakes_one_per_slot(
                 0,
             )
     async with db.write() as tx:
-        await accounts.sync_local_health(tx, True)
+        # Not probed this pass: nothing changes.
+        assert await accounts.sync_local_health(tx, {local: (None, "")}) == []
+        await accounts.sync_local_health(tx, {local: (True, "")})
     async with db.read() as conn:
         # one lease slot is back: one task is woken, the other keeps waiting
         states = {i: (await tasks.get_task(conn, i)).state for i in (restricted, plain)}

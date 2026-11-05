@@ -36,8 +36,8 @@ from argus_api.access import (
     require_task_readable,
     worker_task_filter,
 )
+from argus_api.accounts import local_health
 from argus_api.accounts import service as accounts
-from argus_api.accounts.routes import with_local_context
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.db import utcnow
 from argus_api.deps import (
@@ -332,7 +332,10 @@ async def claim_task(
                     unknown = await steers.previous_unknown(conn, task.id, task.attempt)
                     resume = await quota_resume.offered(conn, task.id, task.attempt)
                 if engine_lease is not None:
-                    engine_lease = await with_local_context(request, engine_lease)
+                    # A claim is never in-process: the worker endpoint.
+                    engine_lease = await local_health.deliver(
+                        request.app.state.local_health, engine_lease, "worker"
+                    )
                 return ClaimedTask(
                     **task.model_dump(),
                     knowledge_refs=refs,
