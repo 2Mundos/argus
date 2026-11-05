@@ -632,3 +632,7 @@ class ClaimedTask(Task):
     # Effective difficulty → executor chain for this task's level (task difficulty /
     # settings 3.7). Empty list: no delegated executor; the harness does the work.
     difficulty_executors: list[str] | None = None
+    # Effective git author {name, email} for this task's project (project override
+    # over global, settings 3.8); null when neither is set, and the worker's git
+    # then refuses commit-class commands.
+    git_identity: dict[str, str] | None = None

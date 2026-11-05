@@ -335,6 +335,75 @@ def test_git_identity_setting_resolves_project_over_global(
     assert client.portal.call(resolve) == "P"  # ty: ignore[unresolved-attribute]
 
 
+def test_git_identity_save_override_reset_and_claim_delivery(
+    client: TestClient,
+) -> None:
+    for slug in ("alpha", "beta"):
+        client.put(
+            f"/api/projects/{slug}",
+            json={"name": slug, "description": "d"},
+            headers=ADMIN,
+        )
+
+    def source(url: str) -> tuple[str, object]:
+        got = client.get(url, headers=ADMIN).json()
+        row = next(s for s in got["settings"] if s["key"] == "git.identity")
+        return row["source"], row["value"]
+
+    def claim(project: str) -> dict[str, str] | None:
+        client.post(
+            "/api/tasks",
+            json={"title": "t", "project": project, "spec": "do it"},
+            headers=ADMIN,
+        )
+        boot = client.post(
+            "/api/agents/bootstrap-tokens", json={"role": "worker"}, headers=ADMIN
+        ).json()
+        agent = client.post(
+            "/api/agents/register",
+            json={"bootstrap_token": boot["token"], "capabilities": []},
+        ).json()
+        res = client.post(
+            "/api/tasks/claim",
+            json={"capabilities": [], "wait_s": 0},
+            headers=bearer(agent["token"]),
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["project"] == project
+        return res.json()["git_identity"]
+
+    glob = {"name": "G", "email": "g@x.io"}
+    over = {"name": "P", "email": "p@x.io"}
+    # Neither scope set: fail closed, nothing delivered.
+    assert source("/api/projects/alpha/settings") == ("default", {})
+    assert claim("alpha") is None
+
+    res = client.put("/api/settings/git.identity", json={"value": glob}, headers=ADMIN)
+    assert res.status_code == 200, res.text
+    assert source("/api/settings") == ("global", glob)
+    assert source("/api/projects/alpha/settings") == ("global", glob)
+    assert claim("alpha") == glob
+
+    res = client.put(
+        "/api/projects/alpha/settings/git.identity",
+        json={"value": over},
+        headers=ADMIN,
+    )
+    assert res.status_code == 200, res.text
+    assert source("/api/projects/alpha/settings") == ("project", over)
+    assert claim("alpha") == over
+    # The override reaches only its own project and leaves global alone.
+    assert source("/api/projects/beta/settings") == ("global", glob)
+    assert source("/api/settings") == ("global", glob)
+    assert claim("beta") == glob
+
+    res = client.delete("/api/projects/alpha/settings/git.identity", headers=ADMIN)
+    assert res.status_code == 200, res.text
+    assert source("/api/projects/alpha/settings") == ("global", glob)
+    assert source("/api/settings") == ("global", glob)
+    assert claim("alpha") == glob
+
+
 @pytest.mark.parametrize(
     "value",
     [

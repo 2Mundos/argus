@@ -78,6 +78,7 @@
   "failover": null,
   "failure_class": null,
   "failures": 0,
+  "git_identity": null,
   "harness_account": null,
   "harness_model": null,
   "id": "codex-reconciled",
