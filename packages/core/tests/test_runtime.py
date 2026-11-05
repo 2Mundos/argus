@@ -89,6 +89,7 @@ def test_projects_never_share_a_reference() -> None:
         (ComponentRef(id="psql", version="16;curl x|sh"), "not approved"),
         (ComponentRef(id="minio"), "required"),
         (ComponentRef(id="python", version="2.7"), "not approved"),
+        (ComponentRef(id="pytest", version="8.0"), "not approved"),
     ],
 )
 def test_unapproved_components_are_refused_with_an_actionable_message(
@@ -169,6 +170,22 @@ def test_every_provisioned_tool_has_a_probe_and_services_are_exercised() -> None
         and "--service valkey" in selftest.argv[-1]
     )
     assert required_probe_names(resolve("radar", spec())) == {"git", "ssh"}
+
+
+def test_pytest_needs_python_and_is_installed_and_probed_in_it() -> None:
+    with pytest.raises(RuntimeSpecError) as err:
+        resolve("radar", spec("pytest"))
+    assert "'pytest' needs component 'python'" in str(err.value)
+    r = resolve("radar", spec("python", "pytest"))
+    assert r.version("pytest") == "9.2.0"
+    text = render_dockerfile(r)
+    install = 'RUN uv pip install --python "$(uv python find 3.13)" pytest==9.2.0'
+    assert text.index(install) > text.index("RUN uv python install 3.13")
+    assert "pytest" not in render_dockerfile(resolve("radar", spec("python")))
+    probe = next(p for p in probes(r) if p.name == "pytest")
+    assert re.search(probe.pattern, "pytest 9.2.0")
+    assert not re.search(probe.pattern, "pytest 9.2.01x")
+    assert probe.argv[-1] == "$(uv python find 3.13) -m pytest --version"
 
 
 def test_helper_is_shipped_and_has_no_network_or_root_needs() -> None:

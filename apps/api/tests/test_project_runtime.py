@@ -37,6 +37,7 @@ A, B = "agent-a", "agent-b"
 
 OUTPUT = {
     "git": "git version 2.39.5", "ssh": "OpenSSH_9.2p1", "python": "Python 3.13.1",
+    "pytest": "pytest 9.2.0",
     "node": "v22.11.0", "chromium": "/usr/bin/chromium", "pango": "pango ok",
     "graft": "0.21.1", "psql": "psql (PostgreSQL) 16.15", "postgres-server": "postgres (PostgreSQL) 16.15",
     "valkey-server": "Valkey server v=8.0.11 sha=0", "valkey-cli": "valkey-cli 8.0.11",
@@ -297,6 +298,38 @@ async def test_failed_probe_is_never_ready(db, manager, docker) -> None:
     (b,) = await builds(db, "radar")
     assert b["state"] == "failed" and "valkey-server" in b["reason"]
     assert b["image_id"] is not None  # built, but not verified
+
+
+async def test_pytest_is_installed_into_the_declared_python_and_probed(
+    db, manager, docker
+) -> None:
+    spec = RuntimeSpec(
+        components=[
+            ComponentRef(id="python", version="3.12"),
+            ComponentRef(id="pytest"),
+        ]
+    )
+    async with db.write() as tx:
+        await service.put_spec(tx, "argus", spec, "human:test")
+    _, sel = await ready_for(db, manager, "argus")
+    assert next(t for t in sel.tools if t.name == "pytest").ok
+    install = 'RUN uv pip install --python "$(uv python find 3.12)" pytest==9.2.0'
+    assert install in docker.builds[0]["dockerfile"]
+
+    docker.failing_probes = {"pytest"}
+    async with db.write() as tx:
+        await service.put_spec(
+            tx,
+            "argus",
+            spec.model_copy(update={"codex_turn_timeout_s": 900}),
+            "human:test",
+        )
+    await create(db, "argus")
+    t = await claim(db)
+    await manager.prepare(A, req(t))
+    await manager.work_once()
+    failed = [b for b in await builds(db, "argus") if b["state"] == "failed"]
+    assert len(failed) == 1 and "pytest" in failed[0]["reason"]
 
 
 async def test_missing_probes_cannot_produce_ready(
