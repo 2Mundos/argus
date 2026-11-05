@@ -949,7 +949,11 @@ Consequences for Argus:
      as an inbound message, waking the agent container.
   4. Turns replies into Argus calls: a plain reply is a progress note;
      `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. The directive
-     is read at the start of the first non-blank line, tolerating markdown
+     is read at the start of the first non-blank line (a reply that is exactly
+     `<message to="argus">…</message>`, NanoClaw's outbound envelope, is unwrapped first
+     and its inner text read the same way; a reply starting with any other `<message`
+     tag that reads like a directive gets a corrective `[Argus]` message and a
+     warning log, never silent progress), tolerating markdown
      decoration around it (`**FAIL:**`, `> FAIL:`, `- FAIL:`, `` `FAIL:` ``) and,
      for an upper-case keyword, ` - `/` – `/` — ` as the separator (`FAIL - why`).
      Also `ASSIST: [resource:] text` (technical assistance) and the scoped

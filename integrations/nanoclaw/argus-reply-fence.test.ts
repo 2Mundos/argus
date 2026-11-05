@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../log.js";
 import type { ChannelSetup } from "./adapter.js";
 import {
   type ArgusConfig,
@@ -18,6 +19,7 @@ import {
   createArgusAdapter,
   foreignChecklistIds,
   parseReply,
+  readReplyEnvelope,
 } from "./argus.js";
 import { until } from "./argus-test-until.js";
 
@@ -300,5 +302,103 @@ describe("parseReply and foreignChecklistIds", () => {
     expect(foreignChecklistIds(B, [{ id: "ac-a1", status: "done" }])).toEqual(["ac-a1"]);
     expect(foreignChecklistIds(B, [{ id: "ac-b1", status: "done" }])).toEqual([]);
     expect(foreignChecklistIds({ continuation: null }, [{ id: "x", status: "done" }])).toEqual([]);
+  });
+});
+
+describe('the NanoClaw <message to="argus"> envelope', () => {
+  const env = (inner: string, to = "argus") => `<message to="${to}">${inner}</message>`;
+  const own = JSON.stringify({
+    summary: "done",
+    checklist: [{ id: "ac-a1", status: "done", evidence: "receipt" }],
+  });
+  async function claimed() {
+    const fake = fakeArgus([A]);
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    return { fake, h };
+  }
+  const completion = (f: ReturnType<typeof fakeArgus>) =>
+    f.calls.find((c) => c.path === "/tasks/task-a/complete")?.body;
+
+  it("completes exactly like the bare form, summary and checklist intact", async () => {
+    const bare = await claimed();
+    await bare.h.adapter.deliver("local", bare.h.thread(), reply(`COMPLETE: ${own}`));
+    await bare.h.adapter.teardown();
+    const wrapped = await claimed();
+    await wrapped.h.adapter.deliver(
+      "local",
+      wrapped.h.thread(),
+      reply(`\n ${env(`COMPLETE: ${own}`)}\n`),
+    );
+    expect(completion(wrapped.fake)).toEqual(completion(bare.fake));
+    expect(completion(wrapped.fake)).toMatchObject({
+      attempt: 1,
+      result: { summary: "done", checklist: [{ id: "ac-a1", status: "done" }] },
+    });
+  });
+
+  it("rejects foreign checklist ids inside the envelope", async () => {
+    const { fake, h } = await claimed();
+    const foreign = JSON.stringify({
+      summary: "x",
+      checklist: [{ id: "ac-b1", status: "done", evidence: "e" }],
+    });
+    await h.adapter.deliver("local", h.thread(), reply(env(`COMPLETE: ${foreign}`)));
+    expect(completion(fake)).toBeUndefined();
+    expect(h.inbound.at(-1).content.text).toContain("ac-b1 do not belong to task task-a");
+  });
+
+  it("does not complete from stale threads or another task's scoped form", async () => {
+    const { fake, h } = await claimed();
+    await h.adapter.deliver("local", "argus:task-a:2", reply(env(`COMPLETE: ${own}`)));
+    await h.adapter.deliver("local", h.thread(), reply(env(`COMPLETE on task-b: ${own}`)));
+    expect(completion(fake)).toBeUndefined();
+  });
+
+  it.each([
+    ["another recipient", env(`COMPLETE: ${own}`, "main"), "other_recipient"],
+    ["an unclosed body", `<message to="argus">COMPLETE: ${own}`, "malformed_envelope"],
+    ["text outside", `${env(`COMPLETE: ${own}`)} thanks`, "malformed_envelope"],
+    [
+      "an extra attribute",
+      `<message to="argus" id="1">COMPLETE: ${own}</message>`,
+      "malformed_envelope",
+    ],
+    ["single quotes", `<message to='argus'>COMPLETE: ${own}</message>`, "other_recipient"],
+    ["a nested envelope", env(env(`COMPLETE: ${own}`)), "nested_envelope"],
+  ])(
+    "answers %s with a correction and a diagnostic, and completes nothing",
+    async (_n, text, reason) => {
+      const { fake, h } = await claimed();
+      const warn = vi.spyOn(log, "warn");
+      try {
+        await h.adapter.deliver("local", h.thread(), reply(text));
+        expect(completion(fake)).toBeUndefined();
+        expect(paths(fake)).not.toContain("/tasks/task-a/progress");
+        expect(h.inbound.at(-1).content.text).toContain("[Argus] Your reply was not recognized");
+        const call = warn.mock.calls.find((c) => /did not recognize/.test(String(c[0])));
+        expect(call?.[1]).toMatchObject({ task: "task-a", attempt: 1, reason });
+        expect(JSON.stringify(call?.[1])).not.toContain("summary");
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it("leaves quoted examples and plain mentions as progress", () => {
+    for (const text of [
+      `Example:\n\`\`\`\n${env("COMPLETE: {}")}\n\`\`\``,
+      `> ${env("COMPLETE: {}")}`,
+      `I will send ${env("COMPLETE: {}")} later`,
+      '<message to="main">status update, nothing to report</message>',
+      "COMPLETE soon, still working",
+    ])
+      expect(readReplyEnvelope(text).kind).toBe("plain");
+    expect(readReplyEnvelope(env("COMPLETE: {}"))).toEqual({
+      kind: "unwrapped",
+      text: "COMPLETE: {}",
+    });
   });
 });

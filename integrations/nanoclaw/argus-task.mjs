@@ -497,6 +497,8 @@ function usageText() {
 ${lines.join("\n")}
 
 Global options: --repository URL (default ARGUS_REPOSITORY_URL).
+There is no completion subcommand: finish by replying COMPLETE: (plain text, then the
+JSON object); the Argus channel submits it. Do not run argus-task to complete.
 Output: one JSON line on stdout. Exit codes: 0 done/ready, 10 still pending,
 11 interrupted by a steer, 12 not ready or rebase conflict, 1 error, 2 usage.
 Wait cap: --max seconds, clamped to ARGUS_TASK_WAIT_MAX_S (default ${DEFAULT_MAX_S}).
