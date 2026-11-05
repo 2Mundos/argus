@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-25
+updated: 2026-11-01
+---
+
 # Gitea helper for workers (`argus-gitea-api`)
 
 # 1. Purpose and Scope

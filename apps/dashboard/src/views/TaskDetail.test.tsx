@@ -9,11 +9,13 @@ const mock = vi.hoisted(() => ({
   trace: {} as Record<string, unknown>,
   artifacts: [] as Record<string, unknown>[],
   events: [] as Record<string, unknown>[],
+  deliveryGate: null as Promise<void> | null,
 }));
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
-  call: async (path: string) =>
-    path.includes("projects/stats")
+  call: async (path: string) => {
+    if (path.includes("delivery") && mock.deliveryGate) await mock.deliveryGate;
+    return path.includes("projects/stats")
       ? []
       : path.includes("/models")
         ? mock.trace
@@ -23,7 +25,10 @@ vi.mock("../api", () => ({
             ? mock.artifacts
             : path.includes("events")
               ? mock.events
-              : mock.task,
+              : path.includes("/attempts")
+                ? []
+                : mock.task;
+  },
   download: vi.fn(),
 }));
 vi.mock("../live", async () => {
@@ -84,7 +89,22 @@ afterEach(() => {
   cleanup();
   mock.artifacts = [];
   mock.events = [];
+  mock.deliveryGate = null;
 });
+describe("TaskDetail loading", () => {
+  it("paints the task before the forge delivery read settles", async () => {
+    mock.task = base;
+    mock.trace = { executions: [], timeline: [] };
+    let release!: () => void;
+    mock.deliveryGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    expect(await screen.findByText(/trace task/)).toBeTruthy();
+    release();
+  });
+});
+
 describe("TaskDetail blocked reason", () => {
   it("shows the inbox card sentence for a block_reason", async () => {
     mock.task = { ...base, state: "blocked", block_reason: "env_repository_unconfigured" };

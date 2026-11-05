@@ -2,7 +2,7 @@ import { type RefObject, useEffect, useRef, useState } from "react";
 import { api, call } from "../api";
 import { useLive } from "../live";
 import { filterLines, type LogFilter, type LogLine, logEvent, mergeLines } from "../taskLog";
-import { TaskSteers } from "./TaskSteers";
+import { type SteersSource, TaskSteers } from "./TaskSteers";
 
 const READ_LIMIT = 1000; // the API's largest page
 
@@ -218,12 +218,14 @@ export function TaskLogContent({
   taskId,
   attempt,
   steer,
+  steers,
   log,
   filter,
 }: {
   taskId: string;
   attempt: number;
   steer?: TaskLogSteer;
+  steers?: SteersSource;
   log: TaskLogState;
   filter: LogFilter;
 }) {
@@ -247,6 +249,7 @@ export function TaskLogContent({
           claimed={steer.claimed}
           assigneeId={steer.assigneeId}
           supportsSteer={steer.supportsSteer}
+          source={steers}
           composerOpen={steerOpen}
           onComposerOpenChange={setSteerOpen}
         />

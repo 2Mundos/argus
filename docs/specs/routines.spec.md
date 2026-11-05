@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-26
+updated: 2026-11-05
+---
+
 # Routines
 
 # 1. Purpose and Scope
@@ -125,7 +131,7 @@ lookup on `tasks.input`):
 - Dashboard: a Routines section per project, listing schedule, next run, last run
   with its task state, findings filed, and enable/run-now actions.
 
-Status: the table (3.1), the scheduler (3.2), run now, finding intake (3.3), the
+The table (3.1), the scheduler (3.2), run now, finding intake (3.3), the
 failure rule (3.5) and the management routes and MCP tools above ship (migrations
 `0062_routines.sql`, `0063_routine_findings.sql`), and so does the dashboard
 Routines page (`#routines`, per project; "findings filed" reads the last run's `findings_filed`

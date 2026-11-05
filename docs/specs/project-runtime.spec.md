@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-23
+updated: 2026-10-23
+---
+
 # Project runtime images
 
 # 1. Purpose and Scope

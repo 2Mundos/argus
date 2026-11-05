@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-16
+updated: 2026-11-04
+---
+
 # Engines, executors and the local model
 
 # 1. Purpose and Scope

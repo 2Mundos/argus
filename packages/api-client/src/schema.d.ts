@@ -2807,6 +2807,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/attempts/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Attempt Summaries
+         * @description The attempt numbers and their unknown-steer counts, oldest first. The
+         *     dashboard strip needs no definitions, so this read stays small.
+         */
+        get: operations["list_attempt_summaries_api_tasks__task_id__attempts_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/attempts/{attempt}/checkpoint": {
         parameters: {
             query?: never;
@@ -10356,6 +10377,19 @@ export interface components {
             steer_unknown?: number;
         };
         /**
+         * TaskAttemptSummary
+         * @description What the attempt strip needs, without the definition each attempt was handed.
+         */
+        TaskAttemptSummary: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Steer Unknown
+             * @default 0
+             */
+            steer_unknown?: number;
+        };
+        /**
          * TaskChanges
          * @description A partial patch: a field left out is preserved, `null` clears (3.2).
          *
@@ -17009,6 +17043,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskAttempt"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_attempt_summaries_api_tasks__task_id__attempts_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskAttemptSummary"][];
                 };
             };
             /** @description Validation Error */

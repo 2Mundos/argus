@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-11-02
+updated: 2026-11-04
+---
+
 # Task helpers (`argus-task`)
 
 # 1. Purpose and Scope

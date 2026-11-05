@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-11-01
+updated: 2026-11-01
+---
+
 # Agent container resource hygiene: OOM priority and CPU count
 
 # 1. Purpose and Scope

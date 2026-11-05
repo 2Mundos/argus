@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-16
+updated: 2026-11-03
+---
+
 # Claude accounts: import, dedicated login, renewal
 
 Builds on [Codex accounts](codex-accounts.spec.md) (same account, vault and

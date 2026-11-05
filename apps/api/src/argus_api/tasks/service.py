@@ -40,7 +40,13 @@ from argus_core.decisions import Audience, DecisionKind
 from argus_core.difficulty import Difficulty, DifficultySource, classify, escalated
 from argus_core.kinds import TaskKind
 from argus_core.quota import failure_class
-from argus_core.task_edit import CLEARABLE, TaskAttempt, TaskChanges, editable_fields
+from argus_core.task_edit import (
+    CLEARABLE,
+    TaskAttempt,
+    TaskAttemptSummary,
+    TaskChanges,
+    editable_fields,
+)
 from argus_core.tasks import (
     ENV_OOM,
     MAX_DEPENDENCIES,
@@ -2268,6 +2274,22 @@ async def attempt_definitions(
                 outcome_reason=r["outcome_reason"],
                 steer_unknown=r["steer_unknown"],
             )
+            for r in await cur.fetchall()
+        ]
+
+
+async def attempt_summaries(
+    conn: aiosqlite.Connection, task_id: str
+) -> list[TaskAttemptSummary]:
+    """What the attempt strip needs, oldest first, without the stored definitions."""
+    await _row(conn, task_id)
+    async with conn.execute(
+        "SELECT attempt, steer_unknown FROM task_attempts"
+        " WHERE task_id = ? ORDER BY id",
+        (task_id,),
+    ) as cur:
+        return [
+            TaskAttemptSummary(attempt=r["attempt"], steer_unknown=r["steer_unknown"])
             for r in await cur.fetchall()
         ]
 

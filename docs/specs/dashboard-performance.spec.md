@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-11-04
+updated: 2026-11-04
+---
+
 # Dashboard live data performance
 
 # 1. Purpose and Scope
@@ -37,6 +43,12 @@ No persistent browser cache, new server dependency, or engine-specific behaviour
   the setup wizard reads its status and template catalog only while open. Over
   HTTP/1.1 the browser allows six connections per host, one held by the event
   stream, so every duplicate startup read delays the board's first page.
+- The task detail paints from its own task read; artifacts, events, delivery,
+  models and the attempt strip each have their own query, so a slow forge read or
+  a large read never holds the whole view. The attempt strip reads
+  `GET /tasks/{id}/attempts/summary` (attempt numbers and `steer_unknown`, without
+  the stored definitions). One steers source serves both the task actions row and
+  the Live panel: one steers read and one assignee lookup per open task.
 - The server gzips responses of 1 KiB or more (JSON and dashboard assets), except
   the event stream, already-compressed and opaque binary types, and ranged reads.
 
@@ -56,26 +68,33 @@ remain unchanged. All engines share the same dashboard behaviour.
 # 6. Implementation Consequences
 
 Implement event filtering and optional delta refreshes in `useLiveData`, shared by
-queries. No API schema or generated client changes are required.
+queries. The task detail gives each section its own query, and the attempt strip
+reads `GET /tasks/{id}/attempts/summary`; that route adds a schema and generated
+client type (`make openapi`).
 
 ## Verification boundary
 
 - Commands: `pnpm --filter @argus/dashboard test`,
   `pnpm --filter @argus/dashboard typecheck`, `pnpm build`,
-  `python3 scripts/validate_docs.py`.
-- Verified: 544 existing dashboard tests, type checking, production build and
-  documentation validation. Chromium comparison against the original source with
-  262 synthetic ready tasks: account lease events issue zero board requests
-  (previously three); a title update reads one summary and renders one card
-  (previously three pages and 524 card renders). Board clock intervals fall from
-  262 to one. Initial loading remains three cursor pages. Synthetic payload for
-  the title update falls from 54,187 to 264 bytes; this is not a live payload size.
-  Browser checks also cover archive membership, creation, reconnect refresh and
-  overlapping updates (the superseding batch includes both unresolved IDs).
+  `make openapi-check`, `python3 scripts/validate_docs.py`.
+- Verified: 599 dashboard tests, the Python suite, type checking, the production
+  build, OpenAPI freshness and documentation validation. The task detail paints
+  while the delivery read is still pending, two steers copies share one read, and
+  the attempts summary answers with only `attempt` and `steer_unknown`. Chromium
+  comparison against the original source with 262 synthetic ready tasks: account
+  lease events issue zero board requests (previously three); a title update reads
+  one summary and renders one card (previously three pages and 524 card renders).
+  Board clock intervals fall from 262 to one. Initial loading remains three cursor
+  pages. Synthetic payload for the title update falls from 54,187 to 264 bytes;
+  this is not a live payload size. Browser checks also cover archive membership,
+  creation, reconnect refresh and overlapping updates (the superseding batch
+  includes both unresolved IDs).
 - Profiled before this change (production build against the remote preview, 262
   tasks, HTTP/1.1, about 0.6 s per round trip): twelve startup reads (three of
   onboarding, two of agents at 99 KB each) queued ahead of the board; the first
   cards appeared at about 3.1 s and the last page at about 5.8 s, with 360 KB of
   uncompressed task JSON. Dedupe and gzip target exactly these.
 - Not verified: production latency or CPU improvement with real active tasks;
-  the browser comparison used a disposable fixture, not the live preview.
+  the browser comparison used a disposable fixture, not the live preview. The
+  task-detail change is measured by request behaviour, not wall-clock time in a
+  browser.

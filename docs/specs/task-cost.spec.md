@@ -1,3 +1,9 @@
+---
+status: draft
+created: 2026-10-29
+updated: 2026-11-05
+---
+
 # Task cost and budget
 
 # 1. Purpose and Scope

@@ -18,7 +18,7 @@ import { AttemptStrip } from "./AttemptStrip";
 import { EventList } from "./EventList";
 import { RepositoryBlockAction } from "./RepositoryBlockAction";
 import { TaskEditForm } from "./TaskEditForm";
-import { TaskSteers } from "./TaskSteers";
+import { TaskSteers, useSteersSource } from "./TaskSteers";
 import { TaskTerminal } from "./TaskTerminal";
 
 /** Size of the History page; a full page may hide older events. */
@@ -64,46 +64,74 @@ export function TaskDetail({
     null,
   );
   const [steerOpen, setSteerOpen] = useState(false);
-  const { data, reload } = useLiveData(
+  // The task itself paints the panel; every other section fills in on its own, so a
+  // slow forge read (delivery) or a large read (models) never holds the whole view.
+  const { data: task, reload: reloadTask } = useLiveData(
     (signal) =>
-      Promise.all([
-        call(api.GET("/api/tasks/{task_id}", { params: { path: { task_id: taskId } }, signal })),
-        call(
-          api.GET("/api/tasks/{task_id}/artifacts", {
-            params: { path: { task_id: taskId } },
-            signal,
-          }),
-        ),
-        call(
-          api.GET("/api/events", {
-            params: { query: { subject_id: taskId, limit: HISTORY_LIMIT } },
-            signal,
-          }),
-        ),
-        // A forge hiccup must not take the drawer down: no delivery section instead.
-        call(
-          api.GET("/api/tasks/{task_id}/delivery", {
-            params: { path: { task_id: taskId } },
-            signal,
-          }),
-        ).catch(() => null),
-        call(
-          api.GET("/api/tasks/{task_id}/models", {
-            params: { path: { task_id: taskId } },
-            signal,
-          }),
-        ),
-        // The strip is an aid: without it the current attempt stays selected.
-        call(
-          api.GET("/api/tasks/{task_id}/attempts", {
-            params: { path: { task_id: taskId } },
-            signal,
-          }),
-        ).catch(() => []),
-      ]),
+      call(api.GET("/api/tasks/{task_id}", { params: { path: { task_id: taskId } }, signal })),
     [taskId],
   );
-  const [task, artifacts, events, delivery, modelTrace, attemptList] = data ?? [];
+  const { data: artifacts, reload: reloadArtifacts } = useLiveData(
+    (signal) =>
+      call(
+        api.GET("/api/tasks/{task_id}/artifacts", {
+          params: { path: { task_id: taskId } },
+          signal,
+        }),
+      ),
+    [taskId],
+  );
+  const { data: events, reload: reloadEvents } = useLiveData(
+    (signal) =>
+      call(
+        api.GET("/api/events", {
+          params: { query: { subject_id: taskId, limit: HISTORY_LIMIT } },
+          signal,
+        }),
+      ),
+    [taskId],
+  );
+  // A forge hiccup must not take the drawer down: no delivery section instead.
+  const { data: delivery, reload: reloadDelivery } = useLiveData(
+    (signal) =>
+      call(
+        api.GET("/api/tasks/{task_id}/delivery", {
+          params: { path: { task_id: taskId } },
+          signal,
+        }),
+      ).catch(() => null),
+    [taskId],
+  );
+  const { data: modelTrace, reload: reloadModels } = useLiveData(
+    (signal) =>
+      call(
+        api.GET("/api/tasks/{task_id}/models", {
+          params: { path: { task_id: taskId } },
+          signal,
+        }),
+      ),
+    [taskId],
+  );
+  // The strip is an aid: without it the current attempt stays selected. The summary
+  // omits the stored definitions, which this view never renders.
+  const { data: attemptList, reload: reloadAttempts } = useLiveData(
+    (signal) =>
+      call(
+        api.GET("/api/tasks/{task_id}/attempts/summary", {
+          params: { path: { task_id: taskId } },
+          signal,
+        }),
+      ).catch(() => []),
+    [taskId],
+  );
+  const reload = () => {
+    reloadTask();
+    reloadArtifacts();
+    reloadEvents();
+    reloadDelivery();
+    reloadModels();
+    reloadAttempts();
+  };
   const current = task?.attempt ?? 0;
   const prevTaskId = useRef(taskId);
   const prevCurrent = useRef<number | null>(null);
@@ -122,28 +150,19 @@ export function TaskDetail({
   const attemptNumbers = Array.isArray(attemptList) ? attemptList.map((a) => a.attempt) : [];
   const steerable = task?.state === "claimed" && current > 0;
   const assigneeId = task?.assignee_agent_id ?? null;
-  const { data: assignee, error: assigneeError } = useLiveData(
-    async (signal) =>
-      steerable && assigneeId
-        ? call(
-            api.GET("/api/agents/{agent_id}", {
-              params: { path: { agent_id: assigneeId } },
-              signal,
-            }),
-          )
-        : null,
-    [steerable, assigneeId],
-  );
-  // Unknown until the assignee loads; a failed lookup counts as unsupported.
-  const supportsSteer = !steerable
-    ? undefined
-    : assignee
-      ? (assignee.runtime?.features?.includes("steer") ?? false)
-      : assigneeError
-        ? false
-        : undefined;
   const picked = pick?.taskId === taskId && pick.current === current ? pick.attempt : null;
   const selected = picked !== null && attemptNumbers.includes(picked) ? picked : current;
+  // One steers source feeds both the actions row and the terminal; the assignee is
+  // looked up once here rather than by each copy.
+  const steers = useSteersSource({
+    taskId,
+    attempt: current,
+    claimed: steerable,
+    assigneeId,
+    enabled: steerable && selected === current,
+  });
+  // Unknown until the assignee loads; a failed lookup counts as unsupported.
+  const supportsSteer = !steerable || !steers.known ? undefined : steers.can;
   // Numbers restart after a retry: the newest row with the number is the one shown.
   const unknownSteers = Array.isArray(attemptList)
     ? (attemptList.filter((a) => a.attempt === selected).at(-1)?.steer_unknown ?? 0)
@@ -473,6 +492,7 @@ export function TaskDetail({
               claimed
               assigneeId={assigneeId}
               supportsSteer={supportsSteer}
+              source={steers}
               composerOpen={steerOpen}
               onComposerOpenChange={setSteerOpen}
               showList={false}
@@ -504,6 +524,7 @@ export function TaskDetail({
               changesAttempt={task.attempt}
               showChanges={task.required_capabilities.includes("repository:write")}
               changesSelected={selected}
+              steers={steers}
               steer={
                 selected === task.attempt
                   ? { claimed: task.state === "claimed", assigneeId, supportsSteer }

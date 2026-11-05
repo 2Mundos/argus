@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-20
+updated: 2026-10-31
+---
+
 # Fleet health
 
 # 1. Purpose and Scope

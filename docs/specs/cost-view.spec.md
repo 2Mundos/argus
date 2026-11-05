@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-20
+updated: 2026-10-29
+---
+
 # Cost view
 
 # 1. Purpose and Scope

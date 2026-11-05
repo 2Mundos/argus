@@ -8,7 +8,9 @@ fails otherwise (`scripts/validate_docs.py`).
 
 - `docs/specs/topic.spec.md` — **living** documentation, no date. Describes
   current intended behaviour and is updated in the same PR that changes it.
-  Follows [`templates/spec.md`](templates/spec.md).
+  Follows [`templates/spec.md`](templates/spec.md) and opens with `status`,
+  `created` and `updated` frontmatter; [the specs index](specs/README.md) lists
+  every spec's status (`scripts/check_specs.py`).
 - Everything else is a **point-in-time** record named
   `YYYY-MM-DD.name.type.md` with `type` in `draft`, `research`, `ref`.
 
@@ -36,6 +38,8 @@ every new dependency is judged against it.
 
 ### Specs
 
+- [Specs index](specs/README.md) — every spec with its status
+  (`implemented`, `partial`, `draft`, `deferred`, `superseded`)
 - [Dashboard live data performance](specs/dashboard-performance.spec.md) — scoped refreshes, task deltas and card rendering
 
 - [Lightweight single-node](specs/single-node.spec.md) — the core principle:

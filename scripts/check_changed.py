@@ -328,6 +328,8 @@ def plan(
 
     if any(c.startswith("docs/") for c in changed):
         steps.append(Step("validate docs", ("python3", "scripts/validate_docs.py"), 60))
+    if any(c.startswith(("docs/specs/", "scripts/check_specs.py")) for c in changed):
+        steps.append(Step("check specs", ("python3", "scripts/check_specs.py"), 60))
     return steps
 
 
