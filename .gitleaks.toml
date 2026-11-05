@@ -13,6 +13,7 @@ paths = [
   '''packages/core/tests/test_redact\.py''',
   '''apps/api/tests/test_task_log\.py''',
   '''integrations/nanoclaw/engines/livelog\.test\.mjs''',
+  '''integrations/nanoclaw/overlays/harness-usage\.test\.ts''',
 ]
 
 # npm SRI integrity of the pinned graft package: a public hash, not a credential.
