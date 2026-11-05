@@ -28,7 +28,7 @@ vi.mock("../api", () => {
       }),
     },
     call: async ({ path, attempt }: { path: string; attempt?: number }) => {
-      if (path.endsWith("/attempts")) return mock.attempts.map((attempt) => ({ attempt }));
+      if (path.endsWith("/attempts/summary")) return mock.attempts.map((attempt) => ({ attempt }));
       if (path.endsWith("/log")) {
         mock.logQueries.push(attempt as number);
         const lines = mock.logs.get(attempt as number) ?? [];
@@ -103,7 +103,17 @@ vi.mock("../WorkerChip", () => ({
 }));
 vi.mock("./EventList", () => ({ EventList: () => null }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
-vi.mock("./TaskSteers", () => ({ TaskSteers: () => null }));
+vi.mock("./TaskSteers", () => ({
+  TaskSteers: () => null,
+  useSteersSource: () => ({
+    taskId: "t1",
+    attempt: 0,
+    page: undefined,
+    reload: () => {},
+    can: false,
+    known: true,
+  }),
+}));
 vi.mock("../delivery", () => ({ TaskDelivery: () => null }));
 vi.mock("../failover", () => ({ TaskFailover: () => null }));
 

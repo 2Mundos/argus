@@ -6,6 +6,7 @@ import {
   useTaskChangesSnapshot,
 } from "./TaskChanges";
 import { TaskLogBarActions, TaskLogContent, type TaskLogSteer, useTaskLog } from "./TaskLog";
+import type { SteersSource } from "./TaskSteers";
 import { type TaskTerminalTab, taskTerminalVisibleTabs } from "./taskTerminalTabs";
 
 export type { TaskTerminalTab };
@@ -21,6 +22,7 @@ export function TaskTerminal({
   taskId,
   attempt,
   steer,
+  steers,
   showChanges = true,
   changesAttempt,
   changesSelected,
@@ -28,6 +30,7 @@ export function TaskTerminal({
   taskId: string;
   attempt: number;
   steer?: TaskLogSteer;
+  steers?: SteersSource;
   showChanges?: boolean;
   changesAttempt?: number;
   changesSelected?: number;
@@ -110,6 +113,7 @@ export function TaskTerminal({
             taskId={taskId}
             attempt={attempt}
             steer={steer}
+            steers={steers}
             log={log}
             filter={filter}
           />

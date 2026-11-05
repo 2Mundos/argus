@@ -2,13 +2,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TaskSteers } from "./TaskSteers";
+import { TaskSteers, useSteersSource } from "./TaskSteers";
 
 type Item = { id: string; message: string; state: string; created_at: string };
 type Post = { taskId: string; message: string; resolve: () => void };
 const mock = vi.hoisted(() => ({
   pages: {} as Record<string, Item[]>,
   posts: [] as Post[],
+  reads: 0,
 }));
 
 vi.mock("../api", () => ({
@@ -24,6 +25,7 @@ vi.mock("../api", () => ({
   },
   call: (req: { key?: string; post?: { taskId: string; message: string } }) => {
     const post = req.post;
+    if (!post) mock.reads += 1;
     if (post)
       return new Promise<void>((resolve) => {
         mock.posts.push({ ...post, resolve });
@@ -50,6 +52,7 @@ afterEach(() => {
   cleanup();
   mock.pages = {};
   mock.posts = [];
+  mock.reads = 0;
 });
 
 const at = "2026-10-30T12:00:00Z";
@@ -65,7 +68,47 @@ const view = (taskId: string, attempt: number) => (
   />
 );
 
+function Shared() {
+  const source = useSteersSource({
+    taskId: "t1",
+    attempt: 2,
+    claimed: true,
+    assigneeId: "w1",
+    supportsSteer: true,
+  });
+  return (
+    <>
+      <TaskSteers
+        taskId="t1"
+        attempt={2}
+        claimed
+        assigneeId="w1"
+        supportsSteer
+        source={source}
+        composerOpen={false}
+        onComposerOpenChange={() => {}}
+        showList={false}
+      />
+      <TaskSteers
+        taskId="t1"
+        attempt={2}
+        claimed
+        assigneeId="w1"
+        supportsSteer
+        source={source}
+        composerOpen={false}
+        onComposerOpenChange={() => {}}
+      />
+    </>
+  );
+}
+
 describe("TaskSteers", () => {
+  it("reads the list once for two copies sharing a source", async () => {
+    render(<Shared />);
+    await waitFor(() => expect(mock.reads).toBe(1));
+  });
+
   it("labels an unknown steer as possibly delivered, without Cancel", async () => {
     mock.pages = {
       "t1/1": [

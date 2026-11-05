@@ -132,7 +132,17 @@ vi.mock("../WorkerChip", () => ({
 vi.mock("./EventList", () => ({ EventList: () => null }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
 vi.mock("./TaskTerminal", () => ({ TaskTerminal: () => null }));
-vi.mock("./TaskSteers", () => ({ TaskSteers: () => null }));
+vi.mock("./TaskSteers", () => ({
+  TaskSteers: () => null,
+  useSteersSource: () => ({
+    taskId: "t1",
+    attempt: 0,
+    page: undefined,
+    reload: () => {},
+    can: false,
+    known: true,
+  }),
+}));
 vi.mock("./AttemptStrip", () => ({ AttemptStrip: () => null }));
 vi.mock("../delivery", () => ({ TaskDelivery: () => null }));
 vi.mock("../failover", () => ({ TaskFailover: () => null }));

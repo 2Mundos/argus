@@ -198,7 +198,9 @@ edit](task-edit.spec.md).
 - Manager token. `attempt` defaults to the current one. Answer `{attempt, items:
   [{id, attempt, message, actor, state, created_at, dispatched_at, delivered_at,
   closed_at}]}`, oldest first.
-- `GET /api/tasks/{id}/attempts` carries each attempt's `steer_unknown` (3.3).
+- `GET /api/tasks/{id}/attempts` carries each attempt's `steer_unknown` (3.3); the
+  dashboard reads the same fields from `GET /api/tasks/{id}/attempts/summary`,
+  which leaves out the stored definitions.
 - MCP, orchestrator and admin scopes: `steer_task(task_id, message)`,
   `list_task_steers(task_id, attempt?)` and `cancel_steer(task_id, steer_id)`,
   with the REST permissions, added to the [MCP operations](mcp-operations.spec.md)
@@ -220,9 +222,9 @@ edit](task-edit.spec.md).
   composer ("Steer this attempt…", Enter sends, Shift+Enter breaks a line, Escape
   closes). It is not shown for attempt 0, for any other state, for a past attempt,
   or when the assignee is known to lack `steer`. The steers list stays under the
-  Live bar. Both surfaces read the same list for the attempt, and the dashboard
-  reloads it on every task event, so a steer sent or cancelled on either surface
-  shows on both.
+  Live bar. Both surfaces share one read of that list per open task, and the
+  dashboard reloads it on every task event, so a steer sent or cancelled on either
+  surface shows on both.
 - The composer is disabled with the reason when the assignee lacks `steer` (3.5),
   and shows the server's refusal otherwise (`too_many_pending`, `rate_limited`).
 - The message is rendered as text, never as HTML.
