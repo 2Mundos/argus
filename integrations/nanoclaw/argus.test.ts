@@ -22,6 +22,7 @@ import {
   relayModelReports,
   renderSteer,
   renderTask,
+  replyPercent,
   resetRelayFile,
   steerUnknownLines,
   takeLogBatch,
@@ -207,6 +208,17 @@ describe("parseReply", () => {
       kind: "progress",
       text: "almost COMPLETE: soon",
     });
+  });
+});
+
+describe("replyPercent", () => {
+  it("reads a leading valid percentage and ignores prose or out-of-range values", () => {
+    expect(replyPercent("40%: running the tests")).toBe(40);
+    expect(replyPercent("  0% done")).toBe(0);
+    expect(replyPercent("100%: all checks green")).toBe(100);
+    expect(replyPercent("150%: impossible")).toBeNull();
+    expect(replyPercent("about 40% done")).toBeNull();
+    expect(replyPercent("running the tests")).toBeNull();
   });
 });
 
@@ -669,6 +681,24 @@ describe("Argus channel", () => {
       error: "cannot open the PR\n\nNo PR tool was available.",
     });
     expect(fake.calls.some((c) => c.path === "/tasks/t1/progress")).toBe(false);
+  });
+
+  it("reads a leading percentage in a progress reply", async () => {
+    const fake = fakeArgus({ tasks: [task()] });
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", h.thread(), {
+      kind: "chat",
+      content: "40%: running the tests",
+    });
+    await until(() => fake.calls.some((c) => c.path === "/tasks/t1/progress"));
+    expect(fake.calls.find((c) => c.path === "/tasks/t1/progress")!.body).toEqual({
+      attempt: 1,
+      message: "40%: running the tests",
+      percent: 40,
+    });
   });
 
   it("sends progress at most once per interval and coalesces to the latest", async () => {

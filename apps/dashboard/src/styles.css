@@ -1721,16 +1721,29 @@ main > section.home > .page-header {
   gap: 0.25rem;
   min-width: 0;
 }
-.bar {
-  height: 4px;
-  background: var(--surface-2);
-  border-radius: 2px;
-  overflow: hidden;
+.progress-pie {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  line-height: 1;
 }
-.bar > span {
-  display: block;
-  height: 100%;
-  background: var(--accent);
+.progress-pie svg {
+  width: 14px;
+  height: 14px;
+  transform: rotate(-90deg);
+}
+.progress-pie circle {
+  fill: none;
+  stroke-width: 3;
+}
+.progress-pie .track {
+  stroke: var(--surface-2);
+}
+.progress-pie .value {
+  stroke: var(--accent);
 }
 
 .badge {

@@ -57,6 +57,10 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
 - A note **with** a kind sets the milestone, the message and `progress_at`. A note
   **without** a kind leaves the milestone as it is, so a PR link outlives chatter.
   Both are cleared where progress is cleared (retry).
+- `progress_percent` is the last reported overall progress. A post without `percent`
+  leaves it unchanged, so a milestone does not erase an earlier note's percentage; a
+  later post with `percent` replaces it. The paths that reset a task's progress
+  (release, expiry, retry, quota/runtime pause) also clear it.
 - **Rate limit.** Free-text notes keep one per 10 s per task. A milestone is not
   limited when its kind differs from the stored `progress_kind`; the same kind again
   within 10 s is `429` like a note. A free-text note after a milestone is limited
@@ -96,6 +100,14 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
 
 - A task card and the activity header show the milestone label, short SHA, the PR as a
   link when present, and its relative time (`progress_data.at`).
+- The task card and activity header also show overall progress as a small pie with its
+  percentage whenever `progress_percent` is set. It is separate from the note and the
+  milestone, so a milestone does not hide it, and it persists until a later post
+  reports a new percentage.
+- Workers are asked to send a rough percentage with progress when they can: the MCP
+  `report_progress` description and the NanoClaw reply instructions both say so. The
+  channel reads a leading `NN%` in a plain progress reply as its `percent`
+  ([task continuation](task-continuation.spec.md) 3.8).
 - **No signal.** For a `claimed` task, when now minus `progress_at` exceeds
   `NO_SIGNAL_MINUTES` (default 10, overridable with `VITE_NO_SIGNAL_MINUTES`), the card
   says "no signal for N min" and the stale note is shown as the last known one, not as

@@ -48,6 +48,23 @@ describe("TaskSignal", () => {
     expect(screen.getByText("PR opened")).toBeTruthy();
   });
 
+  it("keeps the progress pie when a milestone supersedes the note", () => {
+    render(
+      <TaskSignal
+        now={NOW}
+        task={{
+          ...base,
+          progress_percent: 40,
+          progress_kind: "pr_opened",
+          progress_data: { number: 30, url: "https://git.example/o/r/pulls/30", at: ago(1) },
+        }}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "40% complete" })).toBeTruthy();
+    expect(screen.getByText("40%")).toBeTruthy();
+    expect(screen.queryByText("Delegating implementation")).toBeNull();
+  });
+
   it("shows what a waiting task waits on and for how long", () => {
     render(
       <TaskSignal

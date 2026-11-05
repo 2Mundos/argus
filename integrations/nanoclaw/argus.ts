@@ -960,6 +960,17 @@ export function parseReply(raw: string, taskId?: string): Directive {
 }
 
 /**
+ * A leading `NN%` in a progress reply, when it is a valid 0-100 percentage. The task
+ * prompt asks the worker to lead a progress update with one when it can estimate.
+ */
+export function replyPercent(text: string): number | null {
+  const m = /^\s*(\d{1,3})\s*%/.exec(text);
+  if (!m) return null;
+  const value = Number(m[1]);
+  return value <= 100 ? value : null;
+}
+
+/**
  * On a local lease the harness runs on the node's small local model (Strata): it
  * only orchestrates. Every read, edit, check and review goes to the executor and
  * comes back as a short summary, so the harness context stays small
@@ -1309,7 +1320,8 @@ export function renderTask(
     })),
   };
   const howToRespond = [
-    "How to respond: send short progress updates as normal messages. When you are done, reply with a",
+    "How to respond: send short progress updates as normal messages, starting with a rough",
+    'percentage when you can (for example "40%: reading the tests"). When you are done, reply with a',
     'message starting with "COMPLETE:" followed by a summary of what you did. If you cannot do it,',
     'start with "FAIL:" and say why; only when the workspace, a tool or a credential is missing (not when the',
     'work is hard), start with "FAIL (environment):" instead. If you need a real scope, cost or permission choice, start with "ASK:"',
@@ -4450,10 +4462,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   async function sendProgress(task: Claim, text: string): Promise<void> {
     if (current !== task) return; // the claim ended or changed while this note waited
     lastProgressAt = nowMs(); // count the interval from the send, not the response
+    const percent = replyPercent(text);
     try {
       await client.call("POST", `/tasks/${task.id}/progress`, {
         attempt: task.attempt,
         message: chars(text).slice(0, PROGRESS_MAX_CHARS).join(""),
+        ...(percent == null ? {} : { percent }),
       });
     } catch (err) {
       if (err instanceof ArgusError && err.status === 429)

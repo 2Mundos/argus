@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-03
+updated: 2026-11-05
 ---
 
 # Task continuation
@@ -190,7 +190,8 @@ upper-case `ASSIST: [resource:] text` and the scoped
 `ASK|FAIL|COMPLETE|ASSIST on|for [task] <task-id>:` where the id is exactly the
 task in flight. Any other mention of ask/fail/complete, another task id, lower
 case, or text not at the start stays progress. `PROGRESS on <task-id>:` is the
-scoped form of a progress note.
+scoped form of a progress note. A plain progress reply may lead with `NN%`; the
+channel sends that as the note's optional `percent` (worker lifecycle 3.12).
 
 ### Reply fencing
 
