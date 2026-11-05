@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -280,29 +281,128 @@ async def test_0060_upgrade_keeps_data_and_reopen_is_a_no_op(tmp_path: Path) -> 
         assert acct.last_rejected_at == datetime(2026, 1, 1, 0, 0, 0, 2, tzinfo=UTC)
 
 
-async def test_a_rebuild_that_breaks_a_reference_rolls_back(tmp_path: Path) -> None:
-    """The foreign-keys-off rebuild still refuses to commit a dangling reference."""
+_PARENT_CHILD = Migration(
+    1,
+    "0001_a.sql",
+    "CREATE TABLE p (name TEXT PRIMARY KEY);"
+    " CREATE TABLE c (id TEXT PRIMARY KEY, pool TEXT NOT NULL REFERENCES p (name));"
+    " INSERT INTO p VALUES ('x'); INSERT INTO c VALUES ('c1', 'x');",
+)
+_REBUILD_P = (
+    "CREATE TABLE p_new (name TEXT PRIMARY KEY); INSERT INTO p_new SELECT * FROM p;"
+    " DROP TABLE p; ALTER TABLE p_new RENAME TO p;"
+)
+# What an earlier write with foreign keys off left behind.
+_ORPHAN = "INSERT INTO c VALUES ('c2', 'gone')"
+
+
+async def _leave_behind(path: Path, statements: list[str]) -> None:
+    await (await Database.open(path, migrations=[_PARENT_CHILD])).close()
+    async with aiosqlite.connect(path) as conn:  # foreign keys are off by default
+        for statement in statements:
+            await conn.execute(statement)
+        await conn.commit()
+
+
+def _rebuild(sql: str) -> list[Migration]:
+    sql = f"-- argus: foreign keys off\n{sql}"
+    return [_PARENT_CHILD, Migration(2, "0002_b.sql", sql)]
+
+
+async def _contents(path: Path) -> list[list[tuple]]:
+    async with aiosqlite.connect(path) as conn:
+        found = []
+        for sql in (
+            "SELECT * FROM p ORDER BY name",
+            "SELECT * FROM c ORDER BY id",
+            'SELECT "table", parent FROM pragma_foreign_key_check ORDER BY 1, 2',
+        ):
+            async with conn.execute(sql) as cur:
+                found.append([tuple(r) for r in await cur.fetchall()])
+    return found
+
+
+@pytest.mark.parametrize(
+    ("left_behind", "sql"),
+    [
+        pytest.param([], _REBUILD_P, id="clean"),
+        pytest.param([_ORPHAN], _REBUILD_P, id="existing broken reference"),
+        pytest.param(
+            [_ORPHAN],
+            "CREATE TABLE c_new (id TEXT PRIMARY KEY,"
+            " pool TEXT NOT NULL REFERENCES p (name));"
+            " INSERT INTO c_new SELECT * FROM c ORDER BY id DESC;"
+            " DROP TABLE c; ALTER TABLE c_new RENAME TO c;" + _REBUILD_P,
+            id="child rebuild that renumbers rowids",
+        ),
+    ],
+)
+async def test_a_rebuild_keeps_the_broken_references_it_found(
+    tmp_path: Path, left_behind: list[str], sql: str
+) -> None:
+    """A dangling reference the database already had does not block a rebuild."""
     path = tmp_path / "argus.db"
-    base = Migration(
-        1,
-        "0001_a.sql",
-        "CREATE TABLE p (name TEXT PRIMARY KEY);"
-        " CREATE TABLE c (pool TEXT NOT NULL REFERENCES p (name));"
-        " INSERT INTO p VALUES ('x'); INSERT INTO c VALUES ('x');",
-    )
-    breaking = Migration(
-        2,
-        "0002_b.sql",
-        "-- argus: foreign keys off\n"
-        "CREATE TABLE p_new (name TEXT PRIMARY KEY);"
-        " DROP TABLE p; ALTER TABLE p_new RENAME TO p;",
-    )
-    with pytest.raises(MigrationError, match=r"0002_b\.sql"):
-        await Database.open(path, migrations=[base, breaking])
+    await _leave_behind(path, left_behind)
+    before = await _contents(path)
+    await (await Database.open(path, migrations=_rebuild(sql))).close()
+    assert await _user_version(path) == 2
+    assert await _contents(path) == before
+
+
+@pytest.mark.parametrize(
+    ("left_behind", "sql", "added"),
+    [
+        pytest.param(
+            [],
+            "CREATE TABLE p_new (name TEXT PRIMARY KEY);"
+            " DROP TABLE p; ALTER TABLE p_new RENAME TO p;",
+            "c id='c1' pool='x' -> p",
+            id="parent row lost",
+        ),
+        pytest.param(
+            [_ORPHAN],
+            "CREATE TABLE p_new (name TEXT PRIMARY KEY);"
+            " DROP TABLE p; ALTER TABLE p_new RENAME TO p;",
+            "c id='c1' pool='x' -> p",
+            id="parent row lost beside an existing broken reference",
+        ),
+        pytest.param(
+            [_ORPHAN],
+            "UPDATE c SET pool = 'lost' WHERE id = 'c2';" + _REBUILD_P,
+            "c id='c2' pool='lost' -> p",
+            id="broken reference changed",
+        ),
+        pytest.param(
+            [_ORPHAN],
+            "DELETE FROM c WHERE id = 'c2'; UPDATE c SET pool = 'gone';" + _REBUILD_P,
+            "c id='c1' pool='gone' -> p",
+            id="broken reference moved to another row",
+        ),
+        pytest.param(
+            [
+                "CREATE TABLE w (pool TEXT PRIMARY KEY REFERENCES p (name))"
+                " WITHOUT ROWID",
+                "INSERT INTO w VALUES ('gone')",
+            ],
+            _REBUILD_P,
+            "w -> p (WITHOUT ROWID: row unknown)",
+            id="broken reference that names no row",
+        ),
+    ],
+)
+async def test_a_rebuild_that_breaks_a_reference_rolls_back(
+    tmp_path: Path, left_behind: list[str], sql: str, added: str
+) -> None:
+    """The foreign-keys-off rebuild still refuses to commit a dangling reference
+    it cannot show was there before."""
+    path = tmp_path / "argus.db"
+    await _leave_behind(path, left_behind)
+    before = await _contents(path)
+    with pytest.raises(MigrationError, match=r"0002_b\.sql: .*" + re.escape(added)):
+        await Database.open(path, migrations=_rebuild(sql))
     assert await _user_version(path) == 1
-    db = await Database.open(path, migrations=[base])
-    async with db.read() as conn, conn.execute("SELECT name FROM p") as cur:
-        assert [r[0] for r in await cur.fetchall()] == ["x"]
+    assert await _contents(path) == before
+    db = await Database.open(path, migrations=[_PARENT_CHILD])
     async with db.write() as tx, tx.conn.execute("PRAGMA foreign_keys") as cur:
         row = await cur.fetchone()  # the writer's, which the runner turned off
     await db.close()
