@@ -277,8 +277,10 @@ for all its turns (3.8).
    ([model selection](model-selection.spec.md)). With neither, the turn is not sent:
    its reply is "No model is configured for `<provider>`: set
    `orchestrator.model` or the model policy."
-2. `custom`: the lease `settings.model` (the account's `engine` model).
-3. `local`: the lease `settings.model`, else the account credential's `model`,
+2. `custom`: the lease `settings.model`: the model `orchestrator.model` names
+   for `custom`, else the account's `engine` model.
+3. `local`: the lease `settings.model` (the model `orchestrator.model` names for
+   `local`, else the account's), else the account credential's `model`,
    else the model the local probe reports as served. The lease route fills
    `settings.model` from the probe when the account names none, as it fills
    `context_tokens`.
@@ -641,16 +643,20 @@ model server already running on the node.
   Enable button, with no template blockers. When it is `nanoclaw`, the step is
   unchanged. When it is `null`, the step shows both reasons and links to step 1.
   Step 3 no longer waits for step 2: a built-in orchestrator can be enabled before
-  any worker exists, and the step says that tasks wait for a worker.
+  any worker exists, and the step says that tasks wait for a worker. While the
+  orchestrator is disabled, step 3 shows the same model picker as Settings above
+  Enable, so the first lease already uses it.
 - **Onboarding step 1** offers **Local model** (3.11) beside Claude and Codex, and
   so does the Accounts tab.
 - **Settings.** An Internal orchestrator section (global scope only) with Enable
   or Disable for `orchestrator.enabled` and a runtime picker (`Automatic`,
-  `Built-in`, `NanoClaw`) for `orchestrator.runtime`. Below them, a Provider
-  picker (`Automatic`, `Anthropic (claude)`, `OpenAI (codex)`) and a Model field
-  write `orchestrator.model` as `<engine>/<model>`; `Automatic` resets it. The
-  change applies at the orchestrator's next lease (a failover or a restart), and
-  the saved notice says Disable and Enable apply it now. A refusal is shown with its
+  `Built-in`, `NanoClaw`) for `orchestrator.runtime`. Below them, the
+  **model picker**: a Provider select (`Automatic`, `Local model`, `Custom`,
+  `Anthropic (claude)`, `OpenAI (codex)`) and a Model field, required for
+  Anthropic and OpenAI and optional for Local and Custom ("the account's model"
+  when empty). It writes `orchestrator.model`; `Automatic` resets it. The change applies at
+  the orchestrator's next lease (a failover or a restart), and the saved notice
+  says Disable and Enable apply it now. A refusal is shown with its
   text and details; a `409 orchestrator_running` adds a Disable action.
 - **Chat header.** "Built-in" or "NanoClaw" before the registration state.
 - **Pools tab.** The system pool card shows `Built-in (in Argus)`, with no image,
@@ -697,7 +703,7 @@ model server already running on the node.
 | --- | --- | --- | --- |
 | `orchestrator.runtime` (new) | `auto` \| `builtin` \| `nanoclaw` | `auto` | 3.1 |
 | `orchestrator.enabled` | bool | `false` | unchanged |
-| `orchestrator.model` | engine/model or null | `null` | prefers that engine's provider and model (3.4) |
+| `orchestrator.model` | `<engine>/<model>`, `local[/<model>]`, `custom[/<model>]` or null | `null` | prefers that provider and model (3.4) |
 | `orchestrator.daily_budget_usd` | number ≥ 0 | `5` | checked after every model call (3.9) |
 | `orchestrator.max_concurrent_turns` | int 1–4 | `2` | enforced by the server (3.8) |
 | `orchestrator.confirm_above_tasks`, `orchestrator.confirm_above_usd` | as today | as today | skill guidance, unchanged |

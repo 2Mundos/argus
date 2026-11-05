@@ -7,6 +7,7 @@ store and are only ever handed to the agent holding a lease.
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 from uuid import uuid4
@@ -44,7 +45,8 @@ from argus_core.custom_accounts import (
     serves_role,
 )
 from argus_core.quota import QuotaHit, classify_quota, sanitize_notice
-from argus_core.tasks import HarnessModel, Task
+from argus_core.tasks import HarnessModel, ModelId, Task
+from pydantic import TypeAdapter
 
 from argus_api.accounts import usage
 from argus_api.accounts.eligibility import engine_pool
@@ -329,7 +331,7 @@ async def lease(
     reuse_held: bool = False,
     task_id: str | None,
     attempt: int | None,
-    prefer: HarnessModel | None = None,
+    prefer: "OrchestratorPreference | None" = None,
     credential_kinds: Sequence[str] | None = None,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
@@ -363,7 +365,7 @@ async def lease(
             tx, agent_id, store, role, [prefer.provider], kinds=credential_kinds
         )
         if result is not None:
-            result = result.model_copy(update={"model": prefer.model})
+            result = prefer.apply(result)
     if result is None:
         result = await _try_lease(
             tx,
@@ -397,16 +399,54 @@ async def lease(
 ORCHESTRATOR_MODEL_KEY = "orchestrator.model"
 
 
-def orchestrator_preference(value: object) -> HarnessModel | None:
-    """`orchestrator.model` as a harness pin: `<engine>/<model>` with a harness
-    engine (`claude`, `codex`). Anything else is no preference (ordinary ranking)."""
-    if not isinstance(value, str) or "/" not in value:
+# Providers `orchestrator.model` names directly, with an optional model that
+# replaces the account's own (internal-orchestrator spec 3.1).
+ACCOUNT_MODEL_PROVIDERS = (LOCAL_PROVIDER, CUSTOM_PROVIDER)
+_MODEL_ID: TypeAdapter[str] = TypeAdapter(ModelId)
+
+
+@dataclass(frozen=True)
+class OrchestratorPreference:
+    provider: str
+    model: str | None
+    # True: the model goes on `settings` (and a local credential), not `model`.
+    account_model: bool = False
+
+    def apply(self, leased: AccountLease) -> AccountLease:
+        """The lease as the preferred provider serves it: only the returned copy
+        changes, never the stored account."""
+        if self.model is None:
+            return leased
+        if not self.account_model:
+            return leased.model_copy(update={"model": self.model})
+        update: dict[str, Any] = {}
+        if leased.settings is not None:
+            update["settings"] = leased.settings.model_copy(
+                update={"model": self.model}
+            )
+        if leased.provider == LOCAL_PROVIDER:
+            update["credential"] = {**leased.credential, "model": self.model}
+        return leased.model_copy(update=update)
+
+
+def orchestrator_preference(value: object) -> OrchestratorPreference | None:
+    """`orchestrator.model` as a preference: `<engine>/<model>` with a harness
+    engine (`claude`, `codex`), or `local` / `custom` with an optional `/<model>`.
+    Anything else is no preference (ordinary ranking)."""
+    if not isinstance(value, str):
         return None
-    engine, model = value.split("/", 1)
+    head, _, model = value.partition("/")
+    if head in ACCOUNT_MODEL_PROVIDERS:
+        try:
+            model = _MODEL_ID.validate_python(model) if model else ""
+        except ValueError:
+            return None
+        return OrchestratorPreference(head, model or None, account_model=True)
     try:
-        return HarnessModel.model_validate({"engine": engine, "model": model})
+        pin = HarnessModel.model_validate({"engine": head, "model": model})
     except ValueError:
         return None
+    return OrchestratorPreference(pin.provider, pin.model)
 
 
 async def _holds_engine(tx: Tx, agent_id: str) -> bool:

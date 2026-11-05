@@ -7,6 +7,7 @@ import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 import { NewWorker } from "./GuidedWorker";
 import { LocalAccount } from "./LocalAccount";
+import { OrchestratorModelPicker } from "./OrchestratorModel";
 
 type Step = 1 | 2 | 3;
 
@@ -344,6 +345,11 @@ function OrchestratorStep(props: {
   // The built-in needs no template check (builtin-orchestrator spec 3.14).
   const blockers = !builtin && props.catalog ? orchestratorBlockers(props.catalog) : undefined;
   const checking = !builtin && !props.catalog;
+  const { data: settings, reload } = useLiveData(
+    (signal) => call(api.GET("/api/settings", { signal })),
+    [],
+  );
+  const preference = settings?.settings?.find((s) => s.key === "orchestrator.model");
   return (
     <div className="onboarding-panel">
       <h3>Start the internal orchestrator</h3>
@@ -392,6 +398,7 @@ function OrchestratorStep(props: {
         </>
       ) : (
         <>
+          {settings && <OrchestratorModelPicker value={preference?.value} onChanged={reload} />}
           <label>
             Daily budget (USD){" "}
             <input
