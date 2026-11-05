@@ -24,6 +24,7 @@ from argus_core.continuation import (
     ContinuationUpdate,
     ObservationRequest,
 )
+from argus_core.conversations import CHAT_TURN_HEADER
 from argus_core.task_drafts import PublishItem, TaskDraftBody
 from argus_core.task_edit import TaskChanges
 from argus_core.tasks import Deliverable, ExecutorModel, HarnessModel
@@ -280,6 +281,11 @@ async def _call(
     # Forward the header verbatim, only adding "Bearer " when the client sent a
     # bare token, so the downstream call is authenticated instead of rejected.
     auth = raw if raw.lower().startswith("bearer ") else f"Bearer {raw}"
+    # The built-in runtime's turn id (builtin-orchestrator 3.6): transport
+    # metadata, never a tool argument; REST honours it only for that agent.
+    turn = (ctx.headers or {}).get(CHAT_TURN_HEADER.lower())
+    if turn:
+        headers = {CHAT_TURN_HEADER: turn, **(headers or {})}
     assert _app is not None
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_app), base_url="http://argus", timeout=60

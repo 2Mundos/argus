@@ -130,6 +130,17 @@ def require_not_system(pool: Pool, *, action: str = "change") -> None:
         )
 
 
+def require_not_inprocess(body: PoolUpsert) -> None:
+    """Only `orchestrator.apply_enabled` writes an in-process pool
+    (builtin-orchestrator spec 3.2)."""
+    if body.target == "inprocess" or body.runtime == "builtin":
+        raise ValidationFailedError(
+            "the in-process target and builtin runtime are for the built-in"
+            " orchestrator only; enable it with orchestrator.enabled",
+            code="inprocess_system_only",
+        )
+
+
 def redact(pool: Pool) -> Pool:
     """The pool as every response shows it: `env` keys, never values (3.3)."""
     return pool.model_copy(update={"env": dict.fromkeys(pool.env, REDACTED)})
@@ -153,8 +164,9 @@ async def patch_pool(
         )
     changes = body.model_dump(exclude_unset=True, exclude={"expected_version", "env"})
     if pool.system is not None:
-        # Internal orchestrator 3.1: only the image (host / agent) may change.
-        allowed = {"image", "nanoclaw"}
+        # Internal orchestrator 3.1: only the image (host / agent) may change;
+        # the built-in has no image at all (builtin-orchestrator 3.2).
+        allowed = set() if pool.runtime == "builtin" else {"image", "nanoclaw"}
         if body.env is not None or set(changes) - allowed:
             raise ConflictError(
                 f"cannot change system pool {pool.name!r} except its image",

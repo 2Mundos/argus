@@ -9,9 +9,11 @@ creating a second one.
 import asyncio
 import builtins
 import json
+import logging
 import os
 import platform
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -21,6 +23,8 @@ from typing import Any, Literal, Protocol
 # measured in this deployment.
 PROVIDER_OP_TIMEOUT_S = 30.0  # list, logs, image checks, probes, mount sources
 START_TIMEOUT_S = 120.0  # Target.start; stop gets its grace on top of the ordinary one
+
+log = logging.getLogger(__name__)
 
 MANAGED_LABEL = "argus.managed"
 POOL_LABEL = "argus.pool"
@@ -825,6 +829,144 @@ def describe_waiting(pod: Any) -> str:
     return f"phase: {pod.status.phase if pod.status else 'unknown'}"
 
 
+# -- in-process ------------------------------------------------------------------
+
+INPROCESS_LOG_LINES = 500
+
+
+class InProcessHandle:
+    """What a loop the in-process target runs gets: its env, a bounded log ring,
+    and the stop request (builtin-orchestrator spec 3.2)."""
+
+    def __init__(self, spec: ContainerSpec) -> None:
+        self.spec = spec
+        self.env = dict(spec.env)
+        self.stopping = asyncio.Event()
+        self._log: deque[str] = deque(maxlen=INPROCESS_LOG_LINES)
+
+    def log(self, line: str) -> None:
+        self._log.append(line)
+
+    def tail(self, n: int) -> list[str]:
+        return list(self._log)[-n:] if n > 0 else []
+
+
+InProcessRunner = Callable[[InProcessHandle], Awaitable[None]]
+
+
+@dataclass
+class _Loop:
+    handle: InProcessHandle
+    task: asyncio.Task[None]
+
+
+class InProcessTarget:
+    """Asyncio tasks in this process, one per instance; for the built-in
+    orchestrator only (builtin-orchestrator spec 3.2). There are no images, no
+    descendants and nothing to pause. After a restart the table is empty, so the
+    reconciler sees the loop gone and replaces the instance."""
+
+    def __init__(self, runner: InProcessRunner) -> None:
+        self._runner = runner
+        self._loops: dict[str, _Loop] = {}
+        self._closed = False  # app shutdown: no new loop may start
+
+    @staticmethod
+    def ref(instance_id: str) -> str:
+        return f"inprocess:{instance_id}"
+
+    async def start(self, spec: ContainerSpec) -> str:
+        if self._closed:
+            raise TargetError("Argus is stopping")
+        if spec.instance_id not in self._loops:  # a retried start finds the loop
+            handle = InProcessHandle(spec)
+            task = asyncio.create_task(
+                self._run(handle), name=self.ref(spec.instance_id)
+            )
+            self._loops[spec.instance_id] = _Loop(handle, task)
+        return self.ref(spec.instance_id)
+
+    async def _run(self, handle: InProcessHandle) -> None:
+        try:
+            await self._runner(handle)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Type and message only: never a credential, prompt or tool result.
+            handle.log(f"error: crashed ({type(exc).__name__}: {exc})")
+            log.warning(
+                "in-process loop %s crashed: %s: %s",
+                handle.spec.instance_id,
+                type(exc).__name__,
+                exc,
+            )
+            raise
+
+    async def stop(self, ref: str, *, grace: timedelta) -> None:
+        instance_id = ref.removeprefix("inprocess:")
+        loop = self._loops.get(instance_id)
+        if loop is None:
+            return
+        loop.handle.stopping.set()
+        if not loop.task.done():
+            done, _ = await asyncio.wait({loop.task}, timeout=grace.total_seconds())
+            if not done:
+                loop.task.cancel()
+                await asyncio.wait({loop.task})
+        self._loops.pop(instance_id, None)
+
+    async def stop_all(self, grace: timedelta) -> None:
+        """App shutdown: every loop through the same stop path, at once. The
+        reconciler still runs meanwhile, so no loop may start after this."""
+        self._closed = True
+        await asyncio.gather(
+            *(self.stop(self.ref(i), grace=grace) for i in list(self._loops))
+        )
+
+    async def list(self, labels: Mapping[str, str]) -> builtins.list[ProviderInstance]:
+        found = []
+        for instance_id, loop in self._loops.items():
+            if any(loop.handle.spec.labels.get(k) != v for k, v in labels.items()):
+                continue
+            if not loop.task.done():
+                found.append(
+                    ProviderInstance(instance_id, self.ref(instance_id), "running")
+                )
+                continue
+            failed = loop.task.cancelled() or loop.task.exception() is not None
+            found.append(
+                ProviderInstance(
+                    instance_id,
+                    self.ref(instance_id),
+                    "exited",
+                    exit_code=1 if failed else 0,
+                )
+            )
+        return found
+
+    async def list_by_label(self, key: str) -> builtins.list[LabeledContainer]:
+        return []
+
+    async def logs(self, ref: str, *, tail: int) -> str:
+        loop = self._loops.get(ref.removeprefix("inprocess:"))
+        return "\n".join(loop.handle.tail(tail)) if loop else ""
+
+    async def pause(self, ref: str) -> None:
+        raise TargetError("in-process instances cannot be paused")
+
+    async def unpause(self, ref: str) -> None:
+        raise TargetError("in-process instances cannot be paused")
+
+    async def probe(self) -> TargetInfo:
+        return TargetInfo(version="inprocess")
+
+    async def image_present(self, image: str) -> bool | None:
+        return True
+
+    async def labeled_images(self, key: str) -> builtins.list[LabeledImage]:
+        return []
+
+
 class TargetRegistry:
     """One client per (kind, host, namespace), created on first use.
 
@@ -832,12 +974,16 @@ class TargetRegistry:
     used by the Kubernetes target.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, inprocess: InProcessTarget | None = None) -> None:
         self._targets: dict[tuple[str, str | None, str | None], Target] = {}
+        if inprocess is not None:
+            self._targets[("inprocess", None, None)] = inprocess
 
     def get(self, kind: str, host: str | None, namespace: str | None = None) -> Target:
         key = (kind, host, namespace)
         if key not in self._targets:
+            if kind == "inprocess":
+                raise TargetError("the in-process target is not running")
             if kind == "docker":
                 self._targets[key] = DockerTarget(host)
             elif kind == "kubernetes":

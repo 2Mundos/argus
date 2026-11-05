@@ -6,6 +6,11 @@ from importlib.resources.abc import Traversable
 import aiosqlite
 
 _NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
+# A migration whose SQL holds this line rebuilds a table other tables reference.
+# SQLite ignores `PRAGMA foreign_keys` inside a transaction, so the runner turns
+# the checks off around it and runs `foreign_key_check` before the commit
+# (SQLite's table-rebuild procedure).
+REBUILDS_REFERENCED = "-- argus: foreign keys off"
 
 
 class MigrationError(RuntimeError):
@@ -45,13 +50,29 @@ async def migrate(conn: aiosqlite.Connection, migrations: list[Migration]) -> in
             f"database is at version {current}, this build knows up to {latest}"
         )
     for m in migrations[current:]:
+        rebuild = REBUILDS_REFERENCED in m.sql
+        # One script per migration: `executescript` commits whatever is pending
+        # before it runs, so the check must sit inside it. A broken reference
+        # fails the CHECK and the whole migration rolls back.
+        check = (
+            "CREATE TEMP TABLE _fk_broken (n INTEGER CHECK (n = 0));\n"
+            "INSERT INTO _fk_broken SELECT count(*) FROM pragma_foreign_key_check;\n"
+            "DROP TABLE _fk_broken;\n"
+            if rebuild
+            else ""
+        )
+        if rebuild:
+            await conn.execute("PRAGMA foreign_keys = OFF")
         try:
             await conn.executescript(
-                f"BEGIN IMMEDIATE;\n{m.sql}\n;\n"
+                f"BEGIN IMMEDIATE;\n{m.sql}\n;\n{check}"
                 f"PRAGMA user_version = {m.version};\nCOMMIT;"
             )
         except Exception as exc:
             if conn.in_transaction:
                 await conn.execute("ROLLBACK")
             raise MigrationError(f"{m.name}: {exc}") from exc
+        finally:
+            if rebuild:
+                await conn.execute("PRAGMA foreign_keys = ON")
     return latest

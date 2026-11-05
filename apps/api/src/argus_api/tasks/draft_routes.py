@@ -1,5 +1,7 @@
 """REST for task drafts (docs/specs/task-drafts.spec.md 3.6): orchestrator or admin."""
 
+from typing import Annotated
+
 from argus_core.task_drafts import (
     PublishRequest,
     PublishResult,
@@ -8,7 +10,7 @@ from argus_core.task_drafts import (
     TaskDraftEdit,
     TaskDraftPage,
 )
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Header, Query, status
 
 from argus_api.deps import DbDep, ManagerDep, SettingsDep
 from argus_api.tasks import drafts
@@ -33,7 +35,13 @@ async def list_drafts(db: DbDep, _: ManagerDep) -> TaskDraftPage:
 
 @router.post("/publish")
 async def publish_drafts(
-    body: PublishRequest, db: DbDep, caller: ManagerDep, settings: SettingsDep
+    body: PublishRequest,
+    db: DbDep,
+    caller: ManagerDep,
+    settings: SettingsDep,
+    x_argus_chat_turn: Annotated[
+        str | None, Header(min_length=1, max_length=80, include_in_schema=False)
+    ] = None,
 ) -> PublishResult:
     """Validate drafts and create their tasks in one transaction. `atomic` (the
     default) publishes all or none; `partial` publishes each valid draft and reports
@@ -42,7 +50,13 @@ async def publish_drafts(
     limit = settings.max_tasks_per_agent_hour
     hourly_limit = limit if caller.agent_id is not None and limit > 0 else None
     async with db.write() as tx:
-        return await drafts.publish(tx, body, caller.actor, hourly_limit=hourly_limit)
+        return await drafts.publish(
+            tx,
+            body,
+            caller.actor,
+            hourly_limit=hourly_limit,
+            chat_turn=x_argus_chat_turn,  # the built-in's turn (task origin)
+        )
 
 
 @router.get("/{draft_id}")

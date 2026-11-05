@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
+import { ApiError } from "../api";
 import { useLiveData } from "../live";
 import { compactDraft, type Draft, emptyChains, toDraft } from "../models";
 import { PageHeader } from "../PageHeader";
@@ -34,6 +35,8 @@ export function Settings() {
   const review = byKey.get("review.independent");
   const models = byKey.get("models");
   const difficultyExecutors = byKey.get("difficulty.executors");
+  const orchestratorEnabled = byKey.get("orchestrator.enabled");
+  const orchestratorRuntime = byKey.get("orchestrator.runtime");
 
   return (
     <section className="settings-page">
@@ -66,6 +69,15 @@ export function Settings() {
       {!data && !error && <p className="muted">Loading…</p>}
       {data && (
         <>
+          {project === null && (
+            <div className="card">
+              <OrchestratorSection
+                enabled={orchestratorEnabled?.value === true}
+                runtime={(orchestratorRuntime?.value as Runtime | undefined) ?? "auto"}
+                onChanged={() => reload()}
+              />
+            </div>
+          )}
           <div className="card">
             <ModelsSection project={project} setting={models} onChanged={() => reload()} />
           </div>
@@ -84,6 +96,89 @@ export function Settings() {
             />
           </div>
         </>
+      )}
+    </section>
+  );
+}
+
+type Runtime = "auto" | "builtin" | "nanoclaw";
+const RUNTIMES: { value: Runtime; label: string }[] = [
+  { value: "auto", label: "Automatic" },
+  { value: "builtin", label: "Built-in (inside Argus)" },
+  { value: "nanoclaw", label: "NanoClaw (container)" },
+];
+
+/** The internal orchestrator's switch and runtime (builtin-orchestrator spec 3.14). */
+function OrchestratorSection(props: { enabled: boolean; runtime: Runtime; onChanged: () => void }) {
+  const { enabled, runtime, onChanged } = props;
+  const action = useAction();
+  const [failure, setFailure] = useState<{ message: string; running: boolean }>();
+
+  async function write(key: string, value: unknown, pendingKey: string) {
+    await action.run(async () => {
+      setFailure(undefined);
+      try {
+        await putSetting(key, value, null);
+        onChanged();
+      } catch (e) {
+        const running = e instanceof ApiError && e.code === "orchestrator_running";
+        const details =
+          e instanceof ApiError && e.details.length ? `: ${e.details.join("; ")}` : "";
+        setFailure({ message: `${e instanceof Error ? e.message : String(e)}${details}`, running });
+      }
+    }, pendingKey);
+  }
+
+  return (
+    <section>
+      <div className="toolbar">
+        <h3>Internal orchestrator</h3>
+      </div>
+      <p className="muted small">
+        {enabled ? "Enabled." : "Disabled."} The runtime applies when it is enabled: Built-in runs
+        inside Argus on an API-key, custom or local account; NanoClaw runs a container. Automatic
+        picks Built-in when such an account exists. Changing it needs a stopped orchestrator.
+      </p>
+      <div className="toolbar">
+        <label>
+          Runtime{" "}
+          <select
+            aria-label="orchestrator runtime"
+            value={runtime}
+            disabled={action.busy}
+            onChange={(e) => void write("orchestrator.runtime", e.target.value, "runtime")}
+          >
+            {RUNTIMES.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <ActionButton
+          pending={action.is("enabled")}
+          disabled={action.busy}
+          action={() => write("orchestrator.enabled", !enabled, "enabled")}
+        >
+          {enabled ? "Disable" : "Enable"}
+        </ActionButton>
+      </div>
+      {failure && (
+        <p className="error" role="alert">
+          {failure.message}
+          {failure.running && enabled && (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="link"
+                onClick={() => void write("orchestrator.enabled", false, "enabled")}
+              >
+                Disable
+              </button>
+            </>
+          )}
+        </p>
       )}
     </section>
   );

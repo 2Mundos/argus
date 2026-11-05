@@ -260,7 +260,8 @@ export function toForm(pool?: Pool): PoolForm {
     extraHosts: pool ? pool.docker.extra_hosts.join(", ") : "host.docker.internal:host-gateway",
     dockerHost: pool?.docker.host ?? "",
     dockerNetwork: pool?.docker.network ?? "",
-    target: pool?.target ?? "docker",
+    // The editor never opens the built-in pool (its target is `inprocess`).
+    target: pool?.target === "kubernetes" ? "kubernetes" : "docker",
     k8sContext: pool?.kubernetes?.context ?? "",
     k8sNamespace: pool?.kubernetes?.namespace ?? "default",
   };

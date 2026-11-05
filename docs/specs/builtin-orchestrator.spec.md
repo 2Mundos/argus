@@ -123,7 +123,8 @@ stores the value. The pool converges at the next enable.
 
 **Onboarding.** `GET /api/onboarding` gains `orchestrator_runtime`: the runtime
 `auto` would resolve to now (`builtin`, `nanoclaw`, or `null` when neither is
-accepted). Step 3 of the wizard uses it (3.14).
+accepted), and `builtin_account`: the name of the best-ranked built-in-capable
+account, or `null`. Step 3 of the wizard uses them (3.14).
 
 ## 3.2 Hosting: the in-process target
 
@@ -154,12 +155,20 @@ image change answers `409 system_pool`, which is the one difference from a
 NanoClaw system pool.
 
 **Migration.** `pools.target` and `pools.runtime` carry `CHECK` constraints from
-`0011_fleet.sql`. Migration `0073_builtin_orchestrator.sql` rebuilds `pools` with
+`0011_fleet.sql`. Migration `0075_builtin_orchestrator.sql` rebuilds `pools` with
 the widened checks (`target IN ('docker', 'kubernetes', 'inprocess')`,
-`runtime IN ('plain', 'nanoclaw', 'builtin')`). It uses SQLite's table-rebuild
-procedure: foreign keys off, copy, drop, rename, and recreate the indexes and
-triggers. It keeps every column added since `0011`, including `system` (`0056`)
-and the OOM streak (`0061`). No other table changes.
+`runtime IN ('plain', 'nanoclaw', 'builtin')`) and one more,
+`(target = 'inprocess') = (runtime = 'builtin')`. It uses SQLite's table-rebuild
+procedure: copy into a new table, drop, rename, and recreate the index. It keeps
+every column added since `0011`, including `system` (`0056`) and the OOM streak
+(`0061`). No other table changes.
+
+SQLite ignores `PRAGMA foreign_keys` inside a transaction, and every migration
+runs in one. A migration whose SQL holds the line `-- argus: foreign keys off`
+therefore runs with foreign keys turned off around it, and the same transaction
+ends with a check of `pragma_foreign_key_check`: a dangling reference fails the
+migration and rolls it back. `instances.pool` still references `pools` by name
+afterwards.
 
 **`InProcessTarget`** implements the `Target` protocol in `fleet/targets.py` and
 is registered in `TargetRegistry` under `inprocess`. It holds a table of running
@@ -245,7 +254,8 @@ may ([account selection](account-selection.spec.md)):
 
 `credential_kinds` is a new optional `LeaseRequest` field. It narrows eligibility
 to accounts of those kinds and never orders them, like `runtime_providers`. It is
-accepted from every caller. NanoClaw does not send it, so its leases are
+accepted from every caller. `ExhaustedReport` takes it too, so the next account
+the report names is one the built-in can lease. NanoClaw does not send it, so its leases are
 unchanged. `local` accounts pass because their credential holds no secret and they
 are stored as `api_key`. The ranking, `max_leases`, recovery after a reset and the
 `orchestrator.model` preference are unchanged. The loop holds one engine lease
@@ -262,7 +272,9 @@ for all its turns (3.8).
    `orchestrator.model` or the model policy."
 2. `custom`: the lease `settings.model` (the account's `engine` model).
 3. `local`: the lease `settings.model`, else the account credential's `model`,
-   else the model the local probe reports as served.
+   else the model the local probe reports as served. The lease route fills
+   `settings.model` from the probe when the account names none, as it fills
+   `context_tokens`.
 
 **Endpoints and headers.** Redirects are never followed and TLS is verified.
 
@@ -437,9 +449,11 @@ stateDiagram-v2
   loop sends `POST /api/agents/me/chat/{conversation_id}/usage`
   `{turn_id, usage}` (3.9). If the answer is `cap_reached: true`, the turn stops.
 - **Step limit.** At most 40 model requests that offer tools. When the limit or
-  the turn deadline is reached, the loop sends one last request with no tools and
-  the user text "Step limit reached. Reply now: what you did, with ids, and what
-  is left." Its text is the reply.
+  the turn deadline is reached, the loop sends one last request with tool choice
+  `none` and the user text "Step limit reached. Reply now: what you did, with ids,
+  and what is left." Its text is the reply. The tools stay defined in that
+  request, because the Messages API refuses a transcript with tool calls and no
+  tools.
 - **Deadline.** 14 minutes after the claim, one minute before the server's
   `TURN_TIMEOUT` expires the turn. If the last request cannot finish in time, the
   reply is "This turn ran out of time after `<n>` steps." with the tools called and
@@ -621,10 +635,12 @@ model server already running on the node.
   unchanged. When it is `null`, the step shows both reasons and links to step 1.
   Step 3 no longer waits for step 2: a built-in orchestrator can be enabled before
   any worker exists, and the step says that tasks wait for a worker.
-- **Onboarding step 1** offers **Local model** (3.11) beside Claude and Codex.
-- **Settings.** A runtime picker (`Automatic`, `Built-in`, `NanoClaw`) for
-  `orchestrator.runtime`. A `409 orchestrator_running` is shown with its text and
-  a Disable action.
+- **Onboarding step 1** offers **Local model** (3.11) beside Claude and Codex, and
+  so does the Accounts tab.
+- **Settings.** An Internal orchestrator section (global scope only) with Enable
+  or Disable for `orchestrator.enabled` and a runtime picker (`Automatic`,
+  `Built-in`, `NanoClaw`) for `orchestrator.runtime`. A refusal is shown with its
+  text and details; a `409 orchestrator_running` adds a Disable action.
 - **Chat header.** "Built-in" or "NanoClaw" before the registration state.
 - **Pools tab.** The system pool card shows `Built-in (in Argus)`, with no image,
   node or resource fields and no edit action.
@@ -662,7 +678,7 @@ model server already running on the node.
 | Local account created by detection | Disable or delete the account (existing routes) | Accounts |
 | Account exhausted or rejected by the built-in | Existing reset, recovery and sign-in flows | Accounts |
 | Task update notices | Archive the conversation, or disable the orchestrator | the thread |
-| Migration `0073` | Not reversible once a built-in pool exists: an older Argus rejects its rows. The release notes say the upgrade cannot be rolled back after the built-in has been enabled ([releases](releases.spec.md)). | release notes |
+| Migration `0075` | Not reversible once a built-in pool exists: an older Argus rejects its rows. The release notes say the upgrade cannot be rolled back after the built-in has been enabled ([releases](releases.spec.md)). | release notes |
 
 ## 3.18 Settings
 
@@ -707,7 +723,7 @@ and the core-profile threshold are constants, not settings.
   heartbeat task. A turn's memory is bounded by its context budget (3.7).
 - No network call inside a write transaction. Time in writes comes from `tx.now`
   in the REST handlers the loop calls.
-- One migration, `0073_builtin_orchestrator.sql`, which only widens the `pools`
+- One migration, `0075_builtin_orchestrator.sql`, which only widens the `pools`
   checks. Shipped migrations are not edited.
 - The built-in uses only public contracts: the chat routes, the agent routes, the
   account routes and MCP. No service function is called directly, and nothing is
@@ -720,9 +736,9 @@ and the core-profile threshold are constants, not settings.
 
 # 6. Implementation Consequences
 
-Order: this spec PR (with the rewrites listed below), then one API and dashboard
-PR, then one small channel PR for the framing fixture and the `Task update.`
-frame.
+Order: this spec PR (with the rewrites listed below), then one PR with the API,
+dashboard and channel changes: the framing fixture and the `Task update.` frame
+ship with the runtime that reads them.
 
 **Spec PR.** This file, and edits to the specs it makes inaccurate:
 - [internal orchestrator](internal-orchestrator.spec.md): 2 (the in-process
@@ -736,13 +752,15 @@ frame.
 **`packages/core`:**
 - `fleet.py`: `TargetKind.INPROCESS`, `RuntimeKind.BUILTIN`, and the `PoolUpsert`
   pairing rule;
-- `accounts.py`: `LeaseRequest.credential_kinds`;
+- `accounts.py`: `LeaseRequest.credential_kinds` and `ExhaustedReport.credential_kinds`,
+  and the detection models;
 - `conversations.py`: `TurnUsage.cached_input_tokens`, `ChatUsageReport`,
   `ChatUsageAck`;
 - the onboarding model's `orchestrator_runtime`.
 
 **`apps/api`:**
-- `db/migrations/0073_builtin_orchestrator.sql`.
+- `db/migrations/0075_builtin_orchestrator.sql`, and the runner's
+  foreign-keys-off rebuild (`db/migrate.py`).
 - `fleet/targets.py`: `InProcessTarget` and its registry entry.
 - `fleet/runtimes.py`: the `builtin` branch of `container_spec`.
 - `fleet/reconciler.py`: no public URL needed for `inprocess`.
@@ -759,7 +777,7 @@ frame.
   cached tokens in `record_usage`, and task update notices called from the task
   transition path.
 - `mcp_server.py`: forward `X-Argus-Chat-Turn`.
-- `onboarding.py`: `orchestrator_runtime`.
+- `onboarding.py`: `orchestrator_runtime` and `builtin_account`.
 - `main.py`: register the target, and stop loops in the lifespan before the
   database closes.
 - New package `orchestrator_builtin/`:
@@ -783,8 +801,9 @@ The framing and title cases move to the shared JSON fixture read by
 `argus-chat.test.ts`.
 
 **Tests** (the lowest layer that fails on `main`):
-- Migration: `0073` on a database migrated to `0072` keeps every pool row and
-  column, and accepts `inprocess`/`builtin`.
+- Migration: `0075` on a database migrated to `0074` keeps every pool row and
+  column, and accepts `inprocess`/`builtin` only as a pair. A foreign-keys-off
+  rebuild that leaves a dangling reference rolls back.
 - Resolution: `auto` gives `builtin` with an Anthropic key, an OpenAI key, a
   custom account with an engine model, or a local account. It gives `nanoclaw`
   with only subscriptions and a ready template, and `orchestrator_unavailable`
@@ -824,11 +843,18 @@ The framing and title cases move to the shared JSON fixture read by
 
 ## Verification boundary
 
-- Commands: `make check`; the API tests above (`apps/api/tests/`); the dashboard
-  Vitest suite; `argus-chat.test.ts`.
+- Commands: `make check`; `apps/api/tests/test_builtin_orchestrator.py` (the loop
+  in the running app against a fake model API),
+  `apps/api/tests/test_builtin_orchestrator_parts.py` (target, reconciler,
+  adapters, detection, notices, framing), the `credential_kinds` case in
+  `test_account_failover.py`, the `0075` cases in `test_migrate.py`; the
+  dashboard Vitest suite (`Onboarding.test.tsx`, `LocalAccount.test.tsx`);
+  `argus-chat.test.ts` through `integrations/nanoclaw/provision.sh check`.
 - Verified at the unit and fake-API level: resolution, the target, the reconciler
   path, leases, turns, failure classes, limits, spend, notices, detection and
-  framing parity. All model behaviour comes from scripted fake responses.
+  framing parity. All model behaviour comes from scripted fake responses. The
+  loop's own claim, reply and leave path runs once in the app with the real
+  in-process target.
 - Not verified: orchestration quality and cost with real inference. Before the
   built-in can be called shipped, a dated report must record a manual run on a
   disposable node:
@@ -837,3 +863,7 @@ The framing and title cases move to the shared JSON fixture read by
   - one turn on the cheapest Anthropic or OpenAI model that creates a task and
     reports it, with its recorded cost.
 - Not verified: the size and cost of the full tool list per step (4).
+- Not verified: request shapes against the real APIs. The Anthropic body
+  (`cache_control`, `tool_choice: none`) and the OpenAI body
+  (`max_completion_tokens`) follow the providers' documentation, not a recorded
+  exchange.

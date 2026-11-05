@@ -48,6 +48,15 @@ ENABLED_KEY = "orchestrator.enabled"
 # Queued on Updates so the chat long-poll wakes. The question text stays out:
 # the orchestrator reads it with tools (untrusted data).
 INBOX_WAKE_PREFIX = "Inbox item waiting."
+# Queued on a task's origin conversation when that task ends (builtin-orchestrator
+# 3.10). It names no task: the turn lists the conversation's tasks itself.
+TASK_UPDATE_PREFIX = "Task update."
+TASK_UPDATE_BODY = (
+    f"{TASK_UPDATE_PREFIX}\n"
+    "source: origin\n"
+    "Tasks from this conversation reached a final state. "
+    "Read them with get_tasks and tell the admin the outcome."
+)
 
 # Active turn: a human message delivered but not yet answered.
 _TURN_OPEN = ("delivered",)
@@ -492,6 +501,34 @@ async def queue_inbox_wake(
     await _queue_wake(tx, conv_id, body)
 
 
+async def queue_task_update(tx: Tx, conv_id: str) -> None:
+    """One `Task update.` notice on a task's origin conversation (3.10).
+
+    No-op unless the orchestrator is enabled, the conversation exists and is not
+    archived, holds no queued task update yet (it covers later transitions until
+    it is claimed) and has room. Never raises into the task transition."""
+    enabled = await settings_service.get_setting(
+        tx.conn, Path(), settings_service.GLOBAL, ENABLED_KEY
+    )
+    if enabled.value is not True:
+        return
+    async with tx.conn.execute(
+        "SELECT 1 FROM conversations WHERE id = ? AND archived_at IS NULL", (conv_id,)
+    ) as cur:
+        if await cur.fetchone() is None:
+            return
+    async with tx.conn.execute(
+        "SELECT 1 FROM messages WHERE conversation_id = ? AND state = 'queued'"
+        " AND author = 'system' AND substr(body, 1, ?) = ? LIMIT 1",
+        (conv_id, len(TASK_UPDATE_PREFIX), TASK_UPDATE_PREFIX),
+    ) as cur:
+        if await cur.fetchone() is not None:
+            return
+    if await _queued_count(tx.conn, conv_id) >= MAX_QUEUED:
+        return
+    await _queue_wake(tx, conv_id, TASK_UPDATE_BODY)
+
+
 async def _unannounced_inbox_rows(conn: aiosqlite.Connection, conv_id: str) -> int:
     """Inbox rows the orchestrator should look at that no notice has covered.
 
@@ -722,10 +759,15 @@ async def record_usage(
     cost_usd = None
     measurement = "unknown"
     if usage.model and (
-        usage.input_tokens is not None or usage.output_tokens is not None
+        usage.input_tokens is not None
+        or usage.output_tokens is not None
+        or usage.cached_input_tokens is not None
     ):
         priced = load_prices(pricing_file).cost(
-            usage.model, usage.input_tokens, usage.output_tokens, None
+            usage.model,
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cached_input_tokens,
         )
         if priced is None:
             measurement = "unpriced"
@@ -747,6 +789,31 @@ async def record_usage(
             measurement,
         ),
     )
+
+
+async def record_step_usage(
+    tx: Tx,
+    conv_id: str,
+    turn_id: str,
+    usage: TurnUsage,
+    pricing_file: Path | None,
+    path,
+) -> bool:
+    """One model call of a built-in turn (3.9): its row, then whether the daily
+    cap is reached counting it. The turn must be this conversation's live one."""
+    await get_conversation(tx.conn, conv_id)
+    async with tx.conn.execute(
+        "SELECT 1 FROM messages WHERE conversation_id = ? AND turn_id = ?"
+        " AND state = 'delivered' LIMIT 1",
+        (conv_id, turn_id),
+    ) as cur:
+        if await cur.fetchone() is None:
+            raise ConflictError(
+                "no turn in flight with this id in this conversation",
+                code="turn_not_open",
+            )
+    await record_usage(tx, conv_id, turn_id, usage, pricing_file)
+    return await daily_cap_reached(tx.conn, tx.now, path)
 
 
 async def daily_spend_usd(

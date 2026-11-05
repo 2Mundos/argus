@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import {
@@ -34,126 +36,34 @@ describe("chat thread ids", () => {
   });
 });
 
+/** Shared with the built-in orchestrator's suite (builtin-orchestrator spec 3.5). */
+const framing: {
+  inbound: { name: string; claim: Parameters<typeof renderChatInbound>[0]; text: string }[];
+  titles: { reply: string; title: string | null; text: string }[];
+} = JSON.parse(
+  fs.readFileSync(
+    fileURLToPath(new URL("./fixtures/chat-framing/cases.json", import.meta.url)),
+    "utf8",
+  ),
+);
+
 describe("renderChatInbound", () => {
-  it("frames the admin message as a trusted instruction", () => {
-    const text = renderChatInbound({
-      message: {
-        id: "m1",
-        conversation_id: "c1",
-        author: "admin:alice",
-        body: "Ship the fix",
-        state: "delivered",
-        turn_id: "t1",
-        created_at: "2026-10-20T12:00:00Z",
-      },
-      conversation: {
-        id: "c1",
-        kind: "chat",
-        title: "Login",
-        session_ref: null,
-      },
-    });
-    expect(text).toContain("Trusted operator instruction from admin:alice");
-    expect(text).toContain("Ship the fix");
-    expect(text).toContain("untrusted DATA");
-    expect(text).not.toContain("Attachments");
+  it.each(framing.inbound.map((c) => [c.name, c] as const))("frames %s", (_, c) => {
+    expect(renderChatInbound(c.claim)).toBe(c.text);
   });
 
-  it("names attached files and the tool that reads them", () => {
-    const text = renderChatInbound({
-      message: {
-        id: "m1",
-        conversation_id: "c1",
-        author: "admin:alice",
-        body: "See the log",
-        state: "delivered",
-        turn_id: "t1",
-        created_at: "2026-10-20T12:00:00Z",
-        attachments: [{ id: "a1", filename: "build.log", media_type: "text/plain", size: 120 }],
-      },
-      conversation: {
-        id: "c1",
-        kind: "chat",
-        title: "Login",
-        session_ref: null,
-      },
-    });
-    expect(text).toContain("Attachments (1)");
-    expect(text).toContain("read_chat_attachment");
-    expect(text).toContain("build.log");
-    expect(text).toContain("id=a1");
-  });
-
-  it("frames a system inbox wake as a notice, not an admin instruction", () => {
-    const text = renderChatInbound({
-      message: {
-        id: "m2",
-        conversation_id: "c1",
-        author: "system",
-        body: "Inbox item waiting.\ndecision_id: d1\nkind: question\naudience: any",
-        state: "delivered",
-        turn_id: "t2",
-        created_at: "2026-10-20T12:00:00Z",
-      },
-      conversation: {
-        id: "c1",
-        kind: "updates",
-        title: "Updates",
-        session_ref: null,
-      },
-    });
-    expect(text).toContain("Inbox wake from Argus, not an admin");
-    expect(text).not.toContain("Trusted operator instruction");
-    expect(text).toContain("decision_id: d1");
-    expect(text).toContain("untrusted DATA");
+  it("trusts admin text and frames every server notice as untrusted", () => {
+    for (const c of framing.inbound) {
+      const admin = c.claim.message.author !== "system";
+      expect(c.text.includes("Trusted operator instruction")).toBe(admin);
+      expect(c.text).toContain("untrusted DATA");
+    }
   });
 });
 
 describe("chat titles", () => {
-  const claim = (kind: "chat" | "updates", source?: "orchestrator" | "admin") => ({
-    message: {
-      id: "m1",
-      conversation_id: "c1",
-      author: "admin:alice",
-      body: "Ship the fix",
-      state: "delivered",
-      turn_id: "t1",
-      created_at: "2026-10-20T12:00:00Z",
-    },
-    conversation: {
-      id: "c1",
-      kind,
-      title: "Ship the fix",
-      title_source: source,
-      session_ref: null,
-    },
-  });
-
-  it("asks for a title only where the orchestrator may set one", () => {
-    expect(renderChatInbound(claim("chat", "orchestrator"))).toContain("`TITLE:");
-    expect(renderChatInbound(claim("chat", "admin"))).not.toContain("TITLE:");
-    expect(renderChatInbound(claim("updates", "orchestrator"))).not.toContain("TITLE:");
-    expect(renderChatInbound(claim("chat"))).not.toContain("TITLE:"); // an older server
-  });
-
-  it.each([
-    ["TITLE: Login bug\nFixed it.", "Login bug", "Fixed it."],
-    ["  title :  “quoted”  \n\nFixed it.\nSecond line.", "quoted", "Fixed it.\nSecond line."],
-    ['TITLE: "Login   bug"\nFixed it.', "Login bug", "Fixed it."],
-    ["TITLE: " + "w".repeat(200) + "\nFixed it.", "w".repeat(80), "Fixed it."],
-  ])("splits the leading line of %j", (reply, title, text) => {
-    expect(splitChatTitle(reply)).toEqual({ title, text });
-  });
-
-  it.each([
-    "Fixed it.",
-    "TITLE: only a title",
-    "TITLE:\nFixed it.",
-    "TITLE:  \nFixed it.",
-    "Fixed it.\nTITLE: not first",
-    "My TITLE: is here\nFixed it.",
-  ])("leaves %j as plain text", (reply) => {
-    expect(splitChatTitle(reply)).toEqual({ title: null, text: reply });
+  it.each(framing.titles.map((c) => [c.reply, c] as const))("splits %j", (_, c) => {
+    expect(splitChatTitle(c.reply)).toEqual({ title: c.title, text: c.text });
   });
 });
 

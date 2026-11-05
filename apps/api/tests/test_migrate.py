@@ -278,3 +278,81 @@ async def test_0060_upgrade_keeps_data_and_reopen_is_a_no_op(tmp_path: Path) -> 
         assert all("WHERE" in sql for _, sql in indexes)  # partial indexes
         assert acct.last_accepted_at == datetime(2026, 1, 1, 0, 0, 2, 2, tzinfo=UTC)
         assert acct.last_rejected_at == datetime(2026, 1, 1, 0, 0, 0, 2, tzinfo=UTC)
+
+
+async def test_a_rebuild_that_breaks_a_reference_rolls_back(tmp_path: Path) -> None:
+    """The foreign-keys-off rebuild still refuses to commit a dangling reference."""
+    path = tmp_path / "argus.db"
+    base = Migration(
+        1,
+        "0001_a.sql",
+        "CREATE TABLE p (name TEXT PRIMARY KEY);"
+        " CREATE TABLE c (pool TEXT NOT NULL REFERENCES p (name));"
+        " INSERT INTO p VALUES ('x'); INSERT INTO c VALUES ('x');",
+    )
+    breaking = Migration(
+        2,
+        "0002_b.sql",
+        "-- argus: foreign keys off\n"
+        "CREATE TABLE p_new (name TEXT PRIMARY KEY);"
+        " DROP TABLE p; ALTER TABLE p_new RENAME TO p;",
+    )
+    with pytest.raises(MigrationError, match=r"0002_b\.sql"):
+        await Database.open(path, migrations=[base, breaking])
+    assert await _user_version(path) == 1
+    db = await Database.open(path, migrations=[base])
+    async with db.read() as conn, conn.execute("SELECT name FROM p") as cur:
+        assert [r[0] for r in await cur.fetchall()] == ["x"]
+    async with db.write() as tx, tx.conn.execute("PRAGMA foreign_keys") as cur:
+        row = await cur.fetchone()  # the writer's, which the runner turned off
+    await db.close()
+    assert row is not None and row[0] == 1
+
+
+async def test_0075_keeps_pools_and_accepts_the_builtin_pair(tmp_path: Path) -> None:
+    path, migrations = tmp_path / "argus.db", load_migrations()
+    t0 = "2026-11-01T00:00:00+00:00"
+    db = await Database.open(path, migrations=migrations[:74])
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO pools (name, target, runtime, image, capabilities,"
+            " agents_per_instance, desired_replicas, max_replicas, config, status,"
+            " last_error, created_at, updated_at, system, oom_streak)"
+            " VALUES ('orchestrator', 'docker', 'nanoclaw', 'host:1', '[\"py\"]', 1,"
+            " 1, 1, '{\"env\": {}}', 'failing', 'boom', ?, ?, 'orchestrator', 2)",
+            (t0, t0),
+        )
+        await tx.conn.execute(
+            "INSERT INTO instances (id, pool, provider_ref, state, created_at)"
+            " VALUES ('i1', 'orchestrator', 'argus-i1', 'running', ?)",
+            (t0,),
+        )
+    async with db.read() as conn, conn.execute("SELECT * FROM pools") as cur:
+        before = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+
+    db = await Database.open(path, migrations=migrations)
+    try:
+        async with db.read() as conn:
+            async with conn.execute("SELECT * FROM pools") as cur:
+                assert [dict(r) for r in await cur.fetchall()] == before
+            async with conn.execute("PRAGMA foreign_key_check") as cur:
+                assert await cur.fetchall() == []
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "INSERT INTO pools (name, target, runtime, image, capabilities,"
+                " max_replicas, config, created_at, updated_at)"
+                " VALUES ('b', 'inprocess', 'builtin', 'builtin', '[]', 1, '{}', ?, ?)",
+                (t0, t0),
+            )
+        for target, runtime in (("inprocess", "plain"), ("docker", "builtin")):
+            with pytest.raises(aiosqlite.IntegrityError):
+                async with db.write() as tx:
+                    await tx.conn.execute(
+                        "INSERT INTO pools (name, target, runtime, image, capabilities,"
+                        " max_replicas, config, created_at, updated_at)"
+                        " VALUES ('x', ?, ?, 'i', '[]', 1, '{}', ?, ?)",
+                        (target, runtime, t0, t0),
+                    )
+    finally:
+        await db.close()

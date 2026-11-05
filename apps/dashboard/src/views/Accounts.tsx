@@ -37,12 +37,14 @@ import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 import { CustomAccount } from "./CustomAccount";
 import { AccountQuota, Sparkline } from "./charts";
+import { LocalAccount } from "./LocalAccount";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
 export function Accounts() {
   const [adding, setAdding] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
   const [addingCustom, setAddingCustom] = useState(false);
+  const [addingLocal, setAddingLocal] = useState(false);
   // A Claude wizard: new (`{}`) or renewing the given account.
   const [claude, setClaude] = useState<{ renew?: Account }>();
   const [editing, setEditing] = useState<Account>();
@@ -119,6 +121,9 @@ export function Accounts() {
         </button>
         <button type="button" onClick={() => setAddingCustom(true)}>
           Add custom provider
+        </button>
+        <button type="button" onClick={() => setAddingLocal(true)}>
+          Add local model
         </button>
         <button type="button" className="primary" onClick={() => setAdding(true)}>
           Add account
@@ -343,6 +348,16 @@ export function Accounts() {
           onDone={() => {
             setAddingCustom(false);
             setNotice("Custom provider account added.");
+            reloadList();
+          }}
+        />
+      )}
+      {addingLocal && (
+        <LocalAccount
+          onClose={() => setAddingLocal(false)}
+          onDone={() => {
+            setAddingLocal(false);
+            setNotice("Local model account added.");
             reloadList();
           }}
         />

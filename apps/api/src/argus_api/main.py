@@ -44,7 +44,7 @@ from argus_api.fleet import reconciler
 from argus_api.fleet.onecli_cleanup import OneCliCleaner
 from argus_api.fleet.reconciler import FleetSettings
 from argus_api.fleet.routes import router as fleet_router
-from argus_api.fleet.targets import TargetRegistry
+from argus_api.fleet.targets import InProcessTarget, TargetRegistry
 from argus_api.fleet.workspace_cleanup import WorkspaceCleaner
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
@@ -54,6 +54,7 @@ from argus_api.onboarding import router as onboarding_router
 from argus_api.ops import LoopStats, ReadinessCache
 from argus_api.ops_routes import probes as probes_router
 from argus_api.ops_routes import router as ops_router
+from argus_api.orchestrator_builtin import loop as builtin_loop
 from argus_api.routines import runs as routine_runs
 from argus_api.routines.routes import router as routines_router
 from argus_api.runtime.docker import CliDocker
@@ -139,7 +140,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         )
         app.state.codex_login = CodexLoginManager(db, secrets, settings)
         app.state.claude_login = ClaudeLoginManager(db, secrets, settings)
-        app.state.targets = TargetRegistry()
+        # The built-in orchestrator's loops run here (builtin-orchestrator 3.2).
+        app.state.builtin_ready = asyncio.Event()  # set once MCP serves
+        app.state.inprocess = InProcessTarget(builtin_loop.make_runner(app))
+        app.state.targets = TargetRegistry(inprocess=app.state.inprocess)
         app.state.workspace_cleanup = WorkspaceCleaner(db, app.state.targets, settings)
         app.state.fleet = FleetSettings(
             argus_url=settings.public_url,
@@ -254,7 +258,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         ]
         try:
             async with mcp_server.endpoint.running():
-                yield
+                app.state.builtin_ready.set()
+                try:
+                    yield
+                finally:
+                    # Before MCP and the database close: the loops use both.
+                    await app.state.inprocess.stop_all(app.state.fleet.stop_grace)
         finally:
             await app.state.codex_login.shutdown()
             await app.state.claude_login.shutdown()

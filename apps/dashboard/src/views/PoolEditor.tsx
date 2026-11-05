@@ -200,7 +200,7 @@ export function PoolEditor({ pool, onClose }: { pool?: Pool; onClose: () => void
     setForm((f) => ({ ...f, [key]: value }));
   const id = (name: string) => `${uid}-${name}`;
   const nanoclaw = base?.runtime === "nanoclaw";
-  const runtime = base?.runtime ?? "plain";
+  const runtime = base?.runtime === "nanoclaw" ? "nanoclaw" : "plain";
   // Prefer the live catalog; if a reload failed, keep using the last successful one for
   // host/agent cross-role checks so a catalog outage cannot skip that guard.
   const roleCatalog = catalog.status === "ready" ? catalog.catalog : lastKnownCatalog;

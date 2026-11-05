@@ -60,6 +60,7 @@ Admin only. Returns:
   "worker": false,
   "orchestrator": false,
   "orchestrator_runtime": "builtin",
+  "builtin_account": "anthropic-key",
   "dismissed": false
 }
 ```
@@ -72,6 +73,8 @@ Admin only. Returns:
   `builtin`, `nanoclaw` or `null` when neither can run
   ([built-in orchestrator](builtin-orchestrator.spec.md) 3.1). It is derived, not
   stored.
+- `builtin_account`: the best-ranked account the built-in can run on, or `null`;
+  step 3 names it.
 - `dismissed`: the global setting `onboarding.dismissed` (bool, default `false`,
   admin-written), the only stored value, so dismissing holds across browsers.
 

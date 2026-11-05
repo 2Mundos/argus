@@ -39,11 +39,15 @@ def validate_repository_url(raw: str) -> str:
 class TargetKind(StrEnum):
     DOCKER = "docker"  # local socket or remote host (DOCKER_HOST ssh:// or tcp://)
     KUBERNETES = "kubernetes"
+    # Asyncio tasks in the Argus process; only the built-in orchestrator
+    # (builtin-orchestrator spec 3.2).
+    INPROCESS = "inprocess"
 
 
 class RuntimeKind(StrEnum):
     PLAIN = "plain"  # any image that speaks the Argus API itself
     NANOCLAW = "nanoclaw"
+    BUILTIN = "builtin"  # the built-in orchestrator loop (builtin-orchestrator 3.2)
 
 
 def _docker_host_ok(host: str) -> bool:
@@ -266,6 +270,12 @@ class PoolUpsert(BaseModel):
     def consistent(self) -> "PoolUpsert":
         if self.desired_replicas > self.max_replicas:
             raise ValueError("desired_replicas cannot exceed max_replicas")
+        if (self.target == TargetKind.INPROCESS) != (
+            self.runtime == RuntimeKind.BUILTIN
+        ):
+            raise ValueError(
+                "target inprocess and runtime builtin go together, and only together"
+            )
         if (
             self.runtime == RuntimeKind.NANOCLAW
             and self.nanoclaw is not None
