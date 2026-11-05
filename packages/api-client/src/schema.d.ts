@@ -4784,6 +4784,11 @@ export interface components {
             /** Block Reason */
             block_reason: string | null;
             /**
+             * Command Guard Enabled
+             * @default true
+             */
+            command_guard_enabled?: boolean;
+            /**
              * Complexity
              * @description The pre-difficulty three-level view, for clients that still read it:
              *     `simple` is `trivial` there, as both prefer the cheap executor.

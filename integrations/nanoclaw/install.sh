@@ -48,6 +48,9 @@ cp "$here/argus-checkpoint.test.ts" "$target/src/channels/argus-checkpoint.test.
 cp "$here/argus-repo-preflight.ts" "$target/src/channels/argus-repo-preflight.ts"
 cp "$here/argus-repo-preflight.test.ts" "$target/src/channels/argus-repo-preflight.test.ts"
 cp "$here/argus-repo-preflight.docker.test.ts" "$target/src/channels/argus-repo-preflight.docker.test.ts"
+# Command guard presence check (command-guard spec 3): the channel imports it at claim.
+cp "$here/argus-guard.ts" "$target/src/channels/argus-guard.ts"
+cp "$here/argus-guard.test.ts" "$target/src/channels/argus-guard.test.ts"
 cp "$here/argus.test.ts" "$target/src/channels/argus.test.ts"
 # Unknown steer outcomes (task steering spec 3.3-3.6), run by scripts/steer-unknown-e2e.sh.
 cp "$here/argus-steer-unknown.e2e.test.ts" "$target/src/channels/argus-steer-unknown.e2e.test.ts"
@@ -442,7 +445,7 @@ old = """  const contributedEnv: Record<string, string> = {
     ...(gateway.env ?? {}),
   };"""
 new = old + """
-  for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL']) {
+  for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL', 'ARGUS_COMMAND_GUARD']) {
     const value = process.env[key];
     if (value?.trim()) contributedEnv[key] = value;
   }"""

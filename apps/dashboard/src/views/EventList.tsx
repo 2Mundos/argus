@@ -4,7 +4,9 @@ import { describeEvent } from "../eventLine";
 import { shortId } from "../format";
 import { WorkerActorChip } from "../WorkerChip";
 
-function eventDetail(event: Pick<ArgusEvent, "data" | "subject_type" | "subject_id">): string {
+function eventDetail(
+  event: Pick<ArgusEvent, "data" | "kind" | "subject_type" | "subject_id">,
+): string {
   const summary = describeEvent(event);
   const subject = `${event.subject_type} ${shortId(event.subject_id)}`;
   return summary ? `${summary} · ${subject}` : subject;

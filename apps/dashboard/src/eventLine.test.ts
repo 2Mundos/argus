@@ -9,10 +9,21 @@ describe("eventLine", () => {
   });
 
   it("describes common event payloads", () => {
-    expect(describeEvent({ data: { from: "ready", to: "claimed" } })).toBe("ready → claimed");
-    expect(describeEvent({ data: { message: "hi" } })).toBe("hi");
-    expect(describeEvent({ data: { reason: "timeout" } })).toBe("timeout");
-    expect(describeEvent({ data: { to: "failed" } })).toBe("→ failed");
-    expect(describeEvent({ data: {} })).toBe("");
+    expect(describeEvent({ kind: "task.x", data: { from: "ready", to: "claimed" } })).toBe(
+      "ready → claimed",
+    );
+    expect(describeEvent({ kind: "task.x", data: { message: "hi" } })).toBe("hi");
+    expect(describeEvent({ kind: "task.x", data: { reason: "timeout" } })).toBe("timeout");
+    expect(describeEvent({ kind: "task.x", data: { to: "failed" } })).toBe("→ failed");
+    expect(describeEvent({ kind: "task.x", data: {} })).toBe("");
+  });
+
+  it("puts the rule id before the reason for blocked commands", () => {
+    const data = { rule: "rm_root", reason: "deletes /" };
+    expect(describeEvent({ kind: "task.command_blocked", data })).toBe("rm_root · deletes /");
+    expect(describeEvent({ kind: "task.command_blocked", data: { reason: "deletes /" } })).toBe(
+      "deletes /",
+    );
+    expect(describeEvent({ kind: "task.failed", data })).toBe("deletes /");
   });
 });

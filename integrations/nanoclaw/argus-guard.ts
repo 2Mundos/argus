@@ -12,7 +12,9 @@ export function registersCommandGuard(settings: unknown): boolean {
     if (typeof e?.matcher !== "string" || !e.matcher.split("|").includes("Bash")) return false;
     return (
       Array.isArray(e.hooks) &&
-      e.hooks.some((h) => String((h as { command?: unknown })?.command).includes("command_guard.py"))
+      e.hooks.some((h) =>
+        String((h as { command?: unknown })?.command).includes("command_guard.py"),
+      )
     );
   });
 }

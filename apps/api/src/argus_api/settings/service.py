@@ -28,6 +28,7 @@ MODELS_KEY = "models"
 REVIEW_KEY = "review.independent"
 DIFFICULTY_EXECUTORS_KEY = "difficulty.executors"
 GIT_IDENTITY_KEY = "git.identity"
+COMMAND_GUARD_KEY = "command_guard.enabled"
 
 
 class GitIdentity(NamedTuple):
@@ -301,6 +302,11 @@ async def claim_git_identity(
     except ValidationFailedError:
         return None
     return identity._asdict()
+
+
+async def claim_command_guard_enabled(conn: aiosqlite.Connection, project: str) -> bool:
+    """Whether the command guard is on for a claim: project override, else global."""
+    return bool((await _setting(conn, Path(), project, COMMAND_GUARD_KEY)).value)
 
 
 def _check_scope(defn: SettingDefinition, scope: str) -> None:
