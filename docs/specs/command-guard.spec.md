@@ -63,8 +63,13 @@ bypass. Background: draft (removed; in git history),
   the agent decides what to do next.
 - **Fail open.** A parse or runtime error in the guard allows the command.
 - **Missing guard.** When the guard is enabled, an image without it is an
-  environment block (`env_guard_missing`), not a silent unguarded run. **Not
-  implemented**; see open items. The image build smoke does fail if the guard is
+  environment block (`env_guard_missing`), not a silent unguarded run. At claim,
+  before any lease, the worker checks the Claude managed settings at
+  `ARGUS_CLAUDE_MANAGED_SETTINGS` (or the channel's `managedSettingsPath`) for a
+  `PreToolUse` `Bash` hook running `command_guard.py`; a missing or unreadable file
+  or hook blocks the task. Skipped when the guard is off (`ARGUS_COMMAND_GUARD=0|off`),
+  for engines without a hook, and when no path is configured (a worker outside the
+  image cannot observe it). The image build smoke does fail if the guard is
   absent or does not block `rm -rf /`.
 - **Registration.** Claude Code managed settings baked into the image
   (`/etc/claude-code/managed-settings.json`, source
@@ -93,14 +98,12 @@ Not built yet (section 3 marks each **not implemented**):
 - `task.command_blocked` events (visibility) and their feed/Fleet presentation.
 - Delivery of `command_guard.enabled` to the hook at claim (the setting is
   registered; the hook already honours `ARGUS_COMMAND_GUARD`).
-- `env_guard_missing` when a guarded engine starts without the hook.
 - Codex coverage (hook support and trusted-hash registration).
 
 - **Open item: settings and event plumbing.** Passing `command_guard.enabled`
   ([settings](settings.spec.md), registered) to the hook as
   `ARGUS_COMMAND_GUARD`, a worker route or channel to carry
-  `task.command_blocked`, its feed/Fleet presentation, and `env_guard_missing`
-  in [failure classes](failure-classes.spec.md).
+  `task.command_blocked`, and its feed/Fleet presentation.
 - Codex: hook support, trusted-hash registration, whether the hook runs inside
   Bubblewrap, and whether it survives `patch-codex-sandbox.py`.
 - Claude Code managed-settings path and precedence in the pinned Claude Code
@@ -117,7 +120,8 @@ Not built yet (section 3 marks each **not implemented**):
 
 # 6. Implementation Consequences
 
-- `integrations/nanoclaw/engines/command_guard.py`, `commit_attribution.py`,
+- `integrations/nanoclaw/argus-guard.ts` (presence check),
+  `integrations/nanoclaw/engines/command_guard.py`, `commit_attribution.py`,
   `claude-managed-settings.json`, `argus-git`, `git-hooks/commit-msg`
 - `engines/Dockerfile.tools-layer` and `engines/apply-tools-layer.sh` install them.
 - `integrations/nanoclaw/tests/test_command_guard.py`

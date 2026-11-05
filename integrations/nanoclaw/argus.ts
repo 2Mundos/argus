@@ -107,6 +107,7 @@ import {
   parseInputRef,
   taskInputLines,
 } from "./argus-inputs.js";
+import { commandGuardBlock } from "./argus-guard.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
 import {
   localHarnessFromCredential,
@@ -373,6 +374,11 @@ export interface ArgusConfig {
    * Default: `argusGroupDir`; tests inject a temporary directory.
    */
   workspaceRoot?: () => Promise<string | null>;
+  /**
+   * Claude Code managed settings the worker can read (default `ARGUS_CLAUDE_MANAGED_SETTINGS`).
+   * Unset: the command guard hook cannot be observed, so it is not checked.
+   */
+  managedSettingsPath?: string;
   /** Test seam: the first retry delay of a task input download (default 1 s, doubling). */
   inputsBackoffMs?: number;
   /**
@@ -3521,7 +3527,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     await reportHarness(task, "running");
     try {
       scopeTaskGitIdentity(claimedGitIdentity(task.git_identity));
-      let envBlock: { reason: string; error: string } | null = await repositoryPreflight(task);
+      let envBlock: { reason: string; error: string } | null = commandGuardBlock(
+        engine,
+        cfg.managedSettingsPath ?? process.env.ARGUS_CLAUDE_MANAGED_SETTINGS?.trim(),
+      );
+      step = "repository preflight";
+      if (!envBlock) envBlock = await repositoryPreflight(task);
       let workspace: TaskWorkspace | null = null;
       let inputs: MaterializedInput[] = [];
       if (!envBlock) {
