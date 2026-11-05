@@ -163,6 +163,12 @@ def test_hook_allows_and_fails_open(payload):
 
 def test_hook_can_be_disabled_by_env():
     assert run_hook(bash("rm -rf /"), ARGUS_COMMAND_GUARD="off").stdout == ""
+    assert run_hook(bash("rm -rf /"), ARGUS_COMMAND_GUARD="0").stdout == ""
+
+
+@pytest.mark.parametrize("env", [{}, {"ARGUS_COMMAND_GUARD": "on"}])
+def test_hook_blocks_when_env_unset_or_on(env):
+    assert '"deny"' in run_hook(bash("rm -rf /"), **env).stdout
 
 
 def test_managed_settings_register_the_hook_on_bash():

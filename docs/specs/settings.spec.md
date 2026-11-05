@@ -197,9 +197,9 @@ inherited; `default` is not set).
 Key `command_guard.enabled`, scopes `global` and `project`, boolean, default
 `true`. On keeps the Claude Code `PreToolUse` [command guard](command-guard.spec.md)
 active; off disables it for new attempts. A project value takes precedence over
-the global one. Only the setting is registered: passing it to the hook at claim
-(as `ARGUS_COMMAND_GUARD`) is not implemented yet, so changing it has no effect on
-the hook today.
+the global one. The claim carries the effective value as `command_guard_enabled`;
+the NanoClaw channel sets `ARGUS_COMMAND_GUARD=off` for that attempt when it is
+false, so a change applies to attempts claimed afterwards.
 
 # 4. Open Questions
 

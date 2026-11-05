@@ -4119,6 +4119,11 @@
             ],
             "title": "Block Reason"
           },
+          "command_guard_enabled": {
+            "default": true,
+            "title": "Command Guard Enabled",
+            "type": "boolean"
+          },
           "complexity": {
             "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
             "enum": [

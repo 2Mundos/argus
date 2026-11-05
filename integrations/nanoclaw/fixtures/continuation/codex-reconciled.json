@@ -5,6 +5,7 @@
   "assignee_agent_id": null,
   "attempt": 2,
   "block_reason": null,
+  "command_guard_enabled": true,
   "complexity": "standard",
   "continuation": {
     "artifacts": [
