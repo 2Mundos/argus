@@ -3,7 +3,7 @@
 Read only. The database sums by group; Python only prices the grouped rows.
 """
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -20,6 +20,7 @@ from argus_core.cost import (
 )
 
 from argus_api.accounts import service, usage
+from argus_api.accounts.figures import FIGURES, NO_MODEL, Acc
 from argus_api.accounts.pricing import PriceTable
 from argus_api.db import ts
 
@@ -28,21 +29,7 @@ WINDOWS: dict[CostWindow, timedelta] = {
     "7d": timedelta(days=7),
     "30d": timedelta(days=30),
 }
-NO_MODEL = "(no model)"
 
-# Per (group, model): runs, measured, not_reported, token sums and reported cost
-# over measured rows (SUM of only NULLs is NULL, which keeps "no figure" apart
-# from zero), and the measured runs that carry any token figure (the priceable ones).
-_FIGURES = (
-    "u.model, count(*), coalesce(sum(u.measurement = 'measured'), 0),"
-    " coalesce(sum(u.measurement = 'not_reported'), 0),"
-    " sum(CASE WHEN u.measurement = 'measured' THEN u.input_tokens END),"
-    " sum(CASE WHEN u.measurement = 'measured' THEN u.output_tokens END),"
-    " sum(CASE WHEN u.measurement = 'measured' THEN u.cached_input_tokens END),"
-    " sum(CASE WHEN u.measurement = 'measured' THEN u.cost_usd END),"
-    " coalesce(sum(u.measurement = 'measured' AND (u.input_tokens IS NOT NULL"
-    "  OR u.output_tokens IS NOT NULL OR u.cached_input_tokens IS NOT NULL)), 0)"
-)
 _WINDOW = " FROM account_usage u LEFT JOIN tasks t ON t.id = u.task_id WHERE u.at > ? AND u.at <= ?"
 # Every real UTC offset is a multiple of 15 minutes, so a 15-minute slot always
 # falls inside one local day.
@@ -65,75 +52,6 @@ _ATTEMPTS = (
 )
 
 
-class _Acc:
-    """Running figures of one group; folds in one (group, model) row at a time."""
-
-    def __init__(self) -> None:
-        self.runs = self.measured = self.not_reported = self.unpriced = 0
-        self.attempts = self.measured_attempts = self.not_reported_attempts = 0
-        self.unpriced_models: set[str] = set()
-        self.tokens: list[int | None] = [None, None, None]
-        self.estimated: float | None = None
-        self.reported: float | None = None
-
-    def add(self, table: PriceTable, row: Iterable) -> None:
-        model, n, measured, nr, i, o, c, reported, priceable = row
-        self.runs += n
-        self.measured += measured
-        self.not_reported += nr
-        for k, v in enumerate((i, o, c)):
-            if v is not None:
-                self.tokens[k] = (self.tokens[k] or 0) + v
-        if reported is not None:
-            self.reported = (self.reported or 0.0) + reported
-        if not priceable:
-            return
-        cost = table.cost(model, i, o, c)
-        if cost is None:
-            self.unpriced += priceable
-            self.unpriced_models.add(model or NO_MODEL)
-        else:
-            self.estimated = (self.estimated or 0.0) + cost
-
-    def set_attempts(self, attempts: int, measured: int, not_reported: int) -> None:
-        self.attempts = attempts
-        self.measured_attempts = measured
-        self.not_reported_attempts = not_reported
-
-    def merge(self, other: "_Acc") -> None:
-        self.runs += other.runs
-        self.measured += other.measured
-        self.not_reported += other.not_reported
-        self.attempts += other.attempts
-        self.measured_attempts += other.measured_attempts
-        self.not_reported_attempts += other.not_reported_attempts
-        self.unpriced += other.unpriced
-        self.unpriced_models |= other.unpriced_models
-        for k, v in enumerate(other.tokens):
-            if v is not None:
-                self.tokens[k] = (self.tokens[k] or 0) + v
-        if other.estimated is not None:
-            self.estimated = (self.estimated or 0.0) + other.estimated
-        if other.reported is not None:
-            self.reported = (self.reported or 0.0) + other.reported
-
-    def figures(self) -> CostFigures:
-        return CostFigures(
-            runs=self.runs,
-            measured_runs=self.measured,
-            not_reported_runs=self.not_reported,
-            attempts=self.attempts,
-            measured_attempts=self.measured_attempts,
-            not_reported_attempts=self.not_reported_attempts,
-            input_tokens=self.tokens[0],
-            output_tokens=self.tokens[1],
-            cached_input_tokens=self.tokens[2],
-            estimated_cost_usd=self.estimated,
-            reported_cost_usd=self.reported,
-            unpriced_runs=self.unpriced,
-        )
-
-
 async def _group[K](
     conn: aiosqlite.Connection,
     key_sql: str,
@@ -143,14 +61,14 @@ async def _group[K](
     bucket: Callable[[str | None], K],
     *,
     extra: str = "",
-) -> dict[K, _Acc]:
-    groups: dict[K, _Acc] = {}
+) -> dict[K, Acc]:
+    groups: dict[K, Acc] = {}
     async with conn.execute(
-        f"SELECT {key_sql}, {_FIGURES}{_WINDOW}{extra} GROUP BY 1, u.model",
+        f"SELECT {key_sql}, {FIGURES}{_WINDOW}{extra} GROUP BY 1, u.model",
         (ts(start), ts(end)),
     ) as cur:
         async for key, *rest in cur:
-            groups.setdefault(bucket(key), _Acc()).add(table, rest)
+            groups.setdefault(bucket(key), Acc()).add(table, rest)
     await _attach_attempts(conn, key_sql, start, end, groups, bucket, extra=extra)
     return groups
 
@@ -160,7 +78,7 @@ async def _attach_attempts[K](
     key_sql: str,
     start: datetime,
     end: datetime,
-    groups: dict[K, _Acc],
+    groups: dict[K, Acc],
     bucket: Callable[[str | None], K],
     *,
     extra: str = "",
@@ -170,7 +88,7 @@ async def _attach_attempts[K](
         (ts(start), ts(end)),
     ) as cur:
         async for key, attempts, measured, nr in cur:
-            groups.setdefault(bucket(key), _Acc()).set_attempts(
+            groups.setdefault(bucket(key), Acc()).set_attempts(
                 int(attempts), int(measured), int(nr)
             )
 
@@ -221,7 +139,7 @@ async def report(
             lambda _k: None,
             extra=" AND u.account_id IS NULL",
         )
-    ).get(None) or _Acc()
+    ).get(None) or Acc()
     by_proj = await _group(conn, "t.project", start, now, table, ident)
     per_day = await _group(
         conn,
@@ -233,11 +151,11 @@ async def report(
     )
 
     # Totals are by_account plus unattributed, so the tables add up (cost view 3.3).
-    totals = _Acc()
+    totals = Acc()
     totals.merge(unattributed)
     by_account = []
     for a in accounts:
-        acc = by_acc.get(a.id) or _Acc()
+        acc = by_acc.get(a.id) or Acc()
         totals.merge(acc)
         by_account.append(
             AccountCost(
@@ -259,7 +177,7 @@ async def report(
     # Listed so the pricing banner names every unpriced model; the totals stay clean.
     pricing_unpriced = totals.unpriced_models | orch.unpriced_models
     daily = [
-        DayCost(start=d, **per_day.get(d, _Acc()).figures().model_dump())
+        DayCost(start=d, **per_day.get(d, Acc()).figures().model_dump())
         for d in usage.bucket_starts(start, now, "day", zone)
     ]
     return CostReport(
@@ -287,12 +205,12 @@ async def _orchestrator_figures(
     conn: aiosqlite.Connection,
     start: datetime,
     end: datetime,
-) -> _Acc:
+) -> Acc:
     """Sum conversation_usage for the window (internal-orchestrator 3.7).
 
     `cost_usd` was priced when the turn was recorded; we sum stored figures.
     """
-    acc = _Acc()
+    acc = Acc()
     async with conn.execute(
         "SELECT model, measurement, count(*),"
         " sum(input_tokens), sum(output_tokens), sum(cost_usd)"

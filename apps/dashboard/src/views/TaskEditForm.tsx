@@ -19,6 +19,7 @@ const LABELS: Record<EditField, string> = {
   spec: "Spec",
   acceptance: "Acceptance criteria (one per line)",
   priority: "Priority",
+  budget_usd: "Budget (USD, estimated; empty: no budget)",
   required_capabilities: "Required capabilities (one per line)",
   knowledge: "Pinned page ids (one per line)",
   depends_on: "Depends on (task ids, one per line)",
@@ -171,7 +172,11 @@ export function TaskEditForm({ task, onDone }: { task: Task; onDone: (saved?: Ta
                 onChange={(value) => setDraft({ ...draft, [field]: value })}
               />
             ) : (
-              <input type={field === "priority" ? "number" : "text"} {...common} />
+              <input
+                type={field === "priority" || field === "budget_usd" ? "number" : "text"}
+                step={field === "budget_usd" ? "any" : undefined}
+                {...common}
+              />
             )}
             {disabled && (
               <p className="muted small">Not editable while the task is {base.state}.</p>

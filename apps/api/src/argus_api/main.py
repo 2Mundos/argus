@@ -18,7 +18,7 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from argus_api import mcp_server, reaper
-from argus_api.accounts import local_health
+from argus_api.accounts import local_health, pricing
 from argus_api.accounts import service as accounts
 from argus_api.accounts.claude_login import ClaudeLoginManager
 from argus_api.accounts.codex_login import CodexLoginManager
@@ -107,6 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         db = await Database.open(settings.db_path)
         app.state.db = db
         app.state.settings = settings
+        pricing.use(settings.pricing_file)
         app.state.artifacts = LocalArtifactStore(
             settings.artifacts_dir, settings.artifact_max_bytes
         )

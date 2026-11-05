@@ -62,6 +62,7 @@ Action = Literal[
     "escalate_to_human",
     "unblock_task",
     "set_project_repository",
+    "raise_task_budget",
     "retry_dependency",
     "inspect_stall",
     "reread",
@@ -475,6 +476,13 @@ def _next(
                 action="escalate_to_human",
                 args=args,
                 reason="the project has no repository and only an admin can set one",
+            )
+        if task.block_reason == "budget_exhausted":
+            return NextAction(
+                action="raise_task_budget",
+                args=args,
+                reason=f"{task.progress_message or 'the budget is spent'}: edit_task"
+                " with a higher budget_usd to continue it, or cancel_task",
             )
         return NextAction(
             action="unblock_task",

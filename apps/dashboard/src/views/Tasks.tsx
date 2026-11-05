@@ -18,7 +18,7 @@ import { TaskSignal } from "../milestones";
 import { PageHeader } from "../PageHeader";
 import { repositoryNeed, repositoryState, repositoryWarning } from "../projectRepository";
 import { TaskLabel } from "../TaskLabel";
-import { executorPin, harnessPin } from "../taskEdit";
+import { executorPin, harnessPin, parseBudget } from "../taskEdit";
 import { WorkerChip } from "../WorkerChip";
 import { AccountPin } from "./AccountPin";
 import { useNow } from "./Activity";
@@ -342,6 +342,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
     harnessModel: "",
     executorModel: "",
     harnessAccount: "",
+    // null until typed in: the field shows the project's `task_default_budget_usd`
+    budget: null as string | null,
   });
   const [error, setError] = useState<string>();
   const [configuring, setConfiguring] = useState<string | null>(null);
@@ -371,6 +373,20 @@ function NewTask({ onClose }: { onClose: () => void }) {
     ? typedCapabilities
     : (kinds?.find((k) => k.name === form.kind)?.default_capabilities ?? []);
   const need = repositoryNeed(form.deliverable, capabilities);
+  const { data: settings } = useLiveData(
+    (signal) =>
+      project
+        ? call(
+            api.GET("/api/projects/{slug}/settings", {
+              params: { path: { slug: project } },
+              signal,
+            }),
+          ).catch(() => null)
+        : Promise.resolve(null),
+    [project],
+  );
+  const defaultBudget = settings?.settings?.find((v) => v.key === "task_default_budget_usd")?.value;
+  const budget = form.budget ?? (typeof defaultBudget === "number" ? String(defaultBudget) : "");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -384,6 +400,9 @@ function NewTask({ onClose }: { onClose: () => void }) {
           .split(",")
           .map((c) => c.trim())
           .filter(Boolean);
+        // Untouched, the server applies the same default the field shows.
+        const parsed = form.budget === null ? null : parseBudget(form.budget);
+        if (parsed && "error" in parsed) return setError(parsed.error);
         const harness = harnessPin(form.harnessModel);
         const executor = executorPin(form.executorModel);
         await call(
@@ -404,6 +423,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
               ...(harness ? { harness_model: harness } : {}),
               ...(executor ? { executor_model: executor } : {}),
               ...(form.harnessAccount ? { harness_account: form.harnessAccount } : {}),
+              ...(parsed ? { budget_usd: parsed.value } : {}),
             },
           }),
         );
@@ -547,6 +567,16 @@ function NewTask({ onClose }: { onClose: () => void }) {
               id="new-executor-model"
               value={form.executorModel}
               onChange={(v) => set("executorModel", v)}
+            />
+          </label>
+          <label>
+            Budget (USD, estimated; empty: no budget)
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={budget}
+              onChange={(e) => set("budget", e.target.value)}
             />
           </label>
           <label>

@@ -2958,6 +2958,27 @@ export interface paths {
         patch: operations["update_continuation_api_tasks__task_id__continuation_patch"];
         trace?: never;
     };
+    "/api/tasks/{task_id}/cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Cost
+         * @description What the task has spent, in total and per attempt, against its budget (task
+         *     cost 3.2). Estimates; workers only read tasks they have leased.
+         */
+        get: operations["get_task_cost_api_tasks__task_id__cost_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/delivery": {
         parameters: {
             query?: never;
@@ -4308,6 +4329,46 @@ export interface components {
             /** Resource */
             resource?: string | null;
         };
+        /** AttemptCost */
+        AttemptCost: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts?: number;
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /**
+             * Measured Attempts
+             * @default 0
+             */
+            measured_attempts?: number;
+            /** Measured Runs */
+            measured_runs: number;
+            /** Models */
+            models: string[];
+            /**
+             * Not Reported Attempts
+             * @default 0
+             */
+            not_reported_attempts?: number;
+            /** Not Reported Runs */
+            not_reported_runs: number;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Runs */
+            runs: number;
+            /** Unpriced Runs */
+            unpriced_runs: number;
+        };
         /**
          * Audience
          * @enum {string}
@@ -4783,6 +4844,8 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             /**
              * Command Guard Enabled
              * @default true
@@ -7998,7 +8061,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "answer_decision" | "escalate_to_human" | "unblock_task" | "set_project_repository" | "retry_dependency" | "inspect_stall" | "reread" | "none";
+            action: "answer_decision" | "escalate_to_human" | "unblock_task" | "set_project_repository" | "raise_task_budget" | "retry_dependency" | "inspect_stall" | "reread" | "none";
             /** Args */
             args: {
                 [key: string]: string;
@@ -10208,6 +10271,8 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             /**
              * Complexity
              * @description The pre-difficulty three-level view, for clients that still read it:
@@ -10413,6 +10478,8 @@ export interface components {
             acceptance?: string[] | null;
             /** Account Providers */
             account_providers?: string[] | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             deliverable?: components["schemas"]["Deliverable"] | null;
             /** Depends On */
             depends_on?: string[] | null;
@@ -10460,6 +10527,28 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
+        /**
+         * TaskCost
+         * @description What one task spent, in total and per attempt (task cost spec 3.2). Rows
+         *     with no attempt count only in `totals`.
+         */
+        TaskCost: {
+            /**
+             * Budget State
+             * @enum {string}
+             */
+            budget_state: "none" | "ok" | "warning" | "exhausted" | "partial_ok" | "partial_warning";
+            /** Budget Usd */
+            budget_usd: number | null;
+            /** By Attempt */
+            by_attempt: components["schemas"]["AttemptCost"][];
+            /** Partial */
+            partial: boolean;
+            pricing: components["schemas"]["PricingInfo"];
+            /** Task Id */
+            task_id: string;
+            totals: components["schemas"]["CostFigures"];
+        };
         /** TaskCreate */
         TaskCreate: {
             /**
@@ -10469,6 +10558,8 @@ export interface components {
             acceptance?: string[];
             /** Account Providers */
             account_providers?: string[] | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             /** @default response */
             deliverable?: components["schemas"]["Deliverable"];
             /**
@@ -10558,6 +10649,8 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             /**
              * Complexity
              * @description The pre-difficulty three-level view, for clients that still read it:
@@ -10724,6 +10817,8 @@ export interface components {
             acceptance?: string[];
             /** Account Providers */
             account_providers?: string[] | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             /** @default response */
             deliverable?: components["schemas"]["Deliverable"];
             /**
@@ -10962,6 +11057,8 @@ export interface components {
             attempt: number;
             /** Block Reason */
             block_reason: string | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             /**
              * Complexity
              * @description The pre-difficulty three-level view, for clients that still read it:
@@ -17370,6 +17467,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_cost_api_tasks__task_id__cost_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCost"];
                 };
             };
             /** @description Validation Error */

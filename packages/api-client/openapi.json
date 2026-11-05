@@ -2772,6 +2772,122 @@
         "title": "Ask",
         "type": "object"
       },
+      "AttemptCost": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "measured_attempts": {
+            "default": 0,
+            "title": "Measured Attempts",
+            "type": "integer"
+          },
+          "measured_runs": {
+            "title": "Measured Runs",
+            "type": "integer"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "not_reported_attempts": {
+            "default": 0,
+            "title": "Not Reported Attempts",
+            "type": "integer"
+          },
+          "not_reported_runs": {
+            "title": "Not Reported Runs",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "reported_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Cost Usd"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "unpriced_runs": {
+            "title": "Unpriced Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "measured_runs",
+          "not_reported_runs",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "estimated_cost_usd",
+          "reported_cost_usd",
+          "unpriced_runs",
+          "attempt",
+          "models"
+        ],
+        "title": "AttemptCost",
+        "type": "object"
+      },
       "Audience": {
         "enum": [
           "human",
@@ -4118,6 +4234,17 @@
               }
             ],
             "title": "Block Reason"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
           },
           "command_guard_enabled": {
             "default": true,
@@ -13653,6 +13780,7 @@
               "escalate_to_human",
               "unblock_task",
               "set_project_repository",
+              "raise_task_budget",
               "retry_dependency",
               "inspect_stall",
               "reread",
@@ -19803,6 +19931,17 @@
             ],
             "title": "Block Reason"
           },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
           "complexity": {
             "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
             "enum": [
@@ -20418,6 +20557,19 @@
             ],
             "title": "Account Providers"
           },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
           "deliverable": {
             "anyOf": [
               {
@@ -20619,6 +20771,66 @@
         "title": "TaskCompact",
         "type": "object"
       },
+      "TaskCost": {
+        "description": "What one task spent, in total and per attempt (task cost spec 3.2). Rows\nwith no attempt count only in `totals`.",
+        "properties": {
+          "budget_state": {
+            "enum": [
+              "none",
+              "ok",
+              "warning",
+              "exhausted",
+              "partial_ok",
+              "partial_warning"
+            ],
+            "title": "Budget State",
+            "type": "string"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
+          "by_attempt": {
+            "items": {
+              "$ref": "#/components/schemas/AttemptCost"
+            },
+            "title": "By Attempt",
+            "type": "array"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/PricingInfo"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/CostFigures"
+          }
+        },
+        "required": [
+          "task_id",
+          "pricing",
+          "totals",
+          "partial",
+          "by_attempt",
+          "budget_usd",
+          "budget_state"
+        ],
+        "title": "TaskCost",
+        "type": "object"
+      },
       "TaskCreate": {
         "properties": {
           "acceptance": {
@@ -20642,6 +20854,19 @@
               }
             ],
             "title": "Account Providers"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
           },
           "deliverable": {
             "$ref": "#/components/schemas/Deliverable",
@@ -20889,6 +21114,17 @@
               }
             ],
             "title": "Block Reason"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
           },
           "complexity": {
             "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
@@ -21430,6 +21666,19 @@
               }
             ],
             "title": "Account Providers"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
           },
           "deliverable": {
             "$ref": "#/components/schemas/Deliverable",
@@ -22136,6 +22385,17 @@
               }
             ],
             "title": "Block Reason"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
           },
           "complexity": {
             "description": "The pre-difficulty three-level view, for clients that still read it:\n`simple` is `trivial` there, as both prefer the cheap executor.",
@@ -34548,6 +34808,54 @@
           }
         ],
         "summary": "Update Continuation",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/cost": {
+      "get": {
+        "description": "What the task has spent, in total and per attempt, against its budget (task\ncost 3.2). Estimates; workers only read tasks they have leased.",
+        "operationId": "get_task_cost_api_tasks__task_id__cost_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskCost"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Task Cost",
         "tags": [
           "tasks"
         ]

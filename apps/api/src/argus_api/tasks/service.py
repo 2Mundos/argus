@@ -98,7 +98,9 @@ from argus_api.modeltrace import service as modeltrace
 from argus_api.routines import failures as routine_failures
 from argus_api.runtime.gate import claim_gate
 from argus_api.tasks import continuation as cont
+from argus_api.tasks import cost as task_cost
 from argus_api.tasks import deliverable, finalization, steers
+from argus_api.tasks.cost import BUDGET_EXHAUSTED
 
 log = logging.getLogger(__name__)
 S = TaskState
@@ -246,6 +248,12 @@ async def _create_task(
     else:
         prompt_trust = PromptTrust.ORCHESTRATOR
     await _check_project_and_pins(tx.conn, body, own_pins)
+    if "budget_usd" not in body.model_fields_set:
+        # Omitted: the project's default; an explicit null keeps "no budget" (3.4).
+        from argus_api.settings import service as settings_svc
+
+        default = await settings_svc.task_default_budget(tx.conn, body.project)
+        body = body.model_copy(update={"budget_usd": default})
     harness_account = await _resolve_harness_account(
         tx.conn,
         body.harness_account,
@@ -288,9 +296,9 @@ async def _create_task(
         " prompt_trust, lease_ttl_s, max_attempts, project, timeout_s, created_by,"
         " created_at, updated_at, difficulty, difficulty_source, account_providers,"
         " harness_model, executor_model, harness_account, origin_conversation_id,"
-        " deliverable)"
+        " deliverable, budget_usd)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
-        " ?, ?, ?, ?, ?)",
+        " ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             body.parent_id,
@@ -320,6 +328,7 @@ async def _create_task(
             harness_account,
             origin_conversation_id,
             body.deliverable,
+            body.budget_usd,
         ),
     )
     await tx.conn.executemany(
@@ -425,6 +434,17 @@ async def claim(
     row = None
     runtime_gates: dict[str, Any] = {}
     for candidate in candidates:
+        # A spent budget starts no attempt: the task blocks instead (task cost 3.6).
+        if (spent := await task_cost.exhausted_reason(tx.conn, candidate)) is not None:
+            await _apply(
+                tx,
+                candidate,
+                Action.BLOCK,
+                f"agent:{agent_id}",
+                set_=_budget_block(spent),
+                data={"reason": BUDGET_EXHAUSTED, "error": spent},
+            )
+            continue
         project = candidate["project"]
         if project not in runtime_gates:
             runtime_gates[project] = await claim_gate(tx.conn, agent_id, project)
@@ -1636,6 +1656,12 @@ async def await_quota_ready(
 
 async def unblock(tx: Tx, task_id: str, actor: str) -> Task:
     row = await _row(tx.conn, task_id)
+    if (
+        row["state"] == S.BLOCKED
+        and row["block_reason"] == BUDGET_EXHAUSTED
+        and (spent := await task_cost.exhausted_reason(tx.conn, row)) is not None
+    ):
+        raise ConflictError(f"task {task_id}: the {spent}", code=BUDGET_EXHAUSTED)
     await _apply(tx, row, Action.UNBLOCK, actor, set_={"block_reason": None})
     if row["block_reason"] == ENV_OOM and actor != "system":
         # The operator answered the pool's OOM block (failure classes 3.2.1).
@@ -1982,6 +2008,15 @@ async def edit_task(
             await _apply(tx, row, Action.DEPS_ADDED, actor)
         elif state is S.PENDING and deps_done:
             await _apply(tx, row, Action.DEPS_SATISFIED, actor)
+    if (
+        "budget_usd" in changed
+        and state is S.BLOCKED
+        and row["block_reason"] == BUDGET_EXHAUSTED
+        and await task_cost.exhausted_reason(tx.conn, await _row(tx.conn, task_id))
+        is None
+    ):
+        # Raising (or clearing) a spent budget is how a manager continues (3.4, 3.6).
+        await _apply(tx, row, Action.UNBLOCK, actor, set_={"block_reason": None})
     # A version that did not move would let a stale editor through, so it only grows.
     version = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
     await tx.conn.execute(
@@ -2014,7 +2049,12 @@ def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any
     values: dict[str, Any] = {}
     for field, value in given.items():
         if value is None:
-            if field in ("account_providers", "harness_account", *_PIN_FIELDS):
+            if field in (
+                "account_providers",
+                "harness_account",
+                "budget_usd",
+                *_PIN_FIELDS,
+            ):
                 values[field] = None
             elif field not in CLEARABLE:
                 errors.append(f"{field}: cannot be cleared")
@@ -2157,6 +2197,7 @@ def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
         "deliverable",
         "account_providers",
         "harness_account",
+        "budget_usd",
     ):
         return {"from": old, "to": new}
     if field in ("required_capabilities", "knowledge", "depends_on"):
@@ -3391,6 +3432,15 @@ async def _apply(
             exhausted=exhausted,
         ),
     )
+    # A requeue, expiry or release that would start another attempt checks the
+    # budget first: when it is spent the task blocks instead (task cost spec 3.6).
+    over_budget = (
+        await task_cost.exhausted_reason(tx.conn, row)
+        if old is S.CLAIMED and new is S.READY
+        else None
+    )
+    if over_budget is not None:
+        new = S.BLOCKED
     # strictly greater than the old version, so a transition always stales a pending edit
     bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
     fields: dict[str, Any] = {
@@ -3399,6 +3449,9 @@ async def _apply(
         "retry_at": None,  # only a transient fail's requeue waits (failure classes 3.2)
         **(set_ or {}),
     }
+    if over_budget is not None:
+        fields |= _budget_block(over_budget)
+        data = {**(data or {}), "block_reason": BUDGET_EXHAUSTED}
     leaving_claim = old is S.CLAIMED and new is not S.CLAIMED
     if leaving_claim:
         fields |= {
@@ -3477,6 +3530,17 @@ async def _apply(
             tx, row["created_by"].removeprefix("routine:"), row["id"]
         )
     return new
+
+
+def _budget_block(message: str) -> dict[str, Any]:
+    return {
+        "block_reason": BUDGET_EXHAUSTED,
+        "retry_at": None,
+        "progress_message": message,
+        "progress_percent": None,
+        "progress_kind": None,
+        "progress_data": None,
+    }
 
 
 def _context(
@@ -3762,6 +3826,7 @@ async def _record_result_usage(
         attempt=attempt,
         **usage.model_dump(exclude={"account_id"}),
     )
+    await task_cost.after_usage(tx, task_id)
 
 
 async def _check_artifacts(

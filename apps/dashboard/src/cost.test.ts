@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  budgetLevel,
+  budgetShare,
   costLabel,
   money,
   notReportedLabel,
@@ -77,5 +79,18 @@ describe("cost helpers", () => {
     expect(note).toContain("argus_api/accounts/pricing.json");
     expect(note).toContain("2026-10-20");
     expect(note).toContain("mystery-1");
+  });
+
+  it("colours a task budget by its state and fills the bar up to the budget", () => {
+    expect(budgetLevel("none")).toBeNull();
+    expect(budgetLevel("ok")).toBe("ok");
+    expect(budgetLevel("partial_ok")).toBe("ok");
+    expect(budgetLevel("warning")).toBe("warning");
+    expect(budgetLevel("partial_warning")).toBe("warning");
+    expect(budgetLevel("exhausted")).toBe("exhausted");
+    expect(budgetShare({ budget_usd: 4, totals: f({ estimated_cost_usd: 1 }) })).toBe(0.25);
+    expect(budgetShare({ budget_usd: 1, totals: f({ estimated_cost_usd: 3 }) })).toBe(1);
+    expect(budgetShare({ budget_usd: null, totals: f() })).toBe(0);
+    expect(budgetShare({ budget_usd: 1, totals: f({ estimated_cost_usd: null }) })).toBe(0);
   });
 });

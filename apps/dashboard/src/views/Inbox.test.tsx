@@ -9,6 +9,8 @@ const net = vi.hoisted(() => {
     inboxQueries: [] as string[],
     posts: [] as { answers: Record<string, unknown>[] }[],
     replies: [] as unknown[],
+    taskWrites: [] as { method: string; path: string; body: unknown }[],
+    patchedState: "ready",
   };
   const Base = globalThis.Request;
   globalThis.Request = class extends Base {
@@ -28,6 +30,14 @@ const net = vi.hoisted(() => {
     } else if (url.pathname === "/api/decisions/answers") {
       net.posts.push(await input.json());
       body = net.replies.shift();
+    } else if (url.pathname.startsWith("/api/tasks/") && input.method !== "GET") {
+      const text = await input.text();
+      net.taskWrites.push({
+        method: input.method,
+        path: url.pathname,
+        body: text ? JSON.parse(text) : null,
+      });
+      body = { id: "task-b2", state: input.method === "PATCH" ? net.patchedState : "cancelled" };
     } else if (url.pathname.startsWith("/api/tasks/")) {
       body = { title: "Deploy", project: "alpha" };
     }
@@ -54,6 +64,8 @@ afterEach(() => {
   cleanup();
   net.posts.length = 0;
   net.inboxQueries.length = 0;
+  net.taskWrites.length = 0;
+  net.patchedState = "ready";
 });
 
 function sent(i: number) {
@@ -163,6 +175,72 @@ describe("Inbox blocked tasks", () => {
     render(<Inbox />);
     expect(await screen.findByText(/is\s+blocked: the executor could not log in/)).toBeTruthy();
     expect(screen.getByText("codex: not logged in")).toBeTruthy();
+  });
+
+  function spent() {
+    const { decision: _, ...base } = item("b2", "question", "", null);
+    net.inbox = {
+      items: [
+        {
+          ...base,
+          decision_id: null,
+          decision_kind: null,
+          task: {
+            id: "task-b2",
+            block_reason: "budget_exhausted",
+            version: "v3",
+            budget_usd: 2,
+            progress_message: "budget of $2.00 is spent (estimate $2.40); raise the budget",
+          },
+        },
+      ],
+      groups: [group("b2", 1)],
+      total: 1,
+      has_more: false,
+    };
+    render(<Inbox />);
+  }
+
+  it("raises a spent budget, offering twice the old one", async () => {
+    spent();
+    expect(await screen.findByText(/blocked: its budget is spent/)).toBeTruthy();
+    expect(
+      screen.getByText("Budget of $2.00 is spent (estimate $2.40); raise the budget."),
+    ).toBeTruthy();
+    const input = screen.getByLabelText(/New budget/) as HTMLInputElement;
+    expect(input.value).toBe("4");
+    net.patchedState = "blocked";
+    fireEvent.click(screen.getByRole("button", { name: "Raise budget" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/raise it further/);
+    net.patchedState = "ready";
+    fireEvent.change(input, { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Raise budget" }));
+    expect((await screen.findByRole("status")).textContent).toMatch(/Budget raised/);
+    expect(net.taskWrites).toEqual([
+      {
+        method: "PATCH",
+        path: "/api/tasks/task-b2",
+        body: { expected_version: "v3", changes: { budget_usd: 4 } },
+      },
+      {
+        method: "PATCH",
+        path: "/api/tasks/task-b2",
+        body: { expected_version: "v3", changes: { budget_usd: 10 } },
+      },
+    ]);
+  });
+
+  it("cancels a task whose budget is spent, and refuses a bad amount locally", async () => {
+    spent();
+    const input = (await screen.findByLabelText(/New budget/)) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Raise budget" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/above 0/);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel task" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Cancelled."));
+    expect(net.taskWrites).toEqual([
+      { method: "POST", path: "/api/tasks/task-b2/cancel", body: null },
+    ]);
   });
 });
 

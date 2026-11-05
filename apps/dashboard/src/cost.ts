@@ -66,3 +66,28 @@ export function pricingNote(p: CostReport["pricing"]): string {
     : "";
   return `Estimate from ${p.source} (${p.version}, as of ${p.as_of}), in ${p.currency} from tokens × model price.${unpriced}`;
 }
+
+export type TaskCost = components["schemas"]["TaskCost"];
+export type BudgetLevel = "ok" | "warning" | "exhausted";
+
+/** The bar colour for a task budget (task cost 3.7); null when the task has none. */
+export function budgetLevel(state: TaskCost["budget_state"]): BudgetLevel | null {
+  if (state === "none") return null;
+  if (state === "exhausted") return state;
+  return state === "warning" || state === "partial_warning" ? "warning" : "ok";
+}
+
+/** How much of the budget the estimate fills, 0..1; 0 without a budget or a figure. */
+export function budgetShare(cost: Pick<TaskCost, "budget_usd" | "totals">): number {
+  const spent = cost.totals.estimated_cost_usd ?? 0;
+  if (!cost.budget_usd || spent <= 0) return 0;
+  return Math.min(spent / cost.budget_usd, 1);
+}
+
+/** "<estimate> of <budget> budget", or null without a budget. */
+export function budgetLabel(cost: TaskCost): string | null {
+  if (cost.budget_usd == null) return null;
+  const currency = cost.pricing.currency;
+  const spent = money(cost.totals.estimated_cost_usd ?? 0, currency);
+  return `${spent} of ${money(cost.budget_usd, currency)} budget`;
+}

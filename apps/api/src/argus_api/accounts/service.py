@@ -62,6 +62,7 @@ from argus_api.errors import (
 from argus_api.events import record
 from argus_api.modeltrace import service as modeltrace
 from argus_api.secrets import SecretStore, ref_name
+from argus_api.tasks import cost as task_cost
 from argus_api.tasks import quota_resume
 from argus_api.tasks import service as tasks
 
@@ -1179,6 +1180,7 @@ async def record_usage(
         attempt=attempt,
         **fields,
     )
+    await task_cost.after_usage(tx, report.task_id)
     if report.rate_limits:
         await usage.upsert_quota(
             tx, account_id, report.rate_limits, "reported", f"agent:{agent_id}"

@@ -5,6 +5,7 @@
   "assignee_agent_id": null,
   "attempt": 2,
   "block_reason": null,
+  "budget_usd": null,
   "command_guard_enabled": true,
   "complexity": "standard",
   "continuation": {
@@ -72,7 +73,7 @@
   "difficulty": "standard",
   "difficulty_executors": null,
   "difficulty_source": "inferred",
-  "editable_fields": ["priority", "deliverable"],
+  "editable_fields": ["priority", "deliverable", "budget_usd"],
   "engine_lease": null,
   "error": null,
   "executor_model": null,

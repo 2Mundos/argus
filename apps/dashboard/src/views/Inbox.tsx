@@ -9,6 +9,7 @@ import { Markdown } from "../Markdown";
 import { PageHeader } from "../PageHeader";
 import { dur, quietFacts } from "../stall";
 import { TaskLabel } from "../TaskLabel";
+import { BudgetBlockAction } from "./BudgetBlockAction";
 import { BatchPanel, type Draft, type Entry, isAnswerable, MAX_BATCH } from "./InboxBatch";
 import { RepositoryBlockAction } from "./RepositoryBlockAction";
 import { TaskDetail } from "./TaskDetail";
@@ -226,6 +227,7 @@ function BlockedCard({ item, onOpenTask }: { item: InboxItem; onOpenTask: () => 
       {item.task?.block_reason === "env_repository_unconfigured" && item.project && (
         <RepositoryBlockAction taskId={item.subject_id} project={item.project} />
       )}
+      {item.task?.block_reason === "budget_exhausted" && <BudgetBlockAction task={item.task} />}
       <div className="actions left">
         <button type="button" className="link" onClick={onOpenTask}>
           Open task

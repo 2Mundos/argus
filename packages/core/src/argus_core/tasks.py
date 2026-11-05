@@ -431,6 +431,7 @@ class TaskResult(BaseModel):
 SPEC_MAX_LENGTH = 200_000
 INPUT_MAX_CHARS = 100_000
 MAX_DEPENDENCIES = 100  # task dependencies 3.1
+BUDGET_MAX_USD = 10_000  # task cost 3.4
 
 
 class TaskCreate(BaseModel):
@@ -469,6 +470,9 @@ class TaskCreate(BaseModel):
     # Pin the engine lease to one account (id or name; stored as its id), e.g. the
     # local Strata account or one custom account (task models spec 3.4).
     harness_account: AccountRef | None = None
+    # Cap on estimated spend (task cost spec 3.4). Omitted: the project's
+    # `task_default_budget_usd`; an explicit null: no budget.
+    budget_usd: float | None = Field(default=None, gt=0, le=BUDGET_MAX_USD)
 
     @field_validator("input")
     @classmethod
@@ -566,6 +570,7 @@ class Task(BaseModel):
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
     harness_account: str | None = None
+    budget_usd: float | None = None  # task cost spec 3.4
     # Set by the server when the internal orchestrator creates the task from a
     # conversation turn (internal-orchestrator.spec.md 3.6); never a tool argument.
     origin_conversation_id: str | None = None

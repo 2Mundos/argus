@@ -439,6 +439,14 @@ async def get_task_log(
 
 
 @tool(ANYONE)
+async def get_task_cost(ctx: Context, task_id: str) -> dict:
+    """What a task has spent: {pricing, totals, partial, by_attempt, budget_usd,
+    budget_state}. Costs are estimates at API rates; `partial` means unpriced or
+    unreported runs, so the true figure may be higher. Workers read leased tasks only."""
+    return await _call(ctx, "GET", f"/tasks/{task_id}/cost")
+
+
+@tool(ANYONE)
 async def get_task_changes(
     ctx: Context, task_id: str, attempt: int | None = None
 ) -> dict:
@@ -881,6 +889,7 @@ async def create_task(
     executor_model: ExecutorModel | None = None,
     harness_account: str | None = None,
     deliverable: Deliverable | None = None,
+    budget_usd: float | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
     """Create a task. Workers may only create subtasks of a task they hold (set
@@ -918,8 +927,10 @@ async def create_task(
     task waits as awaiting_quota while it cannot serve and never runs on another.
     Local and custom accounts bring their own model, so pair them with no
     harness_model; a local (Strata) harness delegates only to the Cursor agent.
-    Pass `idempotency_key` when you may retry: the same key and arguments return
-    the task the first call created instead of a duplicate."""
+    `budget_usd` (at most 10000) caps the estimated spend; omitted, the project's
+    task_default_budget_usd applies. Pass `idempotency_key` when you may retry: the
+    same key and arguments return the task the first call created instead of a
+    duplicate."""
     body: dict[str, Any] = {
         "title": title,
         "project": project,
@@ -947,6 +958,8 @@ async def create_task(
         body["harness_account"] = harness_account
     if deliverable is not None:
         body["deliverable"] = deliverable.value
+    if budget_usd is not None:
+        body["budget_usd"] = budget_usd
     headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
     return await _call(ctx, "POST", "/tasks", json=body, headers=headers)
 
@@ -1384,14 +1397,16 @@ async def edit_task(
     account_providers, difficulty (trivial | simple | standard | hard; not clearable),
     deliverable (not clearable; the creation rules re-run), harness_model ({engine,
     model}), executor_model ({executor, model}) and
-    harness_account (an account id or name). `changes` is a partial patch: a field
-    you leave out is kept, null clears spec, acceptance, required_capabilities,
-    knowledge, depends_on, account_providers (no restriction), a model pin (back to
-    the policy) or the harness account pin (any account). Pass the task's `version` as
-    expected_version (409 stale_version carries the current one). The task's
-    `editable_fields` says what its state allows: ready, pending and
-    awaiting_approval tasks take everything; in_review takes priority and deliverable;
-    blocked and claimed only priority; finished ones nothing (409 task_not_editable). Returns the task with
+    harness_account (an account id or name) and budget_usd. `changes` is a partial
+    patch: a field you leave out is kept, null clears spec, acceptance,
+    required_capabilities, knowledge, depends_on, account_providers (no restriction),
+    a model pin (back to the policy), the harness account pin (any account) or the
+    budget. Pass the task's `version` as expected_version (409 stale_version carries
+    the current one). The task's `editable_fields` says what its state allows: ready,
+    pending and awaiting_approval tasks take everything; in_review takes priority,
+    deliverable and budget_usd; blocked and claimed priority and budget_usd (raising
+    a spent budget continues a budget_exhausted task); finished ones nothing (409
+    task_not_editable). Returns the task with
     its new `version`. Nothing is written when any field is refused."""
     return await _call(
         ctx,

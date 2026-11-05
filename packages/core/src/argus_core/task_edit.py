@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from argus_core.difficulty import Difficulty
 from argus_core.tasks import (
+    BUDGET_MAX_USD,
     AccountRef,
     Deliverable,
     ExecutorModel,
@@ -32,21 +33,24 @@ EDITABLE = (
     "harness_model",
     "executor_model",
     "harness_account",
+    "budget_usd",
 )
 # `null` clears these to their empty value; title, priority, difficulty and
 # deliverable cannot be.
 CLEARABLE = frozenset(EDITABLE) - {"title", "priority", "difficulty", "deliverable"}
 
 _ALL = frozenset(EDITABLE)
-_PRIORITY_ONLY = frozenset({"priority"})
+# The budget is editable in every non-terminal state: raising it is how a manager
+# continues a task blocked as budget_exhausted (task cost spec 3.4).
+_PRIORITY_AND_BUDGET = frozenset({"priority", "budget_usd"})
 # A deliverable that proved unreachable can be lowered while the result is reviewed.
-_IN_REVIEW = frozenset({"priority", "deliverable"})
+_IN_REVIEW = frozenset({"priority", "deliverable", "budget_usd"})
 EDITABLE_BY_STATE: dict[TaskState, frozenset[str]] = {
     TaskState.AWAITING_APPROVAL: _ALL,
     TaskState.PENDING: _ALL,
     TaskState.READY: _ALL,
-    TaskState.BLOCKED: _PRIORITY_ONLY,
-    TaskState.CLAIMED: _PRIORITY_ONLY,
+    TaskState.BLOCKED: _PRIORITY_AND_BUDGET,
+    TaskState.CLAIMED: _PRIORITY_AND_BUDGET,
     TaskState.IN_REVIEW: _IN_REVIEW,
     TaskState.SUCCEEDED: frozenset(),
     TaskState.FAILED: frozenset(),
@@ -84,6 +88,7 @@ class TaskChanges(BaseModel):
     harness_model: HarnessModel | None = None
     executor_model: ExecutorModel | None = None
     harness_account: AccountRef | None = None
+    budget_usd: float | None = Field(default=None, gt=0, le=BUDGET_MAX_USD)
 
     def given(self) -> dict[str, Any]:
         """Editable fields the caller named (even as null), by name."""

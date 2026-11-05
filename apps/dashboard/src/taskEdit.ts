@@ -7,6 +7,7 @@ export const EDIT_FIELDS = [
   "spec",
   "acceptance",
   "priority",
+  "budget_usd",
   "required_capabilities",
   "knowledge",
   "depends_on",
@@ -30,6 +31,7 @@ export type Changes = {
   spec?: string;
   acceptance?: string[];
   priority?: number;
+  budget_usd?: number | null;
   required_capabilities?: string[];
   knowledge?: string[];
   depends_on?: string[];
@@ -72,6 +74,18 @@ export function executorPin(text: string): ExecutorPin | null {
   return pin && { executor: pin.name as ExecutorPin["executor"], model: pin.model };
 }
 
+/** Highest task budget the API accepts (task cost spec 3.4). */
+export const BUDGET_MAX_USD = 10000;
+
+/** A budget field's text: "" is no budget, else a positive amount up to the maximum. */
+export function parseBudget(text: string): { value: number | null } | { error: string } {
+  if (text.trim() === "") return { value: null };
+  const n = Number(text);
+  if (!Number.isFinite(n) || n <= 0 || n > BUDGET_MAX_USD)
+    return { error: `Budget is an amount above 0 and at most ${BUDGET_MAX_USD}.` };
+  return { value: n };
+}
+
 export type FieldErrors = Partial<Record<EditField | "form", string>>;
 
 export function parseList(text: string): string[] {
@@ -87,6 +101,7 @@ export function toDraft(task: Task): Draft {
     spec: task.spec,
     acceptance: task.acceptance.join("\n"),
     priority: String(task.priority),
+    budget_usd: task.budget_usd == null ? "" : String(task.budget_usd),
     required_capabilities: task.required_capabilities.join("\n"),
     knowledge: task.knowledge.join("\n"),
     depends_on: task.depends_on.join("\n"),
@@ -129,6 +144,10 @@ export function buildChanges(base: Task, draft: Draft): { changes: Changes; erro
       if (value.trim() === "" || !Number.isInteger(n))
         errors.priority = "Priority is a whole number.";
       else changes.priority = n;
+    } else if (field === "budget_usd") {
+      const budget = parseBudget(value);
+      if ("error" in budget) errors.budget_usd = budget.error;
+      else changes.budget_usd = budget.value;
     } else if (field === "difficulty") {
       changes.difficulty = value as "trivial" | "simple" | "standard" | "hard";
     } else if (field === "deliverable") {

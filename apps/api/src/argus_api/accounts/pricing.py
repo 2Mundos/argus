@@ -92,6 +92,20 @@ def load(path: Path | None) -> PriceTable:
         ) from None
 
 
+_in_force: Path | None = None
+
+
+def use(path: Path | None) -> None:
+    """Set the price table file the server runs with (`ARGUS_PRICING_FILE`), for
+    the paths with no settings at hand: the budget checks (task cost spec 3.5)."""
+    global _in_force
+    _in_force = path
+
+
+def in_force() -> PriceTable:
+    return load(_in_force)
+
+
 def _rate(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
         raise ValueError("prices must be non-negative numbers")

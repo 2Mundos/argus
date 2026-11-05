@@ -102,6 +102,7 @@ vi.mock("../WorkerChip", () => ({
   WorkerActorChip: () => null,
 }));
 vi.mock("./EventList", () => ({ EventList: () => null }));
+vi.mock("./TaskCost", () => ({ TaskCostTile: () => null }));
 vi.mock("./TaskEditForm", () => ({ TaskEditForm: () => null }));
 vi.mock("./TaskSteers", () => ({
   TaskSteers: () => null,
