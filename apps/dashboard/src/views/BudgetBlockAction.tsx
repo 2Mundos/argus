@@ -12,7 +12,7 @@ export function BudgetBlockAction({
   task,
   onChanged,
 }: {
-  task: Pick<Task, "id" | "version" | "budget_usd">;
+  task: Pick<Task, "id" | "version" | "budget_usd" | "progress_message">;
   onChanged?: () => void;
 }) {
   const suggested = task.budget_usd ? Math.min(task.budget_usd * 2, BUDGET_MAX_USD) : "";
@@ -72,6 +72,12 @@ export function BudgetBlockAction({
   const id = `budget-${task.id}`;
   return (
     <div className="budget-block-action">
+      {task.progress_message && (
+        // The block message carries the figures: "budget of $X is spent (estimate $Y)…"
+        <p className="small">
+          {task.progress_message.charAt(0).toUpperCase() + task.progress_message.slice(1)}.
+        </p>
+      )}
       <label htmlFor={id} className="small">
         New budget (USD; empty: no budget)
       </label>

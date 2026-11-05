@@ -185,7 +185,13 @@ describe("Inbox blocked tasks", () => {
           ...base,
           decision_id: null,
           decision_kind: null,
-          task: { id: "task-b2", block_reason: "budget_exhausted", version: "v3", budget_usd: 2 },
+          task: {
+            id: "task-b2",
+            block_reason: "budget_exhausted",
+            version: "v3",
+            budget_usd: 2,
+            progress_message: "budget of $2.00 is spent (estimate $2.40); raise the budget",
+          },
         },
       ],
       groups: [group("b2", 1)],
@@ -198,6 +204,9 @@ describe("Inbox blocked tasks", () => {
   it("raises a spent budget, offering twice the old one", async () => {
     spent();
     expect(await screen.findByText(/blocked: its budget is spent/)).toBeTruthy();
+    expect(
+      screen.getByText("Budget of $2.00 is spent (estimate $2.40); raise the budget."),
+    ).toBeTruthy();
     const input = screen.getByLabelText(/New budget/) as HTMLInputElement;
     expect(input.value).toBe("4");
     net.patchedState = "blocked";
