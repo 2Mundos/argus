@@ -77,9 +77,10 @@ bypass. Background: draft (removed; in git history),
 - **Visibility (intended).** Each block is an informational, persistent
   `task.command_blocked` event with the reason and a redacted, truncated command.
   It is not a failure class and not an inbox item. The event type and its data
-  shape (`tool`, `rule`, `reason`) exist in `argus_core` (`events.py`); the hook
-  emission, the worker route and the feed presentation are **not implemented**;
-  the hook currently only returns the deny decision.
+  shape (`tool`, `rule`, `reason`) exist in `argus_core` (`events.py`) and the
+  task feed shows the rule id and reason; the hook emission, the worker route and
+  the Fleet presentation are **not implemented**; the hook currently only returns
+  the deny decision.
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
@@ -95,13 +96,14 @@ bypass. Background: draft (removed; in git history),
 
 Not built yet (section 3 marks each **not implemented**):
 
-- `task.command_blocked` visibility: the event type and data shape exist; still
-  missing are the hook emission, the worker route and the feed/Fleet presentation.
+- `task.command_blocked` event emission and Fleet presentation: the event type
+  and data shape exist and the task feed shows the rule id and reason; still
+  missing are the hook emission, the worker route and the Fleet presentation.
 - `env_guard_missing` when a guarded engine starts without the hook.
 - Codex coverage (hook support and trusted-hash registration).
 
 - **Open item: event plumbing.** A worker route or channel to carry
-  `task.command_blocked`, its feed/Fleet presentation, and `env_guard_missing`
+  `task.command_blocked`, its Fleet presentation, and `env_guard_missing`
   in [failure classes](failure-classes.spec.md).
 - Codex: hook support, trusted-hash registration, whether the hook runs inside
   Bubblewrap, and whether it survives `patch-codex-sandbox.py`.
