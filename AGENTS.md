@@ -34,6 +34,11 @@ Instructions for AI agents working in this repo.
   through `Database.write()`; use `tx.now` for time, never a clock read elsewhere,
   and make no network calls inside a write transaction.
 - **Ruff is the formatting authority** for Python, Biome for TS. `make format` fixes both.
+- **Tool-token cost.** A PR that changes MCP tool descriptions, tool input schemas, or
+  `mcp_server.INSTRUCTIONS` puts the `make tool-tokens` difference from `main` in its
+  description: per-role totals (orchestrator and worker) before and after, and the delta.
+  An increase in first-turn cost needs a stated reason; there is no hard ceiling
+  ([tool description rules](docs/drafts/2026-11-04.tool-description-rules.draft.md)).
 - TypeScript is `strict`; no `any` without a written justification.
 - The dashboard talks to the API only; never to workers or the database directly.
 - **English only.** UI copy, docs, specs, comments, identifiers, tests,
