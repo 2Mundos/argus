@@ -21,7 +21,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[1] / "integrations/nanoclaw/fixtures/transcripts"
+ROOT = (
+    Path(__file__).resolve().parents[1] / "integrations/nanoclaw/fixtures/transcripts"
+)
 MAX_BYTES = 200 * 1024
 STRING_CAPS = (2000, 500, 120)
 
@@ -55,7 +57,9 @@ def render(lines: list[str]) -> str:
         text = "\n".join(rows) + "\n"
         if len(text.encode()) <= MAX_BYTES:
             return text
-    raise SystemExit(f"events stay above {MAX_BYTES} bytes with a {STRING_CAPS[-1]} cap")
+    raise SystemExit(
+        f"events stay above {MAX_BYTES} bytes with a {STRING_CAPS[-1]} cap"
+    )
 
 
 def record(db: sqlite3.Connection, task_id: str, attempt: int) -> list[str]:

@@ -24,7 +24,10 @@ def make_db(path: Path, lines: list[tuple[str, int, str, str]]) -> Path:
 
 
 def test_trim_cuts_long_strings_and_keeps_structure() -> None:
-    event = {"type": "user", "content": [{"type": "tool_result", "content": "x" * 5000}]}
+    event = {
+        "type": "user",
+        "content": [{"type": "tool_result", "content": "x" * 5000}],
+    }
     out = trim(event, 100)
     assert out["type"] == "user"
     assert out["content"][0]["type"] == "tool_result"
@@ -53,7 +56,8 @@ def test_main_writes_the_attempt_events_only(tmp_path: Path) -> None:
         ],
     )
     root = tmp_path / "transcripts"
-    assert main(["t1", "1", "claude", "success", "--db", str(db), "--root", str(root)]) == 0
+    argv = ["t1", "1", "claude", "success", "--db", str(db), "--root", str(root)]
+    assert main(argv) == 0
     rows = (root / "claude" / "success" / "events.jsonl").read_text().splitlines()
     assert len(rows) == 3
     assert json.loads(rows[0]) == {"type": "system", "subtype": "init"}
