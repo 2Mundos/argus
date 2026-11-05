@@ -25,6 +25,12 @@ import { TaskTerminal } from "./TaskTerminal";
 const HISTORY_LIMIT = 50;
 const ERROR_EXCERPT = 160;
 
+const CHECKPOINT_TEXT = {
+  available: "work can be restored",
+  unavailable: "work cannot be restored or inspected",
+  unknown: "checkpoint unknown: none recorded yet, still running, or state not recognised",
+} as const;
+
 function LastError({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const needsMore = text.length > ERROR_EXCERPT;
@@ -345,6 +351,23 @@ export function TaskDetail({
             <dt>Attempt</dt>
             <dd>
               {task.attempt} (failures {task.failures}/{task.max_attempts})
+            </dd>
+            <dt>Workspace</dt>
+            <dd>
+              {task.workspace ? (
+                <>
+                  <WorkerChip agentId={task.workspace.owner_agent_id} layout="inline" /> ·{" "}
+                  {CHECKPOINT_TEXT[task.workspace.checkpoint]}
+                  <span className="muted small">
+                    {" "}
+                    (owner is the newest attempt's worker; it may no longer be running)
+                  </span>
+                </>
+              ) : (
+                <span className="muted">
+                  No workspace yet: the task has not started an attempt.
+                </span>
+              )}
             </dd>
             <TaskFailover task={task} />
             {task.assignee_agent_id && (
