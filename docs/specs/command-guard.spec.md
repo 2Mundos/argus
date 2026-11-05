@@ -65,12 +65,15 @@ bypass. Background: draft (removed; in git history),
 - **Missing guard.** When the guard is enabled, an image without it is an
   environment block (`env_guard_missing`), not a silent unguarded run. At claim,
   before any lease, the worker checks the Claude managed settings at
-  `ARGUS_CLAUDE_MANAGED_SETTINGS` (or the channel's `managedSettingsPath`) for a
-  `PreToolUse` `Bash` hook running `command_guard.py`; a missing or unreadable file
-  or hook blocks the task. Skipped when the guard is off (`ARGUS_COMMAND_GUARD=0|off`),
-  for engines without a hook, and when no path is configured (a worker outside the
-  image cannot observe it). The image build smoke does fail if the guard is
-  absent or does not block `rm -rf /`.
+  `ARGUS_CLAUDE_MANAGED_SETTINGS` (or the channel's `managedSettingsPath`), else
+  `/etc/claude-code/managed-settings.json`, for a `PreToolUse` `Bash` hook running
+  `command_guard.py`; a missing, unreadable or malformed file, or a missing hook,
+  blocks the task. An unset path is not a pass. Skipped only when the guard is off
+  (`ARGUS_COMMAND_GUARD=0|off`) and for engines without a hook. The image sets
+  `ARGUS_CLAUDE_MANAGED_SETTINGS` to that path, and its build smoke
+  (`engines/probe-managed-settings.sh`) fails if the file does not register
+  `command_guard.py` exactly once and `repeat_guard.py`, or if the guard does not
+  block `rm -rf /`.
 - **Registration.** Claude Code managed settings baked into the image
   (`/etc/claude-code/managed-settings.json`, source
   `engines/claude-managed-settings.json`), so a project's own `.claude` settings

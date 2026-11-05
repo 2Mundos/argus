@@ -19,11 +19,15 @@ export function registersCommandGuard(settings: unknown): boolean {
   });
 }
 
+/** Where Claude Code reads managed settings on Linux; the tools layer installs them here. */
+export const DEFAULT_MANAGED_SETTINGS_PATH = "/etc/claude-code/managed-settings.json";
+
 /**
  * `env_guard_missing` when a guarded engine would start without the command guard hook
  * (command guard spec 3, failure classes 3.3). Null when the guard is off
- * (`ARGUS_COMMAND_GUARD=0|off`), the engine is not guarded, no managed settings path is
- * configured (the worker cannot see the image), or the hook is registered.
+ * (`ARGUS_COMMAND_GUARD=0|off`), the engine is not guarded, or the hook is registered.
+ * An unset or empty `settingsPath` checks `DEFAULT_MANAGED_SETTINGS_PATH`: a missing,
+ * unreadable or malformed file, or one without the hook, blocks.
  */
 export function commandGuardBlock(
   engine: string,
@@ -33,16 +37,32 @@ export function commandGuardBlock(
 ): { reason: string; error: string } | null {
   const off = env.ARGUS_COMMAND_GUARD?.trim().toLowerCase();
   if (off === "0" || off === "off") return null;
-  if (!GUARDED_ENGINES.has(engine) || !settingsPath) return null;
+  if (!GUARDED_ENGINES.has(engine)) return null;
+  const path = settingsPath?.trim() || DEFAULT_MANAGED_SETTINGS_PATH;
   let registered = false;
   try {
-    registered = registersCommandGuard(JSON.parse(read(settingsPath)));
+    registered = registersCommandGuard(JSON.parse(read(path)));
   } catch {
     // unreadable or malformed settings: the hook is not in effect
   }
   if (registered) return null;
   return {
     reason: "env_guard_missing",
-    error: `the ${engine} engine would start without the command guard hook (${settingsPath} does not register command_guard.py as a PreToolUse Bash hook)`,
+    error: `the ${engine} engine would start without the command guard hook (${path} does not register command_guard.py as a PreToolUse Bash hook)`,
   };
+}
+
+/** The worker's check: the channel's path, else `ARGUS_CLAUDE_MANAGED_SETTINGS`, else the default. */
+export function workerCommandGuardBlock(
+  engine: string,
+  configuredPath: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  read?: (path: string) => string,
+): { reason: string; error: string } | null {
+  return commandGuardBlock(
+    engine,
+    configuredPath ?? env.ARGUS_CLAUDE_MANAGED_SETTINGS?.trim(),
+    env,
+    read,
+  );
 }

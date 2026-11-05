@@ -98,7 +98,7 @@ import {
   scopeCommandGuard,
   scopeGitIdentity,
 } from "./argus-git-identity.js";
-import { commandGuardBlock } from "./argus-guard.js";
+import { workerCommandGuardBlock } from "./argus-guard.js";
 import {
   consumedReceipts,
   type InputReceipt,
@@ -377,7 +377,8 @@ export interface ArgusConfig {
   workspaceRoot?: () => Promise<string | null>;
   /**
    * Claude Code managed settings the worker can read (default `ARGUS_CLAUDE_MANAGED_SETTINGS`).
-   * Unset: the command guard hook cannot be observed, so it is not checked.
+   * Unset: the image path `/etc/claude-code/managed-settings.json`, which must register the
+   * command guard hook for a guarded engine to start.
    */
   managedSettingsPath?: string;
   /** Test seam: the first retry delay of a task input download (default 1 s, doubling). */
@@ -3562,9 +3563,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       scopeTaskGitIdentity(claimedGitIdentity(task.git_identity));
       scopeTaskCommandGuard(task.command_guard_enabled);
-      let envBlock: { reason: string; error: string } | null = commandGuardBlock(
+      let envBlock: { reason: string; error: string } | null = workerCommandGuardBlock(
         engine,
-        cfg.managedSettingsPath ?? process.env.ARGUS_CLAUDE_MANAGED_SETTINGS?.trim(),
+        cfg.managedSettingsPath,
       );
       step = "repository preflight";
       if (!envBlock) envBlock = await repositoryPreflight(task);
