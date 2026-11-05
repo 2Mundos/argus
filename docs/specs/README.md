@@ -4,10 +4,9 @@ Every spec in this directory with its status, kept in sync by
 `scripts/check_specs.py` (CI and pre-push fail otherwise; regenerate with
 `python3 scripts/check_specs.py --write-index`). Status meanings:
 
-- `implemented`: main does what the spec says.
-- `partial`: some numbered decisions are not built yet; the spec's **Open items**
-  section lists them.
-- `draft`: agreed design, not built.
+- `implemented`: main does what it says.
+- `partial`: some of it is not built yet; its **Open items** section lists what.
+- `draft`: proposed or agreed, not built.
 - `deferred`: parked; not planned for now.
 - `superseded`: replaced by the spec it links.
 

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 INDEX = DOCS / "README.md"
 SPECS_INDEX = DOCS / "specs" / "README.md"
+DRAFTS_INDEX = DOCS / "drafts" / "README.md"
 DATED = re.compile(r"^\d{4}-\d{2}-\d{2}\.[a-z0-9-]+\.(draft|research|ref)\.md$")
 SPEC = re.compile(r"^[a-z0-9-]+\.spec\.md$")
 RELEASE = re.compile(r"^\d{4}-\d{2}-\d{2}\.v\d+-\d+-\d+\.ref\.md$")
@@ -108,7 +109,7 @@ def main() -> int:
                 if not RELEASE.match(doc.name):
                     errors.append(f"{rel}: name must match YYYY-MM-DD.vX-Y-Z.ref.md")
                 continue  # indexed as a series: README links releases/ once
-            elif not DATED.match(doc.name):
+            elif doc != DRAFTS_INDEX and not DATED.match(doc.name):
                 errors.append(f"{rel}: name must match YYYY-MM-DD.name.type.md")
         if doc.resolve() not in linked:
             errors.append(f"{rel}: not linked from docs/README.md")

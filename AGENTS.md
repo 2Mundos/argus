@@ -24,6 +24,10 @@ Instructions for AI agents working in this repo.
   starts as a `draft` spec. A `partial` spec lists what is missing under **Open
   items**; building one removes it, and the last one moves the status to
   `implemented`. A `superseded` spec links its replacement.
+- **Drafts carry the same frontmatter** and are listed in [the drafts
+  index](docs/drafts/README.md). When a draft becomes a spec, mark it `superseded`
+  with a link to that spec in the same PR; a draft built without a spec is
+  `implemented`, a partly built one is `partial` with **Open items**.
 - **Negentropy.** Code is a liability; add only what is needed.
 - **Schema changes** are a new `apps/api/src/argus_api/db/migrations/NNNN_name.sql`
   (next number, no gaps). Never edit a migration that has shipped. All writes go

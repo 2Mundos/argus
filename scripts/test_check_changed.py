@@ -64,6 +64,7 @@ def test_ts_graph_resolves_specifiers_and_workspace_alias() -> None:
 def test_docs_only_runs_only_docs_validation() -> None:
     assert steps_for(["docs/README.md"]) == ["validate docs"]
     assert steps_for(["docs/specs/home.spec.md"]) == ["validate docs", "check specs"]
+    assert steps_for(["docs/drafts/README.md"]) == ["validate docs", "check specs"]
 
 
 def test_launcher_change_runs_its_python_test() -> None:
