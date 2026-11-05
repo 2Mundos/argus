@@ -21,6 +21,7 @@ TEMPLATE_FIELDS = INTAKE_FIELDS | frozenset(
         "input",
         "required_capabilities",
         "priority",
+        "budget_usd",
         "review",
         "difficulty",
         "harness_model",

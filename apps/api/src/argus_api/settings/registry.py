@@ -115,6 +115,16 @@ REGISTRY: dict[str, SettingDefinition] = {
         scopes=["global", "project"],
         description="Require review by a different model before a code task succeeds.",
     ),
+    "task_default_budget_usd": SettingDefinition(
+        key="task_default_budget_usd",
+        schema={"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 10000},
+        default=None,
+        scopes=["global", "project"],
+        description=(
+            "Budget (USD, estimated) for a new task that names none; a project value"
+            " overrides the global one. Unset: no budget."
+        ),
+    ),
     "onboarding.dismissed": SettingDefinition(
         key="onboarding.dismissed",
         schema={"type": "boolean"},

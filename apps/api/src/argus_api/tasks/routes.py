@@ -9,6 +9,7 @@ from argus_core.continuation import (
     EffectiveContinuation,
     ObservationRequest,
 )
+from argus_core.cost import TaskCost
 from argus_core.delivery import Delivery, DeliveryReconciliation, PrBinding
 from argus_core.difficulty import chain_for
 from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
@@ -36,7 +37,7 @@ from argus_api.access import (
     require_task_readable,
     worker_task_filter,
 )
-from argus_api.accounts import local_health
+from argus_api.accounts import local_health, pricing
 from argus_api.accounts import service as accounts
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.db import utcnow
@@ -68,6 +69,9 @@ from argus_api.tasks import (
     service,
     steers,
     views,
+)
+from argus_api.tasks import (
+    cost as task_cost,
 )
 from argus_api.tasks.prerequisites import PrerequisitesView
 from argus_api.tasks.quota_resume import QuotaResumeTaken
@@ -393,6 +397,18 @@ async def get_delivery(
         await require_task_readable(conn, caller, task_id)
         task = await service.get_task(conn, task_id)
         return await delivery.delivery_of(conn, request.app.state.pr_checker, task)
+
+
+@router.get("/{task_id}/cost")
+async def get_task_cost(
+    task_id: str, db: DbDep, caller: CallerDep, settings: SettingsDep
+) -> TaskCost:
+    """What the task has spent, in total and per attempt, against its budget (task
+    cost 3.2). Estimates; workers only read tasks they have leased."""
+    table = pricing.load(settings.pricing_file)
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await task_cost.task_cost(conn, task_id, table)
 
 
 @router.get("/{task_id}/prerequisites")

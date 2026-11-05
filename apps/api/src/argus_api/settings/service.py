@@ -28,6 +28,7 @@ MODELS_KEY = "models"
 REVIEW_KEY = "review.independent"
 DIFFICULTY_EXECUTORS_KEY = "difficulty.executors"
 GIT_IDENTITY_KEY = "git.identity"
+TASK_DEFAULT_BUDGET_KEY = "task_default_budget_usd"
 COMMAND_GUARD_KEY = "command_guard.enabled"
 
 
@@ -307,6 +308,15 @@ async def claim_git_identity(
 async def claim_command_guard_enabled(conn: aiosqlite.Connection, project: str) -> bool:
     """Whether the command guard is on for a claim: project override, else global."""
     return bool((await _setting(conn, Path(), project, COMMAND_GUARD_KEY)).value)
+
+
+async def task_default_budget(
+    conn: aiosqlite.Connection, project: str | None
+) -> float | None:
+    """`task_default_budget_usd` for a new task: project override, else global."""
+    scope = GLOBAL if project is None else project
+    value = (await _setting(conn, Path(), scope, TASK_DEFAULT_BUDGET_KEY)).value
+    return None if value is None else float(value)
 
 
 def _check_scope(defn: SettingDefinition, scope: str) -> None:

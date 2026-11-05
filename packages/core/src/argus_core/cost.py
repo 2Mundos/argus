@@ -68,3 +68,28 @@ class CostReport(BaseModel):
     # Chat turns for the internal orchestrator (internal-orchestrator 3.7); not in totals.
     orchestrator: CostFigures
     daily: list[DayCost]
+
+
+# Task cost spec 3.2: `partial_*` when the task has unpriced or unreported runs, so
+# the true figure may be higher; `exhausted` is judged on the known figure alone.
+BudgetState = Literal[
+    "none", "ok", "warning", "exhausted", "partial_ok", "partial_warning"
+]
+
+
+class AttemptCost(CostFigures):
+    attempt: int
+    models: list[str]  # distinct models of the attempt's rows, "(no model)" if unnamed
+
+
+class TaskCost(BaseModel):
+    """What one task spent, in total and per attempt (task cost spec 3.2). Rows
+    with no attempt count only in `totals`."""
+
+    task_id: str
+    pricing: PricingInfo
+    totals: CostFigures
+    partial: bool
+    by_attempt: list[AttemptCost]
+    budget_usd: float | None
+    budget_state: BudgetState
