@@ -16,9 +16,9 @@ def test_every_state_has_a_policy_within_the_editable_fields() -> None:
 
 def test_editable_fields_keep_the_canonical_order_and_archived_is_read_only() -> None:
     assert editable_fields(TaskState.READY) == list(EDITABLE)
-    assert editable_fields(TaskState.CLAIMED) == ["priority"]
+    assert editable_fields(TaskState.CLAIMED) == ["priority", "budget_usd"]
     # A deliverable that proved unreachable can be lowered while the result is reviewed.
-    assert editable_fields(TaskState.IN_REVIEW) == ["priority", "deliverable"]
+    assert editable_fields(TaskState.IN_REVIEW) == ["priority", "deliverable", "budget_usd"]
     assert editable_fields(TaskState.SUCCEEDED) == []
     assert editable_fields(TaskState.READY, archived=True) == []
 
