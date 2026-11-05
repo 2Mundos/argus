@@ -703,7 +703,7 @@ async def exhausted(
     await tasks.pause_for_quota(tx, agent_id, task_id, attempt, reason, wait=True)
     if report.native_session is not None:
         await quota_resume.record_session(
-            tx, agent_id, task_id, attempt, report.native_session
+            tx, agent_id, task_id, attempt, report.native_session, "quota"
         )
     return FallbackResult(
         lease=None,
@@ -809,9 +809,16 @@ async def fail_task(
             held = await cur.fetchone()
     hit = classify_quota(error, held["provider"], tx.now) if held else None
     if held is None or hit is None:
-        return await tasks.fail(
+        task = await tasks.fail(
             tx, agent_id, task_id, attempt, error, reason, oom_kill=oom_kill
         )
+        # A confirmed container exit can resume the same conversation next time
+        # (quota resume spec 3.2); a stall or `agent_ended` cannot name one.
+        if native_session is not None and reason == "session_lost":
+            await quota_resume.record_session(
+                tx, agent_id, task_id, attempt, native_session, "session_lost"
+            )
+        return task
     await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
     detail = _hit_detail(
         hit, "structured" if error.lstrip().startswith("{") else "notice"
@@ -839,7 +846,7 @@ async def fail_task(
     )
     if native_session is not None:
         await quota_resume.record_session(
-            tx, agent_id, task_id, attempt, native_session
+            tx, agent_id, task_id, attempt, native_session, "quota"
         )
     await _failover(
         tx,

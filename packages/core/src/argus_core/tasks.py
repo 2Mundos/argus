@@ -598,11 +598,14 @@ class Task(BaseModel):
 
 
 class QuotaResume(NativeSessionReport):
-    """The native session the previous attempt's quota pause left, offered once to
-    the next claim (quota resume spec 3.3). `node` is the agent that held it."""
+    """The native session the previous attempt left, offered once to the next claim
+    (quota resume spec 3.3). `node` is the agent that held it; `cause` says why the
+    attempt ended."""
 
     node: str
     from_attempt: int
+    # Attempts recorded before `cause` existed were quota pauses.
+    cause: Literal["quota", "session_lost"] = "quota"
 
 
 class ClaimedTask(Task):

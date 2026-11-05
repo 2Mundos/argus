@@ -760,15 +760,20 @@ export function parseFramedSteer(text: string): { message: string } {
   return { message: parsed.message };
 }
 
-/** The one operator message that resumes a quota-paused session (quota resume spec 3.5). */
-export function renderQuotaResume(task: { id: string; attempt: number }): string {
+/** The one operator message that resumes an interrupted session (quota resume spec 3.5). */
+export function renderQuotaResume(
+  task: { id: string; attempt: number },
+  cause: "quota" | "session_lost" = "quota",
+): string {
+  const why =
+    cause === "session_lost"
+      ? "Your previous session ended unexpectedly."
+      : "Your previous account hit a usage limit and the account was switched.";
   return renderSteer({
     actor: "argus:quota-resume",
     task_id: task.id,
     attempt: task.attempt,
-    message:
-      "Your previous account hit a usage limit and the account was switched. " +
-      "Continue from where you stopped.",
+    message: `${why} Continue from where you stopped.`,
   });
 }
 
@@ -2075,6 +2080,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return data.heartbeat_interval_s ?? 30;
   }
 
+  /**
+   * The native Claude session this attempt wrote, for the next claim to resume
+   * (quota resume spec 3.2): a quota pause or a confirmed `session_lost` exit.
+   * Undefined when another engine ran or the host cannot observe transcripts.
+   */
+  async function observedNativeSession(
+    provider: string | null | undefined = account?.provider,
+  ): Promise<{ session_id: string; engine: string } | undefined> {
+    if (!cfg.nativeSessions || provider !== RESUME_ENGINE) return undefined;
+    const id = await cfg.nativeSessions.observe(claimedAt).catch(() => null);
+    return id ? { session_id: id, engine: RESUME_ENGINE } : undefined;
+  }
+
   async function leaseActivityAt(): Promise<string | undefined> {
     const times: number[] = [];
     if (lastProgressAt > 0) times.push(lastProgressAt);
@@ -2247,6 +2265,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         attempt: task.attempt,
         error: report.error,
         reason: "session_lost",
+        native_session: await observedNativeSession(),
         ...(report.oomKill ? { oom_kill: true } : {}),
       });
       const state = (data as { state?: string } | null)?.state;
@@ -2843,12 +2862,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
     }
     const pausedProvider = account?.provider;
-    /** The paused attempt's Claude session, for a quota pause only (quota resume spec 3.2). */
-    const nativeSession = async (): Promise<{ session_id: string; engine: string } | undefined> => {
-      if (pausedProvider !== RESUME_ENGINE || !cfg.nativeSessions) return undefined;
-      const id = await cfg.nativeSessions.observe(claimedAt).catch(() => null);
-      return id ? { session_id: id, engine: RESUME_ENGINE } : undefined;
-    };
+    /** The ended attempt's Claude session, for a quota pause or a confirmed exit. */
+    const nativeSession = () => observedNativeSession(pausedProvider);
     if (f.kind === "exhausted" && cfg.accounts && account) {
       const exhausted = account;
       account = null;
@@ -3459,7 +3474,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         outcome: resumed ? "resumed" : "fallback",
         reason,
       });
-      return resumed && data?.first === true ? renderQuotaResume(task) : null;
+      return resumed && data?.first === true ? renderQuotaResume(task, offer.cause) : null;
     } catch (err) {
       log.warn("Could not record the quota resume decision", { task: task.id, err });
       return null;

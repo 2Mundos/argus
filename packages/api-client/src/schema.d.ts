@@ -7982,9 +7982,9 @@ export interface components {
         };
         /**
          * NativeSessionReport
-         * @description The engine's own session the quota pause left behind (quota resume spec 3.2).
-         *     Optional on a quota report; the server adds the node and ignores it for any other
-         *     ending.
+         * @description The engine's own session the ending attempt left behind (quota resume spec 3.2).
+         *     Optional on a quota report and on a confirmed `session_lost` report; the server
+         *     adds the node and ignores it for any other ending.
          */
         NativeSessionReport: {
             /** Engine */
@@ -9229,10 +9229,17 @@ export interface components {
         };
         /**
          * QuotaResume
-         * @description The native session the previous attempt's quota pause left, offered once to
-         *     the next claim (quota resume spec 3.3). `node` is the agent that held it.
+         * @description The native session the previous attempt left, offered once to the next claim
+         *     (quota resume spec 3.3). `node` is the agent that held it; `cause` says why the
+         *     attempt ended.
          */
         QuotaResume: {
+            /**
+             * Cause
+             * @default quota
+             * @enum {string}
+             */
+            cause?: "quota" | "session_lost";
             /** Engine */
             engine: string;
             /** From Attempt */

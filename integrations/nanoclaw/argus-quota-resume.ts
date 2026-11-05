@@ -5,12 +5,14 @@
  * does the Argus calls and the sending.
  */
 
-/** The native session a quota pause left, as the claim offers it (3.3). */
+/** The native session a quota pause or confirmed exit left, as the claim offers it (3.3). */
 export interface QuotaResumeOffer {
   session_id: string;
   engine: string;
   node: string;
   from_attempt: number;
+  /** Older APIs omit it; every session they recorded came from a quota pause. */
+  cause?: "quota" | "session_lost";
 }
 
 /** Only Claude Code sessions are resumed; the Argus provider name is the engine. */

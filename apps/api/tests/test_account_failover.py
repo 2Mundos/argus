@@ -159,12 +159,13 @@ async def test_quota_pause_keeps_the_native_session_and_the_counters_match(
     assert (offer.session_id, offer.engine, offer.node, offer.from_attempt) == (
         SESSION.session_id, "anthropic", A, 1,
     )  # fmt: skip
+    assert offer.cause == "quota"
     assert (
         await offered(db, task.id, task.attempt) is None
     )  # attempt 1 has no earlier one
 
 
-async def test_only_a_quota_pause_keeps_a_session(
+async def test_a_confirmed_session_exit_keeps_a_session(
     db: Database, store: MemorySecretStore
 ) -> None:
     await add(db, store, "acct-a")
@@ -178,7 +179,7 @@ async def test_only_a_quota_pause_keeps_a_session(
         await tx.conn.execute("UPDATE tasks SET retry_at = NULL")  # skip the backoff
         again = await tasks.claim(tx, A, [])
     assert again is not None
-    assert await offered(db, task.id, again.attempt) is None  # a failure, not a quota
+    assert await offered(db, task.id, again.attempt) is None  # a failure, not a pause
     async with db.write() as tx:
         await accounts.fail_task(
             tx, A, task.id, again.attempt, "gone", "session_lost", store,
@@ -187,7 +188,28 @@ async def test_only_a_quota_pause_keeps_a_session(
         await tx.conn.execute("UPDATE tasks SET retry_at = NULL")
         third = await tasks.claim(tx, A, [])
     assert third is not None
-    assert await offered(db, task.id, third.attempt) is None
+    resume = await offered(db, task.id, third.attempt)
+    assert resume is not None
+    assert (resume.session_id, resume.cause) == (SESSION.session_id, "session_lost")
+
+
+async def test_a_stall_or_agent_ended_keeps_no_session(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "acct-a")
+    await lease(db, store)
+    task = await new_task(db)
+    for reason in ("stalled", "agent_ended"):
+        async with db.write() as tx:
+            await accounts.fail_task(
+                tx, A, task.id, task.attempt, "gone", reason, store,
+                timedelta(hours=1), native_session=SESSION,
+            )  # fmt: skip
+            await tx.conn.execute("UPDATE tasks SET retry_at = NULL")
+            again = await tasks.claim(tx, A, [])
+        assert again is not None
+        assert await offered(db, task.id, again.attempt) is None
+        task = again
 
 
 async def test_awaiting_quota_pause_keeps_the_session_too(

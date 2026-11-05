@@ -4031,6 +4031,12 @@ describe("quota resume in the channel (quota-resume.spec.md 3.3-3.5)", () => {
     expect(run.text.split(NOTE)).toHaveLength(2);
   });
 
+  it("frames a confirmed session exit as an unexpected end, not an account switch", async () => {
+    const run = await claim(paused({ cause: "session_lost" }), true, seeding());
+    expect(run.text).toContain("Your previous session ended unexpectedly.");
+    expect(run.text).not.toContain("usage limit");
+  });
+
   it("after a crash, the reclaimed attempt resumes again without a second note", async () => {
     const resume = seeding();
     await claim(paused(), true, resume);

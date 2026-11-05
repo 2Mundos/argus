@@ -643,9 +643,9 @@ class AccountLease(BaseModel):
 
 
 class NativeSessionReport(BaseModel):
-    """The engine's own session the quota pause left behind (quota resume spec 3.2).
-    Optional on a quota report; the server adds the node and ignores it for any other
-    ending."""
+    """The engine's own session the ending attempt left behind (quota resume spec 3.2).
+    Optional on a quota report and on a confirmed `session_lost` report; the server
+    adds the node and ignores it for any other ending."""
 
     session_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,64}$")
     engine: str = Field(min_length=1, max_length=32)

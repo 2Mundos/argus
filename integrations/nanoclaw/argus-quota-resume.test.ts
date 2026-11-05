@@ -150,6 +150,15 @@ describe("renderQuotaResume", () => {
     );
     expect(parseFramedSteer(text).message).toContain("Continue from where you stopped");
   });
+
+  it("names the ending that caused the resume", () => {
+    expect(parseFramedSteer(renderQuotaResume({ id: "t1", attempt: 2 })).message).toContain(
+      "hit a usage limit",
+    );
+    const exited = renderQuotaResume({ id: "t1", attempt: 2 }, "session_lost");
+    expect(parseFramedSteer(exited).message).toContain("session ended unexpectedly");
+    expect(parseFramedSteer(exited).message).not.toContain("usage limit");
+  });
 });
 
 const SESSION = "5b1c0f3e-aaaa-bbbb-cccc-0123456789ab";

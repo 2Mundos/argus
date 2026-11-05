@@ -21,15 +21,21 @@ class QuotaResumeTaken(BaseModel):
 
 
 async def record_session(
-    tx: Tx, agent_id: str, task_id: str, attempt: int, report: NativeSessionReport
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    report: NativeSessionReport,
+    cause: Literal["quota", "session_lost"],
 ) -> None:
-    """Keep the paused attempt's native session. Called by the quota pause only, so
-    a crash, stall or `session_lost` never leaves one. The node is the caller."""
+    """Keep the ended attempt's native session. Called by a quota pause and by a
+    confirmed `session_lost` exit only, so a stall or `agent_ended` never leaves
+    one. The node is the caller."""
     await tx.conn.execute(
         "UPDATE task_attempts SET native_session = ? WHERE task_id = ? AND attempt = ?"
         " AND native_session IS NULL",
         (
-            json.dumps({**report.model_dump(), "node": agent_id}),
+            json.dumps({**report.model_dump(), "node": agent_id, "cause": cause}),
             task_id,
             attempt,
         ),
