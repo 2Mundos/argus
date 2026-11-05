@@ -674,7 +674,12 @@ earlier tasks neither inflate its cost nor contaminate its replies
   policy prevention, not a hostile-agent sandbox) applies on the worker image
   normal paths only:
   - **`/usr/local/lib/argus/bin/git`** is prepended to the session container
-    `PATH` (`patch-git-worker-attribution.py`), so `git commit`, `git push`,
+    `PATH` (`patch-git-worker-attribution.py`). The composed `PATH` is that
+    directory, then the engine directory (`PNPM_HOME`, falling back to `/pnpm`;
+    skipped when the base `PATH` already lists it), then the base `PATH`, so
+    the engine CLIs the image installs resolve. Verify with
+    `docker exec <session> sh -c 'command -v codex'` (also `claude`,
+    `opencode`). Because the wrapper is first, `git commit`, `git push`,
     `argus-task deliver`, and delegated executors that inherit `PATH` hit the
     same wrapper. It refuses new commit messages that carry prohibited trailer
     lines, and refuses a push when any **outgoing** commit (relative to the
@@ -686,6 +691,11 @@ earlier tasks neither inflate its cost nor contaminate its replies
     resolving the push range return an actionable error instead of allowing the
     push. It does not rewrite messages, amend history on its own, or strip
     trailers from commits that already exist on the remote.
+    **Open limitation:** if an engine executable is missing, NanoClaw's
+    upstream poll loop reports `Executable not found in $PATH` and acks the
+    batch as completed; this patch does not change upstream retry semantics, so
+    the task sees a generic run failure. Argus does not change this from this
+    repository.
     The same wrapper pins the commit identity to the configured project
     identity: `ARGUS_GIT_AUTHOR_NAME`/`ARGUS_GIT_AUTHOR_EMAIL` become author and
     committer, and caller `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, `--author`,

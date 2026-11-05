@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Prepend the worker git wrapper to session PATH (install.sh).
+"""Prepend the worker git wrapper and engine dir to session PATH (install.sh).
 
 docs/specs/worker-lifecycle.spec.md 3.8. Merges PATH into the existing
 agent-resource-hygiene `agent.env` block (does not splice into the hygiene
-comment). Idempotent; requires patch-agent-resource-hygiene.py to have run first.
+comment). PATH is BIN, then PNPM_HOME (fallback /pnpm) unless the base PATH
+already lists it, then the base. Idempotent; requires
+patch-agent-resource-hygiene.py to have run first.
 """
 
 import re
@@ -16,10 +18,10 @@ BIN = "/usr/local/lib/argus/bin"
 HYGIENE_ENV = (
     f"  agent.env = {{ BASH_ENV: '{SHIM}', CLAUDE_ENV_FILE: '{SHIM}', ...agent.env }};"
 )
-EXPANDED = f"""  {MARKER} (worker-lifecycle 3.8): prepend worker git wrapper on PATH.
+EXPANDED = f"""  {MARKER} (worker-lifecycle 3.8): prepend worker git wrapper and engine dir on PATH.
   agent.env = {{
     ...agent.env,
-    PATH: '{BIN}:' + (agent.env.PATH ?? process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'),
+    PATH: '{BIN}:' + ((e, b) => (b.split(':').includes(e) ? b : e + ':' + b))(agent.env.PNPM_HOME ?? process.env.PNPM_HOME ?? '/pnpm', agent.env.PATH ?? process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'),
     BASH_ENV: '{SHIM}',
     CLAUDE_ENV_FILE: '{SHIM}',
   }};"""
