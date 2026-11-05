@@ -442,7 +442,7 @@ old = """  const contributedEnv: Record<string, string> = {
     ...(gateway.env ?? {}),
   };"""
 new = old + """
-  for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL']) {
+  for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL', 'ARGUS_COMMAND_GUARD']) {
     const value = process.env[key];
     if (value?.trim()) contributedEnv[key] = value;
   }"""

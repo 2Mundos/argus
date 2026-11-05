@@ -100,7 +100,9 @@ CASES = {
 
 def test_every_rule_has_both_cases():
     assert set(CASES) == set(guard.REASONS)
-    assert all(c["block"] and c["allow"] for c in CASES.values())
+    for rule in guard.REASONS:
+        assert any(guard.check(c) == rule for c in CASES[rule]["block"]), rule
+        assert any(guard.check(c) is None for c in CASES[rule]["allow"]), rule
 
 
 @pytest.mark.parametrize(
@@ -163,6 +165,12 @@ def test_hook_allows_and_fails_open(payload):
 
 def test_hook_can_be_disabled_by_env():
     assert run_hook(bash("rm -rf /"), ARGUS_COMMAND_GUARD="off").stdout == ""
+    assert run_hook(bash("rm -rf /"), ARGUS_COMMAND_GUARD="0").stdout == ""
+
+
+@pytest.mark.parametrize("env", [{}, {"ARGUS_COMMAND_GUARD": "on"}])
+def test_hook_blocks_when_env_unset_or_on(env):
+    assert '"deny"' in run_hook(bash("rm -rf /"), **env).stdout
 
 
 def test_managed_settings_register_the_hook_on_bash():

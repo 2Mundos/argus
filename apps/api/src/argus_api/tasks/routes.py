@@ -330,6 +330,11 @@ async def claim_task(
                     git_identity = await settings_svc.claim_git_identity(
                         conn, task.project
                     )
+                    command_guard_enabled = (
+                        await settings_svc.claim_command_guard_enabled(
+                            conn, task.project
+                        )
+                    )
                     switch = await service.attempt_model_switch(
                         conn, task.id, task.attempt
                     )
@@ -352,6 +357,7 @@ async def claim_task(
                     project_repository=project_repository,
                     difficulty_executors=difficulty_executors,
                     git_identity=git_identity,
+                    command_guard_enabled=command_guard_enabled,
                 )
             remaining = deadline - loop.time()
             try:
