@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run only the checks the changed files can affect (docs/drafts changed-only-checks).
+"""Run only the checks the changed files can affect (docs/specs/changed-only-checks.spec.md).
 
 Compares the working tree (committed and uncommitted changes, plus untracked
 files) with the merge base of origin/main. `--plan` prints the steps and exits.

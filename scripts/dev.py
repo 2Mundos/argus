@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Isolated dev servers per checkout.
 
-Spec: docs/drafts/2026-10-31.worktree-dev-isolation.draft.md.
+Spec: docs/specs/worktree-dev-isolation.spec.md.
 
     dev.py api [--data-dir D] [--no-seed] [--accounts] [--keep-tasks N] [--source DB]
     dev.py dashboard

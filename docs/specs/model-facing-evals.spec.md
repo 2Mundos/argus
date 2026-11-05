@@ -77,7 +77,7 @@ how to run, cost). Shared code lives in `evals/*.py`.
 
 # 4. Open Questions
 
-Carried from the [draft](../drafts/2026-10-31.model-facing-evals.draft.md):
+Carried from the draft (removed; in git history):
 
 - **Which models form the baseline, and is the local model included?** Open.
   The runner takes any model name; the choice waits for a first real run.

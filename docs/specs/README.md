@@ -17,6 +17,7 @@ Every spec in this directory with its status, kept in sync by
 | [Agent hygiene: lost/gone aggregates, bounded archiving and alerts](agent-hygiene.spec.md) | `implemented` |
 | [Agent container resource hygiene: OOM priority and CPU count](agent-resource-hygiene.spec.md) | `implemented` |
 | [Built-in Orchestrator Runtime](builtin-orchestrator.spec.md) | `implemented` |
+| [Changed-only checks](changed-only-checks.spec.md) | `implemented` |
 | [Claude accounts: import, dedicated login, renewal](claude-accounts.spec.md) | `implemented` |
 | [Codex accounts: import, dedicated login, engine selection](codex-accounts.spec.md) | `implemented` |
 | [Codex worker sandbox profile (default on; profiles candidate)](codex-sandbox-profile.spec.md) | `partial` |
@@ -84,8 +85,10 @@ Every spec in this directory with its status, kept in sync by
 | [Task resumability preflight](task-resumability-preflight.spec.md) | `implemented` |
 | [Task steering](task-steering.spec.md) | `implemented` |
 | [Task workspace: a stable per-task git workspace, checked before the model](task-workspace.spec.md) | `implemented` |
+| [Test hygiene checks](test-hygiene.spec.md) | `implemented` |
 | [Desktop Tray](tray.spec.md) | `implemented` |
 | [Worker launch and node capabilities](worker-launch.spec.md) | `implemented` |
 | [Worker Lifecycle and Task Coordination Spec](worker-lifecycle.spec.md) | `implemented` |
 | [Worker Read Scope](worker-read-scope.spec.md) | `implemented` |
 | [Workspace cleanup: terminated NanoClaw instance directories](workspace-cleanup.spec.md) | `implemented` |
+| [Worktree dev isolation](worktree-dev-isolation.spec.md) | `implemented` |

@@ -17,7 +17,7 @@ home directory, a disk device).
 The command guard is a `PreToolUse` hook on Claude Code's Bash tool that refuses
 a short list of catastrophic commands and tells the agent why. It is **accident
 prevention, not a sandbox**: it catches the obvious mistake, not a determined
-bypass. Background: [draft](../drafts/2026-10-29.command-guard.draft.md),
+bypass. Background: draft (removed; in git history),
 [research](../research/2026-10-29.command-guard.research.md).
 
 # 2. Non-Goals

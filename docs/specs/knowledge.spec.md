@@ -6,7 +6,7 @@ updated: 2026-11-04
 
 # Knowledge Spec
 
-Finalized from [the 2026-10-14 draft](../drafts/2026-10-14.knowledge.draft.md),
+Finalized from the 2026-10-14 draft (removed; in git history),
 which was inspired by Radar's shared scenario knowledge and reduced to fit
 [lightweight single-node](single-node.spec.md).
 
