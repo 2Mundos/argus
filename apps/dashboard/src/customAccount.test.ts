@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildConfig, checkBaseUrl, emptyForm } from "./customAccount";
+import { buildConfig, checkBaseUrl, emptyForm, formForPreset } from "./customAccount";
 
 describe("buildConfig", () => {
   it("drops empty fields and splits comma lists", () => {
@@ -33,6 +33,25 @@ describe("buildConfig", () => {
     expect(buildConfig(f).engine).toEqual({ model: "m" });
   });
 });
+
+describe("provider presets", () => {
+  it("fills the Google AI Studio OpenAI-compatible endpoint", () => {
+    const f = formForPreset("google");
+    assertPreset(f);
+    f.engine = { ...f.engine, model: "gemini-flash-latest" };
+    expect(buildConfig(f)).toEqual({
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+      label: "google",
+      engine: { model: "gemini-flash-latest" },
+      executor: {},
+    });
+  });
+});
+
+function assertPreset(f: ReturnType<typeof formForPreset>) {
+  expect(f.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  expect(f.label).toBe("google");
+}
 
 describe("checkBaseUrl", () => {
   it.each(["ftp://x/v1", "nope", "https://u:p@x/v1", "https://x/v1?k=1"])("rejects %s", (url) => {

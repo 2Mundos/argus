@@ -17,6 +17,7 @@ from argus_core.custom_accounts import (
     CustomAccountError,
     CustomConfig,
     ModelEndpoints,
+    normalize_model_id,
     parse_endpoints,
 )
 from argus_core.quota import classify_quota, quota_notice_from_response
@@ -54,12 +55,14 @@ def _client(
     )
 
 
-def _model_ids(payload: Any) -> list[str]:
+def _model_ids(label: str, payload: Any) -> list[str]:
     data = payload.get("data") if isinstance(payload, dict) else None
     ids = {
-        m["id"]
+        model
         for m in (data if isinstance(data, list) else [])
-        if isinstance(m, dict) and isinstance(m.get("id"), str)
+        if isinstance(m, dict)
+        and isinstance(m.get("id"), str)
+        and (model := normalize_model_id(label, m["id"])) is not None
     }
     return sorted(ids)[:MAX_MODELS]
 
@@ -102,7 +105,9 @@ async def probe(
     if res.status_code != 200:
         return _classify(res.status_code, res.headers)
     try:
-        models = _model_ids(res.json()) if len(res.content) <= MAX_BODY else []
+        models = (
+            _model_ids(config.label, res.json()) if len(res.content) <= MAX_BODY else []
+        )
     except ValueError:
         return CustomProbe(
             status="failed", http_status=200, reason="response is not JSON"

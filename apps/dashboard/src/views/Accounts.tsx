@@ -15,6 +15,7 @@ import {
   withoutSecret,
 } from "../accountProviders";
 import { type Account, api, call } from "../api";
+import type { CustomPresetId } from "../customAccount";
 import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { PageHeader } from "../PageHeader";
@@ -44,7 +45,7 @@ import { ProviderMark, StateIcon } from "./providerIcons";
 export function Accounts() {
   const [adding, setAdding] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
-  const [addingCustom, setAddingCustom] = useState(false);
+  const [addingCustom, setAddingCustom] = useState<CustomPresetId>();
   const [addingLocal, setAddingLocal] = useState(false);
   // A Claude wizard: new (`{}`) or renewing the given account.
   const [claude, setClaude] = useState<{ renew?: Account }>();
@@ -121,7 +122,10 @@ export function Accounts() {
         <button type="button" onClick={() => setClaude({})}>
           Add Claude account
         </button>
-        <button type="button" onClick={() => setAddingCustom(true)}>
+        <button type="button" onClick={() => setAddingCustom("google")}>
+          Add Google AI Studio
+        </button>
+        <button type="button" onClick={() => setAddingCustom("openrouter")}>
           Add custom provider
         </button>
         <button type="button" onClick={() => setAddingLocal(true)}>
@@ -372,10 +376,14 @@ export function Accounts() {
       )}
       {addingCustom && (
         <CustomAccount
-          onClose={() => setAddingCustom(false)}
+          preset={addingCustom}
+          onClose={() => setAddingCustom(undefined)}
           onDone={() => {
-            setAddingCustom(false);
-            setNotice("Custom provider account added.");
+            const google = addingCustom === "google";
+            setAddingCustom(undefined);
+            setNotice(
+              google ? "Google AI Studio account added." : "Custom provider account added.",
+            );
             reloadList();
           }}
         />

@@ -29,6 +29,38 @@ export function upstreamUrlAllowed(configuredBase, targetUrl) {
   }
 }
 
+const THOUGHT_SIGNATURE_MARK = "__argus_thought__";
+
+/**
+ * Carry provider tool-call metadata through the Anthropic `tool_use.id`, which the
+ * client echoes back on the tool_result. Gemini 3 needs its thought signature on
+ * the next request, and the Anthropic Messages format has no field for it.
+ */
+export function encodeToolCallId(id, extraContent) {
+  const signature = extraContent?.google?.thought_signature;
+  if (typeof id !== "string" || typeof signature !== "string" || !signature) return id;
+  return `${id}${THOUGHT_SIGNATURE_MARK}${Buffer.from(signature, "utf8").toString("base64url")}`;
+}
+
+export function decodeToolCallId(id) {
+  if (typeof id !== "string") return { id, extra_content: undefined };
+  const at = id.lastIndexOf(THOUGHT_SIGNATURE_MARK);
+  if (at < 0) return { id, extra_content: undefined };
+  try {
+    const signature = Buffer.from(
+      id.slice(at + THOUGHT_SIGNATURE_MARK.length),
+      "base64url",
+    ).toString("utf8");
+    if (!signature) return { id, extra_content: undefined };
+    return {
+      id: id.slice(0, at),
+      extra_content: { google: { thought_signature: signature } },
+    };
+  } catch {
+    return { id, extra_content: undefined };
+  }
+}
+
 function anthropicContentToOpenAI(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -42,9 +74,11 @@ function anthropicContentToOpenAI(content) {
       typeof block.id === "string" &&
       typeof block.name === "string"
     ) {
+      const call = decodeToolCallId(block.id);
       toolCalls.push({
-        id: block.id,
+        id: call.id,
         type: "function",
+        ...(call.extra_content ? { extra_content: call.extra_content } : {}),
         function: {
           name: block.name,
           arguments: JSON.stringify(block.input ?? {}),
@@ -61,7 +95,11 @@ function anthropicContentToOpenAI(content) {
                 .map((c) => c.text)
                 .join("")
             : "";
-      return { role: "tool", tool_call_id: block.tool_use_id, content: text };
+      return {
+        role: "tool",
+        tool_call_id: decodeToolCallId(block.tool_use_id).id,
+        content: text,
+      };
     }
   }
   if (toolCalls.length) return { content: parts.join("") || null, tool_calls: toolCalls };
@@ -156,12 +194,15 @@ export function openAIChoiceToAnthropic(choice) {
     }
     content.push({
       type: "tool_use",
-      id: call.id ?? `tool_${content.length}`,
+      id: encodeToolCallId(call.id ?? `tool_${content.length}`, call.extra_content),
       name: call.function?.name ?? "tool",
       input,
     });
   }
-  const stop = choice?.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
+  const stop =
+    choice?.finish_reason === "tool_calls" || content.some((block) => block.type === "tool_use")
+      ? "tool_use"
+      : "end_turn";
   return {
     id: `msg_${randomId()}`,
     type: "message",
@@ -224,14 +265,14 @@ export async function pipeOpenAIChatStreamToAnthropic(res, reader) {
     });
   };
 
-  const startToolBlock = (toolIndex, id, name) => {
+  const startToolBlock = (toolIndex, id, name, extraContent) => {
     closeTextBlock();
     const existing = tools.get(toolIndex);
     if (existing?.started) return existing;
     const blockIndex = nextBlockIndex++;
     const state = {
       blockIndex,
-      id: id ?? `tool_${toolIndex}`,
+      id: encodeToolCallId(id ?? `tool_${toolIndex}`, extraContent),
       name: name ?? "tool",
       started: true,
     };
@@ -271,8 +312,8 @@ export async function pipeOpenAIChatStreamToAnthropic(res, reader) {
           for (const tc of delta.tool_calls) {
             const ti = tc.index ?? 0;
             let state = tools.get(ti);
-            if (!state?.started) state = startToolBlock(ti, tc.id, tc.function?.name);
-            if (tc.id) state.id = tc.id;
+            if (!state?.started)
+              state = startToolBlock(ti, tc.id, tc.function?.name, tc.extra_content);
             if (tc.function?.name) state.name = tc.function.name;
             const frag = tc.function?.arguments;
             if (typeof frag === "string" && frag) {
@@ -293,6 +334,9 @@ export async function pipeOpenAIChatStreamToAnthropic(res, reader) {
   }
 
   closeTextBlock();
+  // Some OpenAI-compatible providers (Gemini) report `stop` even when the reply
+  // carries tool calls; the emitted blocks are what decides the Anthropic stop.
+  if (stopReason !== "max_tokens" && tools.size > 0) stopReason = "tool_use";
   for (const state of tools.values()) {
     if (!closedBlocks.has(state.blockIndex)) {
       sse(res, "content_block_stop", { type: "content_block_stop", index: state.blockIndex });

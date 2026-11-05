@@ -45,6 +45,7 @@ CATALOG: dict[str, Component] = {
     c.id: c
     for c in (
         Component("python", "provision", ("3.12", "3.13"), "interpreter installed by uv for the node user"),
+        Component("pytest", "provision", ("9.2.0",), "pytest test runner installed into the declared python interpreter"),
         Component("pango", "provision", (), "pango/harfbuzz/fonts that weasyprint loads at import"),
         Component("graft", "provision", ("0.21.1",), "codebase navigation CLI, npm integrity pinned"),
         Component("psql", "provision", ("16",), "PostgreSQL client from the PGDG apt repository"),
@@ -188,6 +189,8 @@ def resolve(project: str, spec: RuntimeSpec) -> Recipe:
                 problems.append(
                     f"{name}: placeholders {sorted(bad)} do not exist for {svc.kind}"
                 )
+    if "pytest" in wanted and "python" not in wanted:
+        problems.append("'pytest' needs component 'python' in the image; add it")
     if "postgres-server" in wanted and "psql" not in wanted:
         problems.append(
             "'postgres-server' needs 'psql' (the client the tasks and probes use); add it"
@@ -279,6 +282,10 @@ def render_dockerfile(recipe: Recipe) -> str:
     if recipe.has("python"):
         py = recipe.version("python")
         out.append(f"RUN uv python install {py} && uv python find {py}")
+        if recipe.has("pytest"):
+            out.append(
+                f'RUN uv pip install --python "$(uv python find {py})" pytest=={recipe.version("pytest")}'
+            )
     out.append(
         f'LABEL dev.argus.runtime.project="{recipe.project}" dev.argus.runtime.schema="{SCHEMA}"'
     )
@@ -335,6 +342,15 @@ def probes(recipe: Recipe) -> list[Probe]:
                         "python",
                         _sh(f"$(uv python find {c.version}) --version"),
                         rf"^Python {re.escape(c.version or '')}\.",
+                    )
+                )
+            case "pytest":
+                py = recipe.version("python")
+                p.append(
+                    Probe(
+                        "pytest",
+                        _sh(f"$(uv python find {py}) -m pytest --version"),
+                        rf"^pytest {re.escape(c.version or '')}\b",
                     )
                 )
             case "node":

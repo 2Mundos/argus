@@ -18,6 +18,9 @@ class ToolCall:
     # object (`raw` keeps it; the call is never sent to Argus).
     arguments: dict[str, Any] | None
     raw: str
+    # Provider metadata the reply carried on the call and that the provider needs
+    # back on the next request (Gemini thought signatures). Never model-visible.
+    extra_content: dict[str, Any] | None = None
 
 
 @dataclass

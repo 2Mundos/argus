@@ -55,6 +55,11 @@ class OpenAIAdapter:
                         {
                             "id": call.id,
                             "type": "function",
+                            **(
+                                {"extra_content": call.extra_content}
+                                if call.extra_content
+                                else {}
+                            ),
                             "function": {
                                 "name": call.name,
                                 "arguments": call.raw
@@ -136,18 +141,31 @@ class OpenAIAdapter:
             name = fn.get("name")
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("invalid OpenAI-compatible function name")
-            text = fn.get("arguments")
-            if not isinstance(text, str) or not text.strip():
+            raw_arguments = fn.get("arguments")
+            if isinstance(raw_arguments, str):
+                text = raw_arguments
+                if not text.strip():
+                    raise ValueError("invalid OpenAI-compatible function arguments")
+            elif isinstance(raw_arguments, dict):
+                try:
+                    text = json.dumps(raw_arguments)
+                except (TypeError, ValueError, RecursionError) as exc:
+                    raise ValueError(
+                        "invalid OpenAI-compatible function arguments"
+                    ) from exc
+            else:
                 raise ValueError("invalid OpenAI-compatible function arguments")
             arguments = parse_arguments(text)
             if arguments is None:
                 raise ValueError("invalid OpenAI-compatible function arguments")
+            extra = raw.get("extra_content")
             calls.append(
                 ToolCall(
                     id=call_id,
                     name=name,
                     arguments=arguments,
                     raw=text,
+                    extra_content=extra if isinstance(extra, dict) else None,
                 )
             )
         return Reply(
