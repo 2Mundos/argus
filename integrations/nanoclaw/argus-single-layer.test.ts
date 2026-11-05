@@ -234,6 +234,15 @@ describe("pullRequestsOf", () => {
     ]);
     expect(pullRequestsOf(undefined, "https://git.example.test/org/repo/pulls/7")).toEqual([]);
   });
+  it("matches the owner and repository whatever their casing (2Mundos/argus #255)", () => {
+    // The claim carries Argus's lowercase URL; the forge prints the owner's casing.
+    expect(
+      pullRequestsOf(
+        "https://github.com/2mundos/argus",
+        "Opened https://github.com/2Mundos/argus/pull/255 and https://github.com/2Mundos/argus-x/pull/3",
+      ),
+    ).toEqual([{ number: 255, url: "https://github.com/2Mundos/argus/pull/255" }]);
+  });
 });
 
 // -- end to end: the adapter against a fake Argus API and OneCLI gateway --------------

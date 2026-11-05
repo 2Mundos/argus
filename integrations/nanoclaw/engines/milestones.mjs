@@ -136,9 +136,12 @@ export function createTracker({ probes, emit, repository }) {
       const head = await safely(() => probes.head(), null);
       if (head && head.sha !== baseline)
         once("commit_created", { branch: head.branch, sha: head.sha });
-      const prefix = repository ? `${repository.replace(/(\.git)?\/*$/, "")}/pull` : null;
+      // Case-insensitive: the task's URL is Argus's lowercase one, the forge prints the owner's casing.
+      const prefix = repository
+        ? `${repository.replace(/(\.git)?\/*$/, "")}/pull`.toLowerCase()
+        : null;
       for (const pr of pullRequestsIn(await safely(() => probes.output(), "")))
-        if (!prefix || pr.url.startsWith(prefix)) once("pr_opened", pr);
+        if (!prefix || pr.url.toLowerCase().startsWith(prefix)) once("pr_opened", pr);
       if (head && head.sha !== baseline && probes.ci) {
         const ci = ciState(await safely(() => probes.ci(head.sha), null));
         if (ci?.state === "pending") once("ci_running", { sha: head.sha });

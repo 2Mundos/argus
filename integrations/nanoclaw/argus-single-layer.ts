@@ -151,13 +151,17 @@ export const SINGLE_LAYER_LINES = [
   "When you open the pull request, name its URL in a progress message or in COMPLETE.",
 ];
 
-/** Pull requests of `repository` named in `text`, as pr_opened data (the URL without query). */
+/**
+ * Pull requests of `repository` named in `text`, as pr_opened data (the URL without query).
+ * Host, owner and repository compare case-insensitively, as the forges and Argus treat
+ * them: the claim's URL is lowercase, while the forge prints the owner's own casing.
+ */
 export function pullRequestsOf(
   repository: string | undefined,
   text: string,
 ): Array<{ number: number; url: string }> {
   if (!repository) return [];
-  const base = repository.replace(/(\.git)?\/*$/, "");
+  const base = repository.replace(/(\.git)?\/*$/, "").toLowerCase();
   const found = new Map<string, { number: number; url: string }>();
   for (const m of text.matchAll(/https?:\/\/[^\s"'<>)\]\\]+/g)) {
     const bare = m[0]
@@ -165,7 +169,7 @@ export function pullRequestsOf(
       .replace(/[.,;:]+$/, "")
       .replace(/\/+$/, "");
     const pr = /^(.*)\/pulls?\/(\d+)$/.exec(bare);
-    if (!pr || pr[1] !== base) continue;
+    if (!pr || pr[1]!.toLowerCase() !== base) continue;
     const number = Number(pr[2]);
     if (Number.isSafeInteger(number) && number >= 1) found.set(bare, { number, url: bare });
   }

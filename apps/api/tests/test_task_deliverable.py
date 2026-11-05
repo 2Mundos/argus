@@ -14,6 +14,7 @@ from argus_api.main import app
 from argus_api.tasks import independent_review as indep
 from argus_api.tasks import pr_binding, service
 from argus_api.tasks.continuation import upsert_artifact
+from argus_api.tasks.delivery import LIST_CAP, LIST_PAGES
 from argus_core.continuation import (
     ArtifactKind,
     ArtifactState,
@@ -1188,6 +1189,73 @@ def test_completion_binds_the_one_pr_of_the_attempt_or_refuses(
     assert again.status_code == 200, again.text
     assert reads == []
     assert len(bindings(client, task_id)) == 1
+
+
+def test_completion_finds_the_attempts_pr_behind_a_full_page_of_newer_ones(
+    client: TestClient,
+) -> None:
+    """2Mundos/argus #255: the attempt's merged PR sat behind 50 newer PRs, so the
+    one-page list never saw it. The list pages on, newest first, until it reaches PRs
+    created before the task, and reads no further."""
+    w = worker(client)
+    task_id = create(client, "pr_open").json()["id"]
+    claimed = claim(client, w)
+    client.app.state.pr_checker._cache.clear()  # ty: ignore[unresolved-attribute]
+    newer, older = "2999-01-01T00:00:00Z", "2000-01-01T00:00:00Z"
+
+    def pull(number: int, ref: str, created: str, **extra) -> dict:
+        return {
+            **open_pr(**extra),
+            "number": number,
+            "created_at": created,
+            "head": {"sha": HEAD if ref.startswith("argus/") else OTHER, "ref": ref},
+        }
+
+    # GitHub's list shape for a merged PR: no `merged` flag, only `merged_at`.
+    ours = pull(255, f"argus/task-{task_id[:8]}", newer, state="closed")
+    del ours["merged"]
+    ours["merged_at"] = "2026-11-04T09:00:00Z"
+    pages = {
+        "1": [pull(300 - n, f"feat-{n}", newer) for n in range(LIST_CAP)],
+        "2": [ours, *(pull(200 - n, f"old-{n}", older) for n in range(LIST_CAP - 1))],
+    }
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/pulls"), request.url.path
+        asked.append(request.url.params["page"])
+        return httpx.Response(200, json=pages.get(request.url.params["page"], []))
+
+    forge(client, handler)
+    res = complete(client, w, claimed)
+    assert res.status_code == 200, res.text
+    assert asked == ["1", "2"]
+    [pr] = [a for a in res.json()["continuation"]["artifacts"] if a["kind"] == "pr"]
+    assert (pr["ref"], pr["state"], pr["head_sha"]) == ("255", "merged", HEAD)
+    [event] = bindings(client, task_id)
+    assert (event["data"]["number"], event["data"]["pr_state"]) == (255, "merged")
+
+
+def test_a_list_not_read_in_full_binds_nothing(client: TestClient) -> None:
+    """Full pages up to the page cap that never reach a PR older than the task: the
+    task's PR could be on an unread page, so the search says it is incomplete."""
+    w = worker(client)
+    task_id = create(client, "pr_open").json()["id"]
+    claimed = claim(client, w)
+    client.app.state.pr_checker._cache.clear()  # ty: ignore[unresolved-attribute]
+    full = [{**open_pr(), "number": n + 1} for n in range(LIST_CAP)]  # dates unknown
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params["page"])
+        return httpx.Response(200, json=full)
+
+    forge(client, handler)
+    res = complete(client, w, claimed)
+    assert (res.status_code, code(res)) == (422, "deliverable_missing")
+    assert "could not be completed" in res.json()["detail"]["details"][0]
+    assert asked == [str(p) for p in range(1, LIST_PAGES + 1)]
+    assert state(client, task_id) == "claimed"
 
 
 def test_a_worker_report_of_the_bound_pr_leaves_the_binding() -> None:

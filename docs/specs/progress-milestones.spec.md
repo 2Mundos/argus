@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # Progress milestones
@@ -84,8 +84,11 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   until the pool environment does, only the file and stderr are written (4).
 - Failures of a sink never fail the delegation.
 - In every execution mode the NanoClaw channel also emits `pr_opened` itself.
-  A PR URL of exactly the task's repository, named in a reply, is posted once per
-  attempt before handling the reply, and a claim-lost answer abandons the attempt.
+  A PR URL of the task's repository, named in a reply, is posted once per attempt
+  before handling the reply, and a claim-lost answer abandons the attempt. Host,
+  owner and repository compare case-insensitively here and in the emitter's
+  `ARGUS_REPOSITORY_URL` filter: the claim's URL is Argus's lowercase one, while the
+  forge prints the owner's own casing (`2Mundos`).
   This covers delegated runs whose emitter has no API token as well as the
   [single-layer experiment](single-layer-experiment.spec.md) 3.3.
 

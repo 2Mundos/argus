@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # Task deliverable
@@ -116,13 +116,20 @@ and hands the result to `complete`. It runs only for the current assignee, and
 never when the task already holds a PR artifact: an explicit worker report comes
 first and the forge is not read.
 
-- **Candidates.** One forge read: the recent pull requests of the project's
-  repository (3.3), any state, newest first, at most 50 (`per_page` on GitHub,
-  `limit` on Gitea), read once with the repository's own credential. Argus filters
-  the list itself; text the worker wrote never nominates a PR, so a worker that does
-  not name its PR is found too. No other forge read is made. A list that cannot be
-  read (no credential, an error status, a body that is not a list) binds nothing and
-  the advice says the search could not be completed.
+- **Candidates.** One forge list: the pull requests of the project's repository
+  (3.3), any state (open, merged and closed), newest created first (`sort=created`,
+  `direction=desc` on GitHub, `sort=newest` on Gitea), read with the repository's own
+  credential in pages of 50 (`per_page` on GitHub, `limit` on Gitea) until a page is
+  short or reaches a PR created before the task. The task's PR is newer than the
+  task, so it is found, open or merged, however many other PRs are newer. Argus
+  filters the list itself; text the worker wrote never nominates a PR, so a worker
+  that does not name its PR is found too. No other forge read is made. A list that
+  cannot be read in full (no credential, an error
+  status, a body that is not a list, or 10 full pages without reaching the task's
+  creation) binds nothing and the advice says the search could not be completed.
+  Repository identities compare case-insensitively everywhere (Argus stores them
+  lowercase); the NanoClaw channel and the delegate's milestone tracker match a PR
+  URL in the owner's own casing (`2Mundos`) to the claim's lowercase repository.
 - **Attributable.** A candidate counts when it is readable (not `unknown`, with a
   head), not `closed`, and either its head branch is the task's branch
   (`argus/task-<first 8 characters of the task id>`) or its head is a commit the
