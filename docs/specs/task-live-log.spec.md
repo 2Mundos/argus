@@ -153,12 +153,16 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   messages (`item.completed` `agent_message`), `▸ shell <command>`, `▸ patch <paths>`,
   `▸ server/tool arg` for an MCP call and `▸ web_search <query>`, a bounded
   result (`  ↳ …`) or error (`  ✗ error: …`, with the exit code of a failed command),
-  `codex error: …` for an `error` event, and `codex finished` or
+  `codex error: …` for an `error` event (`codex error (retrying): …` for the CLI's
+  `Reconnecting... N/5` and `Falling back ...` notices, which are not failures), and `codex finished` or
   `codex finished with an error: …` on `turn.completed` / `turn.failed`. Never shown:
   `reasoning`, `todo_list`, the prompt, or unknown events and unparsable lines. The
-  Codex command, auth, usage accounting and attribution are unchanged. The event names
-  are not yet checked against a captured credential-free run or a pinned schema in this
-  repo (open question); unknown or differently shaped events are ignored, not guessed.
+  Codex command, auth, usage accounting and attribution are unchanged. The event
+  names and fields are pinned to codex-cli 0.162.1 by
+  `integrations/nanoclaw/fixtures/codex-0.162.1/PIN.md`: a captured unauthenticated
+  `exec --json` stream and the app-server schema extract. The one gap is the exec
+  success path, which has no live capture and rests on the binary's names. Unknown or
+  differently shaped events are ignored, not guessed.
 - The batches are appended as JSON lines `{v, task_id, attempt, at, lines}` to
   `argus-task-log.jsonl` in the agent group directory (beside the model-policy
   snapshot, no new mount). The file is capped at 8 MiB per run, counting what it
