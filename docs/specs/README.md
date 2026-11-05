@@ -78,6 +78,7 @@ Every spec in this directory with its status, kept in sync by
 | [Task drafts](task-drafts.spec.md) | `implemented` |
 | [Task edit](task-edit.spec.md) | `implemented` |
 | [Task finalization](task-finalization.spec.md) | `implemented` |
+| [Task graph](task-graph.spec.md) | `draft` |
 | [Task helpers (`argus-task`)](task-helpers.spec.md) | `implemented` |
 | [Task inputs: hand bytes to a later attempt through the NanoClaw channel](task-inputs.spec.md) | `implemented` |
 | [Task live log](task-live-log.spec.md) | `implemented` |
