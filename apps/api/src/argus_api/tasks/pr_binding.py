@@ -8,6 +8,7 @@ delivery reconciliation only opens the normal review decision, so no gate is wai
 
 import json
 import re
+from datetime import datetime
 
 import aiosqlite
 from argus_core.continuation import (
@@ -47,12 +48,12 @@ async def find_pr(
     attempt: int,
 ) -> deliverable.PrSearch | None:
     """The one automatic attempt to bind a PR before a completion is refused for want
-    of one (task deliverable spec 3.4). One forge read, here and outside the write,
-    lists the project's repository's recent PRs; none when no search is due (another
-    deliverable, a PR already reported, a caller that is not the assignee). A PR
-    counts only when it is on the task's branch or at a commit the task pushed, and
-    its head is not past what the task pushed. A list that cannot be read binds
-    nothing."""
+    of one (task deliverable spec 3.4). One forge list, here and outside the write,
+    reads the project's repository's PRs created since the task was; none when no
+    search is due (another deliverable, a PR already reported, a caller that is not
+    the assignee). A PR counts only when it is on the task's branch or at a commit
+    the task pushed, and its head is not past what the task pushed. A list that
+    cannot be read in full binds nothing."""
     async with db.read() as conn:
         row = await service.task_row(conn, task_id)
         if (
@@ -72,7 +73,8 @@ async def find_pr(
                 None, f"Argus found no repository configured for {row['project']}."
             )
         pushed = _pushed_heads(have)
-        listed = await checker.list_recent(conn, proven)
+        since = datetime.fromisoformat(row["created_at"])
+        listed = await checker.list_since(conn, proven, since)
     where = f"https://{'/'.join(proven)}"
     searched = f"Argus searched {where} for a pull request from {branch}"
     if pushed:
@@ -82,9 +84,10 @@ async def find_pr(
     if listed is None:
         return deliverable.PrSearch(
             None,
-            f"{searched}; the search could not be completed (the forge list was unreadable).",
+            f"{searched}; the search could not be completed (the forge list could not"
+            " be read in full).",
         )
-    notes = [f"{len(listed)} recent pull requests read"]
+    notes = [f"{len(listed)} pull requests read"]
     matches: list[tuple[delivery.PrRef, delivery.ForgeSnapshot]] = []
     for ref, snap in listed:
         at_pushed = snap.head_sha is not None and any(

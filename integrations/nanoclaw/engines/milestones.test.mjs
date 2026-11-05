@@ -103,6 +103,16 @@ test("pr_opened comes from executor output, only for the configured repository",
   assert.deepEqual(emitted, [{ kind: "pr_opened", data: { number: 12, url: PR } }]);
 });
 
+test("pr_opened matches the repository whatever the owner's casing (2Mundos/argus #255)", async () => {
+  const url = "https://github.com/2Mundos/argus/pull/255";
+  const { t, emitted } = tracker(
+    { head: () => null, output: () => `opened ${url}` },
+    "https://github.com/2mundos/argus.git",
+  );
+  await t.poll();
+  assert.deepEqual(emitted, [{ kind: "pr_opened", data: { number: 255, url } }]);
+});
+
 test("CI states map to milestones and a failing context is a gate_failed", async () => {
   let statuses = [{ id: 1, context: "lint", status: "pending" }];
   let head = { branch: "b", sha: "a".repeat(40) };

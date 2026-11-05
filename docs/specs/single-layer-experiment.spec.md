@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # Single-layer experiment: the Claude harness codes without the delegate hop
@@ -102,7 +102,7 @@ always the default path, marked.
   call `argus-delegate` or start another coding CLI; name the PR URL in a progress
   message or in `COMPLETE`". Everything else in the task body is unchanged.
 - **`pr_opened`.** The channel reports the milestone itself, as in delegated runs.
-  A URL in a reply whose base is exactly the task's repository
+  A URL in a reply whose base is the task's repository (compared case-insensitively)
   and whose path ends `/pull/<n>` or `/pulls/<n>` is posted as `pr_opened`
   `{number, url}`, once per URL and attempt, before the reply is handled
   ([progress milestones](progress-milestones.spec.md)). A 409 claim-lost answer

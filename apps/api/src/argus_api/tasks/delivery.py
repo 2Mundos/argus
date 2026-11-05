@@ -58,7 +58,8 @@ CACHE_S = 15.0
 TEXT_CAP = 20_000
 CHECK_CAP = 50
 REVIEW_CAP = 20
-LIST_CAP = 50  # PRs of one repository read to find a task's own
+LIST_CAP = 50  # PRs per page of the list that finds a task's own (Gitea's default max)
+LIST_PAGES = 10  # pages read at most; a list longer than that is not read in full
 DESC_CAP = 200
 PENDING_IDS_CAP = 20
 
@@ -390,6 +391,16 @@ def _truncate(text: str | None) -> str | None:
     return t if len(t) <= DESC_CAP else t[: DESC_CAP - 1] + "…"
 
 
+def _created_before(item: Any, since: datetime) -> bool:
+    """A listed PR created before `since`; one without a readable date is not."""
+    raw = item.get("created_at") if isinstance(item, dict) else None
+    try:
+        created = datetime.fromisoformat(raw) if isinstance(raw, str) else None
+    except ValueError:
+        return False
+    return created is not None and created.tzinfo is not None and created < since
+
+
 class PrChecker:
     """Reads one PR and its exact-head checks from its forge. Concurrent reads of
     the same PR share one request and a result is reused for CACHE_S seconds."""
@@ -570,53 +581,61 @@ class PrChecker:
                 pr_state=PrState.UNKNOWN, merged_at=None, checked_at=checked_at
             )
 
-    async def list_recent(
-        self, conn: aiosqlite.Connection, repo: tuple[str, str, str]
+    async def list_since(
+        self, conn: aiosqlite.Connection, repo: tuple[str, str, str], since: datetime
     ) -> list[tuple[PrRef, ForgeSnapshot]] | None:
-        """The one forge read that finds a task's PR (task deliverable spec 3.4): the
-        repository's most recent PRs of any state, newest first, as PR facts without
-        checks. The caller filters by head. None when the list could not be read."""
+        """The forge read that finds a task's PR (task deliverable spec 3.4): the
+        repository's PRs of any state, newest first, as PR facts without checks, page
+        by page until the list ends or a page reaches a PR created before `since`, so
+        a PR is found however many others are newer. The caller filters by head. None
+        when a page could not be read or LIST_PAGES pages did not reach `since`."""
         ref = PrRef(*repo, 0)
         login = await self.login(conn, ref.provider)
         if login is None:
             return None
         base, headers, basic = self._client(ref, login)
-        page = (
-            f"per_page={LIST_CAP}" if ref.provider == "github" else f"limit={LIST_CAP}"
+        order = (
+            f"sort=created&direction=desc&per_page={LIST_CAP}"
+            if ref.provider == "github"
+            else f"sort=newest&limit={LIST_CAP}"
         )
         checked_at = utcnow()
+        deadline = time.monotonic() + OVERALL_BUDGET_S
+        found: list[tuple[PrRef, ForgeSnapshot]] = []
         try:
             async with httpx.AsyncClient(
                 transport=self.transport, timeout=TIMEOUT_S, follow_redirects=False
             ) as client:
-                res = await self._get(
-                    client,
-                    f"{base}/pulls?state=all&sort=newest&{page}&page=1",
-                    headers,
-                    basic,
-                    time.monotonic() + OVERALL_BUDGET_S,
-                )
-            if res is None or res.status_code != 200:
-                return None
-            items = res.json()
-            if not isinstance(items, list):
-                return None
-            found: list[tuple[PrRef, ForgeSnapshot]] = []
-            for item in items:
-                if not isinstance(item, dict) or not isinstance(
-                    item.get("number"), int
-                ):
-                    continue
-                # GitHub's list has no `merged` flag, only `merged_at`.
-                if item.get("merged") is None and item.get("merged_at"):
-                    item = {**item, "merged": True}
-                found.append(
-                    (
-                        PrRef(*repo, item["number"]),
-                        self._parse_pr(item, checked_at),
+                for page in range(1, LIST_PAGES + 1):
+                    res = await self._get(
+                        client,
+                        f"{base}/pulls?state=all&{order}&page={page}",
+                        headers,
+                        basic,
+                        deadline,
                     )
-                )
-            return found
+                    if res is None or res.status_code != 200:
+                        return None
+                    items = res.json()
+                    if not isinstance(items, list):
+                        return None
+                    for item in items:
+                        if not isinstance(item, dict) or not isinstance(
+                            item.get("number"), int
+                        ):
+                            continue
+                        # GitHub's list has no `merged` flag, only `merged_at`.
+                        if item.get("merged") is None and item.get("merged_at"):
+                            item = {**item, "merged": True}
+                        found.append(
+                            (
+                                PrRef(*repo, item["number"]),
+                                self._parse_pr(item, checked_at),
+                            )
+                        )
+                    if len(items) < LIST_CAP or _created_before(items[-1], since):
+                        return found
+            return None
         except (httpx.HTTPError, ValueError, AttributeError, TypeError):
             log.info("pr list unavailable for %s/%s/%s", *repo)
             return None
