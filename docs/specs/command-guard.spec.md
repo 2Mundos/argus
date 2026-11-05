@@ -81,7 +81,8 @@ bypass. Background: draft (removed; in git history),
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
-  and its delivery at claim are **not implemented**.
+  is registered ([settings](settings.spec.md) 3.9); its delivery at claim is
+  **not implemented**.
 
 # 4. Open Questions
 
@@ -91,13 +92,13 @@ Not built yet (section 3 marks each **not implemented**):
 
 - `task.command_blocked` event emission and Fleet presentation (the task feed
   already shows the rule id and reason).
-- The `command_guard.enabled` setting and its delivery to the hook at claim; the
-  hook already honours `ARGUS_COMMAND_GUARD`.
+- Delivery of `command_guard.enabled` to the hook at claim (the setting is
+  registered; the hook already honours `ARGUS_COMMAND_GUARD`).
 - `env_guard_missing` when a guarded engine starts without the hook.
 - Codex coverage (hook support and trusted-hash registration).
 
-- **Open item: settings and event plumbing.** `command_guard.enabled`
-  ([settings](settings.spec.md)), passing it to the hook as
+- **Open item: settings and event plumbing.** Passing `command_guard.enabled`
+  ([settings](settings.spec.md), registered) to the hook as
   `ARGUS_COMMAND_GUARD`, a worker route or channel to carry
   `task.command_blocked`, its Fleet presentation, and `env_guard_missing`
   in [failure classes](failure-classes.spec.md).
