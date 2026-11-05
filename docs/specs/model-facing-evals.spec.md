@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-11-01
+updated: 2026-11-01
+---
+
 # Model-Facing Evals
 
 # 1. Purpose and Scope

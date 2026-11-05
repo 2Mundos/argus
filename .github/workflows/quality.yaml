@@ -332,6 +332,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 scripts/validate_docs.py
+      - run: python3 scripts/check_specs.py
 
   secret-scan:
     runs-on: ubuntu-latest

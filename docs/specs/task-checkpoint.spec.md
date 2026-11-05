@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-29
+updated: 2026-10-29
+---
+
 # Task checkpoint: keep a task's unpublished work across attempts and workers
 
 # 1. Purpose and Scope

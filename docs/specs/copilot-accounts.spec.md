@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-30
+updated: 2026-10-30
+---
+
 # Copilot accounts: import, executor lease, delegated CLI
 
 Builds on [engines](engines.spec.md), the account pool in

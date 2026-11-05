@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-11-04
+updated: 2026-11-04
+---
+
 # Dashboard live data performance
 
 # 1. Purpose and Scope

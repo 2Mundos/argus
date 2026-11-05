@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-21
+updated: 2026-11-03
+---
+
 # Custom OpenAI-compatible harness (NanoClaw engine)
 
 Builds on [custom accounts](custom-accounts.spec.md), [local Strata harness](local-harness.spec.md),

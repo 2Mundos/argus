@@ -16,6 +16,14 @@ Instructions for AI agents working in this repo.
   integrations are off by default. Changing this needs a spec PR first.
 - **Spec first.** Behaviour changes start in `docs/specs/` (`topic.spec.md`, six-section
   template). Other docs are `YYYY-MM-DD.name.type.md`. Link every doc from `docs/README.md`.
+- **Specs track the code.** Every spec opens with `status` (`implemented`, `partial`,
+  `draft`, `deferred`, `superseded`), `created` and `updated` frontmatter and is
+  listed in [the specs index](docs/specs/README.md); `scripts/check_specs.py` (in
+  `make lint`, pre-push and CI) enforces it. A PR that changes behaviour updates the
+  owning spec in the same PR: its text, its status and `updated`. A new feature
+  starts as a `draft` spec. A `partial` spec lists what is missing under **Open
+  items**; building one removes it, and the last one moves the status to
+  `implemented`. A `superseded` spec links its replacement.
 - **Negentropy.** Code is a liability; add only what is needed.
 - **Schema changes** are a new `apps/api/src/argus_api/db/migrations/NNNN_name.sql`
   (next number, no gaps). Never edit a migration that has shipped. All writes go

@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-17
+updated: 2026-10-24
+---
+
 # Cursor accounts: import, executor lease, delegated CLI
 
 Builds on [engines](engines.spec.md) and the account pool in

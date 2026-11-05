@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-14
+updated: 2026-11-03
+---
+
 # Lightweight Single-Node Spec
 
 This is a core principle of Argus. Every other spec and every new dependency is

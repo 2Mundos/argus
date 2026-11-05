@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-20
+updated: 2026-11-04
+---
+
 # Local Strata harness (NanoClaw failover)
 
 # 1. Purpose and Scope

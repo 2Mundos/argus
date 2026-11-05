@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-14
+updated: 2026-11-04
+---
+
 # Operations Spec
 
 Health, readiness, metrics, and the System widgets. Everything here follows

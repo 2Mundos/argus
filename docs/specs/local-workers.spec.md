@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-11-03
+updated: 2026-11-03
+---
+
 # Local workers
 
 # 1. Purpose and Scope

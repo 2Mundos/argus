@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-16
+updated: 2026-11-03
+---
+
 # Worker launch and node capabilities
 
 # 1. Purpose and Scope

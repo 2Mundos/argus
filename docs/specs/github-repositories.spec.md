@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-27
+updated: 2026-10-28
+---
+
 # GitHub repositories
 
 # 1. Purpose and Scope

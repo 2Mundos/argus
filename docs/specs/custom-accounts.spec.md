@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-21
+updated: 2026-10-23
+---
+
 # Custom OpenAI-compatible accounts
 
 Builds on [global account selection](account-selection.spec.md), the account pool in

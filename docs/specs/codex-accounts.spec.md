@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-16
+updated: 2026-11-03
+---
+
 # Codex accounts: import, dedicated login, engine selection
 
 Builds on [engines](engines.spec.md) and the account pool in

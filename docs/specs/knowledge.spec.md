@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-14
+updated: 2026-11-04
+---
+
 # Knowledge Spec
 
 Finalized from [the 2026-10-14 draft](../drafts/2026-10-14.knowledge.draft.md),

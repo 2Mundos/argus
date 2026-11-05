@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-20
+updated: 2026-10-20
+---
+
 # Task archive
 
 # 1. Purpose and Scope

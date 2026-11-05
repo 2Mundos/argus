@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-10-16
+updated: 2026-11-05
+---
+
 # Home
 
 # 1. Purpose and Scope
@@ -136,8 +142,6 @@ knowledge: {pages_by_state, proposals_by_state}
 - UI text is English. Layout works from 390 px to 1440 px, tables scroll inside
   their container, severity is conveyed by icon and word as well as colour, and the
   attention region is `aria-live="polite"`.
-- The generated OpenAPI schema does not yet contain `/api/overview`; the dashboard
-  uses local types in `apps/dashboard/src/overview.ts` until regeneration.
 
 # 6. Implementation Consequences
 

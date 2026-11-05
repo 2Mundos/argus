@@ -1,3 +1,9 @@
+---
+status: implemented
+created: 2026-11-01
+updated: 2026-11-01
+---
+
 # Pool delete
 
 # 1. Purpose and Scope
