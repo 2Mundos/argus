@@ -11079,6 +11079,7 @@ export interface components {
             updated_at: string;
             /** Version */
             version: string;
+            workspace?: components["schemas"]["WorkspaceFacts"] | null;
         };
         /**
          * TaskResult
@@ -11701,6 +11702,20 @@ export interface components {
             /** Running */
             running: boolean;
             settings: components["schemas"]["WorkspaceCleanupSettings"];
+        };
+        /**
+         * WorkspaceFacts
+         * @description Who holds the task's current workspace and whether its work is recoverable.
+         *     Never a path or a checkpoint reference: the API knows neither.
+         */
+        WorkspaceFacts: {
+            /**
+             * Checkpoint
+             * @enum {string}
+             */
+            checkpoint: "available" | "unavailable" | "unknown";
+            /** Owner Agent Id */
+            owner_agent_id: string;
         };
         /**
          * Yield
