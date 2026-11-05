@@ -13624,7 +13624,7 @@
         "type": "object"
       },
       "NativeSessionReport": {
-        "description": "The engine's own session the quota pause left behind (quota resume spec 3.2).\nOptional on a quota report; the server adds the node and ignores it for any other\nending.",
+        "description": "The engine's own session the ending attempt left behind (quota resume spec 3.2).\nOptional on a quota report and on a confirmed `session_lost` report; the server\nadds the node and ignores it for any other ending.",
         "properties": {
           "engine": {
             "maxLength": 32,
@@ -17046,8 +17046,17 @@
         "type": "object"
       },
       "QuotaResume": {
-        "description": "The native session the previous attempt's quota pause left, offered once to\nthe next claim (quota resume spec 3.3). `node` is the agent that held it.",
+        "description": "The native session the previous attempt left, offered once to the next claim\n(quota resume spec 3.3). `node` is the agent that held it; `cause` says why the\nattempt ended.",
         "properties": {
+          "cause": {
+            "default": "quota",
+            "enum": [
+              "quota",
+              "session_lost"
+            ],
+            "title": "Cause",
+            "type": "string"
+          },
           "engine": {
             "maxLength": 32,
             "minLength": 1,

@@ -1,21 +1,23 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-05
 ---
 
-# Quota resume: resume the same native conversation after a quota pause
+# Session resume: resume the same native conversation after an interruption
 
 # 1. Purpose and Scope
 
 [Account selection](account-selection.spec.md) pauses a task on a provider quota
 notice without spending an attempt: it goes back to `ready`, or parks as
-`awaiting_quota`. The next claim starts a new agent session and the
-[task checkpoint](task-checkpoint.spec.md) restores files, but the model starts
-over. This spec keeps the native conversation across that pause: the paused attempt
-records the Claude Code session id, and the next claim on the same node and engine
-hands the agent one framed operator message instead of a cold start. When that is
-not possible the claim behaves exactly as before.
+`awaiting_quota`. A confirmed session exit (`session_lost`) ends the attempt the
+same way, with a new attempt on the same task. Either way the next claim starts a
+new agent session and the [task checkpoint](task-checkpoint.spec.md) restores
+files, but the model starts over. This spec keeps the native conversation across
+both interruptions: the ended attempt records the Claude Code session id, and the
+next claim on the same node and engine hands the agent one framed operator message
+instead of a cold start. When that is not possible the claim behaves exactly as
+before.
 
 The scope is `task_attempts.native_session` (migration `0066`),
 `argus_api/tasks/quota_resume.py`, the `native_session` field of the `/fail` and
@@ -25,8 +27,8 @@ The scope is `task_attempts.native_session` (migration `0066`),
 
 # 2. Non-Goals
 
-- No resume after `session_lost`, a crash or a stall, and no cross-node or
-  cross-engine resume. Those belong to P4 of
+- No resume after a stall or an `agent_ended` exit: the host that could name the
+  session is gone, and no cross-node or cross-engine resume. Those stay in P4 of
   [worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md).
 - No Codex, Cursor, Copilot, custom or local resume (3.6).
 - No claim that the credential swap works inside a live session (4.2).
@@ -38,26 +40,28 @@ The scope is `task_attempts.native_session` (migration `0066`),
 
 ## 3.1 What is recorded
 
-`task_attempts.native_session` is JSON `{session_id, engine, node}`;
-`native_session_used_by` is the attempt that took it. Both are null for attempts
-that ended any other way.
+`task_attempts.native_session` is JSON `{session_id, engine, node, cause}` where
+`cause` is `quota` or `session_lost`; `native_session_used_by` is the attempt that
+took it. Both are null for attempts that ended any other way.
 
-## 3.2 Only a quota pause records it
+## 3.2 A quota pause or a confirmed session exit records it
 
 The channel reports `native_session` (`session_id`: 8-64 characters of
-`[A-Za-z0-9_-]`, plus `engine`) on `/fail` and `/exhausted`. Argus keeps it only
-when it itself classifies the report as a quota pause: in `fail_task` right after
-`pause_for_quota`, and in `exhausted` when no next account exists. A generic
-failure, `session_lost`, a stall or a crash keeps nothing, whatever the channel
-sent. The first write wins. The node is the caller's agent id, never a body field.
+`[A-Za-z0-9_-]`, plus `engine`) on `/fail` and `/exhausted`. Argus keeps it when it
+itself classifies the report as a quota pause (in `fail_task` right after
+`pause_for_quota`, and in `exhausted` when no next account exists, `cause=quota`),
+and on `/fail` with reason `session_lost` (a confirmed container exit, `cause=
+session_lost`). A generic failure, a stall or an `agent_ended` exit keeps nothing,
+whatever the channel sent. The first write wins. The node is the caller's agent id,
+never a body field.
 
 ## 3.3 The claim offer
 
-`ClaimedTask.quota_resume` is `{session_id, engine, node, from_attempt}` when the
-attempt just before the claimed one has an unused session, otherwise null. Only
-the immediately previous attempt is offered. The attempt counter and failure count
-are unchanged: `claim` bumps `attempt` and a quota pause never touches
-`failures`, as before.
+`ClaimedTask.quota_resume` is `{session_id, engine, node, from_attempt, cause}` when
+the attempt just before the claimed one has an unused session, otherwise null. An
+attempt recorded before `cause` existed reads as `quota`. Only the immediately
+previous attempt is offered. The attempt counter and failure count are unchanged:
+`claim` bumps `attempt` and a quota pause never touches `failures`, as before.
 
 ## 3.4 Resume or fall back
 
@@ -93,17 +97,19 @@ On a resume the channel posts `POST /tasks/{id}/quota-resume` with the outcome
 session used and records `task.quota_resume` once; it answers `{first: true}` only
 the first time. The channel sends the framed message only on `first: true`. The
 message uses the task-steering framing ([task steering](task-steering.spec.md)
-`renderSteer`): "Your previous account hit a usage limit and the account was
-switched. Continue from where you stopped.", followed by the current task text, as
-one inbound message. A retry, a re-claim or a second call never sends again. The
-accepted cost: a crash between the take and the send loses the note, never
-duplicates it. A fallback also consumes the session.
+`renderSteer`), followed by the current task text, as one inbound message. The
+wording follows the offer's `cause`: "Your previous account hit a usage limit and
+the account was switched." for `quota`, and "Your previous session ended
+unexpectedly." for `session_lost`, each followed by "Continue from where you
+stopped.". A retry, a re-claim or a second call never sends again. The accepted
+cost: a crash between the take and the send loses the note, never duplicates it. A
+fallback also consumes the session.
 
 ## 3.6 Engines
 
 | Engine | Decision |
 | --- | --- |
-| Claude (`anthropic`) | Records, offers, and resumes by seeding the runner's continuation (3.4) when `ARGUS_QUOTA_RESUME=1`. |
+| Claude (`anthropic`) | Records, offers, and resumes by seeding the runner's continuation (3.4) when `ARGUS_QUOTA_RESUME=1`, after a quota pause or a confirmed `session_lost` exit. |
 | Codex | Unsupported. Nothing shows a thread resumes under another ChatGPT account. |
 | Cursor, Copilot, custom, local | Unsupported. The channel sends no session. |
 
@@ -156,6 +162,11 @@ claude-agent-sdk 0.3.296, against a local fake Messages API
   the channel with mocks, the runner outside a container.
 - **Validity cutoff.** The only check is that the transcript exists and is not
   empty. The provider's retention of a conversation is unknown.
+- **Resume after `session_lost`.** The transcript outlives the container that wrote
+  it, and the seed and resume path is the same one proven for a quota pause, but
+  resuming a conversation whose session died (OOM, crash, host restart) has not
+  been run against a real provider or a disposable node. The opt-in gate (3.9) is
+  unchanged.
 - **Codex with another account.** Unverified, so unsupported (3.6).
 
 ## 4.3 Risks
@@ -201,7 +212,8 @@ claude-agent-sdk 0.3.296, against a local fake Messages API
 ## Verification boundary
 
 1. **Fake and unit (done).** `uv run pytest apps/api/tests/test_account_failover.py`
-   (record on quota only, counters, offer, take-once, lease fence, fallback consumes).
+   (record on a quota pause and on a confirmed session exit, counters, offer,
+   take-once, lease fence, fallback consumes).
    Vitest `argus-quota-resume.test.ts` (decision, seed, host wiring, gate) and
    `argus-accounts.test.ts` (the channel flow: seed, note once, crash and re-claim,
    stale lease, every fallback, `resume_failed`), inside a NanoClaw checkout via
