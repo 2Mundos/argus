@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
-from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -27,16 +26,28 @@ from argus_core.accounts import (
     FallbackResult,
     LeaseRequest,
     LeaseRole,
+    LocalAccountUpdate,
     LocalDetection,
+    LocalTestRequest,
+    LocalTestResult,
     QuotaRefresh,
     UsageReport,
     UsageSeries,
+    local_credential_problem,
 )
 from argus_core.cost import CostReport, CostWindow
 from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field
 
-from argus_api.accounts import cost, custom, local_detect, pricing, service, usage
+from argus_api.accounts import (
+    cost,
+    custom,
+    local_detect,
+    local_health,
+    pricing,
+    service,
+    usage,
+)
 from argus_api.db import utcnow
 from argus_api.deps import (
     AdminDep,
@@ -76,6 +87,11 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
         elif provider == custom_accounts.PROVIDER:
             custom_accounts.validate_credential(credential)
             return "api_key", "api_key"
+        elif provider == LOCAL_PROVIDER:
+            # The same rule on every path: no unchecked URL (local harness spec).
+            if problem := local_credential_problem(credential):
+                raise ValidationFailedError(f"invalid local credential: {problem}")
+            return "api_key", "endpoint"
         elif provider == "gitea":
             token = credential.get("token")
             username = credential.get("username")
@@ -127,12 +143,33 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
     return found.kind, found.mode
 
 
+def _health(request: Request) -> local_health.LocalHealth:
+    return request.app.state.local_health
+
+
+async def _presented(
+    request: Request, conn: aiosqlite.Connection, listed: list[Account]
+) -> list[Account]:
+    """Accounts as read: credential state, and a local account's `local` view
+    (from memory: no network call on a read)."""
+    secrets = request.app.state.secrets
+    out = service.with_credential(listed, secrets, utcnow())
+    if not any(a.provider == LOCAL_PROVIDER for a in out):
+        return out
+    views = await local_health.views(
+        conn,
+        secrets,
+        _health(request),
+        request.app.state.settings.model_policy_path,
+    )
+    return [a.model_copy(update={"local": views.get(a.id)}) for a in out]
+
+
 @router.get("")
 async def list_accounts(request: Request, db: DbDep, _: ManagerDep) -> list[Account]:
-    now = utcnow()
     async with db.read() as conn:
-        listed = await service.list_accounts(conn, now)
-    return service.with_credential(listed, request.app.state.secrets, now)
+        listed = await service.list_accounts(conn, utcnow())
+        return await _presented(request, conn, listed)
 
 
 @router.get("/usage")
@@ -343,10 +380,54 @@ async def cancel_claude_login(
 async def get_account(
     account_id: str, request: Request, db: DbDep, _: ManagerDep
 ) -> Account:
-    now = utcnow()
     async with db.read() as conn:
-        found = await service.get_account(conn, account_id, now)
-    return service.with_credential([found], request.app.state.secrets, now)[0]
+        found = await service.get_account(conn, account_id, utcnow())
+        return (await _presented(request, conn, [found]))[0]
+
+
+@router.put("/{account_id}/local")
+async def update_local_account(
+    account_id: str,
+    body: LocalAccountUpdate,
+    request: Request,
+    db: DbDep,
+    caller: AdminDep,
+    secrets: SecretsDep,
+) -> Account:
+    """Change a local account's worker endpoint, API endpoint, model or context
+    window; `null` clears an optional field (local harness spec, "Editor"). The
+    answer carries a fresh discovery (no inference), so a model the server no
+    longer lists shows as a stale model warning."""
+    health = _health(request)
+    await local_health.update(db, secrets, health, account_id, body, caller.actor)
+    await local_health.refresh(db, secrets, health, account_id)
+    return await get_account(account_id, request, db, caller)
+
+
+@router.post("/{account_id}/local/test")
+async def test_local_account(
+    account_id: str,
+    body: LocalTestRequest,
+    request: Request,
+    db: DbDep,
+    caller: AdminDep,
+    secrets: SecretsDep,
+    settings: SettingsDep,
+) -> LocalTestResult:
+    """Test a local account from the Argus API process against its own API
+    endpoint: discovery always; a short completion only with `inference`, and a
+    tool-call completion on the built-in orchestrator's model only with
+    `tool_calling` (local harness spec, "Admin test"). Three separate statuses;
+    discovery never marks the other two passed."""
+    return await local_health.run_test(
+        db,
+        secrets,
+        _health(request),
+        settings.model_policy_path,
+        account_id,
+        body,
+        caller.actor,
+    )
 
 
 @router.post("/{account_id}/quota/refresh")
@@ -463,7 +544,8 @@ async def detect_local_models(request: Request, _: AdminDep) -> LocalDetection:
     (llama.cpp, Strata). No credential is sent and nothing is stored
     (builtin-orchestrator spec 3.11)."""
     return await local_detect.detect(
-        getattr(request.app.state, "local_detect_transport", None)
+        getattr(request.app.state, "local_detect_transport", None),
+        in_container=_health(request).container,
     )
 
 
@@ -483,7 +565,13 @@ async def lease_account(
     internal orchestrator may leave them out, for its engine (internal orchestrator
     spec 3.1). One active lease per role; `409 no_account` when none is usable. A `local` lease
     whose credential names no `context_tokens` carries the window the local model's
-    probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only")."""
+    probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only").
+    A `local` lease names the endpoint of the runtime holding it: the API endpoint
+    for a built-in agent, the worker endpoint otherwise (local harness spec, "One
+    endpoint per runtime")."""
+    local_served_models = await local_health.served_models_for_leases(
+        db, secrets, _health(request)
+    )
     async with db.write() as tx:
         prefer = None
         if body.task_id is None:
@@ -498,6 +586,7 @@ async def lease_account(
                     )
                 ).value
             )
+        runtime = await local_health.agent_runtime(tx.conn, agent_id)
         leased = await service.lease(
             tx,
             agent_id,
@@ -509,8 +598,10 @@ async def lease_account(
             attempt=body.attempt,
             prefer=prefer,
             credential_kinds=body.credential_kinds,
+            runtime=runtime,
+            local_served_models=local_served_models,
         )
-    return await with_local_context(request, leased)
+    return await local_health.deliver(_health(request), leased, runtime)
 
 
 async def _require_orchestrator_engine(
@@ -520,42 +611,6 @@ async def _require_orchestrator_engine(
     (internal orchestrator spec 3.1); anyone else must name its live claim."""
     if role != "engine" or await agent_system_pool(conn, agent_id) != SYSTEM_MARKER:
         raise ValidationFailedError("task_id and attempt are required")
-
-
-async def with_local_context(request: Request, leased: AccountLease) -> AccountLease:
-    """Fill a local lease's `context_tokens`, and its model when the account names
-    none, from the probe (cached; outside the transaction). Unknown stays absent:
-    the harness then assumes a small window (builtin-orchestrator spec 3.4)."""
-    if leased.provider != LOCAL_PROVIDER:
-        return leased
-    needs_ctx = "context_tokens" not in leased.credential
-    needs_model = leased.settings is not None and leased.settings.model is None
-    if not (needs_ctx or needs_model):
-        return leased
-    local_model = getattr(request.app.state, "local_model", None)
-    if local_model is None:
-        return leased
-    try:
-        info = await local_model.probe()
-    except Exception:  # a probe problem never fails the lease
-        log.exception("local model probe failed while leasing")
-        return leased
-    update: dict = {}
-    if needs_ctx and info.n_ctx:
-        update["credential"] = {**leased.credential, "context_tokens": info.n_ctx}
-    # The probe describes the node's configured local model; it names the model
-    # only of an account on that same endpoint.
-    same = leased.settings is not None and _origin(local_model.url) == _origin(
-        leased.settings.base_url
-    )
-    if needs_model and same and info.reachable and info.model and leased.settings:
-        update["settings"] = leased.settings.model_copy(update={"model": info.model})
-    return leased.model_copy(update=update) if update else leased
-
-
-def _origin(url: str) -> tuple[str, str]:
-    parts = urlsplit(url)
-    return parts.scheme, parts.netloc.lower()
 
 
 @router.post("/release", status_code=status.HTTP_204_NO_CONTENT)

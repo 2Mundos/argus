@@ -6,7 +6,7 @@ store and are only ever handed to the agent holding a lease.
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
@@ -50,6 +50,7 @@ from pydantic import TypeAdapter
 
 from argus_api.accounts import usage
 from argus_api.accounts.eligibility import engine_pool
+from argus_api.accounts.local_health import HEALTH_REASONS
 from argus_api.db import Tx, ts
 from argus_api.disk_guard import DiskGuard
 from argus_api.errors import (
@@ -67,9 +68,6 @@ from argus_api.tasks import service as tasks
 log = logging.getLogger(__name__)
 DEFAULT_COOLDOWN = timedelta(hours=1)
 NO_ACCOUNT = "no_account"  # the lease error code; tasks wait as `awaiting_quota`
-# The one reason a local account is disabled by Argus itself, and the only one the
-# local probe may undo (a missing secret stays for `reconcile_secrets`).
-LOCAL_UNREACHABLE = "local model unreachable"
 
 
 class NoAccountError(ConflictError):
@@ -306,8 +304,8 @@ async def reconcile_secrets(tx: Tx, store: SecretStore) -> None:
             present
             and row["state"] == "disabled"
             and row["auto_disabled"]
-            # An unreachable local model is only brought back by its own probe.
-            and not (row["disabled_reason"] or "").startswith(LOCAL_UNREACHABLE)
+            # An unhealthy local model is only brought back by its own probe.
+            and not (row["disabled_reason"] or "").startswith(HEALTH_REASONS)
         ):
             await tx.conn.execute(
                 "UPDATE accounts SET state = 'available', disabled_reason = NULL,"
@@ -333,6 +331,8 @@ async def lease(
     attempt: int | None,
     prefer: "OrchestratorPreference | None" = None,
     credential_kinds: Sequence[str] | None = None,
+    runtime: str = "worker",
+    local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
     least leased, then name); the local model is a tier below every cloud account,
@@ -362,7 +362,15 @@ async def lease(
     result = None
     if prefer is not None and allowed is not None and prefer.provider in allowed:
         result = await _try_lease(
-            tx, agent_id, store, role, [prefer.provider], kinds=credential_kinds
+            tx,
+            agent_id,
+            store,
+            role,
+            [prefer.provider],
+            kinds=credential_kinds,
+            runtime=runtime,
+            local_served_models=local_served_models,
+            prefer=prefer,
         )
         if result is not None:
             result = prefer.apply(result)
@@ -377,6 +385,9 @@ async def lease(
             prefer_local=prefer_local,
             only_account=scope.account,
             kinds=credential_kinds,
+            runtime=runtime,
+            local_served_models=local_served_models,
+            prefer=prefer,
         )
     if result is None:
         reset = await earliest_reset(tx, role, allowed)
@@ -449,14 +460,32 @@ def orchestrator_preference(value: object) -> OrchestratorPreference | None:
     return OrchestratorPreference(pin.provider, pin.model)
 
 
-async def _holds_engine(tx: Tx, agent_id: str) -> bool:
+async def _held_engine_eligible(
+    tx: Tx,
+    agent_id: str,
+    store: SecretStore,
+    local_served_models: Mapping[str, tuple[str, ...] | None] | None,
+) -> bool:
     async with tx.conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM account_leases WHERE agent_id = ?"
-        " AND role = 'engine' AND released_at IS NULL)",
+        "SELECT a.id, a.provider, a.secret_ref FROM account_leases l"
+        " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
+        " AND l.role = 'engine' AND l.released_at IS NULL LIMIT 1",
         (agent_id,),
     ) as cur:
         row = await cur.fetchone()
-    return bool(row and row[0])
+    if row is None or row["provider"] != LOCAL_PROVIDER:
+        return row is not None
+    name = ref_name(row["secret_ref"])
+    credential = store.get(name) if name else None
+    return bool(
+        credential
+        and _local_model_eligible(
+            row,
+            credential,
+            runtime="worker",
+            local_served_models=local_served_models,
+        )
+    )
 
 
 async def _lease_available(
@@ -465,6 +494,7 @@ async def _lease_available(
     task: aiosqlite.Row,
     runtime_providers: list[str],
     store: SecretStore,
+    local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
 ) -> bool:
     """Would `lease` give this task an engine account now? The same narrowing,
     ranking and credential test, without writing."""
@@ -479,7 +509,14 @@ async def _lease_available(
         ),
         scope.account,
     )
-    return any((name := ref_name(r["secret_ref"])) and store.get(name) for r in ranked)
+    return any(
+        (name := ref_name(r["secret_ref"]))
+        and (credential := store.get(name))
+        and _local_model_eligible(
+            r, credential, runtime="worker", local_served_models=local_served_models
+        )
+        for r in ranked
+    )
 
 
 async def claim(
@@ -491,20 +528,21 @@ async def claim(
     *,
     default_timeout_s: int = 0,
     disk_guard: DiskGuard | None = None,
+    local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
 ) -> tuple[Task | None, AccountLease | None]:
     """Claim a task and, when the agent holds no engine lease, reserve its account
     in the same transaction: a task is only claimed when an account leases for it
     now, so a claim never ends in a lease failure. An agent that already holds an
     engine lease keeps it (the worker re-checks the fit)."""
-    reserve = (
-        bool(runtime_providers)
-        and await tasks.manages_accounts(tx.conn)
-        and not await _holds_engine(tx, agent_id)
+    manages_accounts = await tasks.manages_accounts(tx.conn)
+    held_eligible = await _held_engine_eligible(
+        tx, agent_id, store, local_served_models
     )
+    reserve = bool(runtime_providers) and manages_accounts and not held_eligible
 
     async def can_lease(tx: Tx, task: aiosqlite.Row) -> bool:
         return await _lease_available(
-            tx, agent_id, task, runtime_providers or [], store
+            tx, agent_id, task, runtime_providers or [], store, local_served_models
         )
 
     task = await tasks.claim(
@@ -528,6 +566,8 @@ async def claim(
         store,
         task_id=task.id,
         attempt=task.attempt,
+        runtime="worker",
+        local_served_models=local_served_models,
     )
     return task, leased
 
@@ -1054,32 +1094,41 @@ async def recover(tx: Tx) -> list[str]:
 
 
 async def sync_local_health(
-    tx: Tx, reachable: bool | None, detail: str = ""
+    tx: Tx, health: Mapping[str, tuple[bool | None, str]]
 ) -> list[str]:
-    """The local model's own probe is the only availability signal for `local`
-    accounts (they have no quota and no credential to lose): an unreachable server
-    disables them, a reachable one brings back exactly the ones Argus disabled for
-    that reason. Not probed (`None`) changes nothing. The probe itself runs before
-    the transaction: no network call happens in here."""
+    """Each local account's own probe is its only availability signal (they have
+    no quota and no credential to lose; local harness spec, "Health per account"):
+    `health` maps an account id to (healthy, reason). An unhealthy one is disabled
+    with its reason; a healthy one brings back exactly an account Argus disabled
+    for a health reason. Not probed (`None`, or absent) changes nothing. The probes
+    ran before the transaction: no network call happens in here."""
+    if not health:
+        return []
     async with tx.conn.execute(
         "SELECT id, state, auto_disabled, disabled_reason FROM accounts"
         " WHERE provider = ?",
         (LOCAL_PROVIDER,),
     ) as cur:
         rows = list(await cur.fetchall())
-    if reachable is None or not rows:
-        return []
     changed: list[str] = []
+    woke = False
     for row in rows:
-        if not reachable and row["state"] != "disabled":
-            await _disable(tx, row["id"], f"{LOCAL_UNREACHABLE}: {detail}"[:500])
+        healthy, reason = health.get(row["id"], (None, ""))
+        if healthy is None:
+            continue
+        ours = row["auto_disabled"] and (row["disabled_reason"] or "").startswith(
+            HEALTH_REASONS
+        )
+        if not healthy and row["state"] != "disabled":
+            await _disable(tx, row["id"], reason[:500])
             changed.append(row["id"])
-        elif (
-            reachable
-            and row["state"] == "disabled"
-            and row["auto_disabled"]
-            and (row["disabled_reason"] or "").startswith(LOCAL_UNREACHABLE)
-        ):
+        elif not healthy and ours and row["disabled_reason"] != reason[:500]:
+            # Still down, for another reason: keep the reason current, no event.
+            await tx.conn.execute(
+                "UPDATE accounts SET disabled_reason = ? WHERE id = ?",
+                (reason[:500], row["id"]),
+            )
+        elif healthy and row["state"] == "disabled" and ours:
             await tx.conn.execute(
                 "UPDATE accounts SET state = 'available', disabled_reason = NULL,"
                 " auto_disabled = 0, updated_at = ? WHERE id = ?",
@@ -1087,7 +1136,8 @@ async def sync_local_health(
             )
             await record(tx, "system", "account", row["id"], "account.available")
             changed.append(row["id"])
-    if changed and reachable:
+            woke = True
+    if woke:
         await release_waiting_tasks(tx)
     return changed
 
@@ -1250,6 +1300,9 @@ async def _try_lease(
     prefer_local: bool = False,
     only_account: str | None = None,
     kinds: Sequence[str] | None = None,
+    runtime: str = "worker",
+    local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
+    prefer: "OrchestratorPreference | None" = None,
 ) -> AccountLease | None:
     """The best usable account for `role` across every provider: cloud before the
     local model (the reverse with `prefer_local`, whose fallback is the cloud in this
@@ -1279,6 +1332,14 @@ async def _try_lease(
         credential = store.get(name) if name else None
         if credential is None:
             await _disable(tx, row["id"], f"secret not found: {row['secret_ref']}")
+            continue
+        if not _local_model_eligible(
+            row,
+            credential,
+            runtime=runtime,
+            local_served_models=local_served_models,
+            prefer=prefer,
+        ):
             continue
         if reuse and row["mine"] is not None:
             return AccountLease(
@@ -1329,6 +1390,31 @@ async def _try_lease(
             settings=_settings(row, role, credential),
         )
     return None
+
+
+def _local_model_eligible(
+    row: aiosqlite.Row,
+    credential: dict[str, Any],
+    *,
+    runtime: str,
+    local_served_models: Mapping[str, tuple[str, ...] | None] | None,
+    prefer: "OrchestratorPreference | None" = None,
+) -> bool:
+    """Unknown discovery preserves the previous selection behavior; known model
+    lists must contain the model this runtime will actually receive."""
+    if row["provider"] != LOCAL_PROVIDER:
+        return True
+    if local_served_models is None or row["id"] not in local_served_models:
+        return True
+    served = local_served_models[row["id"]]
+    if served is None:
+        return True
+    if not served:
+        return False
+    model = credential.get("model")
+    if runtime == "api" and prefer and prefer.provider == LOCAL_PROVIDER:
+        model = prefer.model or model
+    return model in served if isinstance(model, str) and model else True
 
 
 def _serves(row: aiosqlite.Row, role: LeaseRole) -> bool:

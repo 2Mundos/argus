@@ -4,6 +4,7 @@ reconciler, adapters, usage, detection, notices and framing
 
 import asyncio
 import json
+import socket
 from datetime import timedelta
 from pathlib import Path
 
@@ -24,10 +25,10 @@ from argus_api.fleet.targets import (
     TargetRegistry,
 )
 from argus_api.orchestrator_builtin import prompt, tools
+from argus_api.orchestrator_builtin.loop import model_http_client
 from argus_api.orchestrator_builtin.models import (
     Endpoint,
     Failure,
-    Reply,
     anthropic,
     openai_compat,
 )
@@ -42,12 +43,44 @@ from argus_api.settings import service as settings_service
 from argus_api.tasks import service as tasks
 from argus_core.conversations import ConversationCreate
 from argus_core.tasks import TaskCreate
+from fastapi import FastAPI
 
 REPO = Path(__file__).resolve().parents[3]
 FRAMING = json.loads(
     (REPO / "integrations/nanoclaw/fixtures/chat-framing/cases.json").read_text()
 )
 NO_URL = FleetSettings(argus_url=None, max_starts_in_flight=8)
+
+
+async def test_model_http_client_routes_local_hosts_around_environment_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8888")
+    monkeypatch.setenv("HTTPS_PROXY", "http://tls-proxy.invalid:9999")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+    for name in ("ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    client = model_http_client(FastAPI())
+    try:
+        local_transports = [
+            client._transport_for_url(httpx.URL(f"http://{host}/v1/chat/completions"))
+            for host in ("127.0.0.1", "localhost", "[::1]", "host.docker.internal")
+        ]
+        assert all(transport is local_transports[0] for transport in local_transports)
+        local_pool = local_transports[0]._pool
+        assert getattr(local_pool, "_proxy_url", None) is None
+
+        cloud_transport = client._transport_for_url(
+            httpx.URL("https://api.openai.com/v1/chat/completions")
+        )
+        assert cloud_transport is not local_transports[0]
+        cloud_proxy = cloud_transport._pool._proxy_url
+        assert cloud_proxy.host == b"tls-proxy.invalid"
+        assert client.follow_redirects is False
+    finally:
+        await client.aclose()
 
 
 # -- the in-process target ---------------------------------------------------------
@@ -275,6 +308,7 @@ def test_openai_body_returns_provider_tool_metadata() -> None:
         {
             "choices": [
                 {
+                    "finish_reason": "tool_calls",
                     "message": {
                         "content": None,
                         "tool_calls": [
@@ -285,12 +319,33 @@ def test_openai_body_returns_provider_tool_metadata() -> None:
                                 "function": {"name": "list_tasks", "arguments": "{}"},
                             }
                         ],
-                    }
+                    },
                 }
             ]
         }
     )
     assert reply.calls[0].extra_content == extra
+    object_reply = adapter.parse(
+        {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "list_tasks", "arguments": {}},
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+    assert object_reply.calls[0].arguments == {}
+    assert object_reply.calls[0].raw == "{}"
     transcript = Transcript()
     transcript.items.append(Step(reply.text, reply.calls))
     body = adapter.body("m", "SYS", [], transcript, [], use_tools=True)
@@ -326,6 +381,331 @@ def test_usage_is_normalised_so_input_never_counts_twice() -> None:
     assert o.text == ""
     bare = anthropic.AnthropicAdapter().parse({"content": []})
     assert bare.usage is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {"choices": "bad"},
+        {"choices": []},
+        {"choices": [None]},
+        {"choices": [{"message": "bad"}]},
+        {"choices": [{"message": {"tool_calls": {}}}]},
+        {"choices": [{"message": {"tool_calls": ["bad"]}}]},
+        {"choices": [{"message": {"tool_calls": [{"function": "bad"}]}}]},
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "tool",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "[]"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    ],
+    ids=[
+        "root-null",
+        "root-list",
+        "choices-not-list",
+        "choices-empty",
+        "choice-not-object",
+        "message-not-object",
+        "tool-calls-not-list",
+        "call-not-object",
+        "function-not-object",
+        "id-missing",
+        "id-empty",
+        "type-invalid",
+        "type-empty",
+        "type-missing",
+        "name-empty",
+        "name-missing",
+        "arguments-missing",
+        "arguments-invalid-json",
+        "arguments-not-object",
+        "arguments-truncated",
+        "finish-stop-with-call",
+    ],
+)
+async def test_openai_send_classifies_malformed_protocol_as_invalid(payload) -> None:
+    payload = json.loads(json.dumps(payload))
+    if isinstance(payload, dict) and isinstance(payload.get("choices"), list):
+        for choice in payload["choices"]:
+            if (
+                isinstance(choice, dict)
+                and isinstance(choice.get("message"), dict)
+                and "tool_calls" in choice["message"]
+            ):
+                choice.setdefault("finish_reason", "tool_calls")
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("http://model.test", {}, 5),
+            openai_compat.OpenAIAdapter(token_field="max_tokens"),
+            {},
+        )
+
+    assert isinstance(got, Failure)
+    assert (got.kind, got.error_type) == ("invalid", "invalid_response")
+
+
+async def test_openai_send_rejects_a_tool_call_without_a_finish_reason() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("http://model.test", {}, 5),
+            openai_compat.OpenAIAdapter(token_field="max_tokens"),
+            {},
+        )
+
+    assert isinstance(got, Failure)
+    assert (got.kind, got.error_type) == ("invalid", "invalid_response")
+
+
+async def test_openai_send_keeps_a_well_formed_tool_call() -> None:
+    payload = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"task_id":"t1"}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("http://model.test", {}, 5),
+            openai_compat.OpenAIAdapter(token_field="max_tokens"),
+            {},
+        )
+
+    assert not isinstance(got, Failure)
+    assert got.calls[0].arguments == {"task_id": "t1"}
+
+
+async def test_send_sanitizes_an_attribute_error_from_a_malformed_adapter_payload() -> (
+    None
+):
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"content": ["malformed"]})
+        )
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("https://model.test", {}, 5),
+            anthropic.AnthropicAdapter(),
+            {},
+        )
+
+    assert isinstance(got, Failure)
+    assert (got.kind, got.error_type) == ("invalid", "invalid_response")
 
 
 @pytest.mark.parametrize(
@@ -381,19 +761,59 @@ async def test_failures_are_classified_from_status_and_token_only(
         assert got.reset is not None
 
 
-async def test_a_transport_error_is_transient() -> None:
-    def refuse(_: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("refused")
+def _raise(exc: BaseException, cause: BaseException | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if cause is None:
+            raise exc
+        raise exc from cause
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as client:
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("handler", "kind", "label"),
+    [
+        # DNS cannot fix itself in 10 s: the endpoint is wrong for this runtime.
+        (
+            _raise(
+                httpx.ConnectError("[Errno -2] Name or service not known"),
+                socket.gaierror(-2, "Name or service not known"),
+            ),
+            "unreachable",
+            "dns_failed",
+        ),
+        (
+            _raise(
+                httpx.ConnectError("All connection attempts failed"),
+                ConnectionRefusedError(111, "Connect call failed"),
+            ),
+            "transient",
+            "connection_refused",
+        ),
+        (_raise(httpx.ReadTimeout("timed out")), "transient", "timeout"),
+        (_raise(httpx.ConnectError("closed")), "transient", "connect_failed"),
+        (_raise(httpx.RemoteProtocolError("bad")), "invalid", "invalid_response"),
+        (
+            lambda _: httpx.Response(200, content=b"<html>not json</html>"),
+            "invalid",
+            "200 invalid_response",
+        ),
+        (
+            lambda _: httpx.Response(307, headers={"location": "http://evil.test/"}),
+            "unreachable",
+            "307 redirect_refused",
+        ),
+    ],
+)
+async def test_transport_failures_are_classified_by_type_never_text(
+    handler, kind: str, label: str
+) -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         got = await send_model(
             client, Endpoint("https://m.test", {}, 5), anthropic.AnthropicAdapter(), {}
         )
-    assert isinstance(got, Failure) and (got.kind, got.label) == (
-        "transient",
-        "ConnectError",
-    )
-    assert not isinstance(got, Reply)
+    assert isinstance(got, Failure) and (got.kind, got.label) == (kind, label)
+    assert "Name or service" not in got.label and "html" not in got.label
 
 
 def test_results_are_cut_at_a_code_point_boundary() -> None:
@@ -486,6 +906,37 @@ async def test_detection_finds_servers_and_follows_no_redirect() -> None:
     lmstudio = by_url["http://127.0.0.1:1234"]
     assert (lmstudio.preferred, lmstudio.note) == (False, local_detect.LOOPBACK_NOTE)
     assert found.hint is None  # something answered
+
+
+@pytest.mark.parametrize("in_container", [False, True])
+async def test_a_host_api_offers_the_worker_name_for_a_loopback_server(
+    in_container: bool,
+) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if (request.url.host, request.url.port) == ("127.0.0.1", 8080):
+            return httpx.Response(200, json={"data": [{"id": "spark-x2.6"}]})
+        raise httpx.ConnectError("closed")  # host.docker.internal does not resolve
+
+    found = await local_detect.detect(
+        httpx.MockTransport(answer), in_container=in_container
+    )
+    by_url = {c.base_url: c for c in found.candidates}
+    loopback = by_url.pop("http://127.0.0.1:8080")
+    assert (loopback.api_endpoint, loopback.preferred) == (
+        "http://127.0.0.1:8080",
+        False,
+    )
+    if in_container:
+        # Inside a container 127.0.0.1 is the container itself: no forwarder guess.
+        assert by_url == {}
+        return
+    [forwarded] = by_url.values()
+    assert (forwarded.base_url, forwarded.api_endpoint) == (
+        "http://host.docker.internal:8080",
+        "http://127.0.0.1:8080",
+    )
+    assert forwarded.preferred and forwarded.note == local_detect.FORWARDER_NOTE
+    assert found.candidates[0] is forwarded  # preferred first
 
 
 async def test_detection_hints_only_inside_a_container() -> None:
@@ -678,34 +1129,3 @@ async def test_a_cancelled_claim_cancels_its_poll() -> None:
     with pytest.raises(asyncio.CancelledError):
         await claim
     assert argus.cancelled == ["/agents/me/chat"]
-
-
-async def test_the_probe_names_the_model_only_of_its_own_endpoint() -> None:
-    from types import SimpleNamespace
-
-    from argus_api.accounts.routes import with_local_context
-    from argus_api.engines.local import LocalModelInfo
-    from argus_core.accounts import AccountLease
-    from argus_core.custom_accounts import LeaseSettings
-
-    class Probe:
-        url = "http://127.0.0.1:8080/v1"
-
-        async def probe(self) -> LocalModelInfo:
-            return LocalModelInfo(reachable=True, model="served", n_ctx=8192)
-
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(local_model=Probe()))
-    )
-
-    def lease(base_url: str) -> AccountLease:
-        return AccountLease(
-            lease_id="l", account_id="a", name="a", provider="local", kind="api_key",
-            credential={"base_url": base_url},
-            settings=LeaseSettings(base_url=base_url, label="local", model=None, provider=None),
-        )  # fmt: skip
-
-    same = await with_local_context(request, lease("http://127.0.0.1:8080"))  # ty: ignore[invalid-argument-type]
-    other = await with_local_context(request, lease("http://127.0.0.1:11434"))  # ty: ignore[invalid-argument-type]
-    assert same.settings is not None and same.settings.model == "served"
-    assert other.settings is not None and other.settings.model is None

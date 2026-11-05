@@ -281,9 +281,10 @@ for all its turns (3.8).
    for `custom`, else the account's `engine` model.
 3. `local`: the lease `settings.model` (the model `orchestrator.model` names for
    `local`, else the account's), else the account credential's `model`,
-   else the model the local probe reports as served. The lease route fills
-   `settings.model` from the probe when the account names none, as it fills
-   `context_tokens`.
+   else the first model the account's own probe lists as served. The lease route
+   fills `settings.model` from that probe when the account names none, as it
+   fills `context_tokens` ([local harness](local-harness.spec.md), "Health per
+   account").
 
 **Endpoints and headers.** Redirects are never followed and TLS is verified.
 
@@ -295,7 +296,18 @@ for all its turns (3.8).
 | `local` | `POST {settings.base_url}/v1/chat/completions` | `Authorization: Bearer <placeholder token>` | 300 s |
 
 The `anthropic` and `openai` hosts are fixed. A `custom` or `local` URL follows its
-account's URL rule (`check_base_url`, `validate_local_base_url`).
+account's URL rule (`check_base_url`, `validate_local_base_url`). A `local`
+lease held by the built-in carries the account's **API endpoint** in
+`settings.base_url`, not the worker endpoint
+([local harness](local-harness.spec.md), "One endpoint per runtime"): on a host
+API that is `127.0.0.1` where workers use `host.docker.internal`.
+
+Cloud requests retain the process's configured HTTP proxy behavior. Requests to
+the allowlisted local model hosts (`127.0.0.1`, `localhost`, `::1` and
+`host.docker.internal`) bypass ambient proxy settings and connect directly, so a
+local placeholder token and local model traffic cannot be relayed to an
+environment-configured proxy. This routing is part of the normal built-in model
+client; redirect refusal and TLS verification apply to both paths.
 
 **Request shape.** At most 4096 output tokens per call: `max_tokens` for Anthropic,
 `custom` and `local`, and `max_completion_tokens` for `openai`. No temperature is
@@ -317,9 +329,20 @@ never read, logged or replied, matching the provider API error rule
 | --- | --- | --- |
 | 402, 429 | quota | `quota_notice_from_response` gives the reset. `POST /api/accounts/{id}/exhausted` (`role: engine`, no task, `reason_code: quota_exhausted`, `reset_status` `stated` or `absent`). If the answer names a next account, lease it and send the **same step** again on it. Otherwise reply with the earliest reset and stop claiming until a lease succeeds. |
 | 401, 403 | auth rejected | `POST /api/accounts/{id}/auth-rejected` (`role: engine`, `source: structured`). The account is not exhausted. Release the lease. The reply names the account: "The model account `<name>` was rejected. Sign it in again or replace its key." The turn ends. |
-| 408, 409, 5xx (Anthropic 529 included), connect or read error, timeout | transient | Send the same request again after 2 s, then after 8 s. After the third failure the reply is "The model provider did not answer (`<status or error type>`). Send the message again." |
+| 408, 409, 5xx (Anthropic 529 included), `connection_refused`, `connect_failed`, `timeout` | transient | Send the same request again after 2 s, then after 8 s. After the third failure the reply is "The model provider did not answer (`<status or failure>`)." with the failure sentence and correlation below, then "Send the message again." |
+| `dns_failed`, `tls_failed`, `redirect_refused` | unreachable | No retry: the endpoint is misconfigured for this runtime. The reply is "The model provider could not be reached (`<failure>`)." with the failure sentence and correlation. |
+| 200 with a malformed response envelope or tool call, arguments that are not a JSON object, a missing or non-`tool_calls` finish reason on a tool call, a truncated tool call, or a protocol error | invalid response | No retry. "The model provider answered with a response Argus cannot read (`invalid_response`)." with correlation. The adapter validates the choices/message/tool-call shapes, required non-empty call id and function name, `type: function`, and parses arguments before returning a reply; malformed provider data never escapes as an exception. |
 | 400 with code `context_length_exceeded` | too long | Elide every tool result of earlier steps (3.7) and send again once. If it fails again, it is a request error. |
 | other 4xx | request error | No retry. The reply is "The model rejected the request (`<status>` `<type>`)." For `custom` and `local` it adds: "Check that the model supports tool calls." |
+
+Transport failures use the [local harness](local-harness.spec.md) failure classes
+for every provider, read from Argus's own exception type and errno, never from
+text. The failure sentence says what failed and, for `local`, what to change
+(for `dns_failed`: "`<host>` does not resolve from the Argus API process. Set the
+account's API endpoint in Accounts → Local endpoints, then test it there."). The
+correlation is one parenthesis: account name, endpoint origin (scheme, host and
+port only), runtime `builtin` and the turn id. The instance log line carries the
+same fields, never a body, header or key.
 
 After a quota switch to another provider the turn continues: the transcript is
 provider-neutral (3.8). Its reply then starts with one line, "Switched to account
@@ -578,12 +601,20 @@ model server already running on the node.
   Each probe has a 2 s timeout, sends no credential and follows no redirect. It
   runs outside any write transaction and stores nothing.
 - **Answer.**
-  `{candidates: [{base_url, server_hint, models: [id], preferred: bool}], hint: str | null}`.
-  `server_hint` comes from the port (`ollama`, `lmstudio`, `llamacpp`). Model ids
-  follow the account model pattern, and others are dropped. `preferred` marks the
-  `host.docker.internal` candidate when it answers, because both the API container
-  and workers can reach it. A `127.0.0.1` candidate carries the note "workers
-  cannot reach this address; only the built-in orchestrator can".
+  `{candidates: [{base_url, api_endpoint, server_hint, models: [id], preferred: bool, note}], hint: str | null}`.
+  `base_url` is what the account stores for workers, and `api_endpoint` what the
+  Argus API process will use for it ([local harness](local-harness.spec.md), "One
+  endpoint per runtime"). `server_hint` comes from the port (`ollama`,
+  `lmstudio`, `llamacpp`). Model ids follow the account model pattern, and others
+  are dropped. A `host.docker.internal` answer is a `preferred` candidate:
+  workers reach it. When Argus does not run in a container, a `127.0.0.1:<port>`
+  answer also yields a `preferred` candidate with `base_url`
+  `http://host.docker.internal:<port>` and `api_endpoint` `http://127.0.0.1:<port>`,
+  noted "workers reach it through the Docker bridge forwarder", because on a host
+  API `host.docker.internal` does not resolve and that name works only inside
+  containers. The plain `127.0.0.1` candidate stays, noted "workers cannot reach
+  this address; only the built-in orchestrator can". Candidates are unique by
+  `base_url`; a direct answer wins.
 - **Hint.** When nothing answers and Argus runs in a container, the hint is:
   "Argus runs in a container. The model server must listen on the Docker bridge
   address (for Ollama, `OLLAMA_HOST=<bridge address>:11434`), and the API needs
@@ -596,8 +627,10 @@ model server already running on the node.
   `local-<model>`. Availability and the probe then follow the
   [local harness](local-harness.spec.md) rules.
 - **Tool calls.** The form states that the built-in orchestrator needs a model
-  with tool calling. Detection does not test it. A model without it fails its
-  first turn with the request-error reply (3.4).
+  with tool calling. Detection does not test it; the account's **Local
+  endpoints** dialog does, only when the admin presses its tool-calling test
+  ([local harness](local-harness.spec.md), "Admin test"). A model without it fails
+  its first turn with the request-error reply (3.4).
 
 ## 3.12 Security
 
@@ -674,6 +707,7 @@ model server already running on the node.
 | See the runtime | Chat header, Pools card | `GET /api/fleet/pools` (`runtime`, `target`) | `list_pools` |
 | Runtime `auto` would pick | Onboarding | `GET /api/onboarding` | none: onboarding is dashboard-only ([onboarding](onboarding.spec.md) 2) |
 | Detect local models | Account form | `POST /api/accounts/local/detect` | none: creating accounts is admin-only on REST and the dashboard |
+| Edit and test a local account's endpoints | Local endpoints dialog | `PUT /api/accounts/{id}/local`, `POST /api/accounts/{id}/local/test` | `update_local_account`, `test_local_account` (admin) |
 | Built-in logs | Agent drawer | existing instance logs route | `get_instance_logs` |
 | Per-step usage | none | `POST /api/agents/me/chat/{id}/usage` | none: it is part of the chat channel contract, like the other `/agents/me/chat` routes |
 
@@ -686,7 +720,7 @@ model server already running on the node.
 | Cursor | Not supported: an executor-only provider with no model API for a loop ([cursor accounts](cursor-accounts.spec.md)). |
 | Copilot | Not supported: an executor-only provider whose token is for its CLI ([copilot accounts](copilot-accounts.spec.md)). |
 | Custom | Supported when the account has an `engine` model. |
-| Local | Supported. The model must support tool calls (3.11). |
+| Local | Supported, on the account's API endpoint. The model must support tool calls (3.11). |
 
 ## 3.17 Way back
 
@@ -696,6 +730,7 @@ model server already running on the node.
 | Runtime resolved to `builtin` | Disable, wait until stopped, set `orchestrator.runtime` to `nanoclaw` (or `auto` with no capable account), enable | Pools card runtime, Settings |
 | Runtime resolved to `nanoclaw` | The same steps toward `builtin` | the same |
 | Local account created by detection | Disable or delete the account (existing routes) | Accounts |
+| A local account's API endpoint or model edited | Reset in the Local endpoints dialog ([local harness](local-harness.spec.md)) | Accounts |
 | Account exhausted or rejected by the built-in | Existing reset, recovery and sign-in flows | Accounts |
 | Task update notices | Archive the conversation, or disable the orchestrator | the thread |
 | Migration `0075` | Not reversible once a built-in pool exists: an older Argus rejects its rows. The release notes say the upgrade cannot be rolled back after the built-in has been enabled ([releases](releases.spec.md)). | release notes |
@@ -860,8 +895,13 @@ The framing and title cases move to the shared JSON fixture read by
 - Task update notices: one per conversation while queued; none for an archived
   conversation, when disabled, or with 20 queued messages; the body has no ids.
 - Detection: Ollama and LM Studio `/v1/models` answers are parsed; unreachable
-  ports are skipped; redirects are not followed; `preferred` and the container
-  hint follow the rules above.
+  ports are skipped; redirects are not followed; `preferred`, the forwarder
+  candidate of a host API and the container hint follow the rules above.
+- Local endpoints: a built-in turn calls the account's API endpoint (`127.0.0.1`
+  on a host API, `host.docker.internal` in an API container) with the
+  `orchestrator.model` override; an unresolvable endpoint replies once, with no
+  retry, naming the failure class, account, endpoint, runtime and turn; transport
+  failures are classified by exception type, never text.
 - The shared framing fixture is read by both suites.
 
 ## Verification boundary

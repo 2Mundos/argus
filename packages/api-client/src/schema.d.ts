@@ -185,6 +185,9 @@ export interface paths {
          *     spec 3.1). One active lease per role; `409 no_account` when none is usable. A `local` lease
          *     whose credential names no `context_tokens` carries the window the local model's
          *     probe measured, so the harness can compact in time (local harness spec, "Harness orchestrates only").
+         *     A `local` lease names the endpoint of the runtime holding it: the API endpoint
+         *     for a built-in agent, the worker endpoint otherwise (local harness spec, "One
+         *     endpoint per runtime").
          */
         post: operations["lease_account_api_accounts_lease_post"];
         delete?: never;
@@ -349,6 +352,53 @@ export interface paths {
          *     any next credential through `/accounts/lease`.
          */
         post: operations["report_exhausted_api_accounts__account_id__exhausted_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Local Account
+         * @description Change a local account's worker endpoint, API endpoint, model or context
+         *     window; `null` clears an optional field (local harness spec, "Editor"). The
+         *     answer carries a fresh discovery (no inference), so a model the server no
+         *     longer lists shows as a stale model warning.
+         */
+        put: operations["update_local_account_api_accounts__account_id__local_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/local/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Local Account
+         * @description Test a local account from the Argus API process against its own API
+         *     endpoint: discovery always; a short completion only with `inference`, and a
+         *     tool-call completion on the built-in orchestrator's model only with
+         *     `tool_calling` (local harness spec, "Admin test"). Three separate statuses;
+         *     discovery never marks the other two passed.
+         */
+        post: operations["test_local_account_api_accounts__account_id__local_test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3393,6 +3443,7 @@ export interface components {
             last_accepted_at?: string | null;
             /** Last Rejected At */
             last_rejected_at?: string | null;
+            local?: components["schemas"]["LocalAccountView"] | null;
             /** Max Leases */
             max_leases: number | null;
             /** Name */
@@ -7326,6 +7377,57 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * LocalAccountUpdate
+         * @description The local editor: a field left out is kept; `null` clears an optional one
+         *     (`api_base_url`, `model`, `context_tokens`). `base_url` cannot be cleared.
+         */
+        LocalAccountUpdate: {
+            /** Api Base Url */
+            api_base_url?: string | null;
+            /** Base Url */
+            base_url?: string | null;
+            /** Context Tokens */
+            context_tokens?: number | null;
+            /** Model */
+            model?: string | null;
+        };
+        /**
+         * LocalAccountView
+         * @description A local account's endpoints, health and last test (local harness spec,
+         *     "Account view"). Never the placeholder token.
+         */
+        LocalAccountView: {
+            /** Api Base Url */
+            api_base_url: string | null;
+            /** Api Endpoint */
+            api_endpoint: string;
+            /**
+             * Api Endpoint Source
+             * @enum {string}
+             */
+            api_endpoint_source: "api_base_url" | "derived" | "base_url";
+            /** Base Url */
+            base_url: string;
+            /** Context Tokens */
+            context_tokens: number | null;
+            discovery: components["schemas"]["LocalCheck"];
+            inference: components["schemas"]["LocalCheck"];
+            /** Model */
+            model: string | null;
+            orchestrator: components["schemas"]["LocalCheck"];
+            /** Orchestrator Model */
+            orchestrator_model: string | null;
+            /** Orchestrator Model Source */
+            orchestrator_model_source: ("orchestrator.model" | "account" | "served") | null;
+            /** Served Models */
+            served_models: string[] | null;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
+        };
         /** LocalAttempt */
         LocalAttempt: {
             /** Completion Tokens */
@@ -7347,6 +7449,8 @@ export interface components {
          *     (builtin-orchestrator spec 3.11).
          */
         LocalCandidate: {
+            /** Api Endpoint */
+            api_endpoint: string;
             /** Base Url */
             base_url: string;
             /** Models */
@@ -7360,6 +7464,31 @@ export interface components {
              * @enum {string}
              */
             server_hint: "ollama" | "lmstudio" | "llamacpp";
+        };
+        /**
+         * LocalCheck
+         * @description One check of a local account, from the Argus API process. `detail` is
+         *     Argus's own sentence, never the server's text.
+         */
+        LocalCheck: {
+            /** At */
+            at?: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Failure */
+            failure?: ("dns_failed" | "connection_refused" | "timeout" | "tls_failed" | "connect_failed" | "redirect_refused" | "http_error" | "invalid_response" | "model_not_served" | "no_models" | "no_tool_call" | "empty_answer") | null;
+            /** Http Status */
+            http_status?: number | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * Status
+             * @default not_run
+             * @enum {string}
+             */
+            status?: "passed" | "failed" | "skipped" | "not_run";
         };
         /** LocalDetection */
         LocalDetection: {
@@ -7421,6 +7550,57 @@ export interface components {
             text: string | null;
             /** Verdict */
             verdict: string;
+        };
+        /**
+         * LocalTestRequest
+         * @description An admin's explicit test. Discovery always runs; the two completions run
+         *     only when asked (no automatic inference).
+         */
+        LocalTestRequest: {
+            /**
+             * Inference
+             * @default false
+             */
+            inference?: boolean;
+            /**
+             * Tool Calling
+             * @default false
+             */
+            tool_calling?: boolean;
+        };
+        /** LocalTestResult */
+        LocalTestResult: {
+            /** Account Id */
+            account_id: string;
+            /** Account Name */
+            account_name: string;
+            discovery: components["schemas"]["LocalCheck"];
+            /** Endpoint */
+            endpoint: string;
+            /**
+             * Endpoint Source
+             * @enum {string}
+             */
+            endpoint_source: "api_base_url" | "derived" | "base_url";
+            inference: components["schemas"]["LocalCheck"];
+            orchestrator: components["schemas"]["LocalCheck"];
+            /**
+             * Runtime
+             * @default api
+             * @constant
+             */
+            runtime?: "api";
+            /** Served Models */
+            served_models: string[];
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
+            /** Worker Endpoint */
+            worker_endpoint: string;
+            /** Worker Note */
+            worker_note?: string | null;
         };
         /** LogAccepted */
         LogAccepted: {
@@ -12449,6 +12629,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FallbackResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_local_account_api_accounts__account_id__local_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalAccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_local_account_api_accounts__account_id__local_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalTestResult"];
                 };
             };
             /** @description Validation Error */

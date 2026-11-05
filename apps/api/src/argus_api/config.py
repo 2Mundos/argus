@@ -72,6 +72,9 @@ class Settings:
     local_output_reserve: int = 2048
     local_chat_template_overhead: int = 512
     local_timeout_s: float = 120.0
+    # How often the reaper probes each local account's API endpoint (local
+    # harness spec, "Health per account").
+    local_health_interval_s: float = 30.0
     engines_ledger: Path | None = None  # default: <data_dir>/engines-ledger.json
     # Executor order per difficulty level, over the defaults in engines/router.py
     # (ARGUS_DIFFICULTY_EXECUTORS, JSON: {"standard": ["codex", "claude"]}).
@@ -230,6 +233,9 @@ class Settings:
                 os.environ.get("ARGUS_LOCAL_CHAT_TEMPLATE_OVERHEAD", 512)
             ),
             local_timeout_s=float(os.environ.get("ARGUS_LOCAL_TIMEOUT_S", 120)),
+            local_health_interval_s=float(
+                os.environ.get("ARGUS_LOCAL_HEALTH_INTERVAL_S", 30)
+            ),
             engines_ledger=(
                 Path(f) if (f := os.environ.get("ARGUS_ENGINES_LEDGER")) else None
             ),

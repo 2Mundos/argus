@@ -39,6 +39,7 @@ import { CodexAccount } from "./CodexAccount";
 import { CustomAccount } from "./CustomAccount";
 import { AccountQuota, Sparkline } from "./charts";
 import { LocalAccount } from "./LocalAccount";
+import { LocalEndpoints } from "./LocalEndpoints";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
 export function Accounts() {
@@ -51,6 +52,7 @@ export function Accounts() {
   const [editing, setEditing] = useState<Account>();
   const [deleting, setDeleting] = useState<Account>();
   const [replacing, setReplacing] = useState<Account>();
+  const [endpoints, setEndpoints] = useState<Account>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
   const {
@@ -176,6 +178,12 @@ export function Accounts() {
                     </span>
                   )}
                   {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
+                  {(a.local?.warnings ?? []).length > 0 && (
+                    <span className="small error" title={(a.local?.warnings ?? []).join("\n")}>
+                      {" "}
+                      stale model
+                    </span>
+                  )}
                 </td>
                 <td data-label="Auth">
                   <AuthFacts account={a} />
@@ -238,6 +246,16 @@ export function Accounts() {
                     >
                       Edit
                     </button>
+                    {a.provider === "local" && (
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`Local endpoints of ${a.name}`}
+                        onClick={() => setEndpoints(a)}
+                      >
+                        Endpoints
+                      </button>
+                    )}
                     <ActionButton
                       className="link"
                       aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
@@ -313,6 +331,16 @@ export function Accounts() {
           onClose={() => setReplacing(undefined)}
           onDone={(message) => {
             setReplacing(undefined);
+            setNotice(message);
+            reloadList();
+          }}
+        />
+      )}
+      {endpoints && (
+        <LocalEndpoints
+          account={endpoints}
+          onClose={() => setEndpoints(undefined)}
+          onSaved={(message) => {
             setNotice(message);
             reloadList();
           }}

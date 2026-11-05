@@ -70,12 +70,19 @@ def quota_exempt(provider: str) -> bool:
     return provider == LOCAL_PROVIDER
 
 
-# A local account's whole credential: where the model answers, the placeholder the
-# harness sends instead of a token, the model name it configures and, optionally,
-# the model's context window in tokens (`context_tokens`; when absent the lease
-# carries the window the local model's probe measured). The harness compacts well
-# before that window (local harness spec, "Harness orchestrates only").
-LOCAL_CREDENTIAL_KEYS = frozenset({"base_url", "auth_token", "model", "context_tokens"})
+# A local account's whole credential: where workers reach the model (`base_url`),
+# optionally where the Argus API process reaches it (`api_base_url`), the
+# placeholder the harness sends instead of a token, the model name it configures
+# and, optionally, the model's context window in tokens (`context_tokens`; when
+# absent the lease carries the window the account's probe measured). The harness
+# compacts well before that window (local harness spec, "Harness orchestrates only").
+LOCAL_CREDENTIAL_KEYS = frozenset(
+    {"base_url", "api_base_url", "auth_token", "model", "context_tokens"}
+)
+# What a lease credential carries: the keys a deployed NanoClaw accepts. The API
+# endpoint is resolved by the server per runtime, never shipped to a worker.
+LOCAL_WORKER_KEYS = frozenset({"base_url", "auth_token", "model", "context_tokens"})
+DOCKER_HOST = "host.docker.internal"
 LOCAL_CONTEXT_TOKENS_RANGE = (4096, 4_000_000)
 LOCAL_AUTH_TOKEN = "argus-local-harness"  # noqa: S105 — public placeholder, not a secret
 # The only hosts a local model is reached on: this node's loopback, or the name a
@@ -85,22 +92,27 @@ _PLACEHOLDER = re.compile(r"[A-Za-z0-9._-]{1,64}")
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}")
 
 
-def validate_local_base_url(url: object) -> str:
+def validate_local_base_url(url: object, field: str = "base_url") -> str:
     """The URL the local model answers on: http(s), a loopback or Docker-host
     name, no credentials, no path, query or fragment. This is also the exact URL a
-    worker may redirect the Anthropic API to, so it is normalised here."""
+    worker may redirect the Anthropic API to, so it is normalised here. `field`
+    names the credential key in errors (`base_url` or `api_base_url`)."""
     if not isinstance(url, str) or not url.strip():
-        raise ValueError("a local account needs a base_url")
+        raise ValueError(f"a local account needs a {field}")
     parts = urlsplit(url.strip())
+    try:
+        parts.port  # noqa: B018 - raises on a malformed port
+    except ValueError:
+        raise ValueError(f"{field} must carry a valid port") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError("base_url must be an http(s) URL")
+        raise ValueError(f"{field} must be an http(s) URL")
     if parts.username or parts.password or parts.query or parts.fragment:
-        raise ValueError("base_url must not carry credentials, a query or a fragment")
+        raise ValueError(f"{field} must not carry credentials, a query or a fragment")
     if parts.path.strip("/"):
-        raise ValueError("base_url must not carry a path")
+        raise ValueError(f"{field} must not carry a path")
     if parts.hostname.lower() not in LOCAL_HOSTS:
         raise ValueError(
-            "base_url host must be one of "
+            f"{field} host must be one of "
             f"{', '.join(sorted(LOCAL_HOSTS))}: the local model is never reached "
             "over the network"
         )
@@ -118,6 +130,8 @@ def local_credential_problem(credential: dict[str, Any]) -> str | None:
         )
     try:
         validate_local_base_url(credential.get("base_url"))
+        if credential.get("api_base_url") is not None:
+            validate_local_base_url(credential["api_base_url"], "api_base_url")
     except ValueError as exc:
         return str(exc)
     token = credential.get("auth_token", LOCAL_AUTH_TOKEN)
@@ -144,6 +158,36 @@ def local_credential_problem(credential: dict[str, Any]) -> str | None:
     return None
 
 
+LocalEndpointSource = Literal["api_base_url", "derived", "base_url"]
+
+
+def local_api_endpoint(
+    credential: dict[str, Any], *, in_container: bool
+) -> tuple[str, LocalEndpointSource]:
+    """Where the Argus API process (built-in orchestrator, health probe, admin
+    test) reaches a valid local credential's model, and why (local harness spec,
+    "One endpoint per runtime"): the stated `api_base_url`; else, outside a
+    container, a `host.docker.internal` worker URL's port on 127.0.0.1 (the host
+    side of the bridge forwarder: that name resolves only inside containers);
+    else the worker `base_url` itself."""
+    if credential.get("api_base_url") is not None:
+        return (
+            validate_local_base_url(credential["api_base_url"], "api_base_url"),
+            "api_base_url",
+        )
+    base = validate_local_base_url(credential.get("base_url"))
+    parts = urlsplit(base)
+    if not in_container and (parts.hostname or "").lower() == DOCKER_HOST:
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://127.0.0.1{port}", "derived"
+    return base, "base_url"
+
+
+def local_worker_credential(credential: dict[str, Any]) -> dict[str, Any]:
+    """The credential as a lease delivers it: only the keys a worker accepts."""
+    return {k: v for k, v in credential.items() if k in LOCAL_WORKER_KEYS}
+
+
 def local_lease_settings(credential: dict[str, Any]) -> LeaseSettings | None:
     """OpenCode (and similar) settings from a local credential: base URL and model,
     label `local`, no provider block. None when the document is not a valid local
@@ -168,10 +212,12 @@ class LocalCandidate(BaseModel):
     """A model server that answered `/v1/models` on this node
     (builtin-orchestrator spec 3.11)."""
 
-    base_url: str
+    base_url: str  # what the account stores: the worker endpoint
+    # What the Argus API process uses for that account (local harness spec).
+    api_endpoint: str
     server_hint: Literal["ollama", "lmstudio", "llamacpp"]
     models: list[str]
-    # The host.docker.internal address: both the API and workers can reach it.
+    # Workers can reach `base_url` (a host.docker.internal address).
     preferred: bool
     note: str | None = None
 
@@ -179,6 +225,102 @@ class LocalCandidate(BaseModel):
 class LocalDetection(BaseModel):
     candidates: list[LocalCandidate]
     hint: str | None = None
+
+
+# One classification of a failure to reach or use a model endpoint (local harness
+# spec, "Failures"), from Argus's own transport and the HTTP status, never text.
+LocalFailure = Literal[
+    "dns_failed",
+    "connection_refused",
+    "timeout",
+    "tls_failed",
+    "connect_failed",
+    "redirect_refused",
+    "http_error",
+    "invalid_response",
+    "model_not_served",
+    "no_models",
+    "no_tool_call",
+    "empty_answer",
+]
+LocalCheckStatus = Literal["passed", "failed", "skipped", "not_run"]
+
+
+class LocalCheck(BaseModel):
+    """One check of a local account, from the Argus API process. `detail` is
+    Argus's own sentence, never the server's text."""
+
+    status: LocalCheckStatus = "not_run"
+    failure: LocalFailure | None = None
+    http_status: int | None = None
+    detail: str | None = None
+    model: str | None = None
+    latency_ms: int | None = None
+    at: datetime | None = None
+
+
+OrchestratorModelSource = Literal["orchestrator.model", "account", "served"]
+
+
+class LocalAccountView(BaseModel):
+    """A local account's endpoints, health and last test (local harness spec,
+    "Account view"). Never the placeholder token."""
+
+    base_url: str  # the worker endpoint
+    api_base_url: str | None  # stored override, or null
+    api_endpoint: str  # what the Argus API process uses
+    api_endpoint_source: LocalEndpointSource
+    model: str | None
+    context_tokens: int | None
+    orchestrator_model: str | None  # what the built-in orchestrator would run
+    orchestrator_model_source: OrchestratorModelSource | None
+    served_models: list[str] | None  # null: not probed yet
+    discovery: LocalCheck
+    inference: LocalCheck
+    orchestrator: LocalCheck
+    warnings: list[str] = []
+
+
+class LocalTestRequest(BaseModel):
+    """An admin's explicit test. Discovery always runs; the two completions run
+    only when asked (no automatic inference)."""
+
+    inference: bool = False
+    tool_calling: bool = False
+
+
+class LocalTestResult(BaseModel):
+    account_id: str
+    account_name: str
+    runtime: Literal["api"] = "api"
+    endpoint: str
+    endpoint_source: LocalEndpointSource
+    worker_endpoint: str
+    # Why the worker endpoint was not tested from here, when it differs.
+    worker_note: str | None = None
+    served_models: list[str]
+    discovery: LocalCheck
+    inference: LocalCheck
+    orchestrator: LocalCheck
+    warnings: list[str] = []
+
+
+class LocalAccountUpdate(BaseModel):
+    """The local editor: a field left out is kept; `null` clears an optional one
+    (`api_base_url`, `model`, `context_tokens`). `base_url` cannot be cleared."""
+
+    base_url: str | None = None
+    api_base_url: str | None = None
+    model: str | None = None
+    context_tokens: int | None = None
+
+    @model_validator(mode="after")
+    def keeps_a_worker_endpoint(self) -> "LocalAccountUpdate":
+        if "base_url" in self.model_fields_set and self.base_url is None:
+            raise ValueError("base_url cannot be cleared: workers need it")
+        if not self.model_fields_set:
+            raise ValueError("give at least one field to change")
+        return self
 
 
 class AccountKind(StrEnum):
@@ -443,6 +585,8 @@ class Account(BaseModel):
     credential: CredentialState | None = None
     # `custom` accounts: where and how to call. Never contains the key.
     config: CustomConfig | None = None
+    # `local` accounts: endpoints per runtime, health and last test; set on read.
+    local: LocalAccountView | None = None
     created_at: datetime
     updated_at: datetime
 

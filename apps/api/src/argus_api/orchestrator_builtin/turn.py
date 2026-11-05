@@ -13,11 +13,14 @@ from functools import partial
 from typing import Any
 
 import httpx2 as httpx
+from argus_core.accounts import LocalFailure
 
+from argus_api.accounts.local_health import failure_sentence
 from argus_api.orchestrator_builtin import prompt, tools
 from argus_api.orchestrator_builtin.accounts import Engine, Lease, NoAccount, Sleep
 from argus_api.orchestrator_builtin.client import ArgusClient
 from argus_api.orchestrator_builtin.models import (
+    Endpoint,
     Failure,
     LeaseError,
     Reply,
@@ -120,7 +123,14 @@ async def _steps(
         try:
             async with asyncio.timeout(max(HARD_DEADLINE_S - elapsed, 1.0)):
                 reply, lease = await _model_step(
-                    deps, conv, context["tasks"], history, transcript, final, state
+                    deps,
+                    conv,
+                    context["tasks"],
+                    history,
+                    transcript,
+                    final,
+                    state,
+                    message["turn_id"],
                 )
         except TimeoutError:
             raise TurnEnded(_out_of_time(transcript, state)) from None
@@ -170,6 +180,7 @@ async def _model_step(
     transcript: Transcript,
     final: bool,
     state: _State,
+    turn_id: str,
 ) -> tuple[Reply, Lease]:
     """One step, sent again on failover or a transient error; never twice once
     it was answered."""
@@ -223,30 +234,80 @@ async def _model_step(
         outcome = await send(deps.models, target, adapter, body)
         if isinstance(outcome, Reply):
             return outcome, lease
-        deps.log(f"error: {outcome.kind} {outcome.label}")
+        where = _Where(lease, target, turn_id)
+        deps.log(f"error: {outcome.kind} {outcome.label} {where.log}")
         if outcome.kind == "quota" and lease.provider == "local":
             # A local server's 429 is load, not a quota: local accounts are never
             # exhausted, so failover would take the same account straight back.
             outcome = replace(outcome, kind="transient")
-        await _handle(deps, lease, outcome, state)
+        await _handle(deps, lease, outcome, state, where)
         if outcome.kind == "transient":
             transient += 1
             if transient > len(RETRY_DELAYS_S):
                 raise TurnEnded(
                     f"The model provider did not answer (`{outcome.label}`)."
+                    f"{_sentence(lease, target, outcome)} {where.reply}"
                     " Send the message again."
                 )
             await deps.sleep(RETRY_DELAYS_S[transient - 1])
         elif outcome.kind == "too_long":
             if shortened or not transcript.elide_earlier_steps():
-                raise TurnEnded(_rejected(lease, outcome))
+                raise TurnEnded(_rejected(lease, outcome, where))
             shortened = True
 
 
+@dataclass(frozen=True)
+class _Where:
+    """Which account, endpoint, runtime and turn a model error came from: names
+    and an origin only, never a key, header or body (builtin-orchestrator 3.4)."""
+
+    lease: Lease
+    target: Endpoint
+    turn_id: str
+
+    @property
+    def reply(self) -> str:
+        return (
+            f"Account `{self.lease.name}`, endpoint `{self.target.origin}`,"
+            f" runtime builtin, turn `{self.turn_id}`."
+        )
+
+    @property
+    def log(self) -> str:
+        return (
+            f"account={self.lease.name} endpoint={self.target.origin}"
+            f" runtime=builtin turn={self.turn_id}"
+        )
+
+
+# Failure classes with a sentence of their own (a provider status or error token
+# speaks for itself).
+_TRANSPORT: dict[str, LocalFailure] = {
+    f: f
+    for f in (
+        "dns_failed",
+        "connection_refused",
+        "timeout",
+        "tls_failed",
+        "connect_failed",
+        "redirect_refused",
+    )
+}
+
+
+def _sentence(lease: Lease, target: Endpoint, failure: Failure) -> str:
+    """The transport failure in words, with what to change on a local account."""
+    known = _TRANSPORT.get(failure.error_type or "")
+    if known is None:
+        return ""
+    return " " + failure_sentence(known, target.url, local=lease.provider == "local")
+
+
 async def _handle(
-    deps: TurnDeps, lease: Lease, failure: Failure, state: _State
+    deps: TurnDeps, lease: Lease, failure: Failure, state: _State, where: _Where
 ) -> None:
-    """Quota moves to the next account; auth and request errors end the turn."""
+    """Quota moves to the next account; auth, request, unreachable and invalid
+    responses end the turn."""
     if failure.kind == "quota":
         moved = await deps.engine.failover(lease, failure)
         if isinstance(moved, NoAccount):
@@ -268,14 +329,25 @@ async def _handle(
             " replace its key."
         )
     elif failure.kind == "request":
-        raise TurnEnded(_rejected(lease, failure))
+        raise TurnEnded(_rejected(lease, failure, where))
+    elif failure.kind == "unreachable":
+        label = failure.error_type or failure.label
+        raise TurnEnded(
+            f"The model provider could not be reached (`{label}`)."
+            f"{_sentence(lease, where.target, failure)} {where.reply}"
+        )
+    elif failure.kind == "invalid":
+        raise TurnEnded(
+            "The model provider answered with a response Argus cannot read"
+            f" (`invalid_response`). {where.reply}"
+        )
 
 
-def _rejected(lease: Lease, failure: Failure) -> str:
+def _rejected(lease: Lease, failure: Failure, where: _Where) -> str:
     text = f"The model rejected the request (`{failure.label}`)."
     if lease.provider in ("custom", "local"):
         text += " Check that the model supports tool calls."
-    return text
+    return f"{text} {where.reply}"
 
 
 async def _report_usage(

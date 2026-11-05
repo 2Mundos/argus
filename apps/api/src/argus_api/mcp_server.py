@@ -1154,7 +1154,10 @@ async def list_accounts(ctx: Context) -> dict:
     is unknown, never zero. `last_accepted_at` / `last_rejected_at` are the latest
     measured output and recorded authentication rejection (null when none). `credential` is
     present|missing|expired as stored (never a health verdict; null for repository
-    accounts).
+    accounts). A `local` account's `local` holds its worker endpoint (`base_url`),
+    the endpoint the Argus API uses (`api_endpoint`, with its source), its model,
+    the built-in orchestrator's model, the last model listing, the last test's
+    inference and orchestrator statuses, and stale model `warnings`.
     Read-only; no credentials."""
     return {"accounts": await _call(ctx, "GET", "/accounts")}
 
@@ -1166,6 +1169,65 @@ async def refresh_account_quota(ctx: Context, account_id: str) -> dict:
     (updated|skipped|rate_limited|failed, with a `code`), the stored windows and
     credit, and the account's resulting `quota_status`."""
     return await _call(ctx, "POST", f"/accounts/{account_id}/quota/refresh")
+
+
+LocalField = Literal["api_base_url", "model", "context_tokens"]
+
+
+@tool(ADMINS)
+async def update_local_account(
+    ctx: Context,
+    account_id: str,
+    base_url: str | None = None,
+    api_base_url: str | None = None,
+    model: str | None = None,
+    context_tokens: int | None = None,
+    clear: list[LocalField] | None = None,
+    reset: bool = False,
+) -> dict:
+    """Edit a `local` account's endpoints or model (admin). `base_url` is where
+    worker containers reach the model (e.g. http://host.docker.internal:8080);
+    `api_base_url` where the Argus API process (the built-in orchestrator, health
+    probe and tests) reaches it, e.g. http://127.0.0.1:8080. Only loopback or
+    host.docker.internal hosts are accepted. Fields left out are kept; `clear`
+    lists optional fields to remove (api_base_url back to its default, model back
+    to the served one); `reset: true` clears all three. Returns the account with a
+    fresh model listing (no inference) and any stale model warning."""
+    body: dict[str, Any] = {
+        k: v
+        for k, v in (
+            ("base_url", base_url),
+            ("api_base_url", api_base_url),
+            ("model", model),
+            ("context_tokens", context_tokens),
+        )
+        if v is not None
+    }
+    for name in ("api_base_url", "model", "context_tokens") if reset else clear or []:
+        body[name] = None
+    return await _call(ctx, "PUT", f"/accounts/{account_id}/local", json=body)
+
+
+@tool(ADMINS)
+async def test_local_account(
+    ctx: Context,
+    account_id: str,
+    inference: bool = False,
+    tool_calling: bool = False,
+) -> dict:
+    """Test a `local` account from the Argus API process against its own API
+    endpoint (admin). Always: DNS/connection and the model list, with whether the
+    account's and the built-in orchestrator's models are served. `inference: true`
+    also sends one short completion; `tool_calling: true` one completion offering a
+    tool, on the model the built-in orchestrator would run. Returns separate
+    `discovery`, `inference` and `orchestrator` statuses (passed, failed, skipped,
+    not_run) with failure classes and Argus's own sentences, never server text."""
+    return await _call(
+        ctx,
+        "POST",
+        f"/accounts/{account_id}/local/test",
+        json={"inference": inference, "tool_calling": tool_calling},
+    )
 
 
 @tool(AGENTS)
