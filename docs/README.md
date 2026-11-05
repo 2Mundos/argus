@@ -227,6 +227,12 @@ every new dependency is judged against it.
   orchestrator as an in-process loop on an API-key, custom or local account: no Docker,
   image or OneCLI; same REST/MCP contract, per-step spend, task update notices, local
   model detection
+- [Changed-only checks](specs/changed-only-checks.spec.md) — the pre-push hook runs
+  only the checks the changed files can affect
+- [Test hygiene checks](specs/test-hygiene.spec.md) — `check_tests.py --strict`
+  rejects sleeps, polling, wall-clock asserts, retries and unreasoned skips or suppressions
+- [Worktree dev isolation](specs/worktree-dev-isolation.spec.md) — state and ports per
+  checkout, seeded from a pruned read-only copy of the preview database
 - [Onboarding](specs/onboarding.spec.md) — a wizard from a fresh install to an account,
   a first worker and optionally the internal orchestrator; Home becomes Dashboard
 
@@ -234,57 +240,25 @@ every new dependency is judged against it.
 
 - [Drafts index](drafts/README.md) — every draft with its status; promoted
   drafts are `superseded` and link their spec
-- [Task operations and reliability](drafts/2026-10-29.task-operations.draft.md) — task
-  detail view, command reliability, finalization, workspace ownership, checkpoints
-  and engine events; candidates for investigation and specification
-- [Knowledge](drafts/2026-10-14.knowledge.draft.md) — superseded by the spec
-  above; kept as a record
-- [Worker lifecycle and task coordination](drafts/2026-10-14.worker-lifecycle.draft.md) —
-  superseded by the spec above; kept as a record
+- [Task operations and reliability](drafts/2026-10-29.task-operations.draft.md) — the
+  unbuilt part: workspace ownership, checkpoint representations and engine events
 - [Worker efficiency](drafts/2026-10-24.worker-efficiency.draft.md) — why tasks are
   interrupted and tokens wasted (baseline numbers, root causes), and eight ordered
   proposals: claim reserves the account, owned workspace, one task per session,
   resumable attempts, progress-based liveness, failure classes, single-layer run;
   P1, P3, P6 and P8 shipped, P2/P5 partly (P5 recovery latency now readable on Fleet)
-- [Command guard](drafts/2026-10-29.command-guard.draft.md) — a `PreToolUse`
-  hook that blocks catastrophic shell commands (root/home deletion, disk wipes,
-  repository deletion, fork bombs); accident prevention, not a sandbox
-- [Disk guard](drafts/2026-10-29.disk-guard.draft.md) — warn, refuse claims,
-  pause session containers, then stop the heaviest writer, in hysteresis bands
-  before SQLite's 64 MiB limit
-- [Agent resource hygiene](drafts/2026-10-29.agent-resource-hygiene.draft.md) —
-  agent commands die before the harness on OOM, CPU counts match the quota,
-  OOM kills classified as `env_oom`
-- [Quota resume draft](drafts/2026-10-29.quota-resume.draft.md) — superseded by the spec
 - [Quota resume research](research/2026-10-29.quota-resume.research.md) — credential
   swap is a container recreate today; session validity and Codex resume left open;
   spec-update plan folding into P4
 - [Quota resume spike](research/2026-11-02.quota-resume-spike.research.md) — a new
   NanoClaw session whose runner continuation is seeded resumes the Claude Code
   session, against a fake API; a seed with a missing transcript loses the first message
-- [Account auth health](drafts/2026-10-29.auth-health.draft.md) — credential
-  state and last accepted/rejected request per account, kept separate
-- [Harness stderr tail](drafts/2026-10-29.harness-stderr-tail.draft.md) — a
-  bounded, redacted stderr artifact on every attempt exit, with truncation flags
 - [Harness stderr tail research](research/2026-10-29.harness-stderr-tail.research.md) —
   the NanoClaw hook drops container stderr today (only `docker logs` stdout is kept)
-- [Bounded recovery](drafts/2026-10-29.bounded-recovery.draft.md) — throttled
-  session starts, one recovery per unexpected exit, uncertain work never resent
-  (shipped; only the NanoClaw start-path question is open)
 - [Verification boundary](drafts/2026-10-29.verification-boundary.draft.md) — a
   spec subsection stating what was verified, at which level and versions
-- [Model-facing evals](drafts/2026-10-31.model-facing-evals.draft.md) —
-  superseded by the spec above; kept as a record
-- [Test hygiene checks](drafts/2026-10-31.test-hygiene-lint.draft.md) — a lint
-  step that rejects sleeps, polling, wall-clock asserts, retries and unreasoned
-  skips or suppressions in tests, and clock reads beside `tx.now`
 - [Replay engine](drafts/2026-10-31.replay-engine.draft.md) — a dev-only worker
   that plays back a recorded attempt through the real API, with no model
-- [Worktree dev isolation](drafts/2026-10-31.worktree-dev-isolation.draft.md) —
-  state and ports per worktree, seeded from a pruned read-only copy of the
-  preview database that cannot start workers
-- [Changed-only checks](drafts/2026-10-31.changed-only-checks.draft.md) — a
-  pre-push run of only the checks the changed files can affect
 - [Repeat-call reminder](drafts/2026-11-04.repeat-call-reminder.draft.md) — an
   advisory `PostToolUse` hook that nudges a worker repeating an identical tool call
 - [Failure evidence audit](drafts/2026-11-04.failure-evidence-audit.draft.md) —

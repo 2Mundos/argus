@@ -6,7 +6,7 @@ updated: 2026-11-04
 
 # Worker Lifecycle and Task Coordination Spec
 
-Finalized from [the 2026-10-14 draft](../drafts/2026-10-14.worker-lifecycle.draft.md).
+Finalized from the 2026-10-14 draft (removed; in git history).
 Everything here operates within the [lightweight single-node](single-node.spec.md)
 principle.
 

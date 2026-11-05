@@ -135,7 +135,7 @@ gateway as `DOCKER_BRIDGE_IP`; neither file publishes on all host interfaces.
   backup first and a rollback on failure.
 - No Compose stack is needed for development: `make dev-api` creates
   `./.argus/argus.db` on first run (seeded from the preview database, see the
-  [worktree dev isolation](../drafts/2026-10-31.worktree-dev-isolation.draft.md) draft). For a packaged run, `deploy/compose.yaml` is
+  [worktree dev isolation](worktree-dev-isolation.spec.md) spec). For a packaged run, `deploy/compose.yaml` is
   still one process and one named volume (`docker compose -f deploy/compose.yaml
   up --build`); an optional `deploy/compose.docker.yaml` overlay adds the host
   Docker socket and a bridge-gateway port binding when the operator wants local

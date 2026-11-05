@@ -136,6 +136,4 @@ and changing pool requests. Where the quota comes from is set by
   from `cpu.max` and from the fallback variable, no-quota no-op, set-only-if-unset,
   the `NODE_OPTIONS` append and its log line, the sitecustomize override, and the
   patch's idempotence and upstream-shape guard.
-- [Docs README](../README.md) links this spec and the draft's status.
-- The draft `docs/drafts/2026-10-29.agent-resource-hygiene.draft.md` records its
-  resulting status.
+- [Docs README](../README.md) links this spec.

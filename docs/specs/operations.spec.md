@@ -119,7 +119,7 @@ renders it as its System widgets and refreshes with the event stream.
 
 ## 3.5 Disk guard
 
-Source: the [disk guard draft](../drafts/2026-10-29.disk-guard.draft.md) and its
+Source: the disk guard draft (removed; in git history) and its
 [investigation](../reports/2026-10-29.disk-guard-investigation.ref.md). Where the
 investigation found a flaw, the corrected rule is stated and flagged **Decision**.
 

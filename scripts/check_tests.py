@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test hygiene checks (docs/drafts/2026-10-31.test-hygiene-lint.draft.md).
+"""Test hygiene checks (docs/specs/test-hygiene.spec.md).
 
 Report-only by default; `--strict` exits non-zero on any unannotated hit.
 Suppress one hit with a comment on the line above:
