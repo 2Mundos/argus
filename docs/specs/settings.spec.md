@@ -192,6 +192,15 @@ saving, and show permission and save errors. The inherit/override state is the
 `source` of the existing read model (`project` is an override; `global` is
 inherited; `default` is not set).
 
+## 3.9 Command guard
+
+Key `command_guard.enabled`, scopes `global` and `project`, boolean, default
+`true`. On keeps the Claude Code `PreToolUse` [command guard](command-guard.spec.md)
+active; off disables it for new attempts. A project value takes precedence over
+the global one. Only the setting is registered: passing it to the hook at claim
+(as `ARGUS_COMMAND_GUARD`) is not implemented yet, so changing it has no effect on
+the hook today.
+
 # 4. Open Questions
 
 - Should orchestrators be allowed to write project overrides? Phase 1 says admin
