@@ -26,7 +26,9 @@ function deriveClaude(events: ClaudeEvent[]) {
   const sdkError = (e: string) => events.some((ev) => ev.type === "assistant" && ev.error === e);
   const result = events.findLast((ev) => ev.type === "result");
   const failed = result?.is_error === true;
-  const authExpiredError = failed ? claudeAuthExpiredError(sdkError("authentication_failed")) : undefined;
+  const authExpiredError = failed
+    ? claudeAuthExpiredError(sdkError("authentication_failed"))
+    : undefined;
   const rateLimitError = failed
     ? claudeRateLimitError(result?.result, sdkError("rate_limit"))
     : undefined;
@@ -50,7 +52,9 @@ const cases = readdirSync(ROOT, { withFileTypes: true })
   .flatMap((engine) =>
     readdirSync(join(ROOT, engine.name), { withFileTypes: true })
       .filter((d) => d.isDirectory())
-      .map((c) => [`${engine.name}/${c.name}`, engine.name as keyof typeof DERIVE, c.name] as const),
+      .map(
+        (c) => [`${engine.name}/${c.name}`, engine.name as keyof typeof DERIVE, c.name] as const,
+      ),
   );
 
 describe("engine transcripts", () => {
