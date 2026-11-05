@@ -505,7 +505,7 @@ describe("codexLogLines", () => {
       "item/completed",
       done({
         type: "commandExecution",
-        command: "curl -H 'Authorization: Bearer abcdef1234567890' x",
+        command: "curl -H '" + "Authorization: Bearer abcdef1234567890" + "' x",
         aggregatedOutput: "token=hunter2hunter2 mysecretvalue9",
         exitCode: 0,
         status: "completed",

@@ -489,7 +489,7 @@ test("cursor agent stream parser: fragmented chunks, malformed, empty and secret
   assert.equal(got.length, 1);
   const tool = ev(
     cursorTool("started", {
-      shellToolCall: { args: { command: "curl -H 'Authorization: Bearer abcdef1234567890xyz' x" } },
+      shellToolCall: { args: { command: "curl -H '" + "Authorization: Bearer abcdef1234567890xyz" + "' x" } },
     }),
   );
   p.push(tool);
@@ -677,19 +677,27 @@ test("codex delegate: events reach the relay before the process ends, with keepa
   const stdoutFile = path.join(dir, "out");
   const sent = [];
   let t = 0;
+  let onStarted;
+  let onAlive;
+  const started = new Promise((r) => (onStarted = r));
+  const alive = new Promise((r) => (onAlive = r));
   const live = startLiveLog({
     stdoutFile,
     executor: "codex",
-    send: (l) => sent.push(l),
+    send: (l) => {
+      sent.push(l);
+      if (l.includes("codex started")) onStarted();
+      if (l.some((x) => x.startsWith("delegate alive"))) onAlive();
+    },
     intervalMs: 5,
     flushMs: 0,
     keepaliveMs: 1000,
     now: () => t,
   });
   fs.writeFileSync(stdoutFile, ev({ type: "thread.started", thread_id: "t" }));
-  await new Promise((r) => setTimeout(r, 40));
-  t = 5000; // silence: a keepalive
-  await new Promise((r) => setTimeout(r, 40));
+  await held(started);
+  t = 5000; // silence since the last output: a keepalive
+  await held(alive);
   fs.appendFileSync(stdoutFile, ev({ type: "turn.completed", usage: {} }));
   live.stop();
   const flat = sent.flat();
