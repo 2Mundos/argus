@@ -32,6 +32,8 @@ import {
   type PreflightEvidenceEvent,
   type ProbeEvidence,
   prepareResultDir,
+  REARM_MAX_ATTEMPTS,
+  rearmBackoffMs,
   RepositoryPreflightError,
   readVerdictFile,
   runRepositoryPreflight,
@@ -377,6 +379,21 @@ describe("what the container can put in the task's error", () => {
       `(helper error policy_denied: rule repository_write_access on ${GITHUB}: `,
     );
     expect(ruled?.message).toContain("lacks push access");
+    child = () => ({
+      code: 13,
+      verdict: {
+        ok: false,
+        evidence: { http_status: 200, permissions: "absent", visibility: "public" },
+        error: { code: "policy_denied", rule: "repository_write_access" },
+      },
+    });
+    const uninjected = await run().then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(uninjected?.message).toContain("attached no credential");
+    expect(uninjected?.message).toContain("re-apply the repository assignment");
+    expect(uninjected?.message).not.toContain("lacks push access");
     expect(ruled?.message.endsWith(")")).toBe(true);
     expect(ruled?.message).not.toContain(SECRET);
     child = () => ({
@@ -961,6 +978,7 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       lease: LEASE,
       verifyAssignment: async () => assigned(),
       probe: probeCalls,
+      backoff: async () => {},
       emit: (event) => {
         events.push(structuredClone(event));
       },
@@ -1134,24 +1152,104 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
     expect(result).toMatchObject({ outcome: "ok", reason: null, error: null });
     expect(rearm).toHaveBeenCalledTimes(1);
     expect(probeCalls).toHaveBeenCalledTimes(2);
-    expect(events[0]).toMatchObject({ outcome: "ok", rearmed: true, probe: { push: true } });
+    expect(events[0]).toMatchObject({
+      outcome: "ok",
+      rearmed: true,
+      rearm_attempts: 1,
+      probe: { push: true },
+    });
   });
 
-  it("reports the second probe's failure and retries only once", async () => {
+  const proven: ProbeEvidence = {
+    helper_error: null,
+    http_status: 200,
+    permissions: "present",
+    push: true,
+    visibility: "private",
+    authentication: "proven",
+  };
+  const missing = (label: string) =>
+    new RepositoryPreflightError("unknown", label, missingInjection);
+
+  it("survives a burst of injection-missing probes and counts the re-arms", async () => {
     const rearm = vi.fn(async () => {});
     const probeCalls = vi
       .fn()
-      .mockRejectedValueOnce(new RepositoryPreflightError("unknown", "first", missingInjection))
-      .mockRejectedValueOnce(new RepositoryPreflightError("unknown", "second", missingInjection));
+      .mockRejectedValueOnce(missing("1"))
+      .mockRejectedValueOnce(missing("2"))
+      .mockRejectedValueOnce(missing("3"))
+      .mockResolvedValueOnce(proven);
     const { done, events } = preflight({ probe: probeCalls, rearm });
-    const result = await done;
-    expect(result).toMatchObject({
-      outcome: "unknown",
-      error: "repository preflight unknown: second",
+    expect(await done).toMatchObject({ outcome: "ok" });
+    expect(rearm).toHaveBeenCalledTimes(3);
+    expect(probeCalls).toHaveBeenCalledTimes(4);
+    expect(events[0]).toMatchObject({ rearmed: true, rearm_attempts: 3 });
+  });
+
+  it("stops at the bound: the last failure is final", async () => {
+    const rearm = vi.fn(async () => {});
+    let n = 0;
+    const probeCalls = vi.fn(async () => {
+      throw missing(`probe ${++n}`);
     });
+    const { done, events } = preflight({ probe: probeCalls, rearm });
+    expect(await done).toMatchObject({
+      outcome: "unknown",
+      error: `repository preflight unknown: probe ${REARM_MAX_ATTEMPTS + 1}`,
+    });
+    expect(rearm).toHaveBeenCalledTimes(REARM_MAX_ATTEMPTS);
+    expect(probeCalls).toHaveBeenCalledTimes(REARM_MAX_ATTEMPTS + 1);
+    expect(events[0]).toMatchObject({ rearmed: true, rearm_attempts: REARM_MAX_ATTEMPTS });
+  });
+
+  it("backs off with increasing rounds and bounded delays", async () => {
+    const rounds: number[] = [];
+    const probeCalls = vi.fn().mockRejectedValue(missing("x"));
+    const { done } = preflight({
+      probe: probeCalls,
+      rearm: async () => {},
+      backoff: async (round) => {
+        rounds.push(round);
+      },
+    });
+    await done;
+    expect(rounds).toEqual(Array.from({ length: REARM_MAX_ATTEMPTS }, (_, i) => i + 1));
+    expect(rounds.map(rearmBackoffMs)).toEqual([1000, 2000, 4000, 8000]);
+    expect(rearmBackoffMs(50)).toBe(8000);
+  });
+
+  it("keeps the first failure when a later re-arm throws", async () => {
+    const rearm = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("OneCLI 500"));
+    let n = 0;
+    const probeCalls = vi.fn(async () => {
+      throw missing(`probe ${++n}`);
+    });
+    const { done, events } = preflight({ probe: probeCalls, rearm });
+    expect(await done).toMatchObject({ error: "repository preflight unknown: probe 2" });
+    expect(probeCalls).toHaveBeenCalledTimes(2);
+    expect(events[0]).toMatchObject({ rearm_attempts: 1 });
+  });
+
+  it("a non-injection failure after a re-arm is final", async () => {
+    const rearm = vi.fn(async () => {});
+    const probeCalls = vi
+      .fn()
+      .mockRejectedValueOnce(missing("first"))
+      .mockRejectedValueOnce(
+        new RepositoryPreflightError("forge_denied", "denied", {
+          ...missingInjection,
+          helper_error: "forbidden",
+          http_status: 403,
+        }),
+      );
+    const { done, events } = preflight({ probe: probeCalls, rearm });
+    expect(await done).toMatchObject({ outcome: "forge_denied" });
     expect(rearm).toHaveBeenCalledTimes(1);
     expect(probeCalls).toHaveBeenCalledTimes(2);
-    expect(events[0]).toMatchObject({ outcome: "unknown", rearmed: true });
+    expect(events[0]).toMatchObject({ rearmed: true, rearm_attempts: 1 });
   });
 
   it.each([
@@ -1186,7 +1284,7 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
     expect(await done).toMatchObject({ outcome });
     expect(rearm).not.toHaveBeenCalled();
     expect(probeCalls).toHaveBeenCalledTimes(1);
-    expect(events[0].rearmed).toBe(false);
+    expect(events[0]).toMatchObject({ rearmed: false, rearm_attempts: 0 });
   });
 
   it("keeps the first failure when the lease cannot be re-applied", async () => {

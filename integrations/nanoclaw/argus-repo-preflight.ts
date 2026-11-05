@@ -92,6 +92,10 @@ const RULE_HINTS: Readonly<Record<string, string>> = {
     "the OneCLI HTTPS proxy is missing or invalid in the preflight session; check the OneCLI gateway setup",
 };
 
+/** The hint for a write-access denial whose verdict shows no credential was attached. */
+const UNINJECTED_HINT =
+  "the OneCLI gateway attached no credential to the preflight request: its policy rule for this repository is not materialized; re-apply the repository assignment";
+
 /**
  * Why the child failed, as a closed reason. The verdict file is written by the container,
  * so none of its free text (messages, paths, provider names) reaches the task: only a code
@@ -105,7 +109,12 @@ export function describeFailure(verdict: unknown, repository?: string): string {
   if (code !== "policy_denied") return `helper error ${code}`;
   if (typeof rule !== "string" || !Object.hasOwn(RULE_HINTS, rule))
     return `helper error ${code}: rule not reported by the helper`;
-  return `helper error ${code}: rule ${rule}${repository ? ` on ${repository}` : ""}: ${RULE_HINTS[rule]}`;
+  // A 200 without permissions shows the gateway attached no credential: "lacks push access" would mislead.
+  const hint =
+    rule === "repository_write_access" && injectionMissing(verdictEvidence(verdict))
+      ? UNINJECTED_HINT
+      : RULE_HINTS[rule];
+  return `helper error ${code}: rule ${rule}${repository ? ` on ${repository}` : ""}: ${hint}`;
 }
 
 /** Bounded, printable, credential-scrubbed text for errors whose origin is not ours (drivers, OneCLI). */
@@ -351,8 +360,20 @@ export interface PreflightEvidenceEvent {
     git_path: string;
   };
   probe: ({ source: "preflight_session_verdict" } & ProbeEvidence) | null;
-  /** Whether the lease was re-applied and the probe retried once (below). */
+  /** Whether the lease was re-applied at least once (`rearm_attempts` > 0). */
   rearmed: boolean;
+  /** How many times the lease was re-applied and the probe retried (at most REARM_MAX_ATTEMPTS). */
+  rearm_attempts: number;
+}
+
+/** Re-arm and probe rounds after a probe that proves no credential was attached. */
+export const REARM_MAX_ATTEMPTS = 4;
+const REARM_BACKOFF_BASE_MS = 1_000;
+const REARM_BACKOFF_MAX_MS = 8_000;
+
+/** 1s, 2s, 4s, 8s for rounds 1..4, never above the cap. */
+export function rearmBackoffMs(round: number): number {
+  return Math.min(REARM_BACKOFF_MAX_MS, REARM_BACKOFF_BASE_MS * 2 ** Math.max(0, round - 1));
 }
 
 export interface RepositoryPreflightInput {
@@ -368,10 +389,12 @@ export interface RepositoryPreflightInput {
   probe(): Promise<ProbeEvidence | void>;
   /**
    * Re-applies the repository lease (secrets and assignments) so OneCLI republishes the
-   * policy rule the gateway injects by. Called once after a probe that proves no credential
-   * was attached, then the probe runs once more.
+   * policy rule the gateway injects by. Called after a probe that proves no credential
+   * was attached, then the probe runs again, up to REARM_MAX_ATTEMPTS times.
    */
   rearm?(): Promise<void>;
+  /** Waits before re-arm round `round` (1-based); defaults to a bounded exponential delay. */
+  backoff?(round: number): Promise<void>;
   /** Receives the event; a throw or rejection is ignored. */
   emit?(event: PreflightEvidenceEvent): unknown;
   preflightId?: string;
@@ -420,6 +443,7 @@ export async function runRepositoryPreflight(
     },
     probe: null,
     rearmed: false,
+    rearm_attempts: 0,
   };
   const finish = async (outcome: PreflightOutcome, detail?: string) => {
     event.outcome = outcome;
@@ -474,27 +498,33 @@ export async function runRepositoryPreflight(
       return finish("session_failure", message(error));
     if (error.evidence) event.probe = { source: "preflight_session_verdict", ...error.evidence };
     // OneCLI can confirm the admin-visible assignment before it publishes the policy rule
-    // the gateway injects by; its rematerialize may also fail and leave the rule missing.
-    // Re-applying the lease republishes it, so one re-arm and one more probe is safe.
-    if (!input.rearm || !injectionMissing(error.evidence))
-      return finish(error.outcome, error.message);
-    try {
-      await input.rearm();
-    } catch {
-      return finish(error.outcome, error.message);
-    }
-    event.rearmed = true;
-    try {
-      await probeOnce();
-      return finish("ok");
-    } catch (retry) {
-      if (retry instanceof RepositoryPreflightError) {
+    // the gateway injects by; its rematerialize may also fail (a P2028 transaction timeout)
+    // and leave the rule missing. Re-applying the lease republishes it, so re-arm and probe
+    // again, bounded and with backoff, while the failure still proves no credential.
+    let failure = error;
+    for (let round = 1; round <= REARM_MAX_ATTEMPTS; round++) {
+      if (!input.rearm || !injectionMissing(failure.evidence))
+        return finish(failure.outcome, failure.message);
+      try {
+        await (input.backoff ?? defaultBackoff)(round);
+        await input.rearm();
+      } catch {
+        return finish(failure.outcome, failure.message);
+      }
+      event.rearmed = true;
+      event.rearm_attempts = round;
+      try {
+        await probeOnce();
+        return finish("ok");
+      } catch (retry) {
+        if (!(retry instanceof RepositoryPreflightError))
+          return finish("session_failure", message(retry));
         if (retry.evidence)
           event.probe = { source: "preflight_session_verdict", ...retry.evidence };
-        return finish(retry.outcome, retry.message);
+        failure = retry;
       }
-      return finish("session_failure", message(retry));
     }
+    return finish(failure.outcome, failure.message);
   }
 }
 
@@ -598,6 +628,7 @@ export interface EphemeralSessionDeps {
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const defaultBackoff = (round: number) => defaultSleep(rearmBackoffMs(round));
 const message = (error: unknown) =>
   safeText(error instanceof Error ? error.message : String(error));
 

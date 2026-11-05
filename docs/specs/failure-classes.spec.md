@@ -303,14 +303,21 @@ therefore runs in a bounded, ephemeral, model-free session:
   helper creates the file exclusively with mode 0600 and never follows a planted link. The
   result directory is owned by the container's mapped user (or chowned to it when the host
   is root); a user that cannot write it fails closed.
-- **One re-arm when no credential was attached.** A probe that fails `unknown` with the forge's
+- **Bounded re-arms when no credential was attached.** A probe that fails `unknown` with the forge's
   200 and no permissions object (the helper's `policy_denied`) does not prove the assignment is
   wrong: the gateway injects only through the policy rule OneCLI publishes for the assignment,
   and that publication can lag the admin read or fail. The host re-applies the repository lease
-  once (the same secrets and assignments; no new lease) and probes once more. Only this shape is
-  retried: a 401/403/404, an answer that proves a credential, a network error or a session
-  failure is final. A second failure is final; the evidence event says the lease was re-armed and
-  carries the last probe.
+  (the same secrets and assignments; no new lease) and probes again, up to 4 rounds, waiting
+  1 s, 2 s, 4 s and 8 s before each (the wait is injectable, so tests run instantly). A burst of
+  failed publications (for example OneCLI's P2028 transaction timeout) is thus survived. Only
+  this shape is retried: a 401/403/404, an answer that proves a credential, a network error or a
+  session failure is final, as is a re-arm that throws (the last probe's failure is kept). When
+  the last round fails too, that failure is final. The evidence event carries `rearmed` (at
+  least one re-arm) and `rearm_attempts` (how many) and the last probe. The write-access denial
+  hint depends on the verdict: when it shows no credential was attached (200, no permissions
+  object, authentication unknown) it says the gateway attached none because its policy rule is
+  not materialized in OneCLI and to re-apply the repository assignment, rather than that the
+  forge credential lacks push access, which is kept for a verdict that carried a credential.
 - **Outcomes.** Every preflight ends with one outcome from a closed set, named first in the
   block `error` (`repository preflight <outcome>: …`):
 
@@ -331,8 +338,8 @@ therefore runs in a bounded, ephemeral, model-free session:
   assignment checks (agent, each secret's state, scope match, secret mode), the target API
   and Git hosts and their scoped path patterns, the probe outcome with the forge's HTTP
   status, whether the permissions object was present, the push bit, the repository's
-  visibility and whether authentication is proven, whether the lease was re-armed for a
-  second probe, and the evidence source of each part
+  visibility and whether authentication is proven, whether the lease was re-armed and how
+  many times (`rearm_attempts`), and the evidence source of each part
   (`onecli_admin_read`, `preflight_session_verdict`, `host`). Every field is a closed value,
   a bounded integer, or a host and path the host derived itself; nothing the container wrote
   is copied as text. No secret value, header, proxy URL or userinfo, or credential-bearing URL
