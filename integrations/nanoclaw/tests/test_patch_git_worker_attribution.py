@@ -61,9 +61,7 @@ def test_requires_hygiene_agent_env_block(tmp_path: Path) -> None:
     assert "patch-agent-resource-hygiene" in result.stderr + result.stdout
 
 
-def _eval_path(
-    root: Path, agent_env: dict[str, str], env: dict[str, str]
-) -> list[str]:
+def _eval_path(root: Path, agent_env: dict, env: dict) -> list[str]:
     text = (root / "src" / "container-runner.ts").read_text()
     match = re.search(r"^    PATH: (.*),$", text, re.MULTILINE)
     assert match
