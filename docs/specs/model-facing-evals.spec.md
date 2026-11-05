@@ -73,7 +73,18 @@ how to run, cost). Shared code lives in `evals/*.py`.
 - **Rules for agents.** A change to tool descriptions, schemas, tool results,
   the persona or worker instructions runs the evals that cover that text. A fix
   for a model-behaviour bug adds a failing case first. Fixtures hold no user
-  data: placeholder paths and repositories only.
+  data: placeholder paths and repositories only. Tool text follows these rules:
+  - Leave out constraints the model learns from the result (a missing task
+    returns an error; a failed send was not delivered).
+  - Describe what the tool does and returns, not how it is implemented.
+  - Put a parameter's defaults, ranges and pairing rules on that parameter, not
+    in the tool description. A description that varies with configuration means
+    the varying part is a parameter.
+  - Say each fact once: not in both the tool and the persona or INSTRUCTIONS,
+    and not in two tools.
+  - Put destructive effects and required checks before the action they guard.
+  - Return bounded results with a reference for the rest (see
+    `{text, bytes, truncated, ref}` in the MCP operations spec).
 
 # 4. Open Questions
 
