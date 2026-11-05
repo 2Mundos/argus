@@ -2155,7 +2155,7 @@ async def set_project_runtime(
     codex_turn_timeout_s: int | None = None,
 ) -> dict:
     """Declare what a project's tasks need in their image. `components` are
-    {id, version?, required?} from GET /runtime/catalog (python, pango, graft, psql,
+    {id, version?, required?} from GET /runtime/catalog (python, pytest, pango, graft, psql,
     postgres-server, valkey, node, git, chromium; pnpm, sops-age, minio, elasticsearch
     are recorded as gaps with required=false). `services` are disposable test services
     {kind: postgres|valkey, env: {VARIABLE: "{url}"}}. Never Dockerfile text: an
