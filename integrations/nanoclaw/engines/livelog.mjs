@@ -246,10 +246,102 @@ export function agentEventLines(ev, secrets = [], state = { seen: new Set(), par
   return lines;
 }
 
+/** `codex exec --json` item statuses that mean the item did not succeed. */
+const CODEX_BAD_STATUS = new Set(["failed", "declined"]);
+
+/**
+ * Readable lines for one `codex exec --json` event (`thread.started`, `turn.*`,
+ * `item.started|completed`, `error`). Shown: the agent's messages, `▸ tool arg` for a
+ * command, patch, MCP call or web search, a bounded result or error summary, and the
+ * final status. Never shown: `reasoning`, the prompt, `todo_list`, or unknown events.
+ * `state.started` holds the ids of items whose `▸` line was already printed.
+ */
+export function codexEventLines(ev, secrets = [], state = { started: new Set() }) {
+  if (!isObject(ev)) return [];
+  const lines = [];
+  const msg = (e) => cut(oneLine(isObject(e) ? (e.message ?? "") : (e ?? "")), RESULT_MAX);
+  const call = (item, label) => {
+    const id = typeof item.id === "string" ? item.id : null;
+    if (id && state.started.has(id)) return;
+    if (id && state.started.size < 5000) state.started.add(id);
+    lines.push(`▸ ${label}`);
+  };
+  const outcome = (item, detail) => {
+    if (CODEX_BAD_STATUS.has(item.status)) lines.push(`  ✗ error: ${detail}`);
+    else if (detail) lines.push(`  ↳ ${detail}`);
+  };
+  switch (ev.type) {
+    case "thread.started":
+      lines.push("codex started");
+      break;
+    case "item.started":
+    case "item.completed": {
+      const item = ev.item;
+      if (!isObject(item)) break;
+      const done = ev.type === "item.completed";
+      switch (item.type) {
+        case "agent_message":
+          if (done && typeof item.text === "string")
+            for (const l of textLines(item.text, secrets)) if (l.trim()) lines.push(l);
+          break;
+        case "command_execution": {
+          if (typeof item.command !== "string") break;
+          call(item, `shell ${cut(oneLine(item.command), ARG_MAX)}`);
+          if (!done) break;
+          const code = Number.isInteger(item.exit_code) ? item.exit_code : null;
+          const out = cut(oneLine(item.aggregated_output ?? ""), RESULT_MAX);
+          if (CODEX_BAD_STATUS.has(item.status) || (code !== null && code !== 0))
+            lines.push(`  ✗ error: ${code !== null ? `exit ${code} ` : ""}${out}`.trimEnd());
+          else if (out) lines.push(`  ↳ ${out}`);
+          break;
+        }
+        case "file_change": {
+          const paths = (Array.isArray(item.changes) ? item.changes : [])
+            .map((c) => (isObject(c) && typeof c.path === "string" ? c.path : ""))
+            .filter(Boolean);
+          call(item, `patch ${cut(oneLine(paths.join(", ")), ARG_MAX)}`.trimEnd());
+          if (done && CODEX_BAD_STATUS.has(item.status)) lines.push(`  ✗ error: ${item.status}`);
+          break;
+        }
+        case "mcp_tool_call": {
+          if (typeof item.tool !== "string") break;
+          const name = `${typeof item.server === "string" && item.server ? `${item.server}/` : ""}${item.tool}`;
+          const args = toolArgs(item.arguments);
+          call(item, `${cut(name, 60)}${args ? ` ${args}` : ""}`);
+          if (done && (item.error || CODEX_BAD_STATUS.has(item.status)))
+            lines.push(`  ✗ error: ${msg(item.error) || String(item.status)}`);
+          break;
+        }
+        case "web_search":
+          if (typeof item.query === "string")
+            call(item, `web_search ${cut(oneLine(item.query), ARG_MAX)}`);
+          break;
+        case "error":
+          if (done) lines.push(`  ✗ error: ${msg(item.message)}`);
+          break;
+        default:
+      }
+      break;
+    }
+    case "error":
+      lines.push(`codex error: ${msg(ev.message)}`);
+      break;
+    case "turn.failed":
+      lines.push(`codex finished with an error: ${msg(ev.error)}`);
+      break;
+    case "turn.completed":
+      lines.push("codex finished");
+      break;
+    default:
+  }
+  return lines;
+}
+
 /** Feed it stdout chunks; calls `onLines` with the readable lines of each complete event. */
 export function createStreamParser({ executor, onLines, secrets = [] }) {
   let rest = "";
   const agentState = { seen: new Set(), partial: "" };
+  const codexState = { started: new Set() };
   const handle = (raw) => {
     const line = raw.trim();
     if (!line) return;
@@ -263,6 +355,12 @@ export function createStreamParser({ executor, onLines, secrets = [] }) {
     } else if (executor === "agent") {
       try {
         lines = agentEventLines(JSON.parse(line), secrets, agentState);
+      } catch {
+        return;
+      }
+    } else if (executor === "codex") {
+      try {
+        lines = codexEventLines(JSON.parse(line), secrets, codexState);
       } catch {
         return;
       }
@@ -337,23 +435,43 @@ export function createBatcher({ send, now = Date.now, flushMs = 3000, keepaliveM
 }
 
 /**
+ * Append one record to `file` without following a link: the directory is writable by
+ * the container, and the channel refuses anything but a regular file with one link.
+ * Returns false (writes nothing) for a symlink, a non-regular file, a hard link, or a
+ * record that would take the file past `maxBytes`. Throws on I/O errors.
+ */
+export function appendRelayRecord(file, rec, maxBytes = RELAY_MAX_BYTES) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const flags =
+    fs.constants.O_WRONLY |
+    fs.constants.O_APPEND |
+    fs.constants.O_CREAT |
+    fs.constants.O_NOFOLLOW |
+    fs.constants.O_NONBLOCK;
+  const fd = fs.openSync(file, flags, 0o660);
+  try {
+    const st = fs.fstatSync(fd);
+    const bytes = Buffer.byteLength(rec);
+    if (!st.isFile() || st.nlink !== 1 || st.size + bytes > maxBytes) return false;
+    fs.writeSync(fd, rec);
+    return true;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
  * The relay: appends `{v, task_id, attempt, at, lines}` JSON lines to `file`.
- * Bounded and silent on failure; after an error or the byte cap it stops writing.
+ * Bounded and silent on failure; after an error, a refused target or the byte cap it
+ * stops writing.
  */
 export function createFileRelay({ file, taskId, attempt, maxBytes = RELAY_MAX_BYTES }) {
-  let written = 0;
   let broken = false;
   return (lines) => {
     if (broken || !lines.length) return;
     try {
       const rec = `${JSON.stringify({ v: 1, task_id: taskId, attempt, at: new Date().toISOString(), lines })}\n`;
-      if (written + rec.length > maxBytes) {
-        broken = true;
-        return;
-      }
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.appendFileSync(file, rec, { mode: 0o660 });
-      written += rec.length;
+      if (!appendRelayRecord(file, rec, maxBytes)) broken = true;
     } catch {
       broken = true;
     }

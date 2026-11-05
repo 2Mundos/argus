@@ -1495,9 +1495,19 @@ describe("delegate live log relay", () => {
       source: "worker",
       post: async (b) => void posts.push(b),
     });
-    fs.writeFileSync(file, rec(["claude finished"]));
+    // records of another task or attempt (a Codex harness line among them) are never posted
+    const other = (task_id: string, attempt: number, lines: string[]) =>
+      `${JSON.stringify({ v: 1, task_id, attempt, at: "x", lines })}\n`;
+    fs.writeFileSync(
+      file,
+      other("t2", 1, ["foreign task"]) +
+        other("t1", 2, ["foreign attempt"]) +
+        rec(["▸ shell ls", "codex finished"]),
+    );
     await relay.poll();
-    expect(posts).toEqual([{ attempt: 1, source: "worker", lines: ["claude finished"] }]);
+    expect(posts).toEqual([
+      { attempt: 1, source: "worker", lines: ["▸ shell ls", "codex finished"] },
+    ]);
     fs.rmSync(dir, { recursive: true });
   });
 

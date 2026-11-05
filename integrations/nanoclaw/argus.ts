@@ -1514,7 +1514,7 @@ class ArgusClient {
 
 /** Where `argus-delegate` (in the container) appends its live log; keep in step with livelog.mjs. */
 export const DELEGATE_LOG_FILE = "argus-task-log.jsonl";
-/** Where the harness (Claude Agent SDK) appends its live log; keep in step with harness-usage.ts. */
+/** Where the harness (Claude Agent SDK or Codex app-server) appends its live log; keep in step with harness-usage.ts. */
 export const HARNESS_LOG_FILE = "argus-harness-log.jsonl";
 const LOG_BATCH_LINES = 200; // POST /api/tasks/{id}/log limits (task-live-log spec 3.1)
 const LOG_BATCH_BYTES = 60 * 1024; // under the 64 KiB server limit
