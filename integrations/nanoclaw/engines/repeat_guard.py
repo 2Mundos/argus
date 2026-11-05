@@ -18,7 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-STATE_DIR = Path("/tmp/argus-repeat-guard")  # container-local, not the workspace
+STATE_DIR = Path("/tmp/argus-repeat-guard")  # noqa: S108 - container-local, not host temp
 THRESHOLDS = (3, 5, 8)
 EXCLUDED = {"heartbeat", "wait_for_events", "TodoWrite"}  # repetition is the point
 MAX_ARGS_CHARS = 500

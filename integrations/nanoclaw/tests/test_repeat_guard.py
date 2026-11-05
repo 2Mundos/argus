@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 ENGINES = Path(__file__).resolve().parents[1] / "engines"
-spec = importlib.util.spec_from_file_location("repeat_guard", ENGINES / "repeat_guard.py")
+spec = importlib.util.spec_from_file_location(
+    "repeat_guard", ENGINES / "repeat_guard.py"
+)
 assert spec and spec.loader
 guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
