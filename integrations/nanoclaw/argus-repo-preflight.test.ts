@@ -30,6 +30,7 @@ import {
   ephemeralSessionRunner,
   type GatewayControl,
   type PreflightEvidenceEvent,
+  type ProbeEvidence,
   prepareResultDir,
   RepositoryPreflightError,
   readVerdictFile,
@@ -1104,6 +1105,106 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       error: `repository preflight ${outcome}: the probe failed`,
     });
     expect(events[0].outcome).toBe(outcome);
+  });
+
+  const missingInjection: ProbeEvidence = {
+    helper_error: "policy_denied",
+    http_status: 200,
+    permissions: "absent",
+    push: null,
+    visibility: "public",
+    authentication: "unknown",
+  };
+
+  it("re-applies the lease once and probes again when the first probe proves no credential", async () => {
+    const rearm = vi.fn(async () => {});
+    const probeCalls = vi
+      .fn()
+      .mockRejectedValueOnce(new RepositoryPreflightError("unknown", "first", missingInjection))
+      .mockResolvedValueOnce({
+        helper_error: null,
+        http_status: 200,
+        permissions: "present",
+        push: true,
+        visibility: "private",
+        authentication: "proven",
+      });
+    const { done, events } = preflight({ probe: probeCalls, rearm });
+    const result = await done;
+    expect(result).toMatchObject({ outcome: "ok", reason: null, error: null });
+    expect(rearm).toHaveBeenCalledTimes(1);
+    expect(probeCalls).toHaveBeenCalledTimes(2);
+    expect(events[0]).toMatchObject({ outcome: "ok", rearmed: true, probe: { push: true } });
+  });
+
+  it("reports the second probe's failure and retries only once", async () => {
+    const rearm = vi.fn(async () => {});
+    const probeCalls = vi
+      .fn()
+      .mockRejectedValueOnce(new RepositoryPreflightError("unknown", "first", missingInjection))
+      .mockRejectedValueOnce(new RepositoryPreflightError("unknown", "second", missingInjection));
+    const { done, events } = preflight({ probe: probeCalls, rearm });
+    const result = await done;
+    expect(result).toMatchObject({
+      outcome: "unknown",
+      error: "repository preflight unknown: second",
+    });
+    expect(rearm).toHaveBeenCalledTimes(1);
+    expect(probeCalls).toHaveBeenCalledTimes(2);
+    expect(events[0]).toMatchObject({ outcome: "unknown", rearmed: true });
+  });
+
+  it.each([
+    [
+      "a proven credential",
+      "unknown",
+      { ...missingInjection, push: true, authentication: "proven" as const },
+    ],
+    [
+      "a forge denial",
+      "forge_denied",
+      {
+        ...missingInjection,
+        helper_error: "unauthorized",
+        http_status: 401,
+        permissions: "unknown" as const,
+      },
+    ],
+    [
+      "an unreadable permissions object",
+      "unknown",
+      { ...missingInjection, permissions: "unknown" as const },
+    ],
+  ])("does not re-arm for %s", async (_label, outcome, evidence) => {
+    const rearm = vi.fn(async () => {});
+    const probeCalls = vi
+      .fn()
+      .mockRejectedValue(
+        new RepositoryPreflightError(outcome as "unknown" | "forge_denied", "x", evidence),
+      );
+    const { done, events } = preflight({ probe: probeCalls, rearm });
+    expect(await done).toMatchObject({ outcome });
+    expect(rearm).not.toHaveBeenCalled();
+    expect(probeCalls).toHaveBeenCalledTimes(1);
+    expect(events[0].rearmed).toBe(false);
+  });
+
+  it("keeps the first failure when the lease cannot be re-applied", async () => {
+    const probeCalls = vi
+      .fn()
+      .mockRejectedValue(new RepositoryPreflightError("unknown", "first", missingInjection));
+    const { done, events } = preflight({
+      probe: probeCalls,
+      rearm: async () => {
+        throw new Error("OneCLI GET /agents failed: 500");
+      },
+    });
+    expect(await done).toMatchObject({
+      outcome: "unknown",
+      error: "repository preflight unknown: first",
+    });
+    expect(probeCalls).toHaveBeenCalledTimes(1);
+    expect(events[0].rearmed).toBe(false);
   });
 
   it("an untyped probe error is session_failure and a failing emit changes nothing", async () => {

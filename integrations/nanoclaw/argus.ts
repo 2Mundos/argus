@@ -3211,6 +3211,21 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           clearTimeout(mark);
         }
       },
+      // A probe answered as public proves the gateway attached no credential: OneCLI has
+      // not published the assignment's policy rule yet (its rematerialize can fail), so
+      // re-apply the lease to publish it and let the preflight probe once more.
+      rearm: async () => {
+        const active = activeRepositoryLease;
+        if (!active) return;
+        await applyRepositoryLease(
+          acc.onecli,
+          target,
+          active,
+          url,
+          activeRepositoryAllowlist,
+          activeAccountLeases,
+        );
+      },
       // Closed values and host-derived hosts and paths only (failure classes 3.3.1).
       emit: async (event) => {
         log.info("Repository preflight evidence", { evidence: event });
