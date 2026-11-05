@@ -22,6 +22,7 @@ import {
   type SettingValue,
   sourceLabel,
 } from "../settings";
+import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ModelPreferences, ModelPreferencesEditor } from "./ModelPreferences";
 
 /** Global settings with per-project overrides (docs/specs/settings.spec.md). */
@@ -35,6 +36,7 @@ export function Settings() {
   const review = byKey.get("review.independent");
   const models = byKey.get("models");
   const difficultyExecutors = byKey.get("difficulty.executors");
+  const gitIdentity = byKey.get("git.identity");
   const orchestratorEnabled = byKey.get("orchestrator.enabled");
   const orchestratorRuntime = byKey.get("orchestrator.runtime");
 
@@ -85,6 +87,19 @@ export function Settings() {
             <DifficultyExecutorsSection
               project={project}
               setting={difficultyExecutors}
+              onChanged={() => reload()}
+            />
+          </div>
+          <div className="card">
+            <h3>Git author identity</h3>
+            <p className="muted small">
+              Author and committer for worker commits. A project override replaces the global value
+              for that project's tasks; workers refuse to commit while neither is set.
+            </p>
+            <GitIdentityEditor
+              key={scope}
+              project={project}
+              setting={gitIdentity}
               onChanged={() => reload()}
             />
           </div>

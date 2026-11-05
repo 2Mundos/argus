@@ -292,6 +292,17 @@ async def effective_git_identity(
     return resolve_git_identity(override, await global_value(conn, GIT_IDENTITY_KEY))
 
 
+async def claim_git_identity(
+    conn: aiosqlite.Connection, project: str
+) -> dict[str, str] | None:
+    """The identity delivered with a claim, or None (fail closed) when unset."""
+    try:
+        identity = await effective_git_identity(conn, Path(), project)
+    except ValidationFailedError:
+        return None
+    return identity._asdict()
+
+
 def _check_scope(defn: SettingDefinition, scope: str) -> None:
     allowed = "global" if scope == GLOBAL else "project"
     if allowed not in defn.scopes:

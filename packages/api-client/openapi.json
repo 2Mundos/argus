@@ -4243,6 +4243,20 @@
             "title": "Failures",
             "type": "integer"
           },
+          "git_identity": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Git Identity"
+          },
           "harness_account": {
             "anyOf": [
               {

@@ -3,6 +3,8 @@ import { api, call, type Project } from "../api";
 import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { PageHeader } from "../PageHeader";
+import { fetchSettings } from "../settings";
+import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ProjectRepositoryDialog } from "./ProjectRepositoryDialog";
 
 type Stats = Awaited<ReturnType<typeof loadStats>>[number];
@@ -165,6 +167,7 @@ function ProjectCard({
           </>
         )}
       </dl>
+      {!isGlobal && <ProjectGitIdentity slug={project.slug} />}
       {!isGlobal && (
         <div className="actions left">
           <button type="button" onClick={onEdit}>
@@ -223,4 +226,21 @@ function Repository({
     return <span className="muted">Not set on the project; pool allowlists not checked.</span>;
   }
   return <span className="muted">Not configured. Tasks that push code will block.</span>;
+}
+
+/** Whether the project inherits the global git identity or overrides it (settings.spec.md 3.8). */
+function ProjectGitIdentity({ slug }: { slug: string }) {
+  const { data, error, reload } = useLiveData((signal) => fetchSettings(slug, signal), [slug]);
+  const setting = (data?.settings ?? []).find((s) => s.key === "git.identity");
+  return (
+    <div>
+      <h4>Git author</h4>
+      {error && (
+        <p className="error" role="alert">
+          Could not load the git author: {error.message}
+        </p>
+      )}
+      {data && <GitIdentityEditor project={slug} setting={setting} onChanged={reload} />}
+    </div>
+  );
 }

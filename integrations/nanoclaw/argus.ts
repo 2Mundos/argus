@@ -92,6 +92,12 @@ import {
   writeCustomHarnessFile,
 } from "./argus-custom-harness.js";
 import {
+  claimedGitIdentity,
+  type GitIdentity,
+  poolGitIdentity,
+  scopeGitIdentity,
+} from "./argus-git-identity.js";
+import {
   consumedReceipts,
   type InputReceipt,
   type InputsSource,
@@ -535,6 +541,8 @@ export interface ArgusTask {
   quota_resume?: QuotaResumeOffer | null;
   /** Effective executor chain for this task's difficulty (settings 3.7). Empty: harness does the work. */
   difficulty_executors?: string[] | null;
+  /** Effective git author for the task's project (settings 3.8); null/missing: use the pool's. */
+  git_identity?: { name: string; email: string } | null;
 }
 
 /** Empty difficulty executor chain and no pin: NanoClaw does the work (task difficulty / local harness). */
@@ -1934,6 +1942,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    */
   function scopeHelperRepositories(base: Record<string, string>, extra: Record<string, string>) {
     process.env.ARGUS_REPOSITORIES_JSON = JSON.stringify({ ...base, ...extra });
+  }
+  let poolGit: ReturnType<typeof poolGitIdentity> | undefined;
+  /** The claimed task's git author in the host env for this task; the pool's value otherwise. */
+  function scopeTaskGitIdentity(identity: GitIdentity | null) {
+    poolGit ??= poolGitIdentity(process.env);
+    scopeGitIdentity(process.env, poolGit, identity);
   }
   let repositoryAssignmentReconciled = false;
   let abortClaim: AbortController | null = null;
@@ -3456,6 +3470,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       });
     await reportHarness(task, "running");
     try {
+      scopeTaskGitIdentity(claimedGitIdentity(task.git_identity));
       let envBlock: { reason: string; error: string } | null = await repositoryPreflight(task);
       let workspace: TaskWorkspace | null = null;
       let inputs: MaterializedInput[] = [];
@@ -3538,6 +3553,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         .catch(() => undefined);
       finishTask();
     } finally {
+      scopeTaskGitIdentity(null);
       if (repositoryLeaseHeld && cfg.accounts) {
         repositoryLeaseHeld = false;
         activeRepositoryLease = null;

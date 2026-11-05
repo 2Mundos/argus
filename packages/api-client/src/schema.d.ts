@@ -4750,6 +4750,10 @@ export interface components {
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            /** Git Identity */
+            git_identity?: {
+                [key: string]: string;
+            } | null;
             /** Harness Account */
             harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;

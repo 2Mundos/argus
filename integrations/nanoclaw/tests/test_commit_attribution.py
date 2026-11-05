@@ -564,6 +564,62 @@ def test_wrapper_pins_configured_identity(tmp_path: Path) -> None:
     assert log.stdout.strip() == f"{who}|{who}"
 
 
+def test_wrapper_follows_the_identity_in_each_invocation_env(tmp_path: Path) -> None:
+    """A task-scoped identity (settings 3.8) is just the env of that invocation: it wins
+    over the pool's earlier value, and nothing is persisted to any git config."""
+    if not REAL:
+        pytest.skip("git not installed")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run([REAL, "init", "-q"], cwd=repo, check=True)
+    base = {
+        k: v
+        for k, v in _env().items()
+        if not k.startswith(("GIT_", "ARGUS_GIT_AUTHOR"))
+    }
+    base.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+    pool = {
+        **base,
+        "ARGUS_GIT_AUTHOR_NAME": "Pool",
+        "ARGUS_GIT_AUTHOR_EMAIL": "pool@example.invalid",
+    }
+    task = {
+        **base,
+        "ARGUS_GIT_AUTHOR_NAME": "Project Dev",
+        "ARGUS_GIT_AUTHOR_EMAIL": "dev@example.invalid",
+    }
+    authors = []
+    for env in (pool, task, pool):
+        (repo / "a").write_text(f"{len(authors)}\n")
+        subprocess.run([REAL, "add", "a"], cwd=repo, check=True)
+        res = _run_git(repo, env, "commit", "-q", "-m", "msg")
+        assert res.returncode == 0, res.stderr
+        authors.append(
+            subprocess.run(
+                [REAL, "log", "-1", "--format=%an|%ae|%cn|%ce"],
+                cwd=repo,
+                env=base,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+    assert authors == [
+        "Pool|pool@example.invalid|Pool|pool@example.invalid",
+        "Project Dev|dev@example.invalid|Project Dev|dev@example.invalid",
+        "Pool|pool@example.invalid|Pool|pool@example.invalid",
+    ]
+    config = subprocess.run(
+        [REAL, "config", "--local", "--list"],
+        cwd=repo,
+        env=base,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "user." not in config
+
+
 def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> None:
     if not REAL:
         pytest.skip("git not installed")

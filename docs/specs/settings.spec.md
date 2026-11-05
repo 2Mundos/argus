@@ -160,11 +160,31 @@ required and non-empty (`email` must look like an address, no spaces). Default
 project value takes precedence over the global one
 (`effective_git_identity`); with neither set it fails closed, naming
 `git.identity`. There is no built-in default and the agent name is never used.
-The global value is passed to each pool container at start as
-`ARGUS_GIT_AUTHOR_NAME`/`ARGUS_GIT_AUTHOR_EMAIL`; the worker's git refuses to
-commit or push without them ([worker lifecycle](worker-lifecycle.spec.md)).
-Containers are per pool, so a project override is not delivered to a running
-worker yet; it needs delivery at task claim.
+Delivery has two layers. The global value is passed to each pool container at
+start as `ARGUS_GIT_AUTHOR_NAME`/`ARGUS_GIT_AUTHOR_EMAIL`; this pinned value is
+the fallback. At claim, the response carries `git_identity` (`{name, email}`):
+the effective project-over-global value for that task's project only, or `null`
+when neither scope is set. The NanoClaw worker puts it in its own process
+environment as those same two variables for the duration of that task, so the
+session container it spawns inherits it and it wins over the pool's pinned
+value, then restores the pool's value when the task ends. Nothing is written to
+git config, a file or the image, and another project's task never sees it. A
+task without an identity (`null`) leaves the pool value in force; if that is
+unset too, the worker's git refuses to commit or push
+([worker lifecycle](worker-lifecycle.spec.md)). Changing a project override
+does not touch the global value or any other project, and resetting it
+(`DELETE`) restores inheritance. A change reaches tasks claimed after it; a
+running task keeps the identity it was claimed with. Other engines and runtimes
+that do not run the NanoClaw worker get no task-scoped identity and use only
+their own pinned value.
+
+The Settings tab has a Git author card (global value, or the project override
+under a project scope) and the Projects page shows per project whether it
+inherits the global value or overrides it, with an explicit "Reset to inherited"
+action. Both validate a non-empty name and an address-shaped email before
+saving, and show permission and save errors. The inherit/override state is the
+`source` of the existing read model (`project` is an override; `global` is
+inherited; `default` is not set).
 
 # 4. Open Questions
 
