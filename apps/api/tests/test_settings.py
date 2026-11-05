@@ -159,6 +159,29 @@ def test_unknown_key_and_bad_value_are_422(client: TestClient) -> None:
     assert res.status_code == 422
 
 
+def test_command_guard_enabled_setting(client: TestClient) -> None:
+    client.put(
+        "/api/projects/demo", json={"name": "Demo", "description": "d"}, headers=ADMIN
+    )
+    body = client.get("/api/settings/registry", headers=ADMIN).json()
+    row = next(d for d in body if d["key"] == "command_guard.enabled")
+    assert row["default"] is True
+    assert row["schema"] == {"type": "boolean"}
+    assert set(row["scopes"]) == {"global", "project"}
+
+    for path in (
+        "/api/settings/command_guard.enabled",
+        "/api/projects/demo/settings/command_guard.enabled",
+    ):
+        for value in (False, True):
+            res = client.put(path, json={"value": value}, headers=ADMIN)
+            assert res.status_code == 200, res.text
+            assert res.json()["value"] is value
+        for bad in ("off", 0, None):
+            res = client.put(path, json={"value": bad}, headers=ADMIN)
+            assert res.status_code == 422, (bad, res.text)
+
+
 def test_models_project_override_merges(client: TestClient) -> None:
     client.put(
         "/api/projects/demo", json={"name": "Demo", "description": "d"}, headers=ADMIN

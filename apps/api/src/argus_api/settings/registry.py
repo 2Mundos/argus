@@ -129,6 +129,16 @@ REGISTRY: dict[str, SettingDefinition] = {
         scopes=["global"],
         description="Run routines on their schedules; off pauses every routine.",
     ),
+    "command_guard.enabled": SettingDefinition(
+        key="command_guard.enabled",
+        schema={"type": "boolean"},
+        default=True,
+        scopes=["global", "project"],
+        description=(
+            "Claude Code PreToolUse command guard is on by default; off disables "
+            "it for new attempts."
+        ),
+    ),
     "orchestrator.enabled": SettingDefinition(
         key="orchestrator.enabled",
         schema={"type": "boolean"},
