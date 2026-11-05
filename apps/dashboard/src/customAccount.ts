@@ -20,6 +20,38 @@ export type CustomForm = {
 };
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1";
+const GOOGLE_AI_STUDIO_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+
+export type CustomPresetId = "openrouter" | "google";
+
+type CustomPreset = {
+  id: CustomPresetId;
+  name: string;
+  label: string;
+  baseUrl: string;
+  note: string;
+};
+
+export const CUSTOM_PRESETS: CustomPreset[] = [
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    label: "openrouter",
+    baseUrl: OPENROUTER_URL,
+    note: "Any OpenAI-compatible endpoint. The key is stored encrypted as an Argus account and is never shown again.",
+  },
+  {
+    id: "google",
+    name: "Google AI Studio",
+    label: "google",
+    baseUrl: GOOGLE_AI_STUDIO_URL,
+    note: "Google AI Studio's OpenAI-compatible endpoint. Create a key in AI Studio; the key is stored encrypted and is never shown again.",
+  },
+];
+
+export function presetById(id: CustomPresetId): CustomPreset {
+  return CUSTOM_PRESETS.find((p) => p.id === id) ?? CUSTOM_PRESETS[0]!;
+}
 
 const emptyRole = (): RoleForm => ({
   model: "",
@@ -29,12 +61,17 @@ const emptyRole = (): RoleForm => ({
   fallbacks: "default",
 });
 
-export const emptyForm = (): CustomForm => ({
-  baseUrl: OPENROUTER_URL,
-  label: "openrouter",
-  engine: emptyRole(),
-  executor: emptyRole(),
-});
+export const formForPreset = (id: CustomPresetId): CustomForm => {
+  const preset = presetById(id);
+  return {
+    baseUrl: preset.baseUrl,
+    label: preset.label,
+    engine: emptyRole(),
+    executor: emptyRole(),
+  };
+};
+
+export const emptyForm = (): CustomForm => formForPreset("openrouter");
 
 const csv = (s: string) =>
   s

@@ -7,9 +7,14 @@ Builds on [global account selection](account-selection.spec.md), the account poo
 
 # 1. Purpose and Scope
 
-Make an OpenAI-compatible endpoint (first case OpenRouter,
-`https://openrouter.ai/api/v1`) a normal Argus **account** with provider `custom`:
+Make an OpenAI-compatible endpoint (presets: OpenRouter,
+`https://openrouter.ai/api/v1`, and Google AI Studio,
+`https://generativelanguage.googleapis.com/v1beta/openai`) a normal Argus
+**account** with provider `custom`:
 
+- **Presets**: the dashboard offers both endpoints and fills their `base_url` and
+  `label` (`openrouter`, `google`); any other OpenAI-compatible endpoint stays
+  available by editing the two fields.
 - **Registration**: `base_url`, a provider `label` (for example `openrouter`) and an
   API key. The key is the account's only secret and lives in the SOPS store as
   `{"api_key": …}` like every other account. `base_url`, `label` and the settings
@@ -64,7 +69,19 @@ Make an OpenAI-compatible endpoint (first case OpenRouter,
 - **Probe**: admin only. Redirects are not followed, 15 s timeout, and the answer is a
   fixed vocabulary (`ok`, `unauthorized`, `exhausted`, `unreachable`, `failed`); no
   upstream text. It reports and changes nothing. It is separate from `QuotaProber`,
-  which runs a Codex subprocess.
+  which runs a Codex subprocess. Model suggestions are normalised: a `google` account
+  drops the catalogue's `models/` prefix because its chat completions take the bare
+  name (`normalize_model_id`; the lease applies the same rule, so a stored prefixed
+  model still works).
+- **Provider tool metadata**: a reply may carry data the provider needs on the next
+  request and that the provider-neutral transcript has no field for. Gemini 3 puts its
+  thought signature in the tool call's `extra_content.google.thought_signature` and
+  rejects a tool result that does not return it. The built-in orchestrator keeps it on
+  the transcript `ToolCall` and re-sends it; the NanoClaw bridge carries it through the
+  Anthropic `tool_use.id` (the client echoes that id on the tool_result) and decodes it
+  before the upstream call. Unknown metadata is passed through unchanged. A delegated
+  CLI driven by `argus-delegate` (Codex, OpenCode) builds its own tool round trips, so
+  that guarantee covers the bridge and the built-in orchestrator only.
 - **Endpoints proxy**: manager scope, `openrouter` label only, `author` and `slug`
   validated as one catalogue path segment each, no key sent (public data), no
   redirects. Failures are `502 upstream_error`, or `404` when the model is unknown.
@@ -119,13 +136,21 @@ Make an OpenAI-compatible endpoint (first case OpenRouter,
 # 6. Implementation Consequences
 
 - `packages/core/src/argus_core/custom_accounts.py`: models, parser, `chat_body`,
-  endpoints parsing; `quota.py`: custom pattern and `quota_notice_from_response`.
+  endpoints parsing, the `google`/`openrouter` labels and `normalize_model_id`;
+  `quota.py`: custom pattern and `quota_notice_from_response`.
 - Migration `0027_account_config.sql` adds `accounts.config`.
 - `apps/api/src/argus_api/accounts/custom.py`: probe and endpoints proxy; routes in
   `accounts/routes.py`; lease `settings` in `accounts/service.py`; test transport via
   `app.state.custom_transport`.
-- Dashboard: the custom account form and the model and host on the attempt.
+- Dashboard: the custom account form (OpenRouter and Google AI Studio presets) and
+  the model and host on the attempt.
 - Delegate: `argus-delegate.mjs` (`parseAccountSettings`, `effectiveModel`,
   `applySettingsEnv`, Codex `-c` args), tests in `argus-delegate.test.mjs`.
+- Built-in orchestrator: `models/openai_compat.py` and `transcript.py` keep
+  provider tool metadata (`extra_content`) across the steps of a turn.
+- NanoClaw bridge: `engines/anthropic-openai-bridge.mjs` encodes the signature in
+  `tool_use.id` and restores it on the next request.
 - Tests: `packages/core/tests/test_custom_accounts.py`,
-  `apps/api/tests/test_custom_accounts.py` (in-process fake provider).
+  `apps/api/tests/test_custom_accounts.py` (in-process fake provider),
+  `apps/api/tests/test_builtin_orchestrator_parts.py`,
+  `integrations/nanoclaw/engines/anthropic-openai-bridge.test.mjs`.

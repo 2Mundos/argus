@@ -55,6 +55,11 @@ class OpenAIAdapter:
                         {
                             "id": call.id,
                             "type": "function",
+                            **(
+                                {"extra_content": call.extra_content}
+                                if call.extra_content
+                                else {}
+                            ),
                             "function": {
                                 "name": call.name,
                                 "arguments": call.raw
@@ -98,12 +103,14 @@ class OpenAIAdapter:
             fn = raw["function"]
             arguments = fn.get("arguments")
             text = arguments if isinstance(arguments, str) else json.dumps(arguments)
+            extra = raw.get("extra_content")
             calls.append(
                 ToolCall(
                     id=str(raw["id"]),
                     name=str(fn["name"]),
                     arguments=parse_arguments(text),
                     raw=text,
+                    extra_content=extra if isinstance(extra, dict) else None,
                 )
             )
         content = message.get("content")

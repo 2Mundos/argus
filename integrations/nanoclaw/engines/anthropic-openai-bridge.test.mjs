@@ -142,6 +142,70 @@ test("openAIChoiceToAnthropic maps tool calls", () => {
   assert.equal(msg.content[0].type, "tool_use");
 });
 
+test("google thought signatures survive an anthropic tool round trip", () => {
+  const signature = "sig+/=";
+  const msg = openAIChoiceToAnthropic({
+    message: {
+      content: "",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          extra_content: { google: { thought_signature: signature } },
+          function: { name: "bash", arguments: '{"cmd":"ls"}' },
+        },
+      ],
+    },
+    finish_reason: "tool_calls",
+  });
+  const toolUse = msg.content[0];
+  assert.equal(toolUse.type, "tool_use");
+  assert.notEqual(toolUse.id, "call_1");
+
+  const back = anthropicToOpenAIMessages({
+    messages: [
+      { role: "assistant", content: [toolUse] },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: toolUse.id, content: "ok" }],
+      },
+    ],
+  });
+  assert.equal(back[0].tool_calls[0].id, "call_1");
+  assert.deepEqual(back[0].tool_calls[0].extra_content, {
+    google: { thought_signature: signature },
+  });
+  assert.deepEqual(back[1], { role: "tool", tool_call_id: "call_1", content: "ok" });
+});
+
+test("streaming keeps a google thought signature and reports tool_use on stop", async () => {
+  const chunks = [
+    'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","extra_content":{"google":{"thought_signature":"sig"}},"function":{"name":"bash","arguments":"{}"}}]}}]}\n\n',
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+    "data: [DONE]\n\n",
+  ];
+  let i = 0;
+  const reader = {
+    async read() {
+      if (i >= chunks.length) return { done: true };
+      return { done: false, value: new TextEncoder().encode(chunks[i++]) };
+    },
+  };
+  const events = [];
+  const res = {
+    writeHead() {},
+    write(line) {
+      events.push(line);
+    },
+    end() {},
+  };
+  await pipeOpenAIChatStreamToAnthropic(res, reader);
+  const joined = events.join("");
+  assert.match(joined, /"type":"tool_use"/);
+  assert.match(joined, /__argus_thought__/);
+  assert.match(joined, /"stop_reason":"tool_use"/);
+});
+
 test("bridge echoes its validation error and hides other failures", async () => {
   const open = await startAnthropicOpenAIBridge({
     settings: { base_url: "http://127.0.0.1:9/v1" },

@@ -14,6 +14,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 PROVIDER = "custom"
 OPENROUTER = "openrouter"
+GOOGLE = "google"
+# Google AI Studio speaks OpenAI Chat Completions at this path (custom accounts
+# spec). The key is still `{api_key}` and goes as the bearer.
+GOOGLE_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+# Labels whose OpenAI-compatible catalogue prefixes ids with `models/`, while
+# chat completions take the bare name.
+_MODEL_PREFIXED = frozenset({GOOGLE})
 
 # Same shape as the model policy's opaque ids (preferred models spec).
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
@@ -192,12 +199,21 @@ class LeaseSettings(BaseModel):
     provider: dict[str, Any] | None
 
 
+def normalize_model_id(label: str, model: str | None) -> str | None:
+    """The model name chat completions take. Google AI Studio's catalogue lists
+    `models/<name>` but its OpenAI-compatible endpoint wants `<name>`."""
+    if model is None or label not in _MODEL_PREFIXED:
+        return model
+    prefix = "models/"
+    return model[len(prefix) :] if model.startswith(prefix) else model
+
+
 def lease_settings(config: CustomConfig, role: str) -> LeaseSettings:
     chosen = config.role(role)
     return LeaseSettings(
         base_url=config.base_url,
         label=config.label,
-        model=chosen.model,
+        model=normalize_model_id(config.label, chosen.model),
         provider=chosen.routing_options.provider_block()
         if chosen.routing_options
         else None,

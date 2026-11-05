@@ -6,12 +6,15 @@ from datetime import UTC, datetime
 import pytest
 from argus_core.accounts import AccountCreate
 from argus_core.custom_accounts import (
+    GOOGLE,
+    GOOGLE_OPENAI_BASE_URL,
     CustomAccountError,
     CustomConfig,
     RoutingOptions,
     chat_body,
     check_base_url,
     lease_settings,
+    normalize_model_id,
     parse_endpoints,
     validate_credential,
 )
@@ -162,6 +165,19 @@ def test_lease_settings_and_chat_body_per_role() -> None:
     }
     with pytest.raises(CustomAccountError):
         chat_body(lease_settings(CustomConfig(base_url=OR, label="x"), "engine"), msgs)
+
+
+def test_google_catalogue_prefix_is_dropped_from_the_lease_model() -> None:
+    config = CustomConfig(
+        base_url=GOOGLE_OPENAI_BASE_URL,
+        label=GOOGLE,
+        engine={"model": "models/gemini-flash-latest"},
+    )
+    assert lease_settings(config, "engine").model == "gemini-flash-latest"
+    assert normalize_model_id(GOOGLE, "gemini-pro-latest") == "gemini-pro-latest"
+    assert normalize_model_id("openrouter", "models/gemini-pro-latest") == (
+        "models/gemini-pro-latest"
+    )
 
 
 def test_parse_endpoints_keeps_only_well_formed_entries() -> None:

@@ -5,8 +5,9 @@ Builds on [custom accounts](custom-accounts.spec.md), [local Strata harness](loc
 
 # 1. Purpose and Scope
 
-Run the NanoClaw **Claude Code** harness against a leased `custom` account (first case
-OpenRouter) while keeping the **executor** independent (typically Cursor `agent` via
+Run the NanoClaw **Claude Code** harness against a leased `custom` account
+(OpenRouter or Google AI Studio) while keeping the **executor** independent (typically
+Cursor `agent` via
 `argus-delegate`). Claude Code speaks the Anthropic Messages API only; the worker never
 calls the provider's OpenAI-compatible URL directly. Instead the trusted host runs a
 loopback **bridge** that translates Messages ↔ Chat Completions and forwards to the
@@ -36,7 +37,10 @@ account's configured `base_url` with the leased API key held only in host memory
   replaced. It receives the API key and `settings` only in process memory from the
   channel at apply time. Outbound requests use `Authorization: Bearer`, the configured
   `model`, and the OpenRouter `provider` block in the JSON body when present
-  (`chat_body` rule in core).
+  (`chat_body` rule in core). Provider tool metadata that must return on the next
+  request (Gemini 3 thought signatures) is carried in the Anthropic `tool_use.id`
+  across the client's tool round trip and restored as `extra_content` before the
+  upstream call; the id the provider issued is what it sees again.
 - **Container path.** Same redirect pattern as local Strata: `ANTHROPIC_BASE_URL` points
   at `http://host.docker.internal:<port>` (bridge), `ANTHROPIC_AUTH_TOKEN` is the public
   placeholder `argus-custom-harness`, and `ARGUS_ALLOWED_ANTHROPIC_BASE_URL` matches.

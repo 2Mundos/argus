@@ -268,6 +268,35 @@ def test_openai_body_marks_errors_and_keeps_raw_arguments() -> None:
     assert body["messages"][5]["content"].startswith("ERROR ")
 
 
+def test_openai_body_returns_provider_tool_metadata() -> None:
+    adapter = openai_compat.OpenAIAdapter(token_field="max_tokens")
+    extra = {"google": {"thought_signature": "sig"}}
+    reply = adapter.parse(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "extra_content": extra,
+                                "function": {"name": "list_tasks", "arguments": "{}"},
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+    )
+    assert reply.calls[0].extra_content == extra
+    transcript = Transcript()
+    transcript.items.append(Step(reply.text, reply.calls))
+    body = adapter.body("m", "SYS", [], transcript, [], use_tools=True)
+    assert body["messages"][1]["tool_calls"][0]["extra_content"] == extra
+
+
 def test_usage_is_normalised_so_input_never_counts_twice() -> None:
     a = anthropic.AnthropicAdapter().parse(
         {
