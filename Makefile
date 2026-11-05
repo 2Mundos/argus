@@ -107,7 +107,7 @@ bench: ## MCP inbox journey benchmark (docs/specs/mcp-operations.spec.md 3.5).
 	$(UV) run python apps/api/bench/mcp_inbox.py
 
 .PHONY: tool-tokens
-tool-tokens: ## Token cost of the MCP tool text per role (docs/drafts/2026-11-04.tool-description-rules.draft.md).
+tool-tokens: ## Print the MCP tool text token count per role and the difference from origin/main (docs/drafts/2026-11-04.tool-description-rules.draft.md).
 	$(UV) run python scripts/tool_tokens.py
 
 .PHONY: openapi openapi-check openapi-client-check
