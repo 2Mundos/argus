@@ -1246,6 +1246,7 @@ async def report_progress(
         raise ValidationFailedError(str(err)) from None
     message = readable_progress(message, kind)
     row = await _owned(tx, task_id, attempt, agent_id)
+    percent = percent if percent is not None else row["progress_percent"]
     if row["progress_at"] is not None and (
         kind is None or kind == row["progress_kind"]
     ):

@@ -67,6 +67,7 @@ describe("Activity quiet claims", () => {
     expect(text).toMatch(/Quiet for 25m/);
     expect(text).toMatch(/last signal: progress at/);
     expect(text).toMatch(/likely cause: workspace missing on the host\./);
+    expect(screen.getByRole("img", { name: "10% complete" })).toBeTruthy();
   });
 
   it("renders no stall sentence for a busy claimed task", () => {

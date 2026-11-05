@@ -113,6 +113,29 @@ export function MilestoneLine({ task, now }: { task: Signal; now: number }) {
   );
 }
 
+const PIE_RADIUS = 6;
+const PIE_CIRCUMFERENCE = 2 * Math.PI * PIE_RADIUS;
+
+/** The last reported overall progress: a small pie with its percentage. */
+export function ProgressPie({ percent }: { percent: number }) {
+  const value = Math.min(100, Math.max(0, Math.round(percent)));
+  return (
+    <span className="progress-pie" role="img" aria-label={`${value}% complete`}>
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <circle className="track" cx="8" cy="8" r={PIE_RADIUS} />
+        <circle
+          className="value"
+          cx="8"
+          cy="8"
+          r={PIE_RADIUS}
+          strokeDasharray={`${(value / 100) * PIE_CIRCUMFERENCE} ${PIE_CIRCUMFERENCE}`}
+        />
+      </svg>
+      <span>{value}%</span>
+    </span>
+  );
+}
+
 /** The quiet-agent warning for a claimed task, or nothing. */
 export function NoSignal({ task, now }: { task: Signal; now: number }) {
   const minutes = noSignalMinutes(task, now);
@@ -125,8 +148,9 @@ export function NoSignal({ task, now }: { task: Signal; now: number }) {
 }
 
 /**
- * What a claimed task card shows for progress: the milestone (if any), a note newer than
- * it, and the no-signal warning, with the last note marked as stale when quiet.
+ * What a claimed task card shows for progress: the overall pie, the milestone (if any),
+ * a note newer than it, and the no-signal warning, with the last note marked stale when
+ * quiet.
  */
 export function TaskSignal({ task, now }: { task: Signal; now: number }) {
   const quiet = noSignalMinutes(task, now) != null;
@@ -139,13 +163,9 @@ export function TaskSignal({ task, now }: { task: Signal; now: number }) {
     <>
       <NoSignal task={task} now={now} />
       <MilestoneLine task={task} now={now} />
+      {task.progress_percent != null && <ProgressPie percent={task.progress_percent} />}
       {note && (
         <span className={quiet ? "progress stale" : "progress"}>
-          {task.progress_percent != null && (
-            <span className="bar">
-              <span style={{ width: `${task.progress_percent}%` }} />
-            </span>
-          )}
           <span className="small" title={task.progress_message ?? undefined}>
             {quiet && "Last note: "}
             {task.progress_message}

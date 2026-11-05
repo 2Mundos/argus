@@ -147,6 +147,23 @@ async def test_progress_is_recorded_and_renews_the_lease(
     assert after.lease_expires_at == clock.now + timedelta(seconds=60)
 
 
+async def test_progress_percent_is_kept_until_a_new_one_is_reported(
+    db: Database, clock: FakeClock
+) -> None:
+    await create(db)
+    task = await claim(db)
+    await progress(db, task, "half way", 50)
+    clock.advance(10)
+    after = await progress(db, task, "still working")
+    assert after.progress_percent == 50
+    clock.advance(1)
+    after = await milestone(db, task, "commit_created", COMMIT)
+    assert after.progress_percent == 50
+    clock.advance(10)
+    after = await progress(db, task, "finishing", 90)
+    assert after.progress_percent == 90
+
+
 @pytest.mark.parametrize(
     "message",
     [

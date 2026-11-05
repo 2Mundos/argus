@@ -45,7 +45,8 @@ from argus_api.errors import UnauthorizedError
 
 INSTRUCTIONS = """\
 Argus coordinates a fleet of agents. As a worker: claim_task, then work on it while
-calling heartbeat (renews your leases) and report_progress; finish with complete_task
+calling heartbeat (renews your leases) and report_progress (include a rough percent
+when you can); finish with complete_task
 or fail_task. Every task write needs the task's `attempt`; a 409 error means you no
 longer hold the task, so stop working on it. If you need a human or orchestrator to
 decide something, use ask_question (your task is paused until answered). Read the
@@ -532,7 +533,9 @@ async def report_progress(
     data: dict | None = None,
 ) -> dict:
     """Post a short progress note shown to humans (at most one per 10 s). It also
-    renews your lease on the task. Optional `kind` marks a milestone: commit_created
+    renews your lease. Pass `percent` (0-100) when you can estimate how much of the
+    task is done; the card keeps the last reported value until you send a new one.
+    Optional `kind` marks a milestone: commit_created
     {branch, sha}, pr_opened {number, url}, ci_running|ci_passed|ci_failed {sha},
     gate_failed {gate}, waiting_input, waiting {on, ref, since}; a milestone is not limited unless its kind repeats."""
     return await _call(

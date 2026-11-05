@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ArgusEvent, Task, TaskRead } from "../api";
 import { DateChip } from "../DateChip";
-import { MilestoneLine, NoSignal } from "../milestones";
+import { MilestoneLine, NoSignal, ProgressPie } from "../milestones";
 import { finalizationLine, quietFacts } from "../stall";
 
 /** The current time, re-read every `ms`, so "N s ago" keeps counting between events. */
@@ -106,11 +106,7 @@ export function Activity({
       )}
       {showProgress && (
         <div className="progress">
-          {task.progress_percent != null && (
-            <span className="bar">
-              <span style={{ width: `${task.progress_percent}%` }} />
-            </span>
-          )}
+          {task.progress_percent != null && <ProgressPie percent={task.progress_percent} />}
           <NoSignal task={task} now={now} />
           <MilestoneLine task={task} now={now} />
           {(task.progress_message || task.state === "claimed") && (
