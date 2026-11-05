@@ -1,0 +1,1 @@
+Real `claude -p` result event (success, 22 turns, trimmed result text) copied from `engines/fixtures/claude-result.json`; only the result event survives, not the full stream; engine version not recorded, re-record the whole stream with `scripts/record_transcript.py` on the next Claude bump.
