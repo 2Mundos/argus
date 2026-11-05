@@ -92,21 +92,64 @@ class OpenAIAdapter:
         return body
 
     def parse(self, data: dict[str, Any]) -> Reply:
-        message = data["choices"][0]["message"]
+        if not isinstance(data, dict):
+            raise ValueError("invalid OpenAI-compatible response")
+        choices = data.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise ValueError("invalid OpenAI-compatible choices")
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise ValueError("invalid OpenAI-compatible choice")
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("invalid OpenAI-compatible message")
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and finish_reason not in (
+            "stop",
+            "length",
+            "tool_calls",
+            "content_filter",
+        ):
+            raise ValueError("invalid OpenAI-compatible finish reason")
+        if "tool_calls" in message and not isinstance(message["tool_calls"], list):
+            raise ValueError("invalid OpenAI-compatible tool calls")
+        raw_calls = message.get("tool_calls", [])
+        if finish_reason == "tool_calls" and not raw_calls:
+            raise ValueError("missing OpenAI-compatible tool call")
+        if raw_calls and finish_reason != "tool_calls":
+            raise ValueError("truncated OpenAI-compatible tool call")
+        content = message.get("content")
+        if content is not None and not isinstance(content, str):
+            raise ValueError("invalid OpenAI-compatible message content")
         calls = []
-        for raw in message.get("tool_calls") or []:
-            fn = raw["function"]
-            arguments = fn.get("arguments")
-            text = arguments if isinstance(arguments, str) else json.dumps(arguments)
+        for raw in raw_calls:
+            if not isinstance(raw, dict):
+                raise ValueError("invalid OpenAI-compatible tool call")
+            call_id = raw.get("id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                raise ValueError("invalid OpenAI-compatible tool call id")
+            if raw.get("type") != "function":
+                raise ValueError("invalid OpenAI-compatible tool call type")
+            fn = raw.get("function")
+            if not isinstance(fn, dict):
+                raise ValueError("invalid OpenAI-compatible function")
+            name = fn.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("invalid OpenAI-compatible function name")
+            text = fn.get("arguments")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("invalid OpenAI-compatible function arguments")
+            arguments = parse_arguments(text)
+            if arguments is None:
+                raise ValueError("invalid OpenAI-compatible function arguments")
             calls.append(
                 ToolCall(
-                    id=str(raw["id"]),
-                    name=str(fn["name"]),
-                    arguments=parse_arguments(text),
+                    id=call_id,
+                    name=name,
+                    arguments=arguments,
                     raw=text,
                 )
             )
-        content = message.get("content")
         return Reply(
             content if isinstance(content, str) else "",
             calls,

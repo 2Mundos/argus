@@ -67,6 +67,7 @@ const result = (over: Partial<LocalTestResult> = {}): LocalTestResult => ({
 const mock = vi.hoisted(() => ({
   puts: [] as Record<string, unknown>[],
   tests: [] as Record<string, unknown>[],
+  testTargets: [] as string[],
   saved: undefined as unknown,
   tested: undefined as unknown,
   fail: undefined as Error | undefined,
@@ -99,7 +100,12 @@ vi.mock("../api", () => ({
     }),
     PATCH: () => ({ op: "patch" }),
   },
-  call: async (req: { op: string; path?: string; body?: Record<string, unknown> }) => {
+  call: async (req: {
+    op: string;
+    path?: string;
+    body?: Record<string, unknown>;
+    params?: { path?: { account_id?: string } };
+  }) => {
     if (req.op === "usage") return { accounts: [] };
     if (req.op === "list") {
       mock.listCalls += 1;
@@ -111,6 +117,7 @@ vi.mock("../api", () => ({
       return mock.saved;
     }
     if (req.path === "/api/accounts/{account_id}/local/test") {
+      mock.testTargets.push(req.params?.path?.account_id ?? "");
       mock.tests.push(req.body ?? {});
       return mock.tested;
     }
@@ -121,6 +128,7 @@ vi.mock("../api", () => ({
 beforeEach(() => {
   mock.puts = [];
   mock.tests = [];
+  mock.testTargets = [];
   mock.saved = account();
   mock.tested = result();
   mock.fail = undefined;
@@ -147,6 +155,45 @@ describe("LocalEndpoints", () => {
     // Nothing has been tested: the completions are not run, not passed.
     expect(status("Inference")).toBe("not_run");
     expect(status("Tool calling (orchestrator)")).toBe("not_run");
+  });
+
+  it("blocks tests on an unsaved draft, then tests the saved account after Save", async () => {
+    mock.saved = account({
+      local: view({
+        api_base_url: "http://localhost:9000",
+        api_endpoint: "http://localhost:9000",
+        api_endpoint_source: "api_base_url",
+        model: "spark-x2.6",
+        warnings: [],
+      }),
+    });
+    render(<LocalEndpoints account={account()} onClose={() => {}} onSaved={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/API endpoint/), {
+      target: { value: "http://localhost:9000" },
+    });
+    fireEvent.change(screen.getByLabelText(/^Model/), { target: { value: "spark-x2.6" } });
+
+    expect(screen.getByText(/Save your endpoint or model changes/)).toBeTruthy();
+    for (const name of ["Test connection", "Test inference", "Test tool calling"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveProperty("disabled", true);
+      fireEvent.click(button);
+    }
+    expect(mock.tests).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(mock.puts).toEqual([{ api_base_url: "http://localhost:9000", model: "spark-x2.6" }]),
+    );
+    expect(screen.getByTestId("api-endpoint").textContent).toContain(
+      "http://localhost:9000 (set here)",
+    );
+    expect(mock.tests).toEqual([]); // Save never runs an inference test.
+    const inference = screen.getByRole("button", { name: "Test inference" });
+    expect(inference).toHaveProperty("disabled", false);
+    fireEvent.click(inference);
+    await waitFor(() => expect(mock.tests).toEqual([{ inference: true, tool_calling: false }]));
+    expect(mock.testTargets).toEqual(["loc-1"]);
   });
 
   it("saves only the changed fields and shows the account as saved", async () => {
@@ -183,9 +230,38 @@ describe("LocalEndpoints", () => {
       target: { value: "http://172.17.0.1:8080" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("api_base_url host must be");
+    expect(await screen.findByText(/api_base_url host must be/)).toBeTruthy();
     expect(onSaved).not.toHaveBeenCalled();
     expect(screen.getByDisplayValue("http://172.17.0.1:8080")).toBeTruthy();
+    expect(screen.getByText(/Save your endpoint or model changes/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Test connection" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(mock.tests).toEqual([]);
+  });
+
+  it("cancels a draft by restoring the saved endpoint and model", () => {
+    render(<LocalEndpoints account={account()} onClose={() => {}} onSaved={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/API endpoint/), {
+      target: { value: "http://localhost:9000" },
+    });
+    fireEvent.change(screen.getByLabelText(/^Model/), { target: { value: "spark-x2.6" } });
+    expect(screen.getByRole("button", { name: "Test tool calling" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel changes" }));
+    expect(screen.getByLabelText(/API endpoint/)).toHaveProperty("value", "");
+    expect(screen.getByLabelText(/^Model/)).toHaveProperty("value", "qwen-stale");
+    expect(screen.queryByText(/Save your endpoint or model changes/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Test tool calling" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(mock.puts).toEqual([]);
   });
 
   it("resets the API endpoint, model and window in one call", async () => {

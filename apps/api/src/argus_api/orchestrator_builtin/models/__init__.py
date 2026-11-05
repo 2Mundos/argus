@@ -178,13 +178,20 @@ async def send(
     if status == 200:
         try:
             return adapter.parse(res.json())
-        except (ValueError, KeyError, TypeError, IndexError):
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            IndexError,
+            AttributeError,
+            RecursionError,
+        ):
             return Failure("invalid", status, "invalid_response")
     if res.is_redirect:
         return Failure("unreachable", status, "redirect_refused")
     try:
         data = res.json()
-    except ValueError:
+    except (ValueError, RecursionError):
         data = None
     code = _error_type(data)
     if status in (402, 429):
@@ -201,7 +208,7 @@ async def send(
 def parse_arguments(raw: str) -> dict[str, Any] | None:
     try:
         value = json.loads(raw) if raw.strip() else {}
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 

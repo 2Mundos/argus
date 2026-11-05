@@ -25,6 +25,7 @@ from argus_api.fleet.targets import (
     TargetRegistry,
 )
 from argus_api.orchestrator_builtin import prompt, tools
+from argus_api.orchestrator_builtin.loop import model_http_client
 from argus_api.orchestrator_builtin.models import (
     Endpoint,
     Failure,
@@ -42,12 +43,44 @@ from argus_api.settings import service as settings_service
 from argus_api.tasks import service as tasks
 from argus_core.conversations import ConversationCreate
 from argus_core.tasks import TaskCreate
+from fastapi import FastAPI
 
 REPO = Path(__file__).resolve().parents[3]
 FRAMING = json.loads(
     (REPO / "integrations/nanoclaw/fixtures/chat-framing/cases.json").read_text()
 )
 NO_URL = FleetSettings(argus_url=None, max_starts_in_flight=8)
+
+
+async def test_model_http_client_routes_local_hosts_around_environment_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8888")
+    monkeypatch.setenv("HTTPS_PROXY", "http://tls-proxy.invalid:9999")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+    for name in ("ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    client = model_http_client(FastAPI())
+    try:
+        local_transports = [
+            client._transport_for_url(httpx.URL(f"http://{host}/v1/chat/completions"))
+            for host in ("127.0.0.1", "localhost", "[::1]", "host.docker.internal")
+        ]
+        assert all(transport is local_transports[0] for transport in local_transports)
+        local_pool = local_transports[0]._pool
+        assert getattr(local_pool, "_proxy_url", None) is None
+
+        cloud_transport = client._transport_for_url(
+            httpx.URL("https://api.openai.com/v1/chat/completions")
+        )
+        assert cloud_transport is not local_transports[0]
+        cloud_proxy = cloud_transport._pool._proxy_url
+        assert cloud_proxy.host == b"tls-proxy.invalid"
+        assert client.follow_redirects is False
+    finally:
+        await client.aclose()
 
 
 # -- the in-process target ---------------------------------------------------------
@@ -297,6 +330,331 @@ def test_usage_is_normalised_so_input_never_counts_twice() -> None:
     assert o.text == ""
     bare = anthropic.AnthropicAdapter().parse({"content": []})
     assert bare.usage is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {"choices": "bad"},
+        {"choices": []},
+        {"choices": [None]},
+        {"choices": [{"message": "bad"}]},
+        {"choices": [{"message": {"tool_calls": {}}}]},
+        {"choices": [{"message": {"tool_calls": ["bad"]}}]},
+        {"choices": [{"message": {"tool_calls": [{"function": "bad"}]}}]},
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "tool",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "[]"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    ],
+    ids=[
+        "root-null",
+        "root-list",
+        "choices-not-list",
+        "choices-empty",
+        "choice-not-object",
+        "message-not-object",
+        "tool-calls-not-list",
+        "call-not-object",
+        "function-not-object",
+        "id-missing",
+        "id-empty",
+        "type-invalid",
+        "type-empty",
+        "type-missing",
+        "name-empty",
+        "name-missing",
+        "arguments-missing",
+        "arguments-invalid-json",
+        "arguments-not-object",
+        "arguments-truncated",
+        "finish-stop-with-call",
+    ],
+)
+async def test_openai_send_classifies_malformed_protocol_as_invalid(payload) -> None:
+    payload = json.loads(json.dumps(payload))
+    if isinstance(payload, dict) and isinstance(payload.get("choices"), list):
+        for choice in payload["choices"]:
+            if (
+                isinstance(choice, dict)
+                and isinstance(choice.get("message"), dict)
+                and "tool_calls" in choice["message"]
+            ):
+                choice.setdefault("finish_reason", "tool_calls")
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("http://model.test", {}, 5),
+            openai_compat.OpenAIAdapter(token_field="max_tokens"),
+            {},
+        )
+
+    assert isinstance(got, Failure)
+    assert (got.kind, got.error_type) == ("invalid", "invalid_response")
+
+
+async def test_openai_send_rejects_a_tool_call_without_a_finish_reason() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("http://model.test", {}, 5),
+            openai_compat.OpenAIAdapter(token_field="max_tokens"),
+            {},
+        )
+
+    assert isinstance(got, Failure)
+    assert (got.kind, got.error_type) == ("invalid", "invalid_response")
+
+
+async def test_openai_send_keeps_a_well_formed_tool_call() -> None:
+    payload = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"task_id":"t1"}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("http://model.test", {}, 5),
+            openai_compat.OpenAIAdapter(token_field="max_tokens"),
+            {},
+        )
+
+    assert not isinstance(got, Failure)
+    assert got.calls[0].arguments == {"task_id": "t1"}
+
+
+async def test_send_sanitizes_an_attribute_error_from_a_malformed_adapter_payload() -> (
+    None
+):
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"content": ["malformed"]})
+        )
+    ) as model_client:
+        got = await send_model(
+            model_client,
+            Endpoint("https://model.test", {}, 5),
+            anthropic.AnthropicAdapter(),
+            {},
+        )
+
+    assert isinstance(got, Failure)
+    assert (got.kind, got.error_type) == ("invalid", "invalid_response")
 
 
 @pytest.mark.parametrize(

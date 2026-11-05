@@ -322,11 +322,11 @@ def servers(client: TestClient) -> Servers:
     return found
 
 
-def _create(client: TestClient, **credential: Any) -> str:
+def _create(client: TestClient, *, name: str = "spark", **credential: Any) -> str:
     res = client.post(
         "/api/accounts",
         json={
-            "name": "spark",
+            "name": name,
             "provider": "local",
             "credential": {"base_url": WORKER_URL, **credential},
         },
@@ -443,11 +443,12 @@ def test_the_test_runs_only_what_is_asked_with_separate_statuses(
                                     "type": "function",
                                     "function": {
                                         "name": "report_status",
-                                        "arguments": "{}",
+                                        "arguments": '{"status":"ok"}',
                                     },
                                 }
                             ],
-                        }
+                        },
+                        "finish_reason": "tool_calls",
                     }
                 ]
             },
@@ -465,6 +466,9 @@ def test_the_test_runs_only_what_is_asked_with_separate_statuses(
     [(_, sent_to, body, headers)] = [s for s in servers.seen if s[0] == "POST"]
     assert sent_to == "http://127.0.0.1:8080/v1/chat/completions"
     assert body["model"] == "spark-x2.6" and body["tools"][0]["function"]["name"]
+    assert body["tools"][0]["function"]["parameters"]["properties"]["status"][
+        "enum"
+    ] == ["ok"]
     assert body["max_tokens"] == local_health.TEST_MAX_TOKENS == 256
     assert headers["authorization"] == f"Bearer {TOKEN}"
     assert TOKEN not in json.dumps(both)
@@ -495,7 +499,17 @@ def test_inference_and_tool_failures_are_reported_apart(
     account = _create(client, model="spark-x2.6")
     servers.chat = [
         (200, {"choices": [{"message": {"content": "OK"}}]}),
-        (200, {"choices": [{"message": {"content": "I cannot call tools."}}]}),
+        (
+            200,
+            {
+                "choices": [
+                    {
+                        "message": {"content": "I cannot call tools."},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        ),
     ]
     got = client.post(
         f"/api/accounts/{account}/local/test",
@@ -510,6 +524,230 @@ def test_inference_and_tool_failures_are_reported_apart(
     assert "I cannot call tools" not in json.dumps(got)  # never the model's text
     inference_body = next(b for m, _, b, _ in servers.seen if m == "POST")
     assert inference_body["max_tokens"] == 256 and "tools" not in inference_body
+
+
+def _tool_probe_response(
+    call: Any = None,
+    finish_reason: Any = "tool_calls",
+) -> dict[str, Any]:
+    if call is None:
+        call = {
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "report_status",
+                "arguments": '{"status":"ok"}',
+            },
+        }
+    return {
+        "choices": [
+            {
+                "finish_reason": finish_reason,
+                "message": {"tool_calls": [call]},
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        {},
+        {"choices": "bad"},
+        {"choices": []},
+        {"choices": _tool_probe_response()["choices"] * 2},
+        {"choices": ["bad"]},
+        {"choices": [{"message": []}]},
+        {"choices": [{"finish_reason": "tool_calls", "message": {"content": []}}]},
+        {"choices": [{"message": {"tool_calls": {}}}]},
+        {"choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": []}}]},
+        {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            _tool_probe_response()["choices"][0]["message"][
+                                "tool_calls"
+                            ][0]
+                        ]
+                        * 2
+                    },
+                }
+            ]
+        },
+        _tool_probe_response("bad"),
+        _tool_probe_response(
+            {
+                "type": "function",
+                "function": {"name": "report_status", "arguments": '{"status":"ok"}'},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "",
+                "type": "function",
+                "function": {"name": "report_status", "arguments": '{"status":"ok"}'},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "function": {"name": "report_status", "arguments": '{"status":"ok"}'},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "",
+                "function": {"name": "report_status", "arguments": '{"status":"ok"}'},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "tool",
+                "function": {"name": "report_status", "arguments": '{"status":"ok"}'},
+            }
+        ),
+        _tool_probe_response({"id": "call-1", "type": "function", "function": "bad"}),
+        _tool_probe_response({"id": "call-1", "type": "function", "function": {}}),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "", "arguments": '{"status":"ok"}'},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "other_tool", "arguments": '{"status":"ok"}'},
+            }
+        ),
+        _tool_probe_response(
+            {"id": "call-1", "type": "function", "function": {"name": "report_status"}}
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "report_status", "arguments": ""},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "report_status", "arguments": "{"},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "report_status", "arguments": "[]"},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "report_status", "arguments": "{}"},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "report_status", "arguments": '{"status":1}'},
+            }
+        ),
+        _tool_probe_response(
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "report_status",
+                    "arguments": '{"status":"not ok"}',
+                },
+            }
+        ),
+        _tool_probe_response(finish_reason="stop"),
+        _tool_probe_response(finish_reason="length"),
+        _tool_probe_response(finish_reason=None),
+        _tool_probe_response(finish_reason="unexpected"),
+        {
+            "choices": [
+                {"message": {"tool_calls": ["truncated"]}, "finish_reason": "length"}
+            ]
+        },
+    ],
+    ids=[
+        "root-null",
+        "root-list",
+        "choices-missing",
+        "choices-not-list",
+        "choices-empty",
+        "multiple-choices",
+        "choice-not-object",
+        "message-not-object",
+        "invalid-message-content",
+        "tool-calls-not-list",
+        "tool-calls-empty-finish",
+        "multiple-calls",
+        "call-not-object",
+        "id-missing",
+        "id-empty",
+        "type-missing",
+        "type-empty",
+        "type-invalid",
+        "function-not-object",
+        "function-empty",
+        "name-empty",
+        "name-not-offered",
+        "arguments-missing",
+        "arguments-empty",
+        "arguments-invalid-json",
+        "arguments-not-object",
+        "status-missing",
+        "status-not-ok-type",
+        "status-not-ok-value",
+        "finish-stop",
+        "finish-truncated",
+        "finish-missing",
+        "finish-invalid",
+        "truncated-call",
+    ],
+)
+async def test_tool_call_probe_rejects_malformed_protocol(payload: Any) -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    ) as model_client:
+        got = await local_health._complete(
+            model_client, _account(model="spark-x2.6"), "spark-x2.6", tools=True
+        )
+
+    assert (got.status, got.failure) == ("failed", "invalid_response")
+    assert got.detail == local_health.failure_sentence(
+        "invalid_response", "http://127.0.0.1:8080"
+    )
+
+
+async def test_tool_call_probe_accepts_a_complete_schema_matching_call() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json=_tool_probe_response())
+        )
+    ) as model_client:
+        got = await local_health._complete(
+            model_client, _account(model="spark-x2.6"), "spark-x2.6", tools=True
+        )
+
+    assert got.status == "passed" and got.failure is None
 
 
 @pytest.mark.parametrize(
@@ -596,7 +834,9 @@ def test_a_worker_lease_keeps_the_worker_endpoint_and_shape(
     worker = {"Authorization": f"Bearer {register(client)}"}
     client.post("/api/tasks", json={"project": "demo", "title": "t"})
     claimed = client.post(
-        "/api/tasks/claim", json={"runtime_providers": ["local"]}, headers=worker
+        "/api/tasks/claim",
+        json={"runtime_providers": ["local"], "wait_s": 0},
+        headers=worker,
     )
     assert claimed.status_code == 200, claimed.text
     lease = claimed.json()["engine_lease"]
@@ -615,6 +855,86 @@ def test_a_worker_lease_keeps_the_worker_endpoint_and_shape(
     assert again.status_code == 200, again.text
     assert again.json()["credential"] == lease["credential"]
     assert again.json()["settings"]["base_url"] == WORKER_URL
+
+
+def test_default_worker_claim_skips_stale_model_for_a_healthy_local_neighbor(
+    client: TestClient, servers: Servers
+) -> None:
+    client.put("/api/settings/orchestrator.model", json={"value": "local/spark-x2.6"})
+    _create(client, name="a-stale", model="qwen-stale")
+    healthy = _create(client, name="z-healthy", model="spark-x2.6")
+    worker = {"Authorization": f"Bearer {register(client)}"}
+    client.post("/api/tasks", json={"project": "demo", "title": "stale local"})
+
+    claimed = client.post(
+        "/api/tasks/claim",
+        json={"runtime_providers": ["local"], "wait_s": 0},
+        headers=worker,
+    )
+
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["engine_lease"]["account_id"] == healthy
+
+
+def test_default_worker_claim_keeps_valid_worker_model_despite_stale_builtin_override(
+    client: TestClient, servers: Servers
+) -> None:
+    client.put("/api/settings/orchestrator.model", json={"value": "local/qwen-stale"})
+    _create(client, model="spark-x2.6")
+    worker = {"Authorization": f"Bearer {register(client)}"}
+    client.post("/api/tasks", json={"project": "demo", "title": "worker local"})
+
+    claimed = client.post(
+        "/api/tasks/claim",
+        json={"runtime_providers": ["local"], "wait_s": 0},
+        headers=worker,
+    )
+
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["engine_lease"]["credential"]["model"] == "spark-x2.6"
+
+
+@pytest.mark.parametrize(
+    ("worker_model", "override", "status", "leased_model"),
+    [
+        ("qwen-stale", "spark-x2.6", 200, "spark-x2.6"),
+        ("spark-x2.6", "qwen-stale", 409, None),
+    ],
+)
+def test_builtin_lease_checks_its_override_independently_of_worker_model(
+    client: TestClient,
+    servers: Servers,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_model: str,
+    override: str,
+    status: int,
+    leased_model: str | None,
+) -> None:
+    client.put("/api/settings/orchestrator.model", json={"value": f"local/{override}"})
+    _create(client, model=worker_model)
+    agent = {"Authorization": f"Bearer {register(client)}"}
+
+    async def builtin_runtime(_conn, _agent_id: str) -> str:
+        return "api"
+
+    monkeypatch.setattr(local_health, "agent_runtime", builtin_runtime)
+    monkeypatch.setattr(
+        "argus_api.accounts.routes.agent_system_pool", _orchestrator_pool
+    )
+
+    leased = client.post(
+        "/api/accounts/lease", json={"runtime_providers": ["local"]}, headers=agent
+    )
+
+    assert leased.status_code == status, leased.text
+    if leased_model is None:
+        assert leased.json()["detail"]["code"] == "no_account"
+    else:
+        assert leased.json()["credential"]["model"] == leased_model
+
+
+async def _orchestrator_pool(_conn, _agent_id: str | None) -> str:
+    return "orchestrator"
 
 
 def test_mcp_edits_and_tests_through_the_same_routes(

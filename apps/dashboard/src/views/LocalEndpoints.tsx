@@ -86,6 +86,12 @@ export function LocalEndpoints({
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const action = useAction();
+  const dirty =
+    view !== null &&
+    view !== undefined &&
+    (baseUrl.trim() !== view.base_url ||
+      (apiBaseUrl.trim() || null) !== (view.api_base_url ?? null) ||
+      (model.trim() || null) !== (view.model ?? null));
 
   async function put(body: Body, message: string, key: string) {
     setError(undefined);
@@ -136,7 +142,17 @@ export function LocalEndpoints({
     );
   }
 
+  function discard() {
+    if (!view) return;
+    setBaseUrl(view.base_url);
+    setApiBaseUrl(view.api_base_url ?? "");
+    setModel(view.model ?? "");
+    setError(undefined);
+    setNotice(undefined);
+  }
+
   async function test(kind: TestKind) {
+    if (dirty) return;
     setError(undefined);
     setNotice(undefined);
     await action.run(async () => {
@@ -251,11 +267,17 @@ export function LocalEndpoints({
           Discovery only lists models. Inference and tool calling each send one short completion (at
           most 256 output tokens) and run only when you press them.
         </p>
+        {dirty && (
+          <p className="error small" role="alert">
+            Save your endpoint or model changes before testing. Tests use the saved account
+            configuration.
+          </p>
+        )}
         <div className="toolbar">
           <ActionButton
             type="button"
             pending={action.is("test:discovery")}
-            disabled={action.busy}
+            disabled={action.busy || dirty}
             action={() => test("discovery")}
           >
             Test connection
@@ -263,7 +285,7 @@ export function LocalEndpoints({
           <ActionButton
             type="button"
             pending={action.is("test:inference")}
-            disabled={action.busy}
+            disabled={action.busy || dirty}
             action={() => test("inference")}
           >
             Test inference
@@ -271,7 +293,7 @@ export function LocalEndpoints({
           <ActionButton
             type="button"
             pending={action.is("test:tools")}
-            disabled={action.busy}
+            disabled={action.busy || dirty}
             action={() => test("tools")}
           >
             Test tool calling
@@ -290,6 +312,9 @@ export function LocalEndpoints({
         <div className="actions">
           <button type="button" disabled={action.busy} onClick={onClose}>
             Close
+          </button>
+          <button type="button" disabled={action.busy || !dirty} onClick={discard}>
+            Cancel changes
           </button>
           <ActionButton
             type="button"

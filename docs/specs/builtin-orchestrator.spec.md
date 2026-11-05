@@ -302,6 +302,13 @@ lease held by the built-in carries the account's **API endpoint** in
 ([local harness](local-harness.spec.md), "One endpoint per runtime"): on a host
 API that is `127.0.0.1` where workers use `host.docker.internal`.
 
+Cloud requests retain the process's configured HTTP proxy behavior. Requests to
+the allowlisted local model hosts (`127.0.0.1`, `localhost`, `::1` and
+`host.docker.internal`) bypass ambient proxy settings and connect directly, so a
+local placeholder token and local model traffic cannot be relayed to an
+environment-configured proxy. This routing is part of the normal built-in model
+client; redirect refusal and TLS verification apply to both paths.
+
 **Request shape.** At most 4096 output tokens per call: `max_tokens` for Anthropic,
 `custom` and `local`, and `max_completion_tokens` for `openai`. No temperature is
 set, because some reasoning models reject it. Tools are offered with automatic
@@ -321,7 +328,7 @@ never read, logged or replied, matching the provider API error rule
 | 401, 403 | auth rejected | `POST /api/accounts/{id}/auth-rejected` (`role: engine`, `source: structured`). The account is not exhausted. Release the lease. The reply names the account: "The model account `<name>` was rejected. Sign it in again or replace its key." The turn ends. |
 | 408, 409, 5xx (Anthropic 529 included), `connection_refused`, `connect_failed`, `timeout` | transient | Send the same request again after 2 s, then after 8 s. After the third failure the reply is "The model provider did not answer (`<status or failure>`)." with the failure sentence and correlation below, then "Send the message again." |
 | `dns_failed`, `tls_failed`, `redirect_refused` | unreachable | No retry: the endpoint is misconfigured for this runtime. The reply is "The model provider could not be reached (`<failure>`)." with the failure sentence and correlation. |
-| 200 with a body the adapter cannot read, or a protocol error | invalid response | No retry. "The model provider answered with a response Argus cannot read (`invalid_response`)." with correlation. |
+| 200 with a malformed response envelope or tool call, arguments that are not a JSON object, a missing or non-`tool_calls` finish reason on a tool call, a truncated tool call, or a protocol error | invalid response | No retry. "The model provider answered with a response Argus cannot read (`invalid_response`)." with correlation. The adapter validates the choices/message/tool-call shapes, required non-empty call id and function name, `type: function`, and parses arguments before returning a reply; malformed provider data never escapes as an exception. |
 | 400 with code `context_length_exceeded` | too long | Elide every tool result of earlier steps (3.7) and send again once. If it fails again, it is a request error. |
 | other 4xx | request error | No retry. The reply is "The model rejected the request (`<status>` `<type>`)." For `custom` and `local` it adds: "Check that the model supports tool calls." |
 

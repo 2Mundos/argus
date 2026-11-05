@@ -84,6 +84,19 @@ account one endpoint per runtime.
     (a stale account `model` behind a served `orchestrator.model`, or the
     reverse) is a *stale model* warning, never a disable.
 
+  **Lease eligibility is runtime-specific.** Discovery also filters local
+  accounts at selection time using the model that the requesting runtime will
+  actually run. A worker or executor lease requires the account's configured
+  `model` (or a served model when it has none); the built-in API runtime requires
+  its valid `orchestrator.model` local override when set, otherwise the account's
+  configured model (or a served model when it has none). A served model for one
+  runtime does not make another runtime's unavailable model eligible. A fresh
+  discovery that lists no required model makes the account ineligible, while an
+  unknown or not-yet-probed discovery leaves selection unchanged. The API probe
+  verifies model listing at the API endpoint only; worker-network reachability is
+  unverified by that probe. Discovery runs before claim/lease transactions; no
+  network request runs in a write transaction.
+
   `ARGUS_LOCAL_MODEL_URL` no longer decides any account's health; it stays the
   `local` engine's endpoint ([engines](engines.spec.md)). A lease whose account
   names no `context_tokens` or no `model` fills them from that account's own probe
@@ -105,8 +118,12 @@ account one endpoint per runtime.
     most 256 output tokens offering one tool with tool choice `auto`, as the
     built-in sends it, on the model the built-in orchestrator would run
     (`orchestrator.model`'s `local/<model>`, else the account's, else the first
-    served); `passed` only when the reply holds a call of that tool
-    (`no_tool_call` otherwise, `empty_answer` when the budget ran out first).
+    served); `passed` only when a complete tool call has a non-empty id, type
+    `function`, the offered function name, and JSON object arguments whose
+    `status` is the string `ok`, with finish reason `tool_calls`. A malformed
+    response, invalid arguments, or truncated tool call is `invalid_response`;
+    a well-formed reply without a call is `no_tool_call`, and an exhausted
+    budget without a call is `empty_answer`.
 
   256 tokens bounds the cost and still leaves a reasoning model room to answer.
 
@@ -123,7 +140,13 @@ account one endpoint per runtime.
   `account.local_updated` names the fields (never values). The answer is the
   account with a fresh discovery, so a model the server no longer lists shows as
   a stale model warning at once. **Reset** clears `api_base_url`, `model` and
-  `context_tokens` in one call.
+  `context_tokens` in one call. In the dashboard, edits are drafts until Save
+  succeeds. All three test actions are disabled while the endpoint or model draft
+  differs from the saved account, with an explicit instruction to save before
+  testing; tests always use saved account data. A failed save keeps the draft and
+  keeps tests disabled. Cancel changes restores the saved values. Saving never
+  runs inference or tool calling; each completion test runs only when explicitly
+  requested after save.
 - **Account view.** `GET /api/accounts` gives a local account `local`: both
   endpoints, the API endpoint's source, the stored `model` and `context_tokens`,
   the built-in orchestrator's model and its source, the last discovery, the served

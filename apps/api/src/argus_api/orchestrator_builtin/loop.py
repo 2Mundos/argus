@@ -26,6 +26,7 @@ CLAIM_WAIT_S = 30
 CLAIM_RETRY_S = 5.0
 RUNTIME = {"worker_version": VERSION, "features": ["builtin"]}
 CRASH_TEXT = "The orchestrator hit an internal error in this turn. Send it again."
+LOCAL_MODEL_HOSTS = ("127.0.0.1", "localhost", "[::1]", "host.docker.internal")
 
 
 class BuiltinLoop:
@@ -192,6 +193,20 @@ class BuiltinLoop:
             )
 
 
+def model_http_client(app: FastAPI) -> httpx.AsyncClient:
+    """Keep cloud proxy support while routing allowlisted local model hosts direct."""
+    injected = getattr(app.state, "model_transport", None)
+    local_transport = (
+        injected if injected is not None else httpx.AsyncHTTPTransport(trust_env=False)
+    )
+    return httpx.AsyncClient(
+        transport=injected,
+        mounts={f"all://{host}": local_transport for host in LOCAL_MODEL_HOSTS},
+        follow_redirects=False,
+        trust_env=True,
+    )
+
+
 def make_runner(app: FastAPI) -> InProcessRunner:
     """What the in-process target runs for each built-in instance. Tests set
     `app.state.model_transport` (a fake model API) and `app.state.builtin_sleep`."""
@@ -205,10 +220,7 @@ def make_runner(app: FastAPI) -> InProcessRunner:
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url=BASE_URL
             ) as argus_http,
-            httpx.AsyncClient(
-                transport=getattr(app.state, "model_transport", None),
-                follow_redirects=False,
-            ) as model_http,
+            model_http_client(app) as model_http,
         ):
             await BuiltinLoop(
                 handle,

@@ -281,6 +281,9 @@ async def claim_task(
 ) -> ClaimedTask | Response:
     """Claim a ready task, long-polling up to `wait_s` seconds for one."""
     disk_guard = request.app.state.disk_guard
+    local_served_models = await local_health.served_models_for_leases(
+        db, secrets, request.app.state.local_health
+    )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + body.wait_s
     with db.bus.subscribe() as sub:
@@ -297,6 +300,7 @@ async def claim_task(
                     secrets,
                     default_timeout_s=settings.task_timeout_s,
                     disk_guard=disk_guard,
+                    local_served_models=local_served_models,
                 )
                 project_repository = (
                     await delivery.project_repository_url(tx.conn, task.project)

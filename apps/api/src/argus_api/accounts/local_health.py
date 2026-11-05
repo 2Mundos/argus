@@ -9,6 +9,7 @@ model-name rule.
 """
 
 import asyncio
+import json
 import socket
 import ssl
 import time
@@ -528,6 +529,26 @@ async def probe_all(
     return {a.id: verdict(a, override, found[a.api_endpoint]) for a in accounts}
 
 
+async def served_models_for_leases(
+    db: Database,
+    store: SecretStore,
+    health: LocalHealth,
+) -> dict[str, tuple[str, ...] | None]:
+    """Discover served model ids before lease transactions. Missing entries and
+    failed discoveries remain unknown. The API endpoint does not prove
+    worker-network reachability."""
+    async with db.read() as conn:
+        accounts = await local_accounts(conn, store, container=health.container)
+    if not accounts:
+        return {}
+    found = await health.discover({a.api_endpoint: a.token for a in accounts})
+    return {
+        account.id: item.models if item.ok else None
+        for account in accounts
+        if (item := found.get(account.api_endpoint)) is not None
+    }
+
+
 def view(
     account: LocalAccount, override: str | None, health: LocalHealth
 ) -> LocalAccountView:
@@ -608,7 +629,7 @@ async def _complete(
                     "description": "Report a status word.",
                     "parameters": {
                         "type": "object",
-                        "properties": {"status": {"type": "string"}},
+                        "properties": {"status": {"type": "string", "enum": ["ok"]}},
                         "required": ["status"],
                     },
                 },
@@ -647,19 +668,59 @@ async def _complete(
             status="failed", failure=failure, http_status=res.status_code, detail=detail
         )
     try:
-        choice = res.json()["choices"][0]
-        message = choice["message"]
-        if not isinstance(message, dict):
-            raise TypeError
-    except (ValueError, KeyError, IndexError, TypeError):
+        data = res.json()
+    except (TypeError, ValueError, RecursionError):
         return done(
             status="failed",
             failure="invalid_response",
             detail=failure_sentence("invalid_response", endpoint),
         )
-    cut = choice.get("finish_reason") == "length"
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if (
+        not isinstance(choices, list)
+        or len(choices) != 1
+        or not isinstance(choices[0], dict)
+    ):
+        return done(
+            status="failed",
+            failure="invalid_response",
+            detail=failure_sentence("invalid_response", endpoint),
+        )
+    choice = choices[0]
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return done(
+            status="failed",
+            failure="invalid_response",
+            detail=failure_sentence("invalid_response", endpoint),
+        )
+    finish_reason = choice.get("finish_reason")
+    if finish_reason is not None and finish_reason not in (
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+    ):
+        return done(
+            status="failed",
+            failure="invalid_response",
+            detail=failure_sentence("invalid_response", endpoint),
+        )
+    if tools and finish_reason is None:
+        return done(
+            status="failed",
+            failure="invalid_response",
+            detail=failure_sentence("invalid_response", endpoint),
+        )
+    cut = finish_reason == "length"
+    content = message.get("content")
+    if content is not None and not isinstance(content, str):
+        return done(
+            status="failed",
+            failure="invalid_response",
+            detail=failure_sentence("invalid_response", endpoint),
+        )
     if not tools:
-        content = message.get("content")
         if isinstance(content, str) and content.strip():
             return done(status="passed")
         # Only reasoning, or nothing: the model did not answer (never a pass).
@@ -668,24 +729,71 @@ async def _complete(
             failure="empty_answer",
             detail=failure_sentence("empty_answer", endpoint, model=model, cut=cut),
         )
-    calls = message.get("tool_calls")
-    names = (
-        [(c.get("function") or {}).get("name") for c in calls if isinstance(c, dict)]
-        if isinstance(calls, list)
-        else []
-    )
-    if TEST_TOOL in names:
-        return done(status="passed")
-    if cut:
+    calls = message.get("tool_calls", [])
+    if not isinstance(calls, list):
         return done(
             status="failed",
-            failure="empty_answer",
-            detail=failure_sentence("empty_answer", endpoint, model=model, cut=True),
+            failure="invalid_response",
+            detail=failure_sentence("invalid_response", endpoint),
         )
+    if not calls:
+        if finish_reason == "tool_calls":
+            return done(
+                status="failed",
+                failure="invalid_response",
+                detail=failure_sentence("invalid_response", endpoint),
+            )
+        if cut:
+            return done(
+                status="failed",
+                failure="empty_answer",
+                detail=failure_sentence(
+                    "empty_answer", endpoint, model=model, cut=True
+                ),
+            )
+        return done(
+            status="failed",
+            failure="no_tool_call",
+            detail=failure_sentence("no_tool_call", endpoint, model=model),
+        )
+    if finish_reason != "tool_calls" or len(calls) != 1:
+        return done(
+            status="failed",
+            failure="invalid_response",
+            detail=failure_sentence("invalid_response", endpoint),
+        )
+    call = calls[0]
+    if not isinstance(call, dict):
+        valid = False
+    else:
+        function = call.get("function")
+        valid = (
+            isinstance(call.get("id"), str)
+            and bool(call["id"].strip())
+            and call.get("type") == "function"
+            and isinstance(function, dict)
+            and isinstance(function.get("name"), str)
+            and bool(function["name"].strip())
+            and function.get("name") == TEST_TOOL
+            and isinstance(function.get("arguments"), str)
+        )
+        if valid:
+            try:
+                arguments = json.loads(function["arguments"])
+            except (TypeError, ValueError, RecursionError):
+                valid = False
+            else:
+                valid = (
+                    isinstance(arguments, dict)
+                    and isinstance(arguments.get("status"), str)
+                    and arguments["status"] == "ok"
+                )
+    if valid:
+        return done(status="passed")
     return done(
         status="failed",
-        failure="no_tool_call",
-        detail=failure_sentence("no_tool_call", endpoint, model=model),
+        failure="invalid_response",
+        detail=failure_sentence("invalid_response", endpoint),
     )
 
 

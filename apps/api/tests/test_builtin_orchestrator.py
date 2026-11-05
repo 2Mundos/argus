@@ -127,7 +127,14 @@ class FakeModel:
         }
         return (
             200,
-            {"choices": [{"message": {"content": None, "tool_calls": [call]}}]},
+            {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {"content": None, "tool_calls": [call]},
+                    }
+                ]
+            },
             {},
         )
 
@@ -173,6 +180,12 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Env]:
     with TestClient(app) as client:
         app.state.secrets = MemorySecretStore()
         app.state.model_transport = httpx.MockTransport(model.handle)
+        app.state.local_health.transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={"data": [{"id": "qwen3"}, {"id": "spark-x2.6"}]},
+            )
+        )
         app.state.builtin_sleep = no_sleep
         found = Env(client, model, sleeps, [], [])
         yield found
@@ -945,6 +958,16 @@ def test_an_unresolvable_endpoint_replies_once_with_what_to_change(env: Env) -> 
         model="qwen3",
         api_base_url="http://host.docker.internal:8080",
     )
+
+    def no_dns(request: httpx.Request) -> httpx.Response:
+        try:
+            raise socket.gaierror(-2, "Name or service not known")
+        except socket.gaierror as exc:
+            raise httpx.ConnectError(
+                "[Errno -2] Name or service not known", request=request
+            ) from exc
+
+    app.state.local_health.transport = httpx.MockTransport(no_dns)
     enable(env)
     loop = boot(env)
     conv = chat(env, "hello")

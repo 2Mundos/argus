@@ -569,6 +569,9 @@ async def lease_account(
     A `local` lease names the endpoint of the runtime holding it: the API endpoint
     for a built-in agent, the worker endpoint otherwise (local harness spec, "One
     endpoint per runtime")."""
+    local_served_models = await local_health.served_models_for_leases(
+        db, secrets, _health(request)
+    )
     async with db.write() as tx:
         prefer = None
         if body.task_id is None:
@@ -583,6 +586,7 @@ async def lease_account(
                     )
                 ).value
             )
+        runtime = await local_health.agent_runtime(tx.conn, agent_id)
         leased = await service.lease(
             tx,
             agent_id,
@@ -594,8 +598,9 @@ async def lease_account(
             attempt=body.attempt,
             prefer=prefer,
             credential_kinds=body.credential_kinds,
+            runtime=runtime,
+            local_served_models=local_served_models,
         )
-        runtime = await local_health.agent_runtime(tx.conn, agent_id)
     return await local_health.deliver(_health(request), leased, runtime)
 
 
