@@ -530,8 +530,8 @@ test("cursor agent: progress reaches the relay before the process ends", async (
 // `codex exec --json` events: thread.started, turn.*, item.started|completed, error. Names are
 // those of the pinned codex-cli binary (strings: thread.started, turn.started, turn.completed,
 // turn.failed, item.started, item.updated, item.completed, command_execution, agent_message,
-// mcp_tool_call, file_change, web_search, todo_list); the repo's usage.test.mjs pins the
-// thread.started / turn.completed / item.completed agent_message shapes.
+// mcp_tool_call, file_change, web_search, todo_list); the shapes are pinned by
+// fixtures/codex-0.162.1/PIN.md.
 const item = (type, extra, kind = "item.completed") => ({
   type: kind,
   item: { id: `i-${type}`, type, ...extra },
@@ -619,6 +619,12 @@ test("codex exec events become short readable lines without reasoning or prompt"
   ]);
   assert.deepEqual(lines(item("error", { message: "bad" })), ["  ✗ error: bad"]);
   assert.deepEqual(lines({ type: "error", message: "stream lost" }), ["codex error: stream lost"]);
+  assert.deepEqual(lines({ type: "error", message: 5 }), ["codex error: 5"]);
+  assert.deepEqual(lines({ type: "error" }), ["codex error: "]);
+  assert.deepEqual(lines(item("error", { message: "Falling back to HTTPS" })), [
+    "codex error (retrying): Falling back to HTTPS",
+  ]);
+  assert.deepEqual(lines(item("error", { message: "bad request" })), ["  ✗ error: bad request"]);
   assert.deepEqual(lines({ type: "turn.failed", error: { message: "quota" } }), [
     "codex finished with an error: quota",
   ]);
@@ -647,6 +653,36 @@ test("codex exec: unknown and malformed events give no lines", () => {
     { type: "item.updated", item: { type: "agent_message", text: "partial" } },
   ])
     assert.deepEqual(codexEventLines(e), [], JSON.stringify(e));
+});
+
+test("codex exec: the captured unauthenticated stream (0.162.1) reads as retries, then the 401 failure", () => {
+  const raw = fs.readFileSync(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../fixtures/codex-0.162.1/exec-unauth.sanitized.jsonl",
+    ),
+  );
+  const got = [];
+  const p = createStreamParser({ executor: "codex", onLines: (l) => got.push(...l) });
+  for (let i = 0; i < raw.length; i += 37) p.push(raw.subarray(i, i + 37).toString("latin1"));
+  p.end();
+  const ws =
+    "unexpected status 401 Unauthorized: WebSocket upgrade rejected by upstream (401), url: wss://api.openai.com/v1/responses";
+  const http =
+    'unexpected status 401 Unauthorized: {"error":"access_restricted","manage_url":"https://example.invalid/manage","message":"api.openai.com credentials exist in OneCLI but this agen…';
+  const httpFinal = http.replace("agen…", "agent does not have acces…");
+  assert.deepEqual(got, [
+    "codex started",
+    ...[2, 3, 4, 5].map((n) => `codex error (retrying): Reconnecting... ${n}/5 (${ws})`),
+    `codex error (retrying): Falling back from WebSockets to HTTPS transport. ${ws}`,
+    ...[1, 2, 3, 4, 5].map((n) => `codex error (retrying): Reconnecting... ${n}/5 (${http}`),
+    `codex error: ${httpFinal}`,
+    `codex finished with an error: ${httpFinal}`,
+  ]);
+  assert.equal(got[0], "codex started");
+  assert.ok(got.at(-1).startsWith("codex finished with an error: unexpected status 401"));
+  for (const word of ["reasoning", "prompt", "manage_url="])
+    assert.ok(!got.join("\n").includes(word), word);
 });
 
 test("codex stream parser: fragmented chunks, noise, errors, final status and redaction", () => {

@@ -399,7 +399,9 @@ describe("codexLogLines", () => {
         done({
           type: "fileChange",
           status: "completed",
-          changes: [{ path: "a.py", kind: "update", diff: "SECRETDIFF" }],
+          changes: [
+            { path: "a.py", kind: { type: "update", move_path: null }, diff: "SECRETDIFF" },
+          ],
         }),
       ),
     ).toEqual(["▸ patch a.py", "  ↳ completed"]);

@@ -249,17 +249,25 @@ export function agentEventLines(ev, secrets = [], state = { seen: new Set(), par
 /** `codex exec --json` item statuses that mean the item did not succeed. */
 const CODEX_BAD_STATUS = new Set(["failed", "declined"]);
 
+/** Connection-retry notices the CLI emits as `error` events and `error` items; the final failure is `turn.failed`. */
+const CODEX_RETRY_NOTICE = /^(Reconnecting\.\.\.|Falling back)/;
+
 /**
  * Readable lines for one `codex exec --json` event (`thread.started`, `turn.*`,
  * `item.started|completed`, `error`). Shown: the agent's messages, `▸ tool arg` for a
  * command, patch, MCP call or web search, a bounded result or error summary, and the
- * final status. Never shown: `reasoning`, the prompt, `todo_list`, or unknown events.
+ * final status. A retry notice (`Reconnecting... N/5`, `Falling back ...`) reads
+ * `codex error (retrying): ...`, not as a failure. Never shown: `reasoning`, the prompt, `todo_list`, or unknown events.
  * `state.started` holds the ids of items whose `▸` line was already printed.
  */
 export function codexEventLines(ev, secrets = [], state = { started: new Set() }) {
   if (!isObject(ev)) return [];
   const lines = [];
   const msg = (e) => cut(oneLine(isObject(e) ? (e.message ?? "") : (e ?? "")), RESULT_MAX);
+  const errorLine = (message, prefix) =>
+    CODEX_RETRY_NOTICE.test(oneLine(message ?? ""))
+      ? `codex error (retrying): ${msg(message)}`
+      : `${prefix}: ${msg(message)}`;
   const call = (item, label) => {
     const id = typeof item.id === "string" ? item.id : null;
     if (id && state.started.has(id)) return;
@@ -317,14 +325,14 @@ export function codexEventLines(ev, secrets = [], state = { started: new Set() }
             call(item, `web_search ${cut(oneLine(item.query), ARG_MAX)}`);
           break;
         case "error":
-          if (done) lines.push(`  ✗ error: ${msg(item.message)}`);
+          if (done) lines.push(errorLine(item.message, "  ✗ error"));
           break;
         default:
       }
       break;
     }
     case "error":
-      lines.push(`codex error: ${msg(ev.message)}`);
+      lines.push(errorLine(ev.message, "codex error"));
       break;
     case "turn.failed":
       lines.push(`codex finished with an error: ${msg(ev.error)}`);
