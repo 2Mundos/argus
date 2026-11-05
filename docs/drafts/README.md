@@ -13,7 +13,7 @@ Every draft in this directory with its status, kept in sync by
 | Draft | Status |
 | --- | --- |
 | [Worker efficiency: stop paying for work that is thrown away](2026-10-24.worker-efficiency.draft.md) | `partial` |
-| [Task operations and reliability](2026-10-29.task-operations.draft.md) | `draft` |
+| [Task operations and reliability](2026-10-29.task-operations.draft.md) | `partial` |
 | [Verification boundary in specs](2026-10-29.verification-boundary.draft.md) | `implemented` |
 | [Replay engine](2026-10-31.replay-engine.draft.md) | `implemented` |
 | [DeepSeek Harness as an engine](2026-11-04.dsh-engine.draft.md) | `draft` |

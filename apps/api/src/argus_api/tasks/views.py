@@ -27,7 +27,7 @@ from argus_api.paging import (
     encode_cursor,
 )
 from argus_api.tasks import service
-from argus_api.tasks.finalization import Finalization, newest
+from argus_api.tasks.finalization import Finalization, WorkspaceFacts, newest
 
 TaskView = Literal["summary", "detail", "compact"]
 MAX_IDS = 50
@@ -115,6 +115,8 @@ class TaskRead(Task):
     stall_cause: StallCause | None = None
     # Execution versus follow-up of the newest attempt (task finalization spec 3.4).
     finalization: Finalization | None = None
+    # Holder of the current workspace and checkpoint status (task workspace 3.5).
+    workspace: WorkspaceFacts | None = None
 
 
 async def read_task(
@@ -122,13 +124,15 @@ async def read_task(
 ) -> TaskRead:
     task = await service.get_task(conn, task_id)
     facts = await service.quiet_facts(conn, task_id, now)
+    finalization, workspace = await newest(conn, task_id, task.state, now)
     return TaskRead(
         **task.model_dump(),
         quiet_at=facts.quiet_at,
         last_signal_at=facts.last_signal_at,
         last_signal_source=facts.last_signal_source,
         stall_cause=facts.stall_cause,
-        finalization=await newest(conn, task_id, task.state, now),
+        finalization=finalization,
+        workspace=workspace,
     )
 
 

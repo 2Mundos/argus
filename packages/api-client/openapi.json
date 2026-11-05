@@ -22565,6 +22565,16 @@
           "version": {
             "title": "Version",
             "type": "string"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -24467,6 +24477,30 @@
           "problems"
         ],
         "title": "WorkspaceCleanupSummary",
+        "type": "object"
+      },
+      "WorkspaceFacts": {
+        "description": "Who holds the task's current workspace and whether its work is recoverable.\nNever a path or a checkpoint reference: the API knows neither.",
+        "properties": {
+          "checkpoint": {
+            "enum": [
+              "available",
+              "unavailable",
+              "unknown"
+            ],
+            "title": "Checkpoint",
+            "type": "string"
+          },
+          "owner_agent_id": {
+            "title": "Owner Agent Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_agent_id",
+          "checkpoint"
+        ],
+        "title": "WorkspaceFacts",
         "type": "object"
       },
       "Yield": {

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-11-04
+updated: 2026-11-05
 ---
 
 # Task workspace: a stable per-task git workspace, checked before the model
@@ -135,6 +135,28 @@ Every reason is in `ENV_BLOCK_REASONS`: the task is **blocked**, never
 A missing repository lease keeps `env_repository_unavailable`; the workspace
 step does not run then. An existing origin URL with userinfo is reported as
 "origin carries credentials", not echoed.
+
+## 3.5 Ownership on the task read
+
+`GET /tasks/{id}` (`TaskRead`) carries `workspace`, derived from the task's newest
+attempt row, or null when the task has no attempt:
+
+- `owner_agent_id`: the worker that holds the current workspace, the `agent_id` of
+  the newest attempt. The API does not know the node id (`ARGUS_NODE_ID` lives on
+  the worker), so none is shown.
+- `checkpoint`: whether the attempt's work is recoverable, from `checkpoint_state`
+  ([task finalization](task-finalization.spec.md) 3.2):
+
+| `checkpoint_state` | `workspace.checkpoint` |
+| --- | --- |
+| `saved` | `available` |
+| `failed`, `nothing_to_save` | `unavailable` |
+| `running`, none recorded, unrecognised | `unknown` |
+
+No path rule: the response never carries a host path, the `checkpoint:<id>:<sha>`
+reference or `checkpoint_detail`; the API knows no workspace path. The field sits
+behind the task read scope. Lists and the MCP `get_task` tool (a pass-through) show
+the same single-task read only. The dashboard display is not built.
 
 # 4. Open Questions
 

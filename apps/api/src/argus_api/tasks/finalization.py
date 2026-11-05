@@ -39,6 +39,32 @@ class Finalization(BaseModel):
     checkpoint: CheckpointFacts | None
 
 
+class WorkspaceFacts(BaseModel):
+    """Who holds the task's current workspace and whether its work is recoverable.
+    Never a path or a checkpoint reference: the API knows neither."""
+
+    owner_agent_id: str
+    checkpoint: Literal["available", "unavailable", "unknown"]
+
+
+_CHECKPOINT_STATUS: dict[str | None, Literal["available", "unavailable"]] = {
+    "saved": "available",
+    "failed": "unavailable",
+    "nothing_to_save": "unavailable",
+}
+
+
+def workspace_facts(row: aiosqlite.Row | None) -> WorkspaceFacts | None:
+    """The newest attempt's worker and checkpoint status; None with no attempt.
+    `running`, no step recorded and any unrecognised state are `unknown`."""
+    if row is None:
+        return None
+    return WorkspaceFacts(
+        owner_agent_id=row["agent_id"],
+        checkpoint=_CHECKPOINT_STATUS.get(row["checkpoint_state"], "unknown"),
+    )
+
+
 async def record_claim_end(tx: Tx, task_id: str, attempt: int, action: str) -> None:
     """The claim of `attempt` ended now, by `action` (called where a task leaves
     `claimed`). Only the attempt's newest row, and only once."""
@@ -163,9 +189,10 @@ def derive(
 
 async def newest(
     conn: aiosqlite.Connection, task_id: str, task_state: str, now: datetime
-) -> Finalization | None:
+) -> tuple[Finalization | None, WorkspaceFacts | None]:
     async with conn.execute(
         "SELECT * FROM task_attempts WHERE task_id = ? ORDER BY id DESC LIMIT 1",
         (task_id,),
     ) as cur:
-        return derive(await cur.fetchone(), task_state, now)
+        row = await cur.fetchone()
+    return derive(row, task_state, now), workspace_facts(row)

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
-from argus_api.tasks.finalization import CHECKPOINT_STALE_S, derive
+from argus_api.tasks.finalization import CHECKPOINT_STALE_S, derive, workspace_facts
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "test-admin-token-" + "x" * 32
@@ -151,3 +151,54 @@ def test_silent_running_follow_up_is_unknown_not_a_result() -> None:
     # An attempt from before the migration has nothing recorded.
     legacy = {**row, "claim_ended_at": None, "checkpoint_state": None}
     assert derive(legacy, "succeeded", now) is None
+
+
+def test_workspace_owner_and_checkpoint_status(client: TestClient) -> None:
+    worker = register(client)
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    ref = "checkpoint:abc123:" + "f" * 40
+    task = claim(client, worker)
+
+    def workspace(headers: dict[str, str] | None = None) -> dict:
+        res = client.get(f"/api/tasks/{task['id']}", headers=headers or ADMIN)
+        assert res.status_code == 200, res.text
+        return res.json()["workspace"]
+
+    assert workspace() == {"owner_agent_id": agent_id, "checkpoint": "unknown"}
+    client.post(
+        f"/api/tasks/{task['id']}/complete",
+        json={"attempt": 1, "result": {"summary": "ok"}},
+        headers=worker,
+    )
+    assert workspace()["checkpoint"] == "unknown"  # no checkpoint step recorded
+    report(client, worker, task, 1, "running")
+    assert workspace()["checkpoint"] == "unknown"
+    report(client, worker, task, 1, "saved", ref)
+    assert workspace()["checkpoint"] == "available"
+    # The worker's own read shows no reference, detail or path-like value.
+    body = client.get(f"/api/tasks/{task['id']}", headers=worker).json()["workspace"]
+    assert body == {"owner_agent_id": agent_id, "checkpoint": "available"}
+    assert "checkpoint:" not in str(body) and "/" not in str(body)
+
+
+def test_workspace_is_null_without_an_attempt(client: TestClient) -> None:
+    task = client.post("/api/tasks", json={"project": "demo", "title": "t"}).json()
+    assert client.get(f"/api/tasks/{task['id']}").json()["workspace"] is None
+
+
+@pytest.mark.parametrize(
+    ("state", "status"),
+    [
+        ("saved", "available"),
+        ("failed", "unavailable"),
+        ("nothing_to_save", "unavailable"),
+        ("running", "unknown"),
+        (None, "unknown"),
+        ("from_a_newer_version", "unknown"),
+    ],
+)
+def test_workspace_facts_maps_checkpoint_state(state: str | None, status: str) -> None:
+    facts = workspace_facts({"agent_id": "agt_1", "checkpoint_state": state})
+    assert facts is not None
+    assert (facts.owner_agent_id, facts.checkpoint) == ("agt_1", status)
+    assert workspace_facts(None) is None
