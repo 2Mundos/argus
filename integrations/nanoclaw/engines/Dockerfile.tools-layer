@@ -29,7 +29,7 @@ COPY --chmod=0755 argus-task.mjs /usr/local/bin/argus-task
 # Command guard (docs/specs/command-guard.spec.md): a Claude Code PreToolUse hook
 # registered in managed settings, which a project's own .claude settings cannot
 # remove. The smoke fails the build if the guard does not block a known-bad command.
-COPY --chmod=0644 command_guard.py commit_attribution.py /usr/local/lib/argus/
+COPY --chmod=0644 command_guard.py commit_attribution.py repeat_guard.py /usr/local/lib/argus/
 COPY --chmod=0644 claude-managed-settings.json /etc/claude-code/managed-settings.json
 COPY --chmod=0755 argus-git /usr/local/lib/argus/bin/git
 COPY --chmod=0755 git-hooks/commit-msg /usr/local/lib/argus/git-hooks/commit-msg

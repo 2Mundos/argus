@@ -6,6 +6,17 @@
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 /usr/local/lib/argus/command_guard.py" }]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "python3 /usr/local/lib/argus/repeat_guard.py" }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "python3 /usr/local/lib/argus/repeat_guard.py" }]
+      }
     ]
   }
 }

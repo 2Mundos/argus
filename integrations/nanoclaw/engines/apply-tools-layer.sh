@@ -17,7 +17,7 @@ gitea_src="$here/../gitea-api.mjs"
 ctx="$(mktemp -d)"
 trap 'rm -rf "$ctx"' EXIT
 shopt -s nullglob
-cp -p "$here"/*.mjs "$here"/*.json "$here/command_guard.py" "$here/commit_attribution.py" "$ctx/"
+cp -p "$here"/*.mjs "$here"/*.json "$here/command_guard.py" "$here/commit_attribution.py" "$here/repeat_guard.py" "$ctx/"
 cp -p "$here/argus-git" "$ctx/"
 mkdir -p "$ctx/git-hooks"
 cp -p "$here/git-hooks/commit-msg" "$ctx/git-hooks/"
