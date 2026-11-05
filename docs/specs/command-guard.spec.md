@@ -89,7 +89,8 @@ bypass. Background: draft (removed; in git history),
 
 Not built yet (section 3 marks each **not implemented**):
 
-- `task.command_blocked` events (visibility) and their feed/Fleet presentation.
+- `task.command_blocked` event emission and Fleet presentation (the task feed
+  already shows the rule id and reason).
 - The `command_guard.enabled` setting and its delivery to the hook at claim; the
   hook already honours `ARGUS_COMMAND_GUARD`.
 - `env_guard_missing` when a guarded engine starts without the hook.
@@ -98,7 +99,7 @@ Not built yet (section 3 marks each **not implemented**):
 - **Open item: settings and event plumbing.** `command_guard.enabled`
   ([settings](settings.spec.md)), passing it to the hook as
   `ARGUS_COMMAND_GUARD`, a worker route or channel to carry
-  `task.command_blocked`, its feed/Fleet presentation, and `env_guard_missing`
+  `task.command_blocked`, its Fleet presentation, and `env_guard_missing`
   in [failure classes](failure-classes.spec.md).
 - Codex: hook support, trusted-hash registration, whether the hook runs inside
   Bubblewrap, and whether it survives `patch-codex-sandbox.py`.
