@@ -1,6 +1,6 @@
 """The tool token budget: approximation, ordering and totals, on a fake tool list."""
 
-from tool_tokens import build_report, count_tokens, format_report
+from tool_tokens import build_report, count_tokens, format_diff, format_report
 
 from evals.model import ToolSpec
 
@@ -36,3 +36,13 @@ def test_breakdown_is_sorted_and_totals_add_up() -> None:
     assert report["total"] == report["prompt"] + sum(sizes)
     assert build_report("worker", fake_tools(), "Be brief.") == report
     assert format_report(report).startswith(f"worker: {report['total']} tokens")
+
+
+def test_diff_is_signed_and_shown_per_role() -> None:
+    assert format_diff(1246, 1234, "origin/main") == "+12 vs origin/main"
+    assert format_diff(1200, 1234, "origin/main") == "-34 vs origin/main"
+    assert format_diff(5, 5, "main") == "+0 vs main"
+    report = build_report("worker", fake_tools(), "Be brief.")
+    base = {**report, "total": report["total"] - 7}
+    line = format_report(report, base, "origin/main").splitlines()[0]
+    assert line.startswith(f"worker: {report['total']} tokens, +7 vs origin/main (")
