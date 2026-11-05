@@ -474,4 +474,13 @@ describe("usage", () => {
     assert.equal((await run(["pr-ready"])).code, EXIT.usage);
     assert.equal((await run(["wait", "deploy", "--pr", "7"])).code, EXIT.usage);
   });
+
+  it("lists no completion subcommand and says to reply COMPLETE:", async () => {
+    const out = [];
+    assert.equal(await main(["--help"], ENV, { stdout: { write: (s) => out.push(s) } }), EXIT.ok);
+    const help = out.join("");
+    assert.match(help, /no completion subcommand/);
+    assert.match(help, /COMPLETE:/);
+    assert.doesNotMatch(help, /^\s+(complete|done)\s/m);
+  });
 });

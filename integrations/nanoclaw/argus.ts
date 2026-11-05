@@ -871,6 +871,38 @@ function scopedDirective(taskId: string): RegExp {
   );
 }
 
+const ARGUS_ENVELOPE = /^<message to="argus">([\s\S]*)<\/message>$/;
+const ANY_ENVELOPE_TAG = /^<message\b[^>]{0,200}>?/i;
+const COMPLETION_LIKE = /\b(?:COMPLETE|FAIL|ASK|ASSIST)\b[^:：\n]{0,80}[:：]/i;
+
+export type ReplyEnvelope =
+  | { kind: "plain"; text: string }
+  | { kind: "unwrapped"; text: string }
+  | { kind: "unsupported"; reason: string; tag: string };
+
+/**
+ * NanoClaw's outbound envelope. Only the whole reply being exactly
+ * `<message to="argus">…</message>` is unwrapped, and the inner text goes to the directive
+ * parser intact. Nothing else is parsed as markup: other recipients, extra attributes,
+ * nested or unclosed tags and text outside the envelope stay as they are, and when such a
+ * reply starts with a `<message` tag and reads like a directive it is `unsupported`, so the
+ * worker is told instead of its completion silently becoming progress.
+ */
+export function readReplyEnvelope(raw: string): ReplyEnvelope {
+  const text = raw.trim();
+  if (!/^<message\b/i.test(text)) return { kind: "plain", text: raw };
+  const m = ARGUS_ENVELOPE.exec(text);
+  if (m && !/<\/?message\b/i.test(m[1]!)) return { kind: "unwrapped", text: m[1]! };
+  if (!COMPLETION_LIKE.test(text)) return { kind: "plain", text: raw };
+  const tag = ANY_ENVELOPE_TAG.exec(text)![0].slice(0, 80);
+  const reason = !/^<message to="argus"/.test(text)
+    ? "other_recipient"
+    : m
+      ? "nested_envelope"
+      : "malformed_envelope";
+  return { kind: "unsupported", reason, tag };
+}
+
 /**
  * The NanoClaw thread of one attempt. Every message of the attempt carries it, so the
  * attempt runs in its own session, and a reply belongs to the attempt only when it
@@ -1111,6 +1143,8 @@ export const OPERATING_RULES = [
   '  effective_contract, effective_contract wins. A bare answer without options (for example "B") authorizes nothing.',
   '- To finish: reply `COMPLETE:` with a JSON object `{"summary": "...", "checklist": [{"id": "<checklist id>", "status": "done|pending|verification_missing", "evidence": "..."}]}`',
   "  covering every checklist id. Only evidenced items count as done; a result with open items goes to review, not to success.",
+  '  `COMPLETE:` is plain reply text and the Argus channel submits it; there is no completion command. A `<message to="argus">...</message>` envelope is',
+  "  stripped if you use it, but only when it is the whole reply. No `argus-task` subcommand completes a task.",
 ];
 
 /** What Argus checks before it accepts COMPLETE, from authenticated task metadata (task deliverable spec 3.4). */
@@ -1272,7 +1306,8 @@ export function renderTask(
     'start with "FAIL:" and say why; only when the workspace, a tool or a credential is missing (not when the',
     'work is hard), start with "FAIL (environment):" instead. If you need a real scope, cost or permission choice, start with "ASK:"',
     'and ask the question; you will be given the answer. For a missing tool or environment start with "ASSIST:"',
-    "(see the operating rules). A directive must be the first thing in your reply.",
+    "(see the operating rules). A directive must be the first thing in your reply. `COMPLETE:` is the reply text itself, not a command;",
+    'the channel also accepts it as exactly `<message to="argus">COMPLETE: ...</message>` with nothing else in the reply.',
   ];
   const lines = [
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
@@ -4560,7 +4595,26 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const isFailureNotice =
         typeof content === "object" && content !== null && content.failureNotice === true;
       if (message.files?.length) await attachFiles(task, message.files);
-      const d = parseReply(text, task.id);
+      const envelope = isFailureNotice
+        ? ({ kind: "plain", text } as const)
+        : readReplyEnvelope(text);
+      if (envelope.kind === "unsupported") {
+        log.warn("Argus channel did not recognize a completion-like envelope", {
+          task: task.id,
+          attempt: task.attempt,
+          reason: envelope.reason,
+          tag: envelope.tag,
+        });
+        resends += 1;
+        await injectTask(
+          task.id,
+          task.attempt,
+          '[Argus] Your reply was not recognized as COMPLETE, FAIL or ASK: its `<message ...>` envelope is not supported here (it must be exactly `<message to="argus">...</message>` with nothing outside it). Reply with the bare `COMPLETE:` text followed by the JSON object, or with that envelope and nothing else.',
+        );
+        return undefined;
+      }
+      const replyText = envelope.text;
+      const d = parseReply(replyText, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
       if (d.kind !== "progress" && !isFailureNotice)
         await Promise.all([logRelay?.drain(), harnessLogRelay?.drain(), changesRelay?.drain()]);
@@ -4574,7 +4628,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       // Receipts are fenced by the attempt: relay `consumed` while it is still held.
       if (d.kind !== "progress" || isFailureNotice) await inputsAfterAttempt(task);
       try {
-        if (!isFailureNotice && !(await relayPullRequests(task, text))) return undefined;
+        if (!isFailureNotice && !(await relayPullRequests(task, replyText))) return undefined;
         if (isFailureNotice) {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {

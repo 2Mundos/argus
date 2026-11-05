@@ -205,6 +205,11 @@ and re-polling the forge helper, the four commands, exit codes 10, 11 and 12, an
 shell timeout. Images built before this change have no `argus-task`, so the line says to
 check `command -v argus-task` first.
 
+`argus-task` has no completion subcommand (only `wait`, `pr-ready`, `ci-digest`, `deliver`).
+A worker completes by replying `COMPLETE:` as plain text followed by the JSON object; the
+Argus channel submits it to `/tasks/{id}/complete` and strips a `<message to="argus">`
+envelope if the reply is exactly that.
+
 # 4. Open Questions
 
 - **Shell timeouts of Codex, Cursor and Copilot.** Not confirmed from this repository;
