@@ -166,9 +166,16 @@ every column added since `0011`, including `system` (`0056`) and the OOM streak
 SQLite ignores `PRAGMA foreign_keys` inside a transaction, and every migration
 runs in one. A migration whose SQL holds the line `-- argus: foreign keys off`
 therefore runs with foreign keys turned off around it, and the same transaction
-ends with a check of `pragma_foreign_key_check`: a dangling reference fails the
-migration and rolls it back. `instances.pool` still references `pools` by name
-afterwards.
+ends with a check of `pragma_foreign_key_check`. A dangling reference the
+database already had (an earlier write left a child row pointing at a missing
+parent) is kept as it is; the runner deletes or rewrites nothing. It records
+them in the transaction before the migration runs, each as the child table, the
+child row's primary key, the parent table, and the referencing columns with
+their values. Any other dangling reference after the migration fails it and
+rolls it back. That includes a new one, and an old one whose value changed or
+that moved to another row. `foreign_key_check` names no row in a `WITHOUT ROWID`
+table, so a dangling reference there is never kept. `instances.pool` still
+references `pools` by name afterwards.
 
 **`InProcessTarget`** implements the `Target` protocol in `fleet/targets.py` and
 is registered in `TargetRegistry` under `inprocess`. It holds a table of running
@@ -803,7 +810,10 @@ The framing and title cases move to the shared JSON fixture read by
 **Tests** (the lowest layer that fails on `main`):
 - Migration: `0075` on a database migrated to `0074` keeps every pool row and
   column, and accepts `inprocess`/`builtin` only as a pair. A foreign-keys-off
-  rebuild that leaves a dangling reference rolls back.
+  rebuild commits and keeps the dangling references the database already had,
+  including across a child rebuild that renumbers rowids. It rolls back when it
+  adds one, changes or moves an existing one, or finds one in a `WITHOUT ROWID`
+  table.
 - Resolution: `auto` gives `builtin` with an Anthropic key, an OpenAI key, a
   custom account with an engine model, or a local account. It gives `nanoclaw`
   with only subscriptions and a ready template, and `orchestrator_unavailable`
