@@ -240,6 +240,23 @@ def test_probe_calls_models_with_the_key_and_returns_suggestions(
     assert KEY not in res.text
 
 
+def test_probe_suggests_bare_google_model_ids(
+    client: TestClient, provider: FakeProvider
+) -> None:
+    provider.models = ["models/gemini-flash-latest", "gemini-pro-latest"]
+    account = create(
+        client,
+        "gemini",
+        config={
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+            "label": "google",
+            "engine": {"model": "models/gemini-flash-latest"},
+        },
+    ).json()
+    res = client.post(f"/api/accounts/{account['id']}/probe", headers=ADMIN)
+    assert res.json()["models"] == ["gemini-flash-latest", "gemini-pro-latest"]
+
+
 @pytest.mark.parametrize(
     ("status", "outcome"),
     [(401, "unauthorized"), (402, "exhausted"), (429, "exhausted"), (500, "failed")],

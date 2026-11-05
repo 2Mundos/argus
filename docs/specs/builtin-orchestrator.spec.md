@@ -303,7 +303,10 @@ set, because some reasoning models reject it. Tools are offered with automatic
 choice. Anthropic requests mark the system block and the last tool definition with
 `cache_control: {"type": "ephemeral"}`, so the skill and tool list are cached
 across the steps of a turn. OpenAI-compatible providers cache prefixes on their
-own.
+own. Provider tool metadata that must return on the next request is kept across
+steps (`ToolCall.extra_content`): Gemini 3 rejects a tool result without its
+`extra_content.google.thought_signature`, so the OpenAI adapter parses it from the
+reply and re-sends it on the assistant message.
 
 **Failover and errors.** The loop classifies only the HTTP status, response
 headers and the provider's error `type` or `code` token. Error message text is

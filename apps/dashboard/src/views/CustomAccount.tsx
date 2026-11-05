@@ -3,9 +3,12 @@ import { ActionButton, useAction } from "../ActionButton";
 import { api, call } from "../api";
 import {
   buildConfig,
+  CUSTOM_PRESETS,
   type CustomForm,
+  type CustomPresetId,
   checkBaseUrl,
-  emptyForm,
+  formForPreset,
+  presetById,
   type RoleForm,
 } from "../customAccount";
 
@@ -15,15 +18,32 @@ type Probe = { status: string; reason: string; models?: string[] };
  * with `GET {base_url}/models`. After a successful probe the model list fills the harness
  * and executor fields; preferences are PATCHed before Done. The key is sent once and never
  * shown again. */
-export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const [name, setName] = useState("OpenRouter");
+export function CustomAccount({
+  preset = "openrouter",
+  onClose,
+  onDone,
+}: {
+  preset?: CustomPresetId;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [presetId, setPresetId] = useState<CustomPresetId>(preset);
+  const [name, setName] = useState(presetById(preset).name);
   const [key, setKey] = useState("");
-  const [form, setForm] = useState<CustomForm>(emptyForm);
+  const [form, setForm] = useState<CustomForm>(() => formForPreset(preset));
   const [error, setError] = useState<string>();
   const [probe, setProbe] = useState<Probe>();
   const [accountId, setAccountId] = useState<string>();
   const action = useAction();
   const openrouter = form.label.trim() === "openrouter";
+  const note = presetById(presetId).note;
+
+  function choosePreset(next: CustomPresetId) {
+    const chosen = presetById(next);
+    setPresetId(next);
+    setName(chosen.name);
+    setForm((f) => ({ ...f, baseUrl: chosen.baseUrl, label: chosen.label }));
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -91,12 +111,9 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
 
   return (
     <div className="overlay">
-      <div className="dialog" role="dialog" aria-label="Add custom provider account">
-        <h2>Add custom provider account</h2>
-        <p className="muted small">
-          Any OpenAI-compatible endpoint. The key is stored encrypted as an Argus account and is
-          never shown again.
-        </p>
+      <div className="dialog" role="dialog" aria-label="Add provider account">
+        <h2>Add provider account</h2>
+        <p className="muted small">{note}</p>
         {probe && accountId ? (
           <>
             <p role="status">
@@ -131,6 +148,20 @@ export function CustomAccount({ onClose, onDone }: { onClose: () => void; onDone
           </>
         ) : (
           <form onSubmit={submit}>
+            <label>
+              Provider
+              <select
+                aria-label="Provider preset"
+                value={presetId}
+                onChange={(e) => choosePreset(e.target.value as CustomPresetId)}
+              >
+                {CUSTOM_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Name
               <input

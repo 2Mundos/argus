@@ -45,6 +45,26 @@ beforeEach(() => {
 });
 
 describe("CustomAccount", () => {
+  it("starts from the Google AI Studio preset", async () => {
+    render(<CustomAccount preset="google" onClose={() => undefined} onDone={() => undefined} />);
+    expect((screen.getByLabelText("Provider preset") as HTMLSelectElement).value).toBe("google");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Google AI Studio");
+    expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    );
+    fireEvent.change(screen.getByLabelText(/^API key/), { target: { value: "AQ.test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and check" }));
+    await waitFor(() => expect(mock.posts).toHaveLength(1));
+    expect(mock.posts[0]?.body).toMatchObject({
+      provider: "custom",
+      credential: { api_key: "AQ.test" },
+      config: {
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        label: "google",
+      },
+    });
+  });
+
   it("lets you pick an OpenRouter harness model after probe and PATCHes config", async () => {
     const onDone = vi.fn();
     render(<CustomAccount onClose={() => undefined} onDone={onDone} />);
