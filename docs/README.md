@@ -232,6 +232,8 @@ every new dependency is judged against it.
 
 ### Drafts
 
+- [Drafts index](drafts/README.md) — every draft with its status; promoted
+  drafts are `superseded` and link their spec
 - [Task operations and reliability](drafts/2026-10-29.task-operations.draft.md) — task
   detail view, command reliability, finalization, workspace ownership, checkpoints
   and engine events; candidates for investigation and specification

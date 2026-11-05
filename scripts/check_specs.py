@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check spec status frontmatter and the specs index (docs/specs/README.md).
+"""Check spec and draft status frontmatter and their indexes (docs/{specs,drafts}/README.md).
 
-Every `docs/specs/*.spec.md` opens with:
+Every `docs/specs/*.spec.md` and `docs/drafts/*.draft.md` opens with:
 
     ---
     status: implemented | partial | draft | deferred | superseded
@@ -9,9 +9,9 @@ Every `docs/specs/*.spec.md` opens with:
     updated: YYYY-MM-DD
     ---
 
-A `partial` spec has an `Open items` section, a `superseded` one links the spec
-that replaces it, and every spec is listed in the index with its status.
-`--write-index` regenerates the index. Standard library only, like validate_docs.py.
+A `partial` doc has an `Open items` section, a `superseded` one links the spec
+that replaces it, and every doc is listed in its directory's index with its status.
+`--write-index` regenerates the indexes. Standard library only, like validate_docs.py.
 """
 
 from __future__ import annotations
@@ -23,30 +23,40 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPECS = ROOT / "docs" / "specs"
+DOCS = ROOT / "docs"
 STATUSES = ("implemented", "partial", "draft", "deferred", "superseded")
 FIELDS = ("status", "created", "updated")
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 TITLE = re.compile(r"^#\s+(.+)$", re.M)
 OPEN_ITEMS = re.compile(r"^#{1,6}\s+(?:\d+(?:\.\d+)*\.?\s+)?Open items\b", re.M | re.I)
-SUPERSEDED_BY = re.compile(r"superseded by\b[^\n]*\]\(([^)]+\.spec\.md)[^)]*\)", re.I)
+SUPERSEDED_BY = re.compile(r"superseded by\b[^\n]*?\]\(([^)]+\.spec\.md)[^)]*\)", re.I)
 ROW = re.compile(r"^\|\s*\[[^\]]*\]\(([^)]+)\)\s*\|\s*`?([a-z]+)`?\s*\|", re.M)
-INDEX_HEAD = """# Specs index
+INDEX_HEAD = """# {title}
 
-Every spec in this directory with its status, kept in sync by
+Every {noun} in this directory with its status, kept in sync by
 `scripts/check_specs.py` (CI and pre-push fail otherwise; regenerate with
 `python3 scripts/check_specs.py --write-index`). Status meanings:
 
-- `implemented`: main does what the spec says.
-- `partial`: some numbered decisions are not built yet; the spec's **Open items**
-  section lists them.
-- `draft`: agreed design, not built.
+- `implemented`: main does what it says{built}.
+- `partial`: some of it is not built yet; its **Open items** section lists what.
+- `draft`: proposed or agreed, not built.
 - `deferred`: parked; not planned for now.
 - `superseded`: replaced by the spec it links.
 
-| Spec | Status |
+| {col} | Status |
 | --- | --- |
 """
+
+
+class Kind:
+    def __init__(self, folder: str, pattern: str, noun: str, built: str = "") -> None:
+        self.folder, self.pattern, self.noun, self.built = folder, pattern, noun, built
+
+
+KINDS = (
+    Kind("specs", "*.spec.md", "spec"),
+    Kind("drafts", "*.draft.md", "draft", ", built without a spec of its own"),
+)
 
 
 def parse(text: str) -> tuple[dict[str, str] | None, str]:
@@ -86,55 +96,76 @@ def check_spec(path: Path, today: dt.date) -> tuple[list[str], dict[str, str]]:
     if created and updated and updated < created:
         errors.append(f"{rel}: updated {updated} is before created {created}")
     if status == "partial" and not OPEN_ITEMS.search(body):
-        errors.append(f"{rel}: partial spec needs an 'Open items' section")
+        errors.append(f"{rel}: partial doc needs an 'Open items' section")
     if status == "superseded":
         m = SUPERSEDED_BY.search(body)
         if not m or not (path.parent / m.group(1).split("#")[0]).is_file():
-            errors.append(f"{rel}: superseded spec must link its replacement")
+            errors.append(f"{rel}: superseded doc must link its replacement spec")
     return errors, meta
 
 
-def render_index(specs: dict[Path, dict[str, str]]) -> str:
+def render_index(docs: dict[Path, dict[str, str]], kind: Kind) -> str:
     rows = []
-    for path, meta in sorted(specs.items()):
+    for path, meta in sorted(docs.items()):
         m = TITLE.search(parse(path.read_text())[1])
-        title = m.group(1).strip() if m else path.name
-        rows.append(f"| [{title}]({path.name}) | `{meta.get('status', '')}` |\n")
-    return INDEX_HEAD + "".join(rows)
+        name = m.group(1).strip() if m else path.name
+        rows.append(f"| [{name}]({path.name}) | `{meta.get('status', '')}` |\n")
+    head = INDEX_HEAD.format(
+        title=f"{kind.noun.capitalize()}s index",
+        noun=kind.noun,
+        built=kind.built,
+        col=kind.noun.capitalize(),
+    )
+    return head + "".join(rows)
 
 
-def main(argv: list[str] | None = None, specs_dir: Path = SPECS) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--write-index", action="store_true", help="regenerate README.md")
+def check_dir(
+    directory: Path, kind: Kind, write: bool, today: dt.date
+) -> tuple[list[str], dict[Path, dict[str, str]]]:
+    errors: list[str] = []
+    docs: dict[Path, dict[str, str]] = {}
+    for path in sorted(directory.glob(kind.pattern)):
+        errs, meta = check_spec(path, today)
+        errors += [f"{kind.folder}/{e}" for e in errs]
+        docs[path] = meta
+    index = directory / "README.md"
+    where = f"{kind.folder}/README.md"
+    if write:
+        index.write_text(render_index(docs, kind))
+    elif not index.is_file():
+        errors.append(f"{where}: index missing (run --write-index)")
+    else:
+        listed = dict(ROW.findall(index.read_text()))
+        for path, meta in docs.items():
+            if path.name not in listed:
+                errors.append(f"{where}: {path.name} not listed in the index")
+            elif meta and listed[path.name] != meta.get("status"):
+                errors.append(
+                    f"{where}: {path.name} listed as '{listed[path.name]}',"
+                    f" frontmatter says '{meta.get('status')}'"
+                )
+        for name in sorted(set(listed) - {p.name for p in docs}):
+            errors.append(f"{where}: lists {name}, which does not exist")
+    return errors, docs
+
+
+def main(argv: list[str] | None = None, docs_dir: Path = DOCS) -> int:
+    ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    ap.add_argument("--write-index", action="store_true", help="regenerate indexes")
     args = ap.parse_args(argv)
     today = dt.date.today()
     errors: list[str] = []
-    specs: dict[Path, dict[str, str]] = {}
-    for path in sorted(specs_dir.glob("*.spec.md")):
-        errs, meta = check_spec(path, today)
+    for kind in KINDS:
+        directory = docs_dir / kind.folder
+        if not directory.is_dir():
+            continue
+        errs, docs = check_dir(directory, kind, args.write_index, today)
         errors += errs
-        specs[path] = meta
-    index = specs_dir / "README.md"
-    if args.write_index:
-        index.write_text(render_index(specs))
-    elif not index.is_file():
-        errors.append("README.md: specs index missing (run --write-index)")
-    else:
-        listed = dict(ROW.findall(index.read_text()))
-        for path, meta in specs.items():
-            if path.name not in listed:
-                errors.append(f"README.md: {path.name} not listed in the index")
-            elif meta and listed[path.name] != meta.get("status"):
-                errors.append(
-                    f"README.md: {path.name} listed as '{listed[path.name]}',"
-                    f" frontmatter says '{meta.get('status')}'"
-                )
-        for name in sorted(set(listed) - {p.name for p in specs}):
-            errors.append(f"README.md: lists {name}, which does not exist")
+        counts = {s: sum(m.get("status") == s for m in docs.values()) for s in STATUSES}
+        summary = ", ".join(f"{n} {s}" for s, n in counts.items() if n)
+        print(f"check_specs: {kind.folder}: {summary or 'none'}")
     for e in errors:
         print(f"error: {e}")
-    counts = {s: sum(m.get("status") == s for m in specs.values()) for s in STATUSES}
-    print("check_specs: " + ", ".join(f"{n} {s}" for s, n in counts.items() if n))
     return 1 if errors else 0
 
 
