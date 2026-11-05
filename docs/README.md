@@ -351,6 +351,8 @@ every new dependency is judged against it.
 
 ### Postmortems
 
+- [Repository preflight blamed credentials when OneCLI published no policy rule](postmortems/2026-11-05.onecli-policy-rule-materialization.ref.md) —
+  a P2028 in the gateway's rule publication looked like a push-permission failure
 - [Worker instance directory permission denial under launcher](postmortems/2026-11-04.launcher-instance-permission.ref.md) —
   unprivileged API fallback to helper container and OSError handling (#194)
 - [Pre-push checks rewrote the repository](postmortems/2026-11-04.pre-push-git-env.ref.md) —

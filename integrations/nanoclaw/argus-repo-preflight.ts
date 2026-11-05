@@ -210,6 +210,21 @@ export function failedOutcome(
 }
 
 /**
+ * A 200 without a permissions object proves the gateway attached no credential. The admin
+ * reads can confirm an assignment before OneCLI has published the policy rule the gateway
+ * injects by (and its publication transaction can fail), so a fresh assignment's first
+ * probe can be answered publicly.
+ */
+export function injectionMissing(evidence: ProbeEvidence | null): boolean {
+  return (
+    evidence?.helper_error === "policy_denied" &&
+    evidence.http_status === 200 &&
+    evidence.permissions === "absent" &&
+    evidence.authentication === "unknown"
+  );
+}
+
+/**
  * The positive the preflight accepts. Anything else, however close, fails closed:
  * exit 0 and an `ok` verdict for exactly this provider and repository with the helper's
  * own allowlist refusals confirmed and, for write, authenticated write access
@@ -336,6 +351,8 @@ export interface PreflightEvidenceEvent {
     git_path: string;
   };
   probe: ({ source: "preflight_session_verdict" } & ProbeEvidence) | null;
+  /** Whether the lease was re-applied and the probe retried once (below). */
+  rearmed: boolean;
 }
 
 export interface RepositoryPreflightInput {
@@ -349,6 +366,12 @@ export interface RepositoryPreflightInput {
   verifyAssignment(): Promise<RepositoryAssignmentCheck>;
   /** The session probe for the same agent; throws a `RepositoryPreflightError` on failure. */
   probe(): Promise<ProbeEvidence | void>;
+  /**
+   * Re-applies the repository lease (secrets and assignments) so OneCLI republishes the
+   * policy rule the gateway injects by. Called once after a probe that proves no credential
+   * was attached, then the probe runs once more.
+   */
+  rearm?(): Promise<void>;
   /** Receives the event; a throw or rejection is ignored. */
   emit?(event: PreflightEvidenceEvent): unknown;
   preflightId?: string;
@@ -396,6 +419,7 @@ export async function runRepositoryPreflight(
       git_path: host(repository.gitPathPattern),
     },
     probe: null,
+    rearmed: false,
   };
   const finish = async (outcome: PreflightOutcome, detail?: string) => {
     event.outcome = outcome;
@@ -438,16 +462,39 @@ export async function runRepositoryPreflight(
       "assignment_missing",
       `the OneCLI agent ${event.assignment.agent === "found" ? "lacks a scoped, assigned repository secret" : "is missing"} (rest ${event.assignment.rest.state}/${event.assignment.rest.scope}, git ${event.assignment.git.state}/${event.assignment.git.scope})`,
     );
-  try {
+  const probeOnce = async () => {
     const evidence = await input.probe();
     if (evidence) event.probe = { source: "preflight_session_verdict", ...evidence };
+  };
+  try {
+    await probeOnce();
     return finish("ok");
   } catch (error) {
-    if (error instanceof RepositoryPreflightError) {
-      if (error.evidence) event.probe = { source: "preflight_session_verdict", ...error.evidence };
+    if (!(error instanceof RepositoryPreflightError))
+      return finish("session_failure", message(error));
+    if (error.evidence) event.probe = { source: "preflight_session_verdict", ...error.evidence };
+    // OneCLI can confirm the admin-visible assignment before it publishes the policy rule
+    // the gateway injects by; its rematerialize may also fail and leave the rule missing.
+    // Re-applying the lease republishes it, so one re-arm and one more probe is safe.
+    if (!input.rearm || !injectionMissing(error.evidence))
+      return finish(error.outcome, error.message);
+    try {
+      await input.rearm();
+    } catch {
       return finish(error.outcome, error.message);
     }
-    return finish("session_failure", message(error));
+    event.rearmed = true;
+    try {
+      await probeOnce();
+      return finish("ok");
+    } catch (retry) {
+      if (retry instanceof RepositoryPreflightError) {
+        if (retry.evidence)
+          event.probe = { source: "preflight_session_verdict", ...retry.evidence };
+        return finish(retry.outcome, retry.message);
+      }
+      return finish("session_failure", message(retry));
+    }
   }
 }
 
