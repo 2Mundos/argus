@@ -259,8 +259,18 @@ def test_attempt_snapshots_are_listed_over_rest(client: TestClient) -> None:
     listing = client.get(f"/api/tasks/{task['id']}/attempts", headers=bearer(worker))
     [snap] = listing.json()
     assert (snap["attempt"], snap["definition"]["spec"]) == (1, "v1")
+    summary = client.get(
+        f"/api/tasks/{task['id']}/attempts/summary", headers=bearer(worker)
+    )
+    assert summary.json() == [{"attempt": 1, "steer_unknown": 0}]
     assert (
         client.get("/api/tasks/ghost/attempts", headers=bearer(worker)).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            "/api/tasks/ghost/attempts/summary", headers=bearer(worker)
+        ).status_code
         == 404
     )
 

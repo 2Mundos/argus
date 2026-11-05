@@ -33,7 +33,7 @@ vi.mock("../api", () => ({
     if (req.path === "/api/tasks/{task_id}") return { ...mock.task, id: req.taskId };
     if (req.path === "/api/tasks/{task_id}/models") return { executions: [], timeline: [] };
     if (req.path === "/api/tasks/{task_id}/delivery") return null;
-    if (req.path === "/api/tasks/{task_id}/attempts")
+    if (req.path === "/api/tasks/{task_id}/attempts/summary")
       return mock.attempts[req.taskId ?? ""] ?? [{ attempt: 1 }, { attempt: 2 }];
     return [];
   },

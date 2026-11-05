@@ -12,7 +12,7 @@ from argus_core.continuation import (
 from argus_core.delivery import Delivery, DeliveryReconciliation, PrBinding
 from argus_core.difficulty import chain_for
 from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
-from argus_core.task_edit import TaskAttempt, TaskEdit
+from argus_core.task_edit import TaskAttempt, TaskAttemptSummary, TaskEdit
 from argus_core.tasks import (
     ENV_BLOCK_REASONS,
     ClaimedTask,
@@ -780,6 +780,17 @@ async def list_attempts(
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
         return await service.attempt_definitions(conn, task_id)
+
+
+@router.get("/{task_id}/attempts/summary")
+async def list_attempt_summaries(
+    task_id: str, db: DbDep, caller: CallerDep
+) -> list[TaskAttemptSummary]:
+    """The attempt numbers and their unknown-steer counts, oldest first. The
+    dashboard strip needs no definitions, so this read stays small."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await service.attempt_summaries(conn, task_id)
 
 
 @router.put("/{task_id}/dependencies")

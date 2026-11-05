@@ -20353,6 +20353,25 @@
         "title": "TaskAttempt",
         "type": "object"
       },
+      "TaskAttemptSummary": {
+        "description": "What the attempt strip needs, without the definition each attempt was handed.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "steer_unknown": {
+            "default": 0,
+            "title": "Steer Unknown",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempt"
+        ],
+        "title": "TaskAttemptSummary",
+        "type": "object"
+      },
       "TaskChanges": {
         "additionalProperties": true,
         "description": "A partial patch: a field left out is preserved, `null` clears (3.2).\n\nAnything that is not an editable field is kept in `model_extra` so the\nservice can refuse it with one structured `immutable_field` error.",
@@ -33982,6 +34001,58 @@
           }
         ],
         "summary": "List Attempts",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/attempts/summary": {
+      "get": {
+        "description": "The attempt numbers and their unknown-steer counts, oldest first. The\ndashboard strip needs no definitions, so this read stays small.",
+        "operationId": "list_attempt_summaries_api_tasks__task_id__attempts_summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TaskAttemptSummary"
+                  },
+                  "title": "Response List Attempt Summaries Api Tasks  Task Id  Attempts Summary Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Attempt Summaries",
         "tags": [
           "tasks"
         ]

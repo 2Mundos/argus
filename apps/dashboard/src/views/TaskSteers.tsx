@@ -1,3 +1,4 @@
+import type { components } from "@argus/api-client";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import { api, call } from "../api";
@@ -11,11 +12,70 @@ type Props = {
   claimed: boolean;
   assigneeId: string | null;
   supportsSteer?: boolean;
+  /** A source already loaded for this task and attempt; without one each copy fetches. */
+  source?: SteersSource;
   composerOpen: boolean;
   onComposerOpenChange: (open: boolean) => void;
   /** False for the composer in the task actions row: the Live panel owns the list. */
   showList?: boolean;
 };
+
+export interface SteersSource {
+  taskId: string;
+  attempt: number;
+  page: components["schemas"]["SteerPage"] | undefined;
+  reload: () => void;
+  can: boolean;
+  known: boolean;
+}
+
+/** Load the steers and the steer support once, so several copies can share them. */
+export function useSteersSource({
+  taskId,
+  attempt,
+  claimed,
+  assigneeId,
+  supportsSteer,
+  enabled = true,
+}: {
+  taskId: string;
+  attempt: number;
+  claimed: boolean;
+  assigneeId: string | null;
+  supportsSteer?: boolean;
+  enabled?: boolean;
+}): SteersSource {
+  const needsLookup = supportsSteer === undefined && claimed && !!assigneeId;
+  const { data: page, reload } = useLiveData(
+    (signal) =>
+      enabled
+        ? call(
+            api.GET("/api/tasks/{task_id}/steers", {
+              params: { path: { task_id: taskId }, query: { attempt } },
+              signal,
+            }),
+          )
+        : Promise.resolve(undefined),
+    [taskId, attempt, enabled],
+  );
+  const { data: assignee, error: lookupError } = useLiveData(
+    async (signal) => {
+      if (!enabled || !needsLookup || !assigneeId) return undefined;
+      return call(
+        api.GET("/api/agents/{agent_id}", { params: { path: { agent_id: assigneeId } }, signal }),
+      );
+    },
+    [enabled, needsLookup, assigneeId],
+  );
+  return {
+    taskId,
+    attempt,
+    page,
+    reload,
+    can: supportsSteer ?? assignee?.runtime?.features?.includes("steer") ?? false,
+    known: supportsSteer !== undefined || !needsLookup || assignee !== undefined || !!lookupError,
+  };
+}
 
 /**
  * Steers for the attempt in flight (task steering spec 3.9). The composer opens
@@ -41,6 +101,7 @@ function Steers({
   claimed,
   assigneeId,
   supportsSteer,
+  source,
   composerOpen,
   onComposerOpenChange,
   showList = true,
@@ -58,31 +119,17 @@ function Steers({
       mounted.current = false;
     };
   }, []);
-  const needsLookup = supportsSteer === undefined && claimed && !!assigneeId;
-  const { data: page, reload } = useLiveData(
-    (signal) =>
-      call(
-        api.GET("/api/tasks/{task_id}/steers", {
-          params: { path: { task_id: taskId }, query: { attempt } },
-          signal,
-        }),
-      ),
-    [taskId, attempt],
-  );
-  const { data: assignee, error: lookupError } = useLiveData(
-    async (signal) => {
-      if (!needsLookup || !assigneeId) return null;
-      return call(
-        api.GET("/api/agents/{agent_id}", { params: { path: { agent_id: assigneeId } }, signal }),
-      );
-    },
-    [needsLookup, assigneeId],
-  );
-
-  const can = supportsSteer ?? assignee?.runtime?.features?.includes("steer") ?? false;
-  const known =
-    supportsSteer !== undefined || !needsLookup || assignee !== undefined || !!lookupError;
-  const items = showList ? (page?.items ?? []) : [];
+  const shared = source?.taskId === taskId && source.attempt === attempt ? source : undefined;
+  const own = useSteersSource({
+    taskId,
+    attempt,
+    claimed,
+    assigneeId,
+    supportsSteer,
+    enabled: !shared,
+  });
+  const { reload, can, known } = shared ?? own;
+  const items = showList ? ((shared ?? own).page?.items ?? []) : [];
   const busy = action.busy;
 
   useEffect(() => {
