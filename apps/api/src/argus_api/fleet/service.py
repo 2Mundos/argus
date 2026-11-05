@@ -125,7 +125,8 @@ def require_not_system(pool: Pool, *, action: str = "change") -> None:
     """Refuse mutating a system-owned pool (internal orchestrator 3.1)."""
     if pool.system is not None:
         raise ConflictError(
-            f"cannot {action} system pool {pool.name!r}",
+            f"cannot {action} system pool {pool.name!r}: it follows the"
+            " orchestrator.enabled setting; turn that off to stop it",
             code="system_pool",
         )
 

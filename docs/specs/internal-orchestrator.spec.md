@@ -71,7 +71,9 @@ Getting a first account, worker and orchestrator is the
   of always `Role.WORKER`.
 - The pool is **system-owned** (`pools.system = 'orchestrator'`): `max_replicas: 1`,
   it cannot be deleted, and `scale_pool`, `launch_worker` and pool deletion answer
-  `409 system_pool`. An admin may change its image in the pool editor; nothing else.
+  `409 system_pool`, naming `orchestrator.enabled` as the way to stop it. The
+  Pools tab shows no scale controls for it, only a link to that switch in
+  Settings. An admin may change its image in the pool editor; nothing else.
   It is excluded from the "first worker" fact in onboarding and from worker-pool
   totals, and listed apart on the Pools tab.
 - **Enable switch (both runtimes):** the global setting `orchestrator.enabled`
