@@ -74,8 +74,9 @@ function checkState(run) {
 function combinedState(statuses, checkRuns) {
   const states = [...statuses.map((s) => statusState(s.state)), ...checkRuns.map(checkState)];
   if (!states.length) return null;
-  for (const state of ["failure", "pending", "unknown"])
+  for (const state of ["failure", "pending", "unknown"]) {
     if (states.includes(state)) return state;
+  }
   return states.some((s) => s === "success" || s === "neutral") ? "success" : "skipped";
 }
 
