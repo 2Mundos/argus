@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import record_transcript
-from record_transcript import MAX_BYTES, main, render, scrub, trim
+from record_transcript import MAX_BYTES, STDERR_MAX_BYTES, main, render, scrub, trim
 
 
 def make_db(path: Path, lines: list[tuple[str, int, str, str]]) -> Path:
@@ -126,3 +126,102 @@ def test_missing_log_and_bad_case_name_are_refused(tmp_path: Path) -> None:
                 str(tmp_path),
             ]
         )
+
+
+def record_case(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: bytes | None,
+    events: str = '{"type": "system"}',
+) -> Path:
+    monkeypatch.setattr(
+        record_transcript, "derive", lambda engine, events: '{"d": 1}\n'
+    )
+    db_path = tmp_path / "a.db"
+    db_path.unlink(missing_ok=True)  # the helper records more than once per test
+    db = make_db(db_path, [("t1", 1, "delegate", events)])
+    argv = ["t1", "1", "claude", "c", "--source", "s", "--db", str(db)]
+    argv += ["--root", str(tmp_path / "root")]
+    if stderr is not None:
+        err = tmp_path / "run.err"
+        err.write_bytes(stderr)
+        argv += ["--stderr", str(err)]
+    assert main(argv) == 0
+    return tmp_path / "root" / "claude" / "c"
+
+
+def test_stderr_is_redacted_in_every_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    err = (
+        b"boom in /home/pedro/work/x.py\nmail pedro@example.com\n"
+        b"key sk-testfakekey1234567890 Authorization: Bearer abcdefghij123456\n"
+    )
+    case = record_case(tmp_path, monkeypatch, err)
+    text = (case / "stderr.txt").read_text()
+    assert "/home/user/work/x.py" in text
+    assert "[redacted email]" in text
+    for f in case.iterdir():
+        body = f.read_text()
+        for leak in ("pedro", "sk-testfakekey1234567890", "example.com"):
+            assert leak not in body, (f.name, leak)
+
+
+def test_stderr_keeps_only_the_last_16_kib(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    err = b"HEAD-MARK\n" + b"a" * 40000 + b"\nTAIL-MARK\n"
+    text = (record_case(tmp_path, monkeypatch, err) / "stderr.txt").read_text()
+    assert len(text.encode()) <= STDERR_MAX_BYTES
+    assert text.endswith("TAIL-MARK\n")
+    assert "HEAD-MARK" not in text
+
+
+def test_stderr_cut_never_splits_a_character(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    err = "é".encode() * STDERR_MAX_BYTES  # 2-byte characters, odd cut point
+    text = (record_case(tmp_path, monkeypatch, err) / "stderr.txt").read_text()
+    assert "\ufffd" not in text
+    assert len(text.encode()) <= STDERR_MAX_BYTES
+
+
+def test_big_events_and_big_stderr_stay_within_the_total(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = json.dumps({"type": "user", "out": "y" * 3000})
+    monkeypatch.setattr(
+        record_transcript, "derive", lambda engine, events: '{"d": 1}\n'
+    )
+    db = make_db(tmp_path / "a.db", [("t1", 1, "delegate", big)] * 120)
+    err = tmp_path / "run.err"
+    err.write_bytes(b"e" * 100_000)
+    argv = ["t1", "1", "claude", "c", "--source", "s", "--db", str(db)]
+    argv += ["--root", str(tmp_path / "root"), "--stderr", str(err)]
+    try:
+        main(argv)
+    except SystemExit:
+        return
+    case = tmp_path / "root" / "claude" / "c"
+    assert sum(f.stat().st_size for f in case.iterdir()) <= MAX_BYTES
+    assert (case / "stderr.txt").stat().st_size <= STDERR_MAX_BYTES
+
+
+def test_no_stderr_gives_no_file_and_removes_a_stale_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = record_case(tmp_path, monkeypatch, None)
+    assert not (case / "stderr.txt").exists()
+    (case / "stderr.txt").write_text("old stderr\n")
+    record_case(tmp_path, monkeypatch, None)
+    assert not (case / "stderr.txt").exists()
+    (case / "stderr.txt").write_text("old stderr\n")
+    record_case(tmp_path, monkeypatch, b"")
+    assert not (case / "stderr.txt").exists()
+
+
+def test_non_utf8_stderr_does_not_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = record_case(tmp_path, monkeypatch, b"bad \xff byte\n")
+    assert "bad" in (case / "stderr.txt").read_text()

@@ -3,13 +3,16 @@
 
     ARGUS_DB=copy-of-argus.db scripts/record_transcript.py <task_id> <attempt> \
         <engine> <case> --source "<task or incident, engine version>" \
-        [--redact VALUE ...] [--root DIR]
+        [--redact VALUE ...] [--stderr PATH] [--root DIR]
 
 Reads the attempt's delegate log (the engine's stream-json output, one event per row)
 and writes <root>/<engine>/<case>/ with:
   events.jsonl   redacted (credentials, emails, home paths, each --redact value, such
                  as a repository name), long strings cut to a cap, structure kept;
                  the case stays under 200 KB
+  stderr.txt     only with --stderr PATH (the engine's stderr, such as a delegate .err
+                 file) and only when it is not empty: its last 16 KiB, redacted the
+                 same way; a stale one is removed
   source.md      the --source line
   expected.json  a DRAFT of what the current code derives (needs `bun`, see
                  integrations/nanoclaw/transcripts-derive.ts); review it before committing
@@ -26,6 +29,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +40,7 @@ ROOT = REPO / "integrations/nanoclaw/fixtures/transcripts"
 DERIVE = REPO / "integrations/nanoclaw/transcripts-derive.ts"
 MAX_BYTES = 200 * 1024
 STRING_CAPS = (2000, 500, 120)
+STDERR_MAX_BYTES = 16 * 1024  # the server's stderr-tail artifact bound
 
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -68,8 +73,28 @@ def trim(value: Any, cap: int) -> Any:
     return value
 
 
-def render(lines: list[str], extra: tuple[str, ...] = ()) -> str:
-    """events.jsonl text for the scrubbed log lines, trimmed with the largest cap that fits."""
+def tail_text(data: bytes, limit: int = STDERR_MAX_BYTES) -> str:
+    """The last `limit` bytes of `data` as text; a cut character is dropped, not split."""
+    if len(data) > limit:
+        data = data[-limit:]
+        while data and data[0] & 0xC0 == 0x80:  # UTF-8 continuation byte
+            data = data[1:]
+    return data.decode("utf-8", errors="replace")
+
+
+def stderr_text(path: Path, extra: tuple[str, ...] = ()) -> str:
+    """stderr.txt text: the scrubbed last 16 KiB of the file, capped again after scrubbing."""
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - STDERR_MAX_BYTES))
+        raw = f.read()
+    text = tail_text(raw)
+    return tail_text(scrub(text, extra).encode())
+
+
+def render(lines: list[str], extra: tuple[str, ...] = (), reserve: int = 0) -> str:
+    """events.jsonl text for the scrubbed log lines, trimmed with the largest cap that fits
+    in MAX_BYTES less the `reserve` kept for the other files."""
     lines = [scrub(line, extra) for line in lines]
     for cap in STRING_CAPS:
         rows = []
@@ -79,10 +104,10 @@ def render(lines: list[str], extra: tuple[str, ...] = ()) -> str:
             except ValueError:  # not JSON (stderr or plain text): keep it as a line
                 rows.append(_cut(line, cap).replace("\n", " "))
         text = "\n".join(rows) + "\n"
-        if len(text.encode()) <= MAX_BYTES:
+        if len(text.encode()) <= MAX_BYTES - reserve:
             return text
     raise SystemExit(
-        f"events stay above {MAX_BYTES} bytes with a {STRING_CAPS[-1]} cap"
+        f"events stay above {MAX_BYTES - reserve} bytes with a {STRING_CAPS[-1]} cap"
     )
 
 
@@ -132,6 +157,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="VALUE",
         help="extra text to mask, such as a repository name",
     )
+    parser.add_argument(
+        "--stderr",
+        type=Path,
+        metavar="PATH",
+        help="file with the engine's stderr; its last 16 KiB is kept, redacted",
+    )
     parser.add_argument("--db", default=os.environ.get("ARGUS_DB"), help="or $ARGUS_DB")
     parser.add_argument("--root", type=Path, default=ROOT)
     args = parser.parse_args(argv)
@@ -140,18 +171,44 @@ def main(argv: list[str] | None = None) -> int:
     for part in (args.engine, args.case):
         if not part or part in (".", "..") or "/" in part or "\\" in part:
             parser.error(f"not a plain directory name: {part!r}")
+    extra = tuple(args.redact)
+    stderr = ""
+    if args.stderr:
+        try:
+            stderr = stderr_text(args.stderr, extra)
+        except OSError as e:
+            parser.error(f"cannot read --stderr: {e}")
+        if not stderr.strip():
+            stderr = ""
     db = sqlite3.connect(f"file:{Path(args.db).resolve()}?mode=ro", uri=True)
     try:
-        text = render(record(db, args.task_id, args.attempt), tuple(args.redact))
+        text = render(
+            record(db, args.task_id, args.attempt),
+            extra,
+            len(stderr.encode()),
+        )
     finally:
         db.close()
+    source = scrub(args.source, extra).strip() + "\n"
+    with tempfile.TemporaryDirectory() as tmp:  # derive reads a file; write nothing yet
+        events = Path(tmp) / "events.jsonl"
+        events.write_text(text)
+        expected = derive(args.engine, events)
+    sizes = [len(t.encode()) for t in (text, stderr, expected, source)]
+    if sum(sizes) > MAX_BYTES:
+        raise SystemExit(
+            f"case is {sum(sizes)} bytes (events {sizes[0]}, stderr {sizes[1]},"
+            f" expected {sizes[2]}, source {sizes[3]}); the limit is {MAX_BYTES}"
+        )
     case = args.root / args.engine / args.case
     case.mkdir(parents=True, exist_ok=True)
     (case / "events.jsonl").write_text(text)
-    (case / "source.md").write_text(
-        scrub(args.source, tuple(args.redact)).strip() + "\n"
-    )
-    (case / "expected.json").write_text(derive(args.engine, case / "events.jsonl"))
+    (case / "source.md").write_text(source)
+    (case / "expected.json").write_text(expected)
+    if stderr:
+        (case / "stderr.txt").write_text(stderr)
+    else:
+        (case / "stderr.txt").unlink(missing_ok=True)
     print(case)
     return 0
 
