@@ -21405,8 +21405,14 @@
             "title": "Budget Usd"
           },
           "deliverable": {
-            "$ref": "#/components/schemas/Deliverable",
-            "default": "response"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Deliverable"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "depends_on": {
             "default": [],
@@ -21497,11 +21503,17 @@
             "type": "integer"
           },
           "max_attempts": {
-            "default": 3,
-            "maximum": 20.0,
-            "minimum": 1.0,
-            "title": "Max Attempts",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Attempts"
           },
           "parent_id": {
             "anyOf": [
@@ -21515,9 +21527,15 @@
             "title": "Parent Id"
           },
           "priority": {
-            "default": 0,
-            "title": "Priority",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
           },
           "project": {
             "anyOf": [
@@ -21531,12 +21549,18 @@
             "title": "Project"
           },
           "required_capabilities": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Required Capabilities",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Capabilities"
           },
           "requires_approval": {
             "default": false,
@@ -21577,6 +21601,221 @@
           "title"
         ],
         "title": "TaskCreate",
+        "type": "object"
+      },
+      "TaskDefaultProblem": {
+        "description": "A combination creation would refuse, e.g. `deliverable_capability`.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "field",
+          "message"
+        ],
+        "title": "TaskDefaultProblem",
+        "type": "object"
+      },
+      "TaskDefaultSources": {
+        "properties": {
+          "budget_usd": {
+            "enum": [
+              "project",
+              "global",
+              "kind",
+              "built_in",
+              "inferred"
+            ],
+            "title": "Budget Usd",
+            "type": "string"
+          },
+          "deliverable": {
+            "enum": [
+              "project",
+              "global",
+              "kind",
+              "built_in",
+              "inferred"
+            ],
+            "title": "Deliverable",
+            "type": "string"
+          },
+          "difficulty": {
+            "enum": [
+              "project",
+              "global",
+              "kind",
+              "built_in",
+              "inferred"
+            ],
+            "title": "Difficulty",
+            "type": "string"
+          },
+          "max_attempts": {
+            "enum": [
+              "project",
+              "global",
+              "kind",
+              "built_in",
+              "inferred"
+            ],
+            "title": "Max Attempts",
+            "type": "string"
+          },
+          "priority": {
+            "enum": [
+              "project",
+              "global",
+              "kind",
+              "built_in",
+              "inferred"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "required_capabilities": {
+            "enum": [
+              "project",
+              "global",
+              "kind",
+              "built_in",
+              "inferred"
+            ],
+            "title": "Required Capabilities",
+            "type": "string"
+          },
+          "timeout_s": {
+            "enum": [
+              "project",
+              "global",
+              "kind",
+              "built_in",
+              "inferred"
+            ],
+            "title": "Timeout S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deliverable",
+          "priority",
+          "difficulty",
+          "required_capabilities",
+          "budget_usd",
+          "max_attempts",
+          "timeout_s"
+        ],
+        "title": "TaskDefaultSources",
+        "type": "object"
+      },
+      "TaskDefaultValues": {
+        "properties": {
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable"
+          },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Difficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "required_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Capabilities",
+            "type": "array"
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S"
+          }
+        },
+        "required": [
+          "deliverable",
+          "priority",
+          "difficulty",
+          "required_capabilities",
+          "budget_usd",
+          "max_attempts",
+          "timeout_s"
+        ],
+        "title": "TaskDefaultValues",
+        "type": "object"
+      },
+      "TaskDefaults": {
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/TaskDefaultProblem"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/TaskDefaultSources"
+          },
+          "values": {
+            "$ref": "#/components/schemas/TaskDefaultValues"
+          }
+        },
+        "required": [
+          "project",
+          "kind",
+          "values",
+          "sources",
+          "problems"
+        ],
+        "title": "TaskDefaults",
         "type": "object"
       },
       "TaskDetail": {
@@ -22227,8 +22466,14 @@
             "title": "Budget Usd"
           },
           "deliverable": {
-            "$ref": "#/components/schemas/Deliverable",
-            "default": "response"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Deliverable"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "depends_on": {
             "default": [],
@@ -22326,11 +22571,17 @@
             "type": "integer"
           },
           "max_attempts": {
-            "default": 3,
-            "maximum": 20.0,
-            "minimum": 1.0,
-            "title": "Max Attempts",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Attempts"
           },
           "parent_id": {
             "anyOf": [
@@ -22344,9 +22595,15 @@
             "title": "Parent Id"
           },
           "priority": {
-            "default": 0,
-            "title": "Priority",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
           },
           "project": {
             "anyOf": [
@@ -22360,12 +22617,18 @@
             "title": "Project"
           },
           "required_capabilities": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Required Capabilities",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Capabilities"
           },
           "requires_approval": {
             "default": false,
@@ -33221,6 +33484,64 @@
           }
         ],
         "summary": "Get Project Override",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/projects/{slug}/task-defaults": {
+      "get": {
+        "description": "What a task of `kind` created in the project now gets for each field it\nleaves out, the source of each value, and the combinations creation would\nrefuse (task defaults spec 3.6).",
+        "operationId": "get_task_defaults_api_projects__slug__task_defaults_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "generic",
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDefaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Task Defaults",
         "tags": [
           "settings"
         ]
