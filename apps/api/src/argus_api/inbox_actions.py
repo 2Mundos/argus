@@ -22,7 +22,13 @@ from argus_core.continuation import (
     ItemStatus,
     split_spec,
 )
-from argus_core.decisions import Audience, Decision, DecisionKind
+from argus_core.decisions import (
+    ACCEPT_WITH_DEVIATION,
+    REVIEW_OPTIONS,
+    Audience,
+    Decision,
+    DecisionKind,
+)
 from argus_core.delivery import MERGED_PENDING_REVIEW, PrState
 from argus_core.redact import redact
 from argus_core.tasks import Review, Task, TaskState
@@ -408,12 +414,14 @@ def _effects(decision: Decision) -> list[Effect] | Literal["unknown"]:
         )
         return [Effect(choice=o, effect=effect) for o in decision.options or ["text"]]
     if kind is DecisionKind.REVIEW and subject == "task":
-        return each(
-            "accept",
-            "the task succeeds",
-            "the task returns to ready with the notes appended to its spec; no"
-            " failure is counted",
-        )
+        effects = {
+            "accept": "the task succeeds; refused while acceptance items are unmet",
+            ACCEPT_WITH_DEVIATION: "the task succeeds with the text recorded as the"
+            " deviation; unmet items stay verification_missing",
+            "reject": "the task returns to ready with the notes appended to its spec;"
+            " no failure is counted",
+        }
+        return [Effect(choice=o, effect=effects[o]) for o in REVIEW_OPTIONS]
     if kind is DecisionKind.POLICY and subject == "pool":
         return each("approve", "applies the requested scale", "keeps the current scale")
     if kind is DecisionKind.POLICY and subject == "routine":

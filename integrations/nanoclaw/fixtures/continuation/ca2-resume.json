@@ -153,6 +153,7 @@
   "requires_approval": false,
   "result": null,
   "review": "none",
+  "review_disposition": null,
   "serving_account": null,
   "spec": "Implement corporate actions collection.",
   "state": "claimed",

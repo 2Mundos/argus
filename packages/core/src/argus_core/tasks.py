@@ -224,6 +224,19 @@ class Review(StrEnum):
     ORCHESTRATOR = "orchestrator"
 
 
+class ReviewDisposition(BaseModel):
+    """How a task reached `succeeded` (task deliverable spec 3.10). `unmet` names the
+    acceptance items that were not `done`; they stay `verification_missing`."""
+
+    outcome: Literal["accepted", "accepted_with_deviation", "not_reviewed"]
+    # Why: the deviation and who authorized it, or why no review ran.
+    reason: str | None = None
+    unmet: list[str] = []
+    decided_by: str
+    decided_at: datetime
+    attempt: int
+
+
 class Deliverable(StrEnum):
     """What a task must leave behind to count as done (task deliverable spec 3.1).
 
@@ -549,6 +562,8 @@ class Task(BaseModel):
     result: TaskResult | None
     error: str | None
     block_reason: str | None
+    # Set when the task succeeds: accepted, with a deviation, or not reviewed.
+    review_disposition: ReviewDisposition | None = None
     # The attempt that ended last was OOM-killed (failure classes 3.2.1).
     oom_kill: bool = False
     failure_class: FailureClass | None = None

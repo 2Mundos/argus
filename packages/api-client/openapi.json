@@ -4699,6 +4699,16 @@
           "review": {
             "$ref": "#/components/schemas/Review"
           },
+          "review_disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "serving_account": {
             "anyOf": [
               {
@@ -13980,6 +13990,35 @@
         "title": "NodeOption",
         "type": "object"
       },
+      "Observation": {
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "status": {
+            "enum": [
+              "unknown",
+              "denied",
+              "missing"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Observation",
+        "type": "object"
+      },
       "ObservationRequest": {
         "additionalProperties": false,
         "description": "What a worker runtime saw (by itself, outside any transaction) at claim.",
@@ -18037,6 +18076,60 @@
         "title": "Review",
         "type": "string"
       },
+      "ReviewDisposition": {
+        "description": "How a task reached `succeeded` (task deliverable spec 3.10). `unmet` names the\nacceptance items that were not `done`; they stay `verification_missing`.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "decided_at": {
+            "format": "date-time",
+            "title": "Decided At",
+            "type": "string"
+          },
+          "decided_by": {
+            "title": "Decided By",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "accepted",
+              "accepted_with_deviation",
+              "not_reviewed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "unmet": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Unmet",
+            "type": "array"
+          }
+        },
+        "required": [
+          "outcome",
+          "decided_by",
+          "decided_at",
+          "attempt"
+        ],
+        "title": "ReviewDisposition",
+        "type": "object"
+      },
       "Revision": {
         "properties": {
           "author": {
@@ -18143,6 +18236,66 @@
           }
         },
         "title": "RoleSettings",
+        "type": "object"
+      },
+      "RouteAccount": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "usable",
+              "exhausted",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "RouteAccount",
+        "type": "object"
+      },
+      "RouteAttempt": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "claimed_at": {
+            "format": "date-time",
+            "title": "Claimed At",
+            "type": "string"
+          },
+          "executions": {
+            "items": {
+              "$ref": "#/components/schemas/RouteExecution"
+            },
+            "title": "Executions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt",
+          "agent_id",
+          "claimed_at",
+          "executions"
+        ],
+        "title": "RouteAttempt",
         "type": "object"
       },
       "RouteDecision": {
@@ -18295,6 +18448,131 @@
         "title": "RouteDecision",
         "type": "object"
       },
+      "RouteExecution": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "layer": {
+            "title": "Layer",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "layer",
+          "state",
+          "engine",
+          "executor",
+          "provider",
+          "account_id",
+          "error_code"
+        ],
+        "title": "RouteExecution",
+        "type": "object"
+      },
+      "RouteProvider": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/RouteAccount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "engine": {
+            "enum": [
+              "supported",
+              "unsupported"
+            ],
+            "title": "Engine",
+            "type": "string"
+          },
+          "engine_allowed": {
+            "title": "Engine Allowed",
+            "type": "boolean"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "engine",
+          "executor",
+          "engine_allowed",
+          "accounts"
+        ],
+        "title": "RouteProvider",
+        "type": "object"
+      },
       "RouteRequest": {
         "properties": {
           "criteria_deterministic": {
@@ -18365,6 +18643,118 @@
           "summary"
         ],
         "title": "RouteRequest",
+        "type": "object"
+      },
+      "RouteResolution": {
+        "description": "What the engine role would use now, for the worker of the current attempt.",
+        "properties": {
+          "engine_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine Account"
+          },
+          "engine_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine Providers"
+          },
+          "executor_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor Provider"
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Reason"
+          }
+        },
+        "required": [
+          "engine_providers",
+          "engine_account",
+          "fallback_reason",
+          "executor_provider"
+        ],
+        "title": "RouteResolution",
+        "type": "object"
+      },
+      "RouteWorker": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "executor_binary": {
+            "$ref": "#/components/schemas/Observation"
+          },
+          "gateway_access": {
+            "$ref": "#/components/schemas/Observation"
+          },
+          "last_heartbeat_at": {
+            "format": "date-time",
+            "title": "Last Heartbeat At",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "runtime_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Providers"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name",
+          "state",
+          "last_heartbeat_at",
+          "runtime_providers",
+          "gateway_access",
+          "executor_binary"
+        ],
+        "title": "RouteWorker",
         "type": "object"
       },
       "Routine": {
@@ -20324,6 +20714,16 @@
           "review": {
             "$ref": "#/components/schemas/Review"
           },
+          "review_disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "serving_account": {
             "anyOf": [
               {
@@ -21528,6 +21928,16 @@
           },
           "review": {
             "$ref": "#/components/schemas/Review"
+          },
+          "review_disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "serving_account": {
             "anyOf": [
@@ -22824,6 +23234,16 @@
           "review": {
             "$ref": "#/components/schemas/Review"
           },
+          "review_disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "serving_account": {
             "anyOf": [
               {
@@ -23054,6 +23474,152 @@
           "summary"
         ],
         "title": "TaskResult",
+        "type": "object"
+      },
+      "TaskRoute": {
+        "properties": {
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouteAttempt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Class"
+          },
+          "harness_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Account"
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "default": "Account status is registry state. It does not prove that this agent may use the account through the credential gateway, nor that the executor binary is installed; those are `unknown` until an attempt reports them.",
+            "title": "Note",
+            "type": "string"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/RouteProvider"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/RouteResolution"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouteWorker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "task_id",
+          "state",
+          "block_reason",
+          "version",
+          "account_providers",
+          "harness_model",
+          "executor_model",
+          "harness_account",
+          "resolution",
+          "attempt",
+          "error",
+          "failure_class",
+          "providers",
+          "worker"
+        ],
+        "title": "TaskRoute",
         "type": "object"
       },
       "TaskState": {
@@ -29050,7 +29616,7 @@
     },
     "/api/decisions/{decision_id}/answer": {
       "post": {
-        "description": "Answer an open decision. Approvals take `approve`/`reject`, reviews\n`accept`/`reject` (with `text` as notes), questions their options or text.\nWith a `request_id`, a retry of the same answer by the same caller returns\nthe stored decision with `replayed: true` instead of 409 decision_not_open.",
+        "description": "Answer an open decision. Approvals take `approve`/`reject`, reviews\n`accept`/`accept_with_deviation`/`reject` (with `text` as notes; required for\n`accept_with_deviation`), questions their options or text.\nWith a `request_id`, a retry of the same answer by the same caller returns\nthe stored decision with `replayed: true` instead of 409 decision_not_open.",
         "operationId": "answer_decision_api_decisions__decision_id__answer_post",
         "parameters": [
           {
@@ -36086,6 +36652,54 @@
           }
         ],
         "summary": "Retry Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/route": {
+      "get": {
+        "description": "Read-only route diagnostic (task models 3.5): state, pins and\n`account_providers`, what the engine role resolves to now, the current attempt's\nevidence (provider, account id, error code, redacted error), per-provider\naccounts with registry status, and the attempt worker's readiness. Gateway\naccess and the executor binary are `unknown` unless an attempt reported their\nfailure: account availability never proves an agent may use it. No secrets.",
+        "operationId": "get_route_api_tasks__task_id__route_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskRoute"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Route",
         "tags": [
           "tasks"
         ]

@@ -5,6 +5,8 @@ from enum import StrEnum
 
 from argus_core.auth import Scope
 from argus_core.decisions import (
+    ACCEPT_WITH_DEVIATION,
+    REVIEW_OPTIONS,
     Ask,
     Audience,
     Decision,
@@ -75,7 +77,7 @@ async def forge_evidence(
     shows, read here, before and outside the write transaction (task deliverable
     spec 3.5). None when no forge read is needed or the decision cannot be read; the
     answer reports the latter itself."""
-    if choice != "accept":
+    if choice not in ("accept", ACCEPT_WITH_DEVIATION):
         return None
     async with db.read() as conn:
         try:
@@ -235,6 +237,7 @@ class Effect(StrEnum):
     TASK_APPROVE = "task_approve"
     TASK_CANCEL = "task_cancel"
     REVIEW_ACCEPT = "review_accept"
+    REVIEW_ACCEPT_DEVIATION = "review_accept_deviation"
     REVIEW_REJECT = "review_reject"
 
 
@@ -253,6 +256,8 @@ def effect_of(decision: Decision, choice: str | None) -> Effect:
             return Effect.ROUTINE_REENABLE if approve else Effect.ROUTINE_STAY_OFF
         case DecisionKind.APPROVAL | DecisionKind.POLICY:
             return Effect.TASK_APPROVE if choice == "approve" else Effect.TASK_CANCEL
+        case DecisionKind.REVIEW if choice == ACCEPT_WITH_DEVIATION:
+            return Effect.REVIEW_ACCEPT_DEVIATION
         case DecisionKind.REVIEW:
             return Effect.REVIEW_ACCEPT if choice == "accept" else Effect.REVIEW_REJECT
 
@@ -316,27 +321,43 @@ async def _apply_answer(
             await tasks.approve(tx, task_id, caller.actor)
         case Effect.TASK_CANCEL:
             await tasks.cancel(tx, task_id, caller.actor)
-        case Effect.REVIEW_ACCEPT | Effect.REVIEW_REJECT as effect:
+        case (
+            Effect.REVIEW_ACCEPT | Effect.REVIEW_ACCEPT_DEVIATION | Effect.REVIEW_REJECT
+        ) as effect:
             await tasks.review(
                 tx,
                 task_id,
                 caller.actor,
                 caller.scope,
-                accept=effect is Effect.REVIEW_ACCEPT,
+                accept=effect is not Effect.REVIEW_REJECT,
                 notes=body.text,
                 forge=forge,
+                deviation=effect is Effect.REVIEW_ACCEPT_DEVIATION,
             )
 
 
 def check_answer(decision: Decision, body: DecisionAnswer) -> None:
     """The choice and text rules of the answer path (raises 422)."""
-    if decision.options is not None and body.choice not in decision.options:
+    options = decision.options
+    if decision.kind is DecisionKind.REVIEW and options is not None:
+        # Review decisions opened before the choice existed take it too (3.10).
+        options = [*options, *(o for o in REVIEW_OPTIONS if o not in options)]
+    if options is not None and body.choice not in options:
         raise ValidationFailedError(
-            f"choice must be one of: {', '.join(decision.options)}",
+            f"choice must be one of: {', '.join(options)}",
             code="invalid_choice",
         )
-    if decision.options is None and not body.text:
+    if options is None and not body.text:
         raise ValidationFailedError("this question needs a text answer")
+    deviation = (
+        decision.kind is DecisionKind.REVIEW and body.choice == ACCEPT_WITH_DEVIATION
+    )
+    if deviation and not body.text.strip():
+        raise ValidationFailedError(
+            "accept_with_deviation needs text: which criteria are unmet, why the"
+            " result is accepted anyway, and who authorized it",
+            code="deviation_reason_required",
+        )
 
 
 def check_audience(audience: Audience, scope: Scope) -> None:

@@ -172,7 +172,8 @@ every new dependency is judged against it.
 - [Task dependencies](specs/task-dependencies.spec.md) — edit a waiting task's
   dependencies with a cycle check; stuck dependents surface in the inbox
 - [Task edit](specs/task-edit.spec.md) — edit a task's title, spec, criteria, priority,
-  capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard
+  capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard;
+  re-route a blocked task
 - [Task drafts](specs/task-drafts.spec.md) — persisted, never-claimable task drafts
   published in one validated, idempotent transaction (atomic or partial)
 - [Command guard](specs/command-guard.spec.md) — a `PreToolUse` hook that blocks a
@@ -195,7 +196,7 @@ every new dependency is judged against it.
   exact-head checks/statuses, mergeability, review evidence; checklist and
   authorization separate) on REST, MCP and the dashboard; a merge is flagged for
   review, never accepted; green does not authorize merge.
-- [Task deliverable](specs/task-deliverable.spec.md) — what a task must leave behind; includes the runbook for reconciling a failed task whose PR merged (3.8)
+- [Task deliverable](specs/task-deliverable.spec.md) — what a task must leave behind; includes the runbook for reconciling a failed task whose PR merged (3.8) and the review disposition and accepted deviation (3.10)
   (response, knowledge, artifact, subtasks, branch, PR open, green or merged),
   validated at creation against capabilities and repository, at completion against
   evidence, and at accept against the forge.
@@ -340,7 +341,8 @@ every new dependency is judged against it.
 - [Task difficulty, executor routing and escalation](specs/task-difficulty.spec.md) — trivial tasks prefer
   the local Strata account and Cursor `composer-2.5`; the executor chain and escalation follow the level.
 - [Task models](specs/task-models.spec.md) — pin a queued task's harness engine/model
-  and executor/model; narrows its leases, no fallback chain
+  and executor/model; narrows its leases, no fallback chain; read-only route
+  diagnostic (3.5)
 - [Model policy operation](runbooks/2026-10-17.model-selection.ref.md)
 - [Project agent images](runbooks/2026-10-17.project-agent-images.ref.md) —
   base × tools × project layers, building and pointing a pool at one

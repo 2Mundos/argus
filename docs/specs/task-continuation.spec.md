@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Task continuation
@@ -150,6 +150,12 @@ a task has no structured criteria but is continued work (attempt > 1, known
 artifacts or WIP), completion also goes to review, flagged
 `acceptance_not_structured`: the orchestrator reconciles it by adding items.
 A first attempt with no criteria completes as before.
+
+A task never succeeds with an item silently open: a review `accept` is refused
+while items lack evidence, and any success (an accepted deviation, or
+acceptance off) stores the open items as `verification_missing` and names them
+in the task's `review_disposition` ([task deliverable](task-deliverable.spec.md)
+3.10).
 
 A completion that reports an id the task does not hold is rejected with 422
 `checklist_mismatch` and records nothing: such ids are another task's work (a late

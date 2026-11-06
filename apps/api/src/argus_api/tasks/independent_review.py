@@ -13,7 +13,7 @@ from typing import Any
 
 import aiosqlite
 from argus_core.continuation import ArtifactKind
-from argus_core.decisions import Audience, DecisionKind
+from argus_core.decisions import REVIEW_OPTIONS, Audience, DecisionKind
 from argus_core.settings import IndependentReviewSetting, ReviewMode
 from argus_core.tasks import (
     FORGE_DELIVERABLES,
@@ -39,7 +39,6 @@ NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
 NO_REVIEW_HEAD = "no_review_head"
 CODE_REVIEW_KIND = "code_review"
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
-_REVIEW_OPTIONS = ("accept", "reject")
 
 # Engine name → account provider for harness / executor selection.
 _ENGINE_PROVIDER = {
@@ -520,7 +519,7 @@ async def on_review_child_complete(
                     f"Review the result of {parent['title']!r}"
                     f" (attempt {parent['attempt']})."
                 ),
-                options=list(_REVIEW_OPTIONS),
+                options=list(REVIEW_OPTIONS),
                 audience=Audience.HUMAN
                 if review is Review.HUMAN
                 else Audience.ORCHESTRATOR,
@@ -545,7 +544,7 @@ async def on_review_child_complete(
                     f"Independent review exhausted {setting.max_rounds} rounds for"
                     f" {parent['title']!r}. Accept or reject?"
                 ),
-                options=list(_REVIEW_OPTIONS),
+                options=list(REVIEW_OPTIONS),
                 audience=Audience.HUMAN,
                 requested_by=actor,
             )

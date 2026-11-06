@@ -96,6 +96,7 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
             "ALTER TABLE tasks ADD COLUMN deliverable TEXT NOT NULL DEFAULT 'response'"
         )
         await tx.conn.execute("ALTER TABLE tasks ADD COLUMN budget_usd REAL")
+        await tx.conn.execute("ALTER TABLE tasks ADD COLUMN review_disposition TEXT")
         task = await tasks.create_task(
             tx, TaskCreate(project="demo", title="t"), "admin:test"
         )
@@ -104,6 +105,7 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN paused_disk_at")
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN deliverable")
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN budget_usd")
+        await tx.conn.execute("ALTER TABLE tasks DROP COLUMN review_disposition")
         await tx.conn.execute(
             "UPDATE agents SET runtime = '{\"features\": [\"steer\"]}' WHERE id = 'a'"
         )

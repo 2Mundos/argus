@@ -413,11 +413,13 @@ async def test_0065_upgrade_keeps_data_and_is_idempotent(tmp_path: Path) -> None
             "ALTER TABLE tasks ADD COLUMN deliverable TEXT NOT NULL DEFAULT 'response'"
         )
         await tx.conn.execute("ALTER TABLE tasks ADD COLUMN budget_usd REAL")
+        await tx.conn.execute("ALTER TABLE tasks ADD COLUMN review_disposition TEXT")
         old = await tasks.create_task(
             tx, TaskCreate(project="demo", title="old"), ACTOR
         )
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN deliverable")
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN budget_usd")
+        await tx.conn.execute("ALTER TABLE tasks DROP COLUMN review_disposition")
     await db.close()
 
     for _ in range(2):  # the upgrade, then a reopen that must change nothing

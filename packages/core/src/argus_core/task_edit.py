@@ -45,11 +45,17 @@ _ALL = frozenset(EDITABLE)
 _PRIORITY_AND_BUDGET = frozenset({"priority", "budget_usd"})
 # A deliverable that proved unreachable can be lowered while the result is reviewed.
 _IN_REVIEW = frozenset({"priority", "deliverable", "budget_usd"})
+# A blocked task has no claim, so its route can be corrected before it is retried;
+# the edit leaves the state and any open decision alone (task edit spec 3.4).
+_ROUTE = frozenset(
+    {"account_providers", "harness_model", "executor_model", "harness_account"}
+)
+_BLOCKED = _PRIORITY_AND_BUDGET | _ROUTE
 EDITABLE_BY_STATE: dict[TaskState, frozenset[str]] = {
     TaskState.AWAITING_APPROVAL: _ALL,
     TaskState.PENDING: _ALL,
     TaskState.READY: _ALL,
-    TaskState.BLOCKED: _PRIORITY_AND_BUDGET,
+    TaskState.BLOCKED: _BLOCKED,
     TaskState.CLAIMED: _PRIORITY_AND_BUDGET,
     TaskState.IN_REVIEW: _IN_REVIEW,
     TaskState.SUCCEEDED: frozenset(),

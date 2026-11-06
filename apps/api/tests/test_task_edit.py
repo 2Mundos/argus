@@ -8,11 +8,14 @@ import pytest
 from api_support import DONE, FakeClock, insert_agent
 from argus_api.accounts import service as accounts
 from argus_api.db import Database
+from argus_api.decisions import service as decisions
+from argus_api.decisions import store as decision_store
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.knowledge import service as kn
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountCreate
+from argus_core.decisions import Ask, DecisionState
 from argus_core.knowledge import PageCreate, ProjectUpsert
 from argus_core.task_edit import EDITABLE, EDITABLE_BY_STATE, TaskChanges
 from argus_core.tasks import ExecutorModel, HarnessModel, TaskCreate
@@ -449,6 +452,37 @@ async def test_each_state_permits_exactly_its_documented_fields(
         else:
             assert field in allowed
             assert getattr(after, field) == value or field == "knowledge"
+
+
+async def test_a_route_edit_keeps_a_blocked_task_blocked_with_its_decision_open(
+    db: Database,
+) -> None:
+    await create(db)
+    claimed = await claim(db)
+    assert claimed is not None
+    async with db.write() as tx:
+        asked = await decisions.ask(
+            tx, A, claimed.id, Ask(attempt=claimed.attempt, question="Which account?")
+        )
+    before = await get(db, claimed.id)
+    assert before.state is S.BLOCKED
+    pin = ExecutorModel(executor="codex", model="gpt-6.1-sol")
+    after = await edit(db, claimed.id, account_providers=["openai"], executor_model=pin)
+    assert (after.account_providers, after.executor_model) == (["openai"], pin)
+    assert after.version != before.version
+    kept = ("state", "block_reason", "assignee_agent_id", "attempt", "error")
+    assert [getattr(after, f) for f in kept] == [getattr(before, f) for f in kept]
+    async with db.read() as conn:
+        assert (await decision_store.get(conn, asked.id)).state is DecisionState.OPEN
+        async with conn.execute("SELECT count(*) FROM account_leases") as cur:
+            assert (await cur.fetchone())[0] == 0
+    with pytest.raises(ValidationFailedError, match="harness_model"):
+        await edit(
+            db,
+            claimed.id,
+            harness_model=HarnessModel(engine="claude", model="claude-opus-5-5"),
+        )
+    assert await get(db, claimed.id) == after
 
 
 async def test_archived_tasks_are_read_only(db: Database) -> None:
