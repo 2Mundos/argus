@@ -1,11 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   commandGuardBlock,
   DEFAULT_MANAGED_SETTINGS_PATH,
+  readImageFile,
   registersCommandGuard,
+  sessionImageCommandGuardBlock,
   workerCommandGuardBlock,
 } from "./argus-guard.js";
 
@@ -107,5 +109,93 @@ describe("worker command guard check against real files", () => {
   it("leaves other engines and the off switch alone", () => {
     expect(workerCommandGuardBlock("codex", undefined, {})).toBeNull();
     expect(workerCommandGuardBlock("claude", undefined, { ARGUS_COMMAND_GUARD: "off" })).toBeNull();
+  });
+});
+
+// The NanoClaw host image has no /etc/claude-code: the hook lives in the agent image only,
+// so the worker must read the session's image, never its own filesystem.
+describe("worker command guard check against the session image", () => {
+  const image = async () => "argus-nanoclaw-agent:test";
+
+  it("passes when the session image registers the hook, whatever the host holds", async () => {
+    const seen: string[][] = [];
+    const read = async (ref: string, p: string) => {
+      seen.push([ref, p]);
+      return shipped;
+    };
+    expect(await sessionImageCommandGuardBlock("claude", image, read, {})).toBeNull();
+    expect(seen).toEqual([["argus-nanoclaw-agent:test", DEFAULT_MANAGED_SETTINGS_PATH]]);
+  });
+
+  it.each([
+    ["no hooks", async () => "{}"],
+    ["no command_guard", async () => shipped.replaceAll("command_guard.py", "other.py")],
+    [
+      "no file in the image",
+      async () => {
+        throw new Error("cat: /etc/claude-code/managed-settings.json: No such file or directory");
+      },
+    ],
+  ])("blocks env_guard_missing naming the image: %s", async (_n, read) => {
+    const block = await sessionImageCommandGuardBlock("claude", image, read, {});
+    expect(block?.reason).toBe("env_guard_missing");
+    expect(block?.error).toContain(
+      `${DEFAULT_MANAGED_SETTINGS_PATH} in image argus-nanoclaw-agent:test`,
+    );
+  });
+
+  it("blocks when the session image cannot be resolved", async () => {
+    const none = async () => {
+      throw new Error("no agent group is wired to the argus channel");
+    };
+    const block = await sessionImageCommandGuardBlock("claude", none, async () => shipped, {});
+    expect(block?.reason).toBe("env_guard_missing");
+  });
+
+  it("does not look at the image when disabled or unguarded", async () => {
+    const read = async () => {
+      throw new Error("must not run");
+    };
+    for (const [engine, env] of [
+      ["claude", { ARGUS_COMMAND_GUARD: "off" }],
+      ["claude", { ARGUS_COMMAND_GUARD: "0" }],
+      ["codex", {}],
+    ] as const) {
+      expect(await sessionImageCommandGuardBlock(engine, image, read, env)).toBeNull();
+    }
+  });
+});
+
+describe("reading a file from an image", () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-guard-bin-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const bin = (name: string, body: string) => {
+    const p = join(dir, name);
+    writeFileSync(p, `#!/bin/sh\n${body}\n`);
+    chmodSync(p, 0o755);
+    return p;
+  };
+
+  it("runs a throwaway container that never pulls and has no network", async () => {
+    const echo = bin("echo-args", `printf '%s\\n' "$@"`);
+    const out = await readImageFile("agent:1", DEFAULT_MANAGED_SETTINGS_PATH, echo);
+    expect(out.trim().split("\n")).toEqual([
+      "run",
+      "--rm",
+      "--pull=never",
+      "--network=none",
+      "--entrypoint",
+      "cat",
+      "agent:1",
+      DEFAULT_MANAGED_SETTINGS_PATH,
+    ]);
+  });
+
+  it("rejects when the runtime fails, and never passes an option as the image", async () => {
+    const fail = bin("fail", "echo 'No such image' >&2; exit 125");
+    await expect(readImageFile("agent:1", DEFAULT_MANAGED_SETTINGS_PATH, fail)).rejects.toThrow();
+    const echo = bin("echo-ok", "echo ok");
+    await expect(readImageFile("--privileged", "/x", echo)).rejects.toThrow(/not an image/);
+    await expect(readImageFile("", "/x", echo)).rejects.toThrow(/not an image/);
   });
 });
