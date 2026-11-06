@@ -27,6 +27,9 @@ function loadUndici() {
   }
 }
 
+// `deadline_exceeded` (a wait budget spent, see `GiteaApi.deadline`) has no exit code: only
+// `argus-task wait` sets a deadline, and it turns the error into exit 10 itself.
+
 /** Stable error classes; each has its own process exit code (documented in --help and the spec). */
 export const EXIT_CODES = Object.freeze({
   internal_error: 1,
@@ -555,6 +558,20 @@ export class GiteaApi {
     this.sleep = options.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms)));
     this.random = options.random ?? Math.random;
     this.now = options.now ?? Date.now;
+    /** Optional `{at, now}`: no exchange starts, sleeps or waits past `at` (ms on the `now()` clock). */
+    this.deadline = null;
+  }
+
+  /** Time left on the deadline, or null without one; throws once it is spent. */
+  remainingMs(method, path) {
+    if (!this.deadline) return null;
+    const left = this.deadline.at - this.deadline.now();
+    if (left <= 0)
+      throw new GiteaError("deadline_exceeded", "deadline reached before the request", {
+        method,
+        path,
+      });
+    return left;
   }
 
   // Forge hooks, overridden by GitHubApi (github-api.mjs).
@@ -593,6 +610,17 @@ export class GiteaApi {
     return Math.round(ceiling / 2 + (this.random() * ceiling) / 2);
   }
 
+  /** Sleep before a retry, never past the deadline: a backoff that would cross it ends the call. */
+  async backoffSleep(ms, method, path) {
+    const left = this.remainingMs(method, path);
+    if (left !== null && ms >= left)
+      throw new GiteaError("deadline_exceeded", "deadline reached while backing off", {
+        method,
+        path,
+      });
+    await this.sleep(ms);
+  }
+
   /** One HTTP exchange; retries only GET/HEAD on 429/5xx/network errors. Returns the unread 2xx (or allowed 3xx) Response. */
   async exchange(
     path,
@@ -603,6 +631,7 @@ export class GiteaApi {
     const idempotent = method === "GET" || method === "HEAD";
     for (let attempt = 0; ; attempt++) {
       let response;
+      const left = this.remainingMs(method, errorPath);
       try {
         response = await this.fetch(target, {
           method,
@@ -613,12 +642,14 @@ export class GiteaApi {
             ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           },
           body: body === undefined ? undefined : JSON.stringify(body),
-          signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
+          signal: AbortSignal.timeout(
+            Math.min(timeoutMs ?? this.timeoutMs, left ?? Number.POSITIVE_INFINITY),
+          ),
         });
       } catch (error) {
         const failure = networkError(error, method, errorPath);
         if (failure.code === "network_error" && idempotent && attempt < this.maxRetries) {
-          await this.sleep(this.backoff(attempt));
+          await this.backoffSleep(this.backoff(attempt), method, errorPath);
           continue;
         }
         throw failure;
@@ -631,7 +662,7 @@ export class GiteaApi {
       ) {
         const hint = response.headers.get("retry-after");
         await discard(response);
-        await this.sleep(this.backoff(attempt, hint));
+        await this.backoffSleep(this.backoff(attempt, hint), method, errorPath);
         continue;
       }
       throw await httpError(response, method, errorPath, this.product);

@@ -47,7 +47,6 @@ const DEFAULT_MAX_S = 110; // under the shortest engine shell timeout we know of
 const CEILING_MAX_S = 540;
 const MARKER_TICK_MS = 1000;
 const PROBE_REQUEST_MS = 10_000; // per forge request inside a wait
-const PROBE_REQUESTS = 3; // the most requests one wait check makes
 const TRANSIENT = new Set(["network_error", "server_error", "rate_limited", "ambiguous"]);
 const DIGEST_BYTES = 2048;
 const MIN_EXCERPT_BYTES = 64;
@@ -218,13 +217,23 @@ async function wait(api, o, ctx) {
     writeJson(file, { on, ref, since });
   }
   const clear = () => file && rmSync(file, { force: true });
-  // A check must not outlive the cap: no retries (the next check is the retry), and each
-  // request is cut to its share of the time left.
+  // One deadline bounds the whole wait: every exchange (each page, the head lookup) checks it
+  // before it starts and is cut to the time left. No retries inside a wait (the next check is
+  // the retry), so there is no backoff to bound either.
+  const deadline = start + capMs;
   api.maxRetries = 0;
+  api.timeoutMs = PROBE_REQUEST_MS;
+  api.deadline = { at: deadline, now: ctx.now };
+  const pending = (check) => {
+    // The waiting file stays: the agent is expected to call again.
+    const { done: _, ...rest } = check;
+    return {
+      code: EXIT.pending,
+      result: { on, ref, waited_s: (ctx.now() - start) / 1000, cursor, ...rest },
+    };
+  };
   try {
     for (;;) {
-      const left = capMs - (ctx.now() - start);
-      api.timeoutMs = Math.max(1000, Math.min(PROBE_REQUEST_MS, Math.floor(left / PROBE_REQUESTS)));
       const steer = interruptAfter(ctx.dir, start);
       if (steer) {
         clear();
@@ -234,9 +243,13 @@ async function wait(api, o, ctx) {
       try {
         check = on === "ci" ? await checkCi(api, o) : await checkReview(api, o, cursor);
       } catch (error) {
-        if (!(error instanceof GiteaError) || !TRANSIENT.has(error.code)) throw error;
+        if (!(error instanceof GiteaError)) throw error;
+        if (error.code === "deadline_exceeded") return pending({ status: "wait budget spent" });
+        if (!TRANSIENT.has(error.code)) throw error;
         check = { done: false, status: `forge not answering (${error.code}); will check again` };
       }
+      // A check that finished after the budget is late: report pending, never success.
+      if (check.done && ctx.now() >= deadline) check = { done: false, status: "wait budget spent" };
       if (check.done) {
         clear();
         return {
@@ -246,14 +259,7 @@ async function wait(api, o, ctx) {
       }
       const nextCheck = ctx.now() + intervalMs;
       for (;;) {
-        if (ctx.now() - start >= capMs) {
-          // The waiting file stays: the agent is expected to call again.
-          const { done: _, ...rest } = check;
-          return {
-            code: EXIT.pending,
-            result: { on, ref, waited_s: (ctx.now() - start) / 1000, cursor, ...rest },
-          };
-        }
+        if (ctx.now() >= deadline) return pending(check);
         if (ctx.now() >= nextCheck || interruptAfter(ctx.dir, start)) break;
         await ctx.sleep(MARKER_TICK_MS);
       }
@@ -261,6 +267,8 @@ async function wait(api, o, ctx) {
   } catch (error) {
     clear();
     throw error;
+  } finally {
+    api.deadline = null;
   }
 }
 

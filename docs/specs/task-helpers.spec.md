@@ -100,9 +100,14 @@ argus-task wait review --pr N [--since CURSOR]
   one-line status (`"3 of 5 checks running"`) so a re-call costs one short turn.
 - Between forge checks it reads the interrupt marker (3.4) once a second, a local file
   read, so a steer ends the wait within a second.
-- A check never outlives the cap: inside a wait the forge client does not retry (the
-  next check is the retry), each request is cut to a third of the time left (at most
-  10 s), and a network error, 5xx or 429 counts as still pending, not as a failure.
+- One deadline, `start + --max`, bounds the whole wait. Every forge request in a check
+  (the PR head lookup and each page of comments, reviews, statuses and check runs)
+  re-reads the clock before it starts, is refused once the deadline has passed, and is
+  cut to the time left (at most 10 s). Inside a wait the forge client does not retry (the
+  next check is the retry), so no backoff can cross the deadline. A network error, 5xx or
+  429 counts as still pending, not as a failure; a refused request ends the wait as
+  pending (exit 10). A check that finishes at or after the deadline is not reported as
+  done: the result is exit 10, never a late success.
 
 ## 3.4 The `.git/argus/` file channel
 

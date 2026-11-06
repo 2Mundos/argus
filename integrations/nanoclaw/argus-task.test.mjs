@@ -26,9 +26,8 @@ let repoCount = 0;
 function repo() {
   const dir = join(scratch, `r${repoCount++}`);
   mkdirSync(dir);
+  // No identity here: only the commit fixtures need one, and the sandbox refuses git config writes.
   git(["init", "-q", "-b", "main"], dir);
-  git(["config", "user.email", "t@example.com"], dir);
-  git(["config", "user.name", "t"], dir);
   return dir;
 }
 
@@ -49,11 +48,19 @@ function forge(routes) {
 }
 
 /** Run the CLI with a fake clock that `sleep` advances; `onSleep(seconds)` runs after each tick. */
-async function run(argv, { routes, cwd = repo(), env = {}, onSleep } = {}) {
+async function run(argv, { routes, cwd = repo(), env = {}, onSleep, onFetch } = {}) {
   let t = T0;
   const out = [];
   const err = [];
   const f = forge(routes ?? {});
+  // `onFetch(key, seconds, cwd)` runs when a request starts, with the 1-based call number
+  // and the seconds elapsed on the fake clock; it returns the seconds the response takes.
+  const inner = f.fetch;
+  f.fetch = async (target, init) => {
+    const response = await inner(target, init);
+    t += (onFetch?.(f.calls.at(-1), f.calls.length, (t - T0) / 1000, cwd) ?? 0) * 1000;
+    return response;
+  };
   const code = await main(
     argv,
     { ...ENV, ...env },
@@ -212,6 +219,114 @@ describe("wait ci", () => {
     assert.equal(r.elapsed, 5);
     assert.equal(existsSync(join(signals(cwd), "waiting.json")), false);
     assert.equal(existsSync(marker), true); // the host owns the marker
+  });
+});
+
+describe("wait deadline", () => {
+  const link = (body) =>
+    new Response(JSON.stringify(body), { headers: { link: '<x>; rel="next"' } });
+  const statuses = `GET /statuses/${HEAD}`;
+  const pending = (id) => ({ id, context: `c${id}`, status: "pending" });
+
+  it("never returns success for a slow page that lands after the budget", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "20"], {
+      routes: { "GET /pulls/7": pr(), [statuses]: [{ id: 1, context: "t", status: "success" }] },
+      onFetch: (key) => (key === statuses ? 25 : 0),
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.out.done, undefined);
+    assert.equal(existsSync(join(signals(r.cwd), "waiting.json")), true);
+  });
+
+  it("starts no page once the budget is spent, across comments and reviews", async () => {
+    let comments = 0;
+    const r = await run(["wait", "review", "--pr", "7", "--since", iso(0), "--max", "30"], {
+      routes: {
+        "GET /issues/7/comments": () => link([{ id: ++comments, body: "x", created_at: iso(-5) }]),
+        "GET /pulls/7/reviews": () => link([]),
+      },
+      onFetch: () => 12, // pages 1-3 start at 0, 12, 24; the 4th would start at 36
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.calls.length, 3);
+    assert.equal(comments, 3);
+  });
+
+  it("shares the budget between the head lookup and the status request", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "30"], {
+      routes: { "GET /pulls/7": pr(), [statuses]: [pending(1)] },
+      onFetch: (key) => (key === "GET /pulls/7" ? 31 : 0),
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.deepEqual(r.calls, ["GET /pulls/7"]);
+    assert.equal(r.out.cursor, null);
+  });
+
+  it("treats a transient error followed by budget exhaustion as pending", async () => {
+    for (const bad of [new Response("{}", { status: 503 }), null]) {
+      const r = await run(["wait", "ci", "--pr", "7", "--max", "40"], {
+        routes: {
+          "GET /pulls/7": pr(),
+          [statuses]: () => {
+            if (bad === null) throw new TypeError("fetch failed");
+            return bad.clone();
+          },
+        },
+      });
+      assert.equal(r.code, EXIT.pending, r.err);
+      assert.equal(r.elapsed, 40);
+      assert.equal(r.calls.filter((c) => c === statuses).length, 2);
+    }
+  });
+
+  it("does not start a request at the deadline, so the second check never runs", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "30"], {
+      routes: { "GET /pulls/7": pr(), [statuses]: [pending(1)] },
+      onFetch: (_, n) => (n === 2 ? 30 : 0),
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.calls.length, 2);
+  });
+
+  it("returns pending for a result that finishes exactly at the deadline", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "30"], {
+      routes: { "GET /pulls/7": pr(), [statuses]: [{ id: 1, context: "t", status: "success" }] },
+      onFetch: (key) => (key === statuses ? 30 : 0),
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.out.waited_s, 30);
+  });
+
+  it("ends a multi-page probe's wait on a steer: exit 11, marker cleared", async () => {
+    const cwd = repo();
+    mkdirSync(signals(cwd), { recursive: true });
+    const marker = join(signals(cwd), "interrupt");
+    const r = await run(["wait", "review", "--pr", "7", "--since", iso(0), "--max", "100"], {
+      cwd,
+      routes: {
+        "GET /issues/7/comments": () => link([]),
+        "GET /pulls/7/reviews": () => link([]),
+      },
+      onFetch: (_, n, s) => {
+        if (n === 2) writeFileSync(marker, JSON.stringify({ reason: "steer", at: iso(s + 1) }));
+        return 2;
+      },
+    });
+    assert.equal(r.code, EXIT.interrupted);
+    assert.equal(existsSync(join(signals(cwd), "waiting.json")), false);
+  });
+
+  it("keeps the --max and ARGUS_TASK_WAIT_MAX_S clamp as the deadline", async () => {
+    const routes = { "GET /pulls/7": pr(), [statuses]: [pending(1)] };
+    const env = { ARGUS_TASK_WAIT_MAX_S: "45" };
+    assert.equal(
+      (await run(["wait", "ci", "--pr", "7", "--max", "600"], { routes, env })).elapsed,
+      45,
+    );
+    assert.equal(
+      (await run(["wait", "ci", "--pr", "7", "--max", "35"], { routes, env })).elapsed,
+      35,
+    );
   });
 });
 

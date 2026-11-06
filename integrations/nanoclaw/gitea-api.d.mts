@@ -89,6 +89,8 @@ export class GiteaApi {
     fetchImpl?: typeof fetch,
     options?: GiteaApiOptions,
   );
+  /** `{at, now}`: no exchange starts or backs off past `at` (ms on `now()`); null for none. */
+  deadline: { at: number; now: () => number } | null;
   /** Repository JSON from Gitea (not a `{pull, reconciled}` wrapper). */
   getRepository(): Promise<unknown>;
   request(path: string, init?: { method?: string; body?: unknown }): Promise<unknown>;
