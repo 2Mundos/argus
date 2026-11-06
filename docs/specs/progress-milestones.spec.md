@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Progress milestones
@@ -103,7 +103,8 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
 - The task card and activity header also show overall progress as a small pie with its
   percentage whenever `progress_percent` is set. It is separate from the note and the
   milestone, so a milestone does not hide it, and it persists until a later post
-  reports a new percentage.
+  reports a new percentage. A succeeded task card always shows 100% as a checkmark,
+  whatever percentage was last reported.
 - Workers are asked to send a rough percentage with progress when they can: the MCP
   `report_progress` description and the NanoClaw reply instructions both say so. The
   channel reads a leading `NN%` in a plain progress reply as its `percent`
