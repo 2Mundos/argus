@@ -14,7 +14,7 @@ import {
 import { DateChip } from "../DateChip";
 import { DELIVERABLES, type Deliverable } from "../deliverables";
 import { reportPage, useLiveData } from "../live";
-import { TaskSignal } from "../milestones";
+import { ProgressPie, TaskSignal } from "../milestones";
 import { PageHeader } from "../PageHeader";
 import { repositoryNeed, repositoryState, repositoryWarning } from "../projectRepository";
 import { TaskLabel } from "../TaskLabel";
@@ -153,8 +153,8 @@ export function Tasks() {
 
   return (
     <section className={selected ? "tasks-open" : "tasks-page"}>
-      <PageHeader title="Tasks" lead="Work waiting, running and finished.">
-        <label className="check">
+      <PageHeader title="Tasks">
+        <label className="check header-toggle">
           <input
             type="checkbox"
             checked={archived}
@@ -163,12 +163,12 @@ export function Tasks() {
           Archived
         </label>
         {!archived && (
-          <button type="button" onClick={() => setArchiving(true)}>
+          <button type="button" className="compact" onClick={() => setArchiving(true)}>
             Archive…
           </button>
         )}
-        <button type="button" className="primary" onClick={() => setCreating(true)}>
-          New task
+        <button type="button" className="primary compact" onClick={() => setCreating(true)}>
+          + New task
         </button>
       </PageHeader>
       {archived && <p className="muted small">Showing archived tasks only.</p>}
@@ -250,7 +250,8 @@ const TaskCard = memo(
     now: number;
   }) {
     return (
-      <button type="button" className="task-card" onClick={() => onOpen(task.id)}>
+      <button type="button" className="task-card has-pie" onClick={() => onOpen(task.id)}>
+        <ProgressPie percent={task.progress_percent ?? (task.state === "succeeded" ? 100 : 0)} />
         <TaskLabel className="title" title={task.title} project={task.project} />
         <span className="meta">
           <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
