@@ -30,6 +30,7 @@ import {
   UNTRUSTED_TASK_DATA_RULES,
   utf8ByteLength,
 } from "./argus.js";
+import { defaultNodeId } from "./argus-checkpoint.js";
 
 type Call = { method: string; path: string; body: any };
 
@@ -756,6 +757,7 @@ describe("Argus channel", () => {
       worker_version: "nanoclaw/9.9.9",
       engine: null,
       executor: null,
+      node_id: defaultNodeId(),
       features: ["steer", "task-inputs"],
     });
   });
