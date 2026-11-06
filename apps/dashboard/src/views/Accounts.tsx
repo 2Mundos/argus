@@ -42,7 +42,50 @@ import { LocalAccount } from "./LocalAccount";
 import { LocalEndpoints } from "./LocalEndpoints";
 import { ProviderMark, StateIcon } from "./providerIcons";
 
+type AccountType = "claude" | "codex" | "google" | "custom" | "local" | "other";
+
+const ACCOUNT_TYPES: { id: AccountType; title: string; hint: string }[] = [
+  { id: "claude", title: "Claude", hint: "Subscription login" },
+  { id: "codex", title: "Codex", hint: "ChatGPT login or API key" },
+  { id: "google", title: "Google AI Studio", hint: "Gemini API key" },
+  { id: "custom", title: "Custom provider", hint: "OpenRouter or any compatible API" },
+  { id: "local", title: "Local model", hint: "Ollama, LM Studio, vLLM…" },
+  { id: "other", title: "Other", hint: "Cursor, Copilot, Gitea, GitHub, raw JSON" },
+];
+
+/** Wizard step 1: choose the kind of account, then hand off to its own dialog. */
+function AddAccountTypePicker(props: { onPick: (type: AccountType) => void; onClose: () => void }) {
+  return (
+    <div className="overlay">
+      <div className="dialog" role="dialog" aria-label="Add account">
+        <h2>Add account</h2>
+        <p className="muted small">What kind of account?</p>
+        <div className="account-type-grid">
+          {ACCOUNT_TYPES.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className="compact"
+              aria-label={t.title}
+              onClick={() => props.onPick(t.id)}
+            >
+              <strong>{t.title}</strong>
+              <span className="muted small">{t.hint}</span>
+            </button>
+          ))}
+        </div>
+        <div className="actions">
+          <button type="button" className="compact" onClick={props.onClose}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Accounts() {
+  const [picking, setPicking] = useState(false);
   const [adding, setAdding] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
   const [addingCustom, setAddingCustom] = useState<CustomPresetId>();
@@ -111,27 +154,13 @@ export function Accounts() {
       >
         <ActionButton
           pending={action.is("reload-secrets")}
+          className="compact"
           disabled={action.busy}
           action={() => reload()}
         >
           Reload secrets file
         </ActionButton>
-        <button type="button" onClick={() => setAddingCodex(true)}>
-          Add Codex account
-        </button>
-        <button type="button" onClick={() => setClaude({})}>
-          Add Claude account
-        </button>
-        <button type="button" onClick={() => setAddingCustom("google")}>
-          Add Google AI Studio
-        </button>
-        <button type="button" onClick={() => setAddingCustom("openrouter")}>
-          Add custom provider
-        </button>
-        <button type="button" onClick={() => setAddingLocal(true)}>
-          Add local model
-        </button>
-        <button type="button" className="primary" onClick={() => setAdding(true)}>
+        <button type="button" className="primary compact" onClick={() => setPicking(true)}>
           Add account
         </button>
       </PageHeader>
@@ -306,6 +335,20 @@ export function Accounts() {
           )}
         </tbody>
       </table>
+      {picking && (
+        <AddAccountTypePicker
+          onClose={() => setPicking(false)}
+          onPick={(type) => {
+            setPicking(false);
+            if (type === "claude") setClaude({});
+            else if (type === "codex") setAddingCodex(true);
+            else if (type === "google") setAddingCustom("google");
+            else if (type === "custom") setAddingCustom("openrouter");
+            else if (type === "local") setAddingLocal(true);
+            else setAdding(true);
+          }}
+        />
+      )}
       {adding && (
         <AddAccount
           onClose={() => {

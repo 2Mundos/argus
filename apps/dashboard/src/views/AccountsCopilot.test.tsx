@@ -98,6 +98,7 @@ const TOKEN = "github_pat_11ABCDEFG_secretvalue";
 async function openAdd() {
   render(<Accounts />);
   fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+  fireEvent.click(screen.getByRole("button", { name: "Other" }));
   await screen.findByLabelText("Provider");
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "seat" } });
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "copilot" } });
