@@ -237,6 +237,38 @@ async def test_awaiting_quota_pause_keeps_the_session_too(
     assert resume.session_id == SESSION.session_id
 
 
+async def test_a_mid_attempt_switch_keeps_the_attempt_but_no_native_session(
+    db: Database, store: MemorySecretStore
+) -> None:
+    a = await add(db, store, "acct-a", priority=100)
+    await add(db, store, "acct-b", priority=90)
+    task = await new_task(db)
+    await lease(db, store, task=task)
+    async with db.write() as tx:
+        result = await accounts.exhausted(
+            tx, A, a,
+            ExhaustedReport(
+                until=None, runtime_providers=["anthropic"], task_id=task.id,
+                attempt=task.attempt, native_session=SESSION,
+            ),
+            store,
+        )  # fmt: skip
+    assert result.next_account_id is not None and not result.task_blocked
+    now = await get(db, task.id)
+    assert (now.state, now.attempt, now.failures) == (S.CLAIMED, 1, 0)
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT native_session FROM task_attempts "
+            "WHERE task_id = ? AND attempt = 1",
+            (task.id,),
+        ) as cur,
+    ):
+        assert all(row[0] is None for row in await cur.fetchall())
+    assert await offered(db, task.id, 2) is None
+    assert await events(db, "task.quota_resume") == []
+
+
 async def test_the_session_is_taken_once_and_a_retry_does_not_send_again(
     db: Database, store: MemorySecretStore
 ) -> None:
