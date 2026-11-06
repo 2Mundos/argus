@@ -24,7 +24,8 @@ const {
 
 const GITHUB_ORIGIN = "https://github.com";
 const API = "https://api.github.com";
-// Completed check-run conclusions that block; success, neutral and skipped do not.
+// Completed check-run conclusions that block; success, neutral and skipped do not, and any
+// other conclusion (stale, null, new values) is unknown.
 const FAILED_CONCLUSIONS = new Set([
   "failure",
   "timed_out",
@@ -50,18 +51,32 @@ export function repositoryClient(repositoryUrl, allowedRepositories, fetchImpl, 
   return new Api(repositoryUrl, allowedRepositories, fetchImpl ?? createGatewayFetch(), options);
 }
 
+const PENDING_STATES = new Set(["pending", "queued", "in_progress", "waiting", "requested"]);
+
+/** A commit status state as failure, pending, success, neutral, skipped or unknown. */
+function statusState(state) {
+  if (state === "failure" || state === "error" || state === "cancelled" || state === "timed_out")
+    return "failure";
+  if (PENDING_STATES.has(state)) return "pending";
+  return ["success", "neutral", "skipped"].includes(state) ? state : "unknown";
+}
+
+/** A check run as failure, pending, success, neutral, skipped or unknown (stale, null, new). */
 function checkState(run) {
-  if (run.status !== "completed") return "pending";
-  return FAILED_CONCLUSIONS.has(run.conclusion) ? "failure" : "success";
+  if (run?.status === "completed") {
+    if (FAILED_CONCLUSIONS.has(run.conclusion)) return "failure";
+    return ["success", "neutral", "skipped"].includes(run.conclusion) ? run.conclusion : "unknown";
+  }
+  return PENDING_STATES.has(run?.status) ? "pending" : "unknown";
 }
 
 /** One state over the latest status per context and the latest check run per name. */
 function combinedState(statuses, checkRuns) {
-  const states = [...statuses.map((s) => s.state), ...checkRuns.map(checkState)];
+  const states = [...statuses.map((s) => statusState(s.state)), ...checkRuns.map(checkState)];
   if (!states.length) return null;
-  if (states.some((s) => s === "failure" || s === "error")) return "failure";
-  if (states.some((s) => s === "pending")) return "pending";
-  return "success";
+  for (const state of ["failure", "pending", "unknown"])
+    if (states.includes(state)) return state;
+  return states.some((s) => s === "success" || s === "neutral") ? "success" : "skipped";
 }
 
 export class GitHubApi extends GiteaApi {
@@ -168,7 +183,11 @@ export class GitHubApi extends GiteaApi {
       context: r.name,
       state: checkState(r),
     }));
-    return [...(await this.latestStatuses(sha)), ...runs];
+    const statuses = (await this.latestStatuses(sha)).map((s) => ({
+      ...s,
+      state: statusState(s.state),
+    }));
+    return [...statuses, ...runs];
   }
 
   async reviewSignals(sha) {

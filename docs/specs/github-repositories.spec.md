@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-10-28
+updated: 2026-11-06
 ---
 
 # GitHub repositories
@@ -89,7 +89,7 @@ Where GitHub differs, the helper adapts and the difference is visible in `--help
 | --- | --- |
 | Base | `https://api.github.com/repos/{owner}/{repo}`, header `X-GitHub-Api-Version: 2022-11-28`. |
 | Lists | `per_page` instead of `limit` (still 1..50). |
-| CI | `status` and `statuses` add the head SHA's **check runs** (GitHub Actions report there, not as statuses) and a `combined_state` over both: `failure` if any status is `failure`/`error` or a completed check run concluded `failure`, `timed_out`, `cancelled`, `action_required` or `startup_failure`; `pending` if any status is `pending` or a check run is not completed; `success` otherwise; `null` with neither. |
+| CI | `status` and `statuses` add the head SHA's **check runs** (GitHub Actions report there, not as statuses) and a `combined_state` over both. Each entry is normalized first: a status is `failure` (`failure`, `error`, `cancelled`, `timed_out`), `pending`, `success`, `neutral`, `skipped` or `unknown`; a check run is `failure` (conclusion `failure`, `timed_out`, `cancelled`, `action_required` or `startup_failure`), `pending` (status `pending`, `queued`, `in_progress`, `waiting` or `requested`), `success`, `neutral`, `skipped`, or `unknown` (a completed run with a missing or unrecognized conclusion such as `stale`, or a missing or unrecognized status). `combined_state` is `failure` if any entry fails; else `pending` if any is pending; else `unknown` if any is unknown; else `success` if any is `success` or `neutral`; else `skipped` when all are skipped; `null` with no entries. Unrecognized evidence is never a pass. `ciStatuses` (used by `argus-task`) returns the same per-entry states. |
 | Issues | `issue-list --type` filters client-side on `pull_request` (pages can come back short). `--q` and `--before` are refused (`usage`): the search API is outside the repository path the proxy authorizes. |
 | Comments | `comment-list --before` is refused (`usage`). |
 | Statuses | `statuses --state/--sort` are refused (`usage`). |
