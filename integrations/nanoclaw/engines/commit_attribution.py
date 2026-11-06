@@ -396,21 +396,56 @@ def _bash_git_commit_segments(command: str) -> list[list[str]]:
     for seg in _bash_segments(command):
         while seg and re.match(r"^\w+=", seg[0]):
             seg = seg[1:]
-        idx = 0
-        while idx < len(seg):
-            name = Path(seg[idx]).name
-            if name == "git" and idx + 1 < len(seg) and seg[idx + 1] == "commit":
-                out.append(seg[idx:])
+        for idx, tok in enumerate(seg):
+            if Path(tok).name == "git":
+                inv = parse_git_argv(seg[idx:], ".")
+                if inv and inv.command == "commit":
+                    out.append(seg[idx:])
                 break
-            if seg[idx] == "commit":
-                out.append(["git", "commit", *seg[idx + 1 :]])
-                break
-            idx += 1
+        else:
+            if seg and seg[0] == "commit":
+                inv = parse_git_argv(["git", *seg], ".")
+                if inv and inv.command == "commit":
+                    out.append(["git", *seg])
     return out
 
 
+def _is_message_flag(token: str) -> bool:
+    return token in ("-m", "--message", "-F", "--file") or token.startswith(
+        ("--message=", "--file=")
+    )
+
+
+def _is_short_flag_with_message(token: str) -> bool:
+    return (
+        token.startswith("-")
+        and not token.startswith("--")
+        and ("m" in token or "F" in token)
+    )
+
+
+def _identity_assignment_in_command(command: str) -> bool:
+    for seg in _bash_segments(command):
+        for idx, token in enumerate(seg):
+            if not _IDENTITY_ENV_ASSIGNMENT.match(token):
+                continue
+            if idx > 0 and (
+                _is_message_flag(seg[idx - 1])
+                or _is_short_flag_with_message(seg[idx - 1])
+            ):
+                continue
+            return True
+        if (
+            seg[0] in ("export", "env")
+            and len(seg) > 1
+            and _IDENTITY_ENV_ASSIGNMENT.match(seg[1])
+        ):
+            return True
+    return False
+
+
 def check_bash_command(command: str) -> str | None:
-    if _IDENTITY_ENV_ASSIGNMENT.search(command):
+    if _identity_assignment_in_command(command):
         return IDENTITY_OVERRIDE_MESSAGE
     try:
         for argv in _bash_git_argvs(command):
