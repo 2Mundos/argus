@@ -5,7 +5,8 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from record_transcript import MAX_BYTES, main, render, trim
+import record_transcript
+from record_transcript import MAX_BYTES, main, render, scrub, trim
 
 
 def make_db(path: Path, lines: list[tuple[str, int, str, str]]) -> Path:
@@ -44,7 +45,21 @@ def test_render_shrinks_the_cap_until_the_file_fits() -> None:
     assert "chars trimmed" in text
 
 
-def test_main_writes_the_attempt_events_only(tmp_path: Path) -> None:
+def test_scrub_masks_credentials_emails_home_paths_and_extra_values() -> None:
+    text = "cd /home/pedro/work/acme-secret-repo; mail a.b@example.com; Authorization: Bearer abcdefghij123456"
+    out = scrub(text, ("acme-secret-repo",))
+    assert "pedro" not in out
+    assert "/home/user/work/[redacted]" in out
+    assert "example.com" not in out
+    assert "abcdefghij123456" not in out
+
+
+def test_main_writes_the_attempt_events_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        record_transcript, "derive", lambda engine, events: '{"d": 1}\n'
+    )
     db = make_db(
         tmp_path / "a.db",
         [
@@ -56,18 +71,58 @@ def test_main_writes_the_attempt_events_only(tmp_path: Path) -> None:
         ],
     )
     root = tmp_path / "transcripts"
-    argv = ["t1", "1", "claude", "success", "--db", str(db), "--root", str(root)]
+    argv = [
+        "t1",
+        "1",
+        "claude",
+        "success",
+        "--source",
+        "task t1, claude 2.1",
+        "--db",
+        str(db),
+        "--root",
+        str(root),
+    ]
     assert main(argv) == 0
     rows = (root / "claude" / "success" / "events.jsonl").read_text().splitlines()
     assert len(rows) == 3
     assert json.loads(rows[0]) == {"type": "system", "subtype": "init"}
     assert json.loads(rows[1])["out"].endswith("[7000 chars trimmed]")
     assert rows[2] == "plain stderr line"
+    case = root / "claude" / "success"
+    assert (case / "source.md").read_text() == "task t1, claude 2.1\n"
+    assert json.loads((case / "expected.json").read_text()) == {"d": 1}
 
 
 def test_missing_log_and_bad_case_name_are_refused(tmp_path: Path) -> None:
     db = make_db(tmp_path / "a.db", [("t1", 1, "worker", "only worker")])
     with pytest.raises(SystemExit, match="no delegate log lines"):
-        main(["t1", "1", "claude", "c", "--db", str(db), "--root", str(tmp_path)])
+        main(
+            [
+                "t1",
+                "1",
+                "claude",
+                "c",
+                "--source",
+                "s",
+                "--db",
+                str(db),
+                "--root",
+                str(tmp_path),
+            ]
+        )
     with pytest.raises(SystemExit):
-        main(["t1", "1", "claude", "../x", "--db", str(db), "--root", str(tmp_path)])
+        main(
+            [
+                "t1",
+                "1",
+                "claude",
+                "../x",
+                "--source",
+                "s",
+                "--db",
+                str(db),
+                "--root",
+                str(tmp_path),
+            ]
+        )
