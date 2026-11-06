@@ -43,6 +43,12 @@ they must come from real engine output, not hand-written strings.
   120 if the case is still too large, and keeps the event structure.
 - **Redaction:** credentials, emails and home paths are masked; pass `--redact`
   for repository names and anything else.
+- **Stderr:** `--stderr PATH` takes the stderr tail (the last 16 KiB, redacted
+  like the events). `stderr.txt` is written only when that input is authentic and
+  non-empty; a re-record without it removes a stale one. No committed case depends
+  on stderr yet, because no authentic stderr capture is available on this host:
+  the server stderr-tail artifact lives on the server volume, and the delegate
+  `.err` files are not retained.
 - **expected.json** is drafted by `transcripts-derive.ts` (needs `bun`).
 - **Review:** a person checks the redaction and the expected values before
   committing.
