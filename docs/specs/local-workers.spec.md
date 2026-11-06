@@ -44,7 +44,6 @@ at the same version as Argus.
 - No remote Docker hosts or Kubernetes: `worker setup` prepares this machine.
 - No change to how the fleet starts, leases or isolates workers. The launcher
   produces the same settings `provision.sh` documents.
-- No arm64 worker images (the API image is multi-arch) ([releases](releases.spec.md), open question 1).
 
 # 3. Decisions Made
 

@@ -9,7 +9,7 @@ updated: 2026-11-06
 # 1. Purpose and Scope
 
 A release is a SemVer tag `vX.Y.Z` on `main`, a notes document committed with
-it, and one container image (`linux/amd64` and `linux/arm64`, built with QEMU/buildx) built from that tag. One command cuts it; pushing
+it, and one container image (`linux/amd64` and `linux/arm64`) built from that tag. One command cuts it; pushing
 the tag builds and publishes everything else.
 
 - `make release` (`scripts/release.py`) infers the next version from the
@@ -30,7 +30,11 @@ the tag builds and publishes everything else.
   is never published.
 - A second job builds and pushes the worker images
   `ghcr.io/<owner>/argus-nanoclaw-host:vX.Y.Z` and `…/argus-nanoclaw-agent:vX.Y.Z`
-  ([local workers](local-workers.spec.md) 3.1), with the same `latest` rule.
+  ([local workers](local-workers.spec.md) 3.1), with the same `latest` rule. Both
+  are multi-arch: each architecture builds natively on its own runner (the
+  ~6 GB agent image is impractical under QEMU) and pushes `vX.Y.Z-amd64` /
+  `vX.Y.Z-arm64`; a final job joins them into the `vX.Y.Z` and `latest` manifests.
+  The per-architecture tags remain in the registry.
 - The image carries the host launcher (`/app/bin/argus`) and every release's
   notes (`/app/releases/`), so `argus update` installs the matching launcher
   and shows the Upgrading sections it skips over ([launcher](launcher.spec.md)).
@@ -132,7 +136,7 @@ to an advanced workflow with the same ignore.
 
 # 4. Open Questions
 
-1. Worker images are still `linux/amd64` only (see the local-workers spec).
+None.
 
 # 5. Constraints
 

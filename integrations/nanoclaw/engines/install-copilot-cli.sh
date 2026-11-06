@@ -8,6 +8,7 @@ prefix=/usr/local/lib/argus-copilot
 
 case "$(uname -m)" in
   x86_64|amd64) pkg="@github/copilot-linux-x64" ;;
+  aarch64|arm64) pkg="@github/copilot-linux-arm64" ;;
   *) echo "copilot: no pinned arch package for $(uname -m); add one before building here" >&2; exit 1 ;;
 esac
 
