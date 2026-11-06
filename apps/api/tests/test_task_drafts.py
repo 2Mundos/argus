@@ -348,12 +348,16 @@ async def test_stale_versions_are_refused(db: Database, clock: FakeClock) -> Non
 
 
 async def test_edits_merge_reset_and_skip_no_ops(db: Database) -> None:
-    d = await new(db, **complete(priority=5))
+    d = await new(db, **complete(priority=5, budget_usd=None))
     async with db.write() as tx:
         same = await drafts.edit_draft(tx, d.id, {"priority": 5}, d.version, ACTOR)
         assert same.version == d.version  # nothing changed: no write
         reset = await drafts.edit_draft(tx, d.id, {"priority": None}, d.version, ACTOR)
-    assert (reset.body.priority, reset.body.spec) == (0, "do it")
+    # A reset field is unset again (the task default applies at publish); the
+    # stored explicit "no budget" the patch did not name is kept.
+    assert (reset.body.priority, reset.body.spec) == (None, "do it")
+    assert reset.body.model_fields_set >= {"budget_usd"}
+    assert "priority" not in reset.body.model_fields_set
     async with db.write() as tx:
         with pytest.raises(ValidationFailedError):
             await drafts.edit_draft(tx, d.id, {"bogus": 1}, reset.version, ACTOR)

@@ -67,7 +67,23 @@ async def events(db: Database, task_id: str) -> list[tuple[str, dict]]:
 async def test_new_task_without_deps_is_ready(db: Database) -> None:
     task = await create(db)
     assert task.state is S.READY
-    assert await events(db, task.id) == [("task.created", {"to": "ready"})]
+    builtin = dict.fromkeys(
+        (
+            "deliverable",
+            "priority",
+            "required_capabilities",
+            "budget_usd",
+            "max_attempts",
+            "timeout_s",
+        ),
+        "built_in",
+    )
+    assert await events(db, task.id) == [
+        (
+            "task.created",
+            {"to": "ready", "defaults": builtin | {"difficulty": "inferred"}},
+        )
+    ]
 
 
 async def test_task_with_unfinished_dep_is_pending_until_dep_succeeds(

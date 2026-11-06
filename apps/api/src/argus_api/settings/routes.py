@@ -8,12 +8,15 @@ from argus_core.settings import (
     SettingValue,
     SettingWrite,
 )
+from argus_core.task_defaults import TaskDefaults
 from fastapi import APIRouter, Request
 
 from argus_api import orchestrator
 from argus_api.access import require_project_readable
 from argus_api.deps import AdminDep, CallerDep, DbDep, SettingsDep
+from argus_api.kinds import service as kinds
 from argus_api.settings import registry, service
+from argus_api.tasks import defaults as task_defaults
 
 router = APIRouter(tags=["settings"])
 
@@ -64,6 +67,21 @@ async def get_project_override(
         await require_project_readable(conn, caller, slug)
         await service.ensure_project_exists(conn, slug)
         return {"key": key, "value": await service.project_override(conn, slug, key)}
+
+
+@router.get("/projects/{slug}/task-defaults")
+async def get_task_defaults(
+    slug: str, db: DbDep, caller: CallerDep, kind: str = "generic"
+) -> TaskDefaults:
+    """What a task of `kind` created in the project now gets for each field it
+    leaves out, the source of each value, and the combinations creation would
+    refuse (task defaults spec 3.6)."""
+    async with db.read() as conn:
+        await require_project_readable(conn, caller, slug)
+        await service.ensure_project_exists(conn, slug)
+        return await task_defaults.effective(
+            conn, slug, await kinds.get_kind(conn, kind)
+        )
 
 
 @router.put("/settings/{key}")

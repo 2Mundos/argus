@@ -24,6 +24,9 @@ TEMPLATE_FIELDS = INTAKE_FIELDS | frozenset(
         "budget_usd",
         "review",
         "difficulty",
+        "deliverable",
+        "max_attempts",
+        "timeout_s",
         "harness_model",
         "executor_model",
     }

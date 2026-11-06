@@ -8,6 +8,7 @@ outside the write transaction, and handed in; nothing here calls the network.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import aiosqlite
@@ -79,32 +80,62 @@ class ForgeGate:
     checks: CheckState | None
 
 
-async def check_creatable(
+@dataclass(frozen=True)
+class CreateProblem:
+    """Why a task with this deliverable could not be created (3.3). `fields` are
+    the task fields that combine into the problem."""
+
+    code: str
+    message: str
+    detail: str
+    fields: tuple[str, ...]
+
+
+async def creation_problem(
     conn: aiosqlite.Connection,
     project: str | None,
     capabilities: list[str],
     level: Deliverable,
-) -> None:
+) -> CreateProblem | None:
     """A task that can never reach its deliverable is refused up front (3.3)."""
     if level not in CODE_DELIVERABLES:
-        return
+        return None
     if REPOSITORY_WRITE not in capabilities:
-        raise ValidationFailedError(
-            f"deliverable {level} needs the {REPOSITORY_WRITE} capability",
+        return CreateProblem(
             code="deliverable_capability",
-            details=[
-                f"required_capabilities: {REPOSITORY_WRITE} (deliverable {level})"
-            ],
+            message=f"deliverable {level} needs the {REPOSITORY_WRITE} capability",
+            detail=f"required_capabilities: {REPOSITORY_WRITE} (deliverable {level})",
+            fields=("deliverable", "required_capabilities"),
         )
     # Lazy: the delivery module imports the fleet, which imports the task service.
     from argus_api.tasks import delivery
 
     if project is not None and project not in await delivery.repositories(conn):
-        raise ValidationFailedError(
-            f"project {project} has no repository configured, so a task cannot"
-            f" deliver {level}",
+        return CreateProblem(
             code="deliverable_repository",
-            details=[f"project: {project} (deliverable {level})"],
+            message=(
+                f"project {project} has no repository configured, so a task cannot"
+                f" deliver {level}"
+            ),
+            detail=f"project: {project} (deliverable {level})",
+            fields=("deliverable",),
+        )
+    return None
+
+
+async def check_creatable(
+    conn: aiosqlite.Connection,
+    project: str | None,
+    capabilities: list[str],
+    level: Deliverable,
+    hints: Callable[[CreateProblem], list[str]] | None = None,
+) -> None:
+    """Raise the creation problem, if any; `hints` add details (task defaults 3.5)."""
+    if problem := await creation_problem(conn, project, capabilities, level):
+        raise ValidationFailedError(
+            problem.message,
+            code=problem.code,
+            details=[problem.detail, *(hints(problem) if hints else [])],
         )
 
 

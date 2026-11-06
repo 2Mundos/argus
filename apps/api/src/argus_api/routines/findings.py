@@ -65,6 +65,10 @@ async def after_succeeded_run(tx: Tx, routine_id: str, run_id: str) -> None:
                     "parent_id": run_id,
                     "project": routine["project"],
                     "requires_approval": routine["findings"] == "approval",
+                    # Untrusted content: a task default must not give it
+                    # repository write (task defaults 3.4).
+                    "deliverable": "response",
+                    "required_capabilities": [],
                 }
             )
         except ValidationError as exc:

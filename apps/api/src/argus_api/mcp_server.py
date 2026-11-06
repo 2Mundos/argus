@@ -891,7 +891,7 @@ async def create_task(
     parent_id: str | None = None,
     depends_on: list[str] | None = None,
     required_capabilities: list[str] | None = None,
-    priority: int = 0,
+    priority: int | None = None,
     acceptance: list[str] | None = None,
     knowledge: list[str] | None = None,
     difficulty: Literal["trivial", "simple", "standard", "hard"] | None = None,
@@ -911,8 +911,10 @@ async def create_task(
     When the project has a repository configured on the pool, the worker gets a
     checkout before the model runs without you setting any capability (project code
     availability spec). Set `repository:write` only when the task may push, publish
-    commits, or open or update PRs.
-    `deliverable` is what the task must leave behind: response (the default: a
+    commits, or open or update PRs. Omitted deliverable, priority, difficulty,
+    required_capabilities and budget_usd take the project's task defaults
+    (get_settings {project}, task_default_*), then the global ones.
+    `deliverable` is what the task must leave behind: response (built-in: a
     summary), knowledge (a page written), artifact (a file listed in the result),
     subtasks (at least one child), branch (pushed), pr_open, pr_green (open with
     passing checks) or pr_merged. The branch and pr_* values need
@@ -925,7 +927,7 @@ async def create_task(
     (composer-2.5), trivial first on the node's local model with the cloud as the
     fallback; "standard" (the default) the Claude or Codex executor; "hard"
     (architecture, data migration, security, several services) the strong model (Opus).
-    Omit it and Argus infers one conservatively from the title and spec.
+    Omitted with no default, Argus infers one conservatively from the title and spec.
     `difficulty_source` is "declared" by default; send "inferred" when the level is
     your suggestion (editable later). A failed attempt for context overflow or a
     failed verification raises it one level. `complexity` is the deprecated name
@@ -940,8 +942,7 @@ async def create_task(
     task waits as awaiting_quota while it cannot serve and never runs on another.
     Local and custom accounts bring their own model, so pair them with no
     harness_model; a local (Strata) harness delegates only to the Cursor agent.
-    `budget_usd` (at most 10000) caps the estimated spend; omitted, the project's
-    task_default_budget_usd applies. Pass `idempotency_key` when you may retry: the
+    `budget_usd` (at most 10000) caps the estimated spend. Pass `idempotency_key` when you may retry: the
     same key and arguments return the task the first call created instead of a
     duplicate."""
     body: dict[str, Any] = {
@@ -951,10 +952,11 @@ async def create_task(
         "kind": kind,
         "parent_id": parent_id,
         "depends_on": depends_on or [],
-        "priority": priority,
         "acceptance": acceptance or [],
         "knowledge": knowledge or [],
     }
+    if priority is not None:
+        body["priority"] = priority
     if required_capabilities is not None:
         body["required_capabilities"] = required_capabilities
     if difficulty is not None or complexity is not None:
@@ -2038,8 +2040,9 @@ async def upsert_routine(
     """Create or replace a routine. `schedule` is 5-field cron or @hourly, @daily,
     @weekly in the IANA `timezone`. `template` holds task fields (kind, title, spec,
     acceptance, input, required_capabilities, priority, review, difficulty,
-    harness_model, executor_model), checked with the task create rules; a bad one is
-    a 422 on save. `findings: auto`, or changing an auto routine, is admin only."""
+    deliverable, max_attempts, timeout_s, budget_usd, harness_model, executor_model),
+    checked with the task create rules; a bad one is a 422 on save. Fields it leaves
+    out take the task defaults at each run. `findings: auto`, or changing an auto routine, is admin only."""
     return await _call(
         ctx,
         "PUT",

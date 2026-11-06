@@ -308,7 +308,9 @@ async def spawn_reviewer(
         review=Review.NONE,
         harness_model=harness,
         executor_model=executor,
+        # Fixed shape: task defaults must not make a reviewer write (task defaults 3.4).
         required_capabilities=[],
+        deliverable=Deliverable.RESPONSE,
     )
     child = await tasks_svc.create_task(tx, body, actor)
     await record(

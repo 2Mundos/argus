@@ -2,7 +2,9 @@
 
 from typing import Any
 
+from argus_core.difficulty import Difficulty
 from argus_core.settings import IndependentReviewSetting, SettingDefinition
+from argus_core.tasks import Deliverable
 
 # JSON Schema for a model-policy map (engine -> nonempty chain). Used for both the
 # full global policy and a partial project override.
@@ -123,6 +125,65 @@ REGISTRY: dict[str, SettingDefinition] = {
         description=(
             "Budget (USD, estimated) for a new task that names none; a project value"
             " overrides the global one. Unset: no budget."
+        ),
+    ),
+    # Task defaults (task defaults spec 3.1): fill what a new task leaves out.
+    "task_default_deliverable": SettingDefinition(
+        key="task_default_deliverable",
+        schema={"enum": [d.value for d in Deliverable]},
+        default=Deliverable.RESPONSE.value,
+        scopes=["global", "project"],
+        description=(
+            "Deliverable for a new task that names none. Code deliverables also need"
+            " repository:write in the capabilities and a project repository."
+        ),
+    ),
+    "task_default_priority": SettingDefinition(
+        key="task_default_priority",
+        schema={"type": "integer", "minimum": -1_000_000, "maximum": 1_000_000},
+        default=0,
+        scopes=["global", "project"],
+        description="Priority for a new task that names none; higher is claimed first.",
+    ),
+    "task_default_difficulty": SettingDefinition(
+        key="task_default_difficulty",
+        schema={"enum": [*(d.value for d in Difficulty), None]},
+        default=None,
+        scopes=["global", "project"],
+        description=(
+            "Difficulty for a new task that names none. Null: inferred from the"
+            " title and spec."
+        ),
+    ),
+    "task_default_required_capabilities": SettingDefinition(
+        key="task_default_required_capabilities",
+        schema={
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": True,
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        },
+        default=[],
+        scopes=["global", "project"],
+        description=(
+            "Capabilities a new task requires when it names none; [] requires none."
+        ),
+    ),
+    "task_default_max_attempts": SettingDefinition(
+        key="task_default_max_attempts",
+        schema={"type": "integer", "minimum": 1, "maximum": 20},
+        default=3,
+        scopes=["global", "project"],
+        description="Attempts a new task gets when it names no limit.",
+    ),
+    "task_default_timeout_s": SettingDefinition(
+        key="task_default_timeout_s",
+        schema={"type": ["integer", "null"], "minimum": 60, "maximum": 7 * 24 * 3600},
+        default=None,
+        scopes=["global", "project"],
+        description=(
+            "Per-attempt timeout (seconds) for a new task that names none. Null: the"
+            " kind's, then the server's."
         ),
     ),
     "onboarding.dismissed": SettingDefinition(
