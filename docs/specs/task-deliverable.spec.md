@@ -37,7 +37,8 @@ a task.
 - **No forge writes** and no forge calls inside a write transaction.
 - **No judgement of quality.** The deliverable proves something exists, not that it
   is good; that stays with `acceptance`, `review` and independent review.
-- **No kind default** in this version; the default is `response`.
+- **No kind default** in this version; the default is `response` unless a
+  [task default](task-defaults.spec.md) setting names another.
 - **No deployment, issue or release values.** They depend on grants and systems
   Argus does not read.
 - No migration of existing tasks beyond the column default (3.2).
@@ -67,7 +68,7 @@ other.
 
 `tasks.deliverable` (migration `0068`), `TEXT NOT NULL DEFAULT 'response'` with no
 `CHECK`, so a new value needs no table rebuild; the API enum is the authority.
-`TaskCreate.deliverable` (default `response`), `Task.deliverable`, the claimed
+`TaskCreate.deliverable` (omitted: the [task default](task-defaults.spec.md), else `response`), `Task.deliverable`, the claimed
 task, and the attempt definition snapshot ([task edit](task-edit.spec.md) 3.5)
 carry it. Rows that predate the column read `response`, which is what they were
 held to (a summary), so no existing task changes behaviour.
@@ -79,12 +80,13 @@ a routine template save and an edit, which share the rules) is refused with
 `422` when:
 
 - `repository:write` is not among the task's required capabilities, after the
-  kind's defaults: `deliverable_capability`;
+  kind's and the [task defaults](task-defaults.spec.md): `deliverable_capability`;
 - the task's project has no proven repository (the pools' `nanoclaw.repositories`
   map, [delivery](task-delivery.spec.md) 3.1): `deliverable_repository`.
 
-Each error names the deliverable and what is missing. The capability is not added
-for the caller. Orchestrators still get an automatic read checkout for configured
+Each error names the deliverable and what is missing, and the setting a value came
+from when a task default supplied it (task defaults 3.5). The capability is not
+added for the caller, and a default deliverable is not merge authorization. Orchestrators still get an automatic read checkout for configured
 projects without setting any capability ([project code
 availability](project-code-availability.spec.md)); branch/pr deliverables still
 require `repository:write` here. `pr_merged` does not require `delivery.allow_merge`:

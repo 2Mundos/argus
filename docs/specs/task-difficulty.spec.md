@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-10-31
+updated: 2026-11-06
 ---
 
 # Task difficulty, executor routing and the hard tier
@@ -36,7 +36,8 @@ the engine role, and the model-policy maps that pin the models.
   `standard`), stored in `tasks.difficulty` (CHECK-constrained). `simple` is work
   that needs no strong model but is more than a copy change; it routes like
   `trivial` to the cheap executor, but only `trivial` prefers the `local` account.
-  `difficulty_source` is `declared` (the creator sent it, or an editor set it) or
+  `difficulty_source` is `declared` (the creator sent it, an editor set it, or a
+  [task default](task-defaults.spec.md) setting supplied it) or
   `inferred` (the heuristic, or an escalation). Migration
   `0036_task_difficulty.sql` adds both columns, copies `complexity` and
   `complexity_source` (`explicit` becomes `declared`, `heuristic` becomes

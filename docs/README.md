@@ -175,6 +175,8 @@ every new dependency is judged against it.
 - [Task edit](specs/task-edit.spec.md) — edit a task's title, spec, criteria, priority,
   capabilities, pins and dependencies with one rule set for REST, MCP and the dashboard;
   re-route a blocked task
+- [Task defaults](specs/task-defaults.spec.md) — global and per-project defaults for
+  the fields a new task leaves out, with their source recorded at creation
 - [Task drafts](specs/task-drafts.spec.md) — persisted, never-claimable task drafts
   published in one validated, idempotent transaction (atomic or partial)
 - [Command guard](specs/command-guard.spec.md) — a `PreToolUse` hook that blocks a

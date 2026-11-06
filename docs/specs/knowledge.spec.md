@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # Knowledge Spec
@@ -115,8 +115,8 @@ per-project permissions: any valid token reads every project.
 - **New task** warns when the selected project has no usable repository, following
   the selection, and never blocks Create. The wording follows what is true: Argus
   refuses to create a branch/PR task without one (`deliverable_repository`); a task
-  holding `repository:write` (typed, or the kind's default capabilities while the
-  field is empty) is blocked by a worker that cannot resolve one; with
+  holding `repository:write` (typed, or the project's task default or the kind's
+  default capabilities while the field is empty) is blocked by a worker that cannot resolve one; with
   `conflict` the warning says workers whose pool names one may use it and others
   block; `invalid` says the stored value is unusable; anything else says the task
   can still run without a checkout. "Set repository…" opens the same dialog beside the

@@ -57,7 +57,7 @@ Every spec in this directory with its status, kept in sync by
 | [Project code availability](project-code-availability.spec.md) | `implemented` |
 | [Project runtime images](project-runtime.spec.md) | `implemented` |
 | [Prompt-data isolation (task spec, knowledge, child tasks)](prompt-data-isolation.spec.md) | `implemented` |
-| [Quota resume: resume the same native conversation after a quota pause](quota-resume.spec.md) | `implemented` |
+| [Session resume: resume the same native conversation after an interruption](quota-resume.spec.md) | `implemented` |
 | [Releases](releases.spec.md) | `implemented` |
 | [Routines](routines.spec.md) | `implemented` |
 | [Security hardening (2026-10-20 review, medium/low)](security-hardening.spec.md) | `implemented` |
@@ -70,6 +70,7 @@ Every spec in this directory with its status, kept in sync by
 | [Task checkpoint: keep a task's unpublished work across attempts and workers](task-checkpoint.spec.md) | `implemented` |
 | [Task continuation](task-continuation.spec.md) | `implemented` |
 | [Task cost and budget](task-cost.spec.md) | `implemented` |
+| [Task defaults](task-defaults.spec.md) | `partial` |
 | [Task deliverable](task-deliverable.spec.md) | `implemented` |
 | [Task delivery](task-delivery.spec.md) | `implemented` |
 | [Task dependencies](task-dependencies.spec.md) | `implemented` |

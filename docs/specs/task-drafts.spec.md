@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-06
 ---
 
 # Task drafts
@@ -73,8 +73,9 @@ create ──▶ open ──edit (expected_version)──▶ open ──publish�
 ```
 
 - **Edit** (`PATCH`) takes `{expected_version, changes}`: a partial patch of
-  `body` fields. A field left out is kept; `null` resets it to its default; a
-  list is replaced whole. The merged body is checked with the save rules. A
+  `body` fields. A field left out is kept; `null` resets it to unset, so
+  it takes the [task default](task-defaults.spec.md) at publish; a list is
+  replaced whole. The merged body is checked with the save rules. A
   mismatched `expected_version` is `409 stale_version` with the current version
   in `details`; nothing changes. A patch that changes nothing writes nothing
   and keeps the version.
@@ -110,7 +111,7 @@ create ──▶ open ──edit (expected_version)──▶ open ──publish�
     without `parent_id` must name a real project, not `global`,
     `project_required`); pinned pages exist;
     the harness account pin resolves (the create rules, `check_create`);
-  - **capabilities**: every required capability (after the kind's defaults) is
+  - **capabilities**: every required capability (after the kind's and the task defaults) is
     declared by at least one pool or one non-archived agent
     (`unknown_capability`); a capability nobody can serve would leave the task
     `ready` forever;
@@ -131,7 +132,9 @@ create ──▶ open ──edit (expected_version)──▶ open ──publish�
   follows the usual rule (`ready` with no unfinished dependency, else `pending`;
   `awaiting_approval` with `requires_approval`). The draft is marked published
   with its task id and records `task_draft.published`. The tasks carry the
-  ordinary `task.created` events.
+  ordinary `task.created` events. Fields a draft leaves out take the task defaults
+  of its project at publish ([task defaults](task-defaults.spec.md) 3.4), not at
+  save; a replay returns the stored answer even if the settings changed since.
 - **Atomic** (`mode: atomic`): if any draft fails, nothing is written and the
   call fails with one error: `404 not_found` if a draft is missing, else
   `409 stale_version` if one is stale, else `409 draft_published`, else

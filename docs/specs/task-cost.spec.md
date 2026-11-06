@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-29
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Task cost and budget
@@ -84,9 +84,10 @@ This spec adds two things:
   `task.edited` with `{budget_usd: {from, to}}`. On a task blocked `budget_exhausted`,
   an edit that leaves the budget no longer exhausted unblocks it in the same
   transaction; a raise still below the estimate saves and stays blocked.
-- [Settings](settings.spec.md): `task_default_budget_usd` (global, per-project
-  override; default unset) fills `budget_usd` for a new task that omits it. An
-  explicit `null` in the request keeps "no budget".
+- [Task defaults](task-defaults.spec.md): `task_default_budget_usd` (global,
+  per-project override; default unset) fills `budget_usd` for a new task that
+  omits it. An explicit `null` in the request, or a stored project `null`, keeps
+  "no budget".
 - Migration `0076_task_budget.sql`: `tasks.budget_usd`
   (nullable real), `tasks.budget_steered_attempt` (nullable integer, 3.5).
 
@@ -131,7 +132,8 @@ This spec adds two things:
   with a budget, a bar against it (amber at warning, red at exhausted). A table
   per attempt with model and runs. Refreshed by `task.cost`.
 - Task create and edit forms: a `Budget (USD)` field. The create form prefills it
-  from the project's `task_default_budget_usd`; emptying it sends "no budget".
+  from the project's effective task defaults ([task defaults](task-defaults.spec.md)
+  3.6); emptying it sends "no budget".
 - The Cost tab is unchanged.
 
 # 4. Open Questions
