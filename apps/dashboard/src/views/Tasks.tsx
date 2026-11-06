@@ -251,7 +251,7 @@ const TaskCard = memo(
   }) {
     return (
       <button type="button" className="task-card has-pie" onClick={() => onOpen(task.id)}>
-        <ProgressPie percent={task.progress_percent ?? (task.state === "succeeded" ? 100 : 0)} />
+        <ProgressPie percent={task.state === "succeeded" ? 100 : (task.progress_percent ?? 0)} />
         <TaskLabel className="title" title={task.title} project={task.project} />
         <span className="meta">
           <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
