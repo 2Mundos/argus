@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
+  existsSync,
   constants as fsc,
   fstatSync,
   lstatSync,
@@ -19,7 +20,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createGatewayFetch,
   errorPayload,
@@ -435,17 +436,54 @@ async function ciDigest(api, o) {
 
 // ---- deliver ----
 
-function gitOk(git, args, cwd) {
+const GIT_STDERR_BYTES = 160;
+const GIT_OPERATIONS = [
+  ["rebase-merge", "rebase"],
+  ["rebase-apply", "rebase"],
+  ["MERGE_HEAD", "merge"],
+  ["CHERRY_PICK_HEAD", "cherry-pick"],
+  ["REVERT_HEAD", "revert"],
+];
+
+/** A git failure as a thrown error: stable code, subcommand, exit status, bounded stderr. */
+function gitError(args, error) {
+  const status = typeof error?.status === "number" ? error.status : null;
+  const stderr = String(error?.stderr ?? "")
+    .trimEnd()
+    .slice(0, GIT_STDERR_BYTES);
+  return new GiteaError(
+    "git_failed",
+    `git ${args[0]} failed (exit ${status ?? "unknown"})${stderr ? `: ${stderr}` : ""}`,
+  );
+}
+
+function gitStep(git, args, cwd) {
   try {
-    git(args, cwd);
-    return true;
-  } catch {
-    return false;
+    return git(args, cwd);
+  } catch (error) {
+    throw gitError(args, error);
   }
+}
+
+/** The merge, rebase, cherry-pick or revert already in progress in this worktree, or null. */
+function operationInProgress(git, cwd, only) {
+  for (const [name, operation] of GIT_OPERATIONS) {
+    if (only && operation !== only) continue;
+    const path = gitStep(git, ["rev-parse", "--git-path", name], cwd);
+    if (existsSync(resolve(cwd, path))) return operation;
+  }
+  return null;
 }
 
 async function deliver(api, o, ctx) {
   const { git, cwd } = ctx;
+  // Before the branch check: a rebase in progress detaches HEAD, and we must not touch it.
+  const pending = operationInProgress(git, cwd);
+  if (pending)
+    throw new GiteaError(
+      "git_operation_in_progress",
+      `a ${pending} is already in progress in this worktree; finish or abort it, then run deliver again`,
+    );
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
   if (!branch || branch === "HEAD") throw usage("deliver needs a checked-out branch");
   const base =
@@ -455,18 +493,46 @@ async function deliver(api, o, ctx) {
   if (typeof base !== "string" || !base)
     throw new GiteaError("bad_response", "repository has no default branch");
   if (branch === base) throw usage(`deliver refuses to push the base branch ${base}`);
-  git(["fetch", "--quiet", "origin", base], cwd);
+  gitStep(git, ["fetch", "--quiet", "origin", base], cwd);
   let rebased = false;
-  if (!gitOk(git, ["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"], cwd)) {
-    if (!gitOk(git, ["rebase", "--quiet", "FETCH_HEAD"], cwd)) {
+  let ancestor = true;
+  try {
+    git(["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"], cwd);
+  } catch (error) {
+    if (error?.status !== 1) throw gitError(["merge-base"], error);
+    ancestor = false;
+  }
+  if (!ancestor) {
+    const changed = gitStep(git, ["status", "--porcelain", "--untracked-files=no"], cwd)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.slice(3));
+    if (changed.length)
+      throw new GiteaError(
+        "dirty_worktree",
+        `${changed.length} changed path(s) block the rebase; commit or stash them: ${changed.slice(0, 5).join(", ")}`,
+      );
+    try {
+      git(["rebase", "--quiet", "FETCH_HEAD"], cwd);
+    } catch (error) {
+      // Only a rebase this invocation started (none existed before) is ours to abort.
+      if (!operationInProgress(git, cwd, "rebase")) throw gitError(["rebase"], error);
       let conflicts = [];
+      let failure = null;
       try {
         conflicts = git(["diff", "--name-only", "--diff-filter=U"], cwd)
           .split("\n")
           .filter(Boolean);
-      } finally {
-        gitOk(git, ["rebase", "--abort"], cwd);
+      } catch (diffError) {
+        failure = gitError(["diff"], diffError);
       }
+      try {
+        git(["rebase", "--abort"], cwd);
+      } catch (abortError) {
+        throw gitError(["rebase --abort"], abortError);
+      }
+      if (failure) throw failure;
+      if (!conflicts.length) throw gitError(["rebase"], error);
       return {
         code: EXIT.not_ready,
         result: { branch, base, reasons: ["rebase_conflict"], conflicts },
@@ -475,8 +541,12 @@ async function deliver(api, o, ctx) {
     rebased = true;
   }
   const refspec = `HEAD:refs/heads/${branch}`;
-  git(["push", "--quiet", ...(rebased ? ["--force-with-lease"] : []), "origin", refspec], cwd);
-  const head = git(["rev-parse", "HEAD"], cwd);
+  gitStep(
+    git,
+    ["push", "--quiet", ...(rebased ? ["--force-with-lease"] : []), "origin", refspec],
+    cwd,
+  );
+  const head = gitStep(git, ["rev-parse", "HEAD"], cwd);
   const body = o["body-file"] === undefined ? undefined : readFileSync(o["body-file"], "utf8");
   const existing = await api.findOpenPullRequest(branch, base);
   let pr = existing;
@@ -486,7 +556,7 @@ async function deliver(api, o, ctx) {
     if (body !== undefined) update.body = body;
     if (Object.keys(update).length) pr = await api.updatePullRequest(existing.number, update);
   } else {
-    const title = o.title ?? git(["log", "-1", "--format=%s"], cwd);
+    const title = o.title ?? gitStep(git, ["log", "-1", "--format=%s"], cwd);
     pr = await api.createPullRequest({ title, head: branch, base, body: body ?? "" });
   }
   return {
