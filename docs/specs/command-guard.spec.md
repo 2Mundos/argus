@@ -87,16 +87,28 @@ bypass. Background: draft (removed; in git history),
 - **Codex: not implemented.** Codex hook support and trusted-hash registration in
   the pinned version are unverified (research section 3), so no Codex hook is
   shipped. Do not claim Codex coverage until a probe confirms it.
-- **Visibility (intended).** Each block is an informational, persistent
-  `task.command_blocked` event with the reason and a redacted, truncated command.
-  It is not a failure class and not an inbox item. The event type and its data
-  shape (`tool`, `rule`, `reason`) exist in `argus_core` (`events.py`). Fleet
-  activity (Home, Events, the status bar and the task feed share one event list)
-  shows the rule id and reason only, never command text, even if the event data
-  carries it. Readers see it through the existing event read model and its task
-  read scope; no failure, retry or inbox count includes it (tested). The hook
-  emission and the worker route are **not implemented**; the hook currently only
-  returns the deny decision.
+- **Visibility.** Each block is an informational, persistent
+  `task.command_blocked` event (`tool`, `rule`, `reason`, `attempt`, `command`). It
+  is not a failure class, not an inbox item, and changes no task state or progress.
+  The hook stays side-effect free and only prints the deny decision. The NanoClaw
+  channel tails the attempt's Claude transcript (`argus-command-blocked.ts`), pairs a
+  Bash `tool_result` with `is_error` whose text is the block message with its
+  `tool_use` by id, maps the reason text to the closed rule id (a table a test keeps
+  equal to `REASONS`) and posts `POST /api/tasks/{id}/command-blocked`
+  `{attempt, tool_use_id, rule, command}` once per `tool_use_id`, with the host's
+  token. The API validates the rule against the closed set (422 `unknown_rule`),
+  takes the reason from its own table (`argus_core.events.COMMAND_GUARD_REASONS`, also
+  kept equal to `REASONS`), and stores the command after control-character cleaning
+  and `redact`, collapsed to one line and cut at 200 characters with `…`. It is fenced
+  like progress (a stale attempt is 409 `stale_attempt`). The pair (task, attempt,
+  `tool_use_id`) is unique (`task_command_blocks`), so a retry records one event
+  (`status: duplicate`); an attempt records at most 20 events and later denials are
+  `status: dropped`, not stored. A task retry clears the rows. A command can print the
+  block message itself, so an event proves only that the transcript said so; it is
+  informational. Fleet activity (Home, Events, the status bar and the task feed share
+  one event list) shows the rule id and reason only, never command text. Readers see
+  it through the existing event read model and its task read scope; no failure, retry
+  or inbox count includes it (tested).
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
@@ -110,15 +122,8 @@ bypass. Background: draft (removed; in git history),
 
 ## Open items
 
-Not built yet (section 3 marks each **not implemented**):
-
-- `task.command_blocked` event emission: the event type, data shape and Fleet
-  presentation exist; still missing are the hook emission and the worker route.
+- Counts of blocks per task or project in Fleet.
 - Codex coverage (hook support and trusted-hash registration).
-
-- **Open item: event plumbing.** A worker route or channel to carry
-  `task.command_blocked`, in
-  [failure classes](failure-classes.spec.md).
 - Codex: hook support, trusted-hash registration, whether the hook runs inside
   Bubblewrap, and whether it survives `patch-codex-sandbox.py`.
 - Claude Code managed-settings path and precedence in the pinned Claude Code
@@ -139,6 +144,9 @@ Not built yet (section 3 marks each **not implemented**):
   `integrations/nanoclaw/engines/command_guard.py`, `commit_attribution.py`,
   `claude-managed-settings.json`, `argus-git`, `git-hooks/commit-msg`
 - `engines/Dockerfile.tools-layer` and `engines/apply-tools-layer.sh` install them.
+- `integrations/nanoclaw/argus-command-blocked.ts` (detection and posting),
+  `apps/api/src/argus_api/tasks/command_blocked.py`, migration
+  `0077_task_command_blocks.sql`
 - `integrations/nanoclaw/tests/test_command_guard.py`
 
 ## Verification boundary
@@ -148,8 +156,13 @@ Not built yet (section 3 marks each **not implemented**):
   `pytest integrations/nanoclaw/tests/test_tools_layer_permissions.py` (Docker
   probe when available).
 - Verified: rule tables (block and allow, shell forms), the hook's stdin/stdout
-  contract, fail-open and the env opt-out, at unit level; the claim-time presence
+  contract, fail-open and the env opt-out, at unit level; the event route and
+  service (`apps/api/tests/test_task_command_blocked.py`: one event, dedupe, the
+  per-attempt limit, stale attempt, rule validation, redaction and bounds, task state
+  unchanged) and the transcript detection and posting
+  (`integrations/nanoclaw/argus-command-blocked.test.ts`) on synthetic transcripts; the claim-time presence
   check against a stubbed session image (`argus-guard.test.ts`,
   `argus-single-layer.test.ts`).
 - Not verified: the image build, that Claude Code loads the managed settings and
-  honours the deny, a blocked `rm -rf ~` on a disposable worker, Codex.
+  honours the deny, that a real denial is written to the transcript in the shape
+  the detection expects (`tool_result` with `is_error`), a blocked `rm -rf ~` on a disposable worker, Codex.

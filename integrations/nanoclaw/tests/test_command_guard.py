@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -180,3 +181,21 @@ def test_managed_settings_register_the_hook_on_bash():
     assert entry["hooks"][0]["command"].endswith(
         "/usr/local/lib/argus/command_guard.py"
     )
+
+
+def test_the_api_reason_table_equals_the_hook_table() -> None:
+    from argus_core.events import COMMAND_GUARD_REASONS
+
+    assert COMMAND_GUARD_REASONS == guard.REASONS
+
+
+def test_the_channel_rule_table_equals_the_hook_table():
+    """`COMMAND_GUARD_REASONS` in argus-command-blocked.ts is what maps a block message
+    back to its rule; it must not drift from the hook."""
+    source = (ENGINES.parent / "argus-command-blocked.ts").read_text()
+    body = source.split("COMMAND_GUARD_REASONS", 1)[1].split("};", 1)[0]
+    table = {
+        key: json.loads(text)
+        for key, text in re.findall(r'(\w+):\s*("(?:[^"\\]|\\.)*")', body)
+    }
+    assert table == guard.REASONS

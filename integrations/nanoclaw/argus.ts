@@ -76,7 +76,6 @@ import {
   parseChatThread,
   splitChatTitle,
 } from "./argus-chat.js";
-
 import {
   type CheckpointFailure,
   checkpointTaskWorkspace,
@@ -85,6 +84,7 @@ import {
   parseCheckpointRef,
   restoreTaskWorkspace,
 } from "./argus-checkpoint.js";
+import { createCommandBlockedRelay } from "./argus-command-blocked.js";
 import { defaultContinuationObserve } from "./argus-continuation-observe.js";
 import { syncCustomHarnessBridge } from "./argus-custom-bridge.js";
 import {
@@ -456,6 +456,8 @@ export interface ArgusConfig {
    * Absent: the delegate log is not relayed.
    */
   delegateLogFile?: () => Promise<string | null>;
+  /** Where the engine's session transcripts are; guard denials are read from them. */
+  claudeProjectsDir?: () => Promise<string | null>;
   /** Per-project image and test services; absent: the base image runs every project (older hosts, test adapters). */
   runtime?: RuntimeHooks;
   /** Apply a pinned policy before starting a task; absent only in test adapters. */
@@ -2052,6 +2054,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let usageTimer: ReturnType<typeof setInterval> | null = null;
   let changesRelay: ReturnType<typeof createChangesRelay> | null = null;
   let changesTimer: ReturnType<typeof setInterval> | null = null;
+  let blockedRelay: ReturnType<typeof createCommandBlockedRelay> | null = null;
+  let blockedTimer: ReturnType<typeof setInterval> | null = null;
   // Stall visibility: remember a session once seen; fail if it vanishes without a reply.
   let seenSessionId: string | null = null;
   let sessionMissingSince: number | null = null;
@@ -2577,6 +2581,24 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  /**
+   * Report the commands the guard denied, read from the Claude transcript (command guard
+   * spec 3). Best effort: a report never fails the task.
+   */
+  function startCommandBlockedRelay(task: { id: string; attempt: number }): void {
+    const projectsDir = cfg.claudeProjectsDir;
+    if (!projectsDir) return;
+    const relay = createCommandBlockedRelay({
+      projectsDir,
+      since: () => claimedAt,
+      task,
+      post: (body) => client.call("POST", `/tasks/${task.id}/command-blocked`, body),
+    });
+    blockedRelay = relay;
+    blockedTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
+    blockedTimer.unref?.();
+  }
+
   /** The last usage of the attempt, posted while its leases still exist. */
   async function drainUsage(): Promise<void> {
     const relay = usageRelay;
@@ -2610,6 +2632,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     changesRelay = null;
     if (changesTimer) clearInterval(changesTimer);
     changesTimer = null;
+    blockedRelay?.stop();
+    blockedRelay = null;
+    if (blockedTimer) clearInterval(blockedTimer);
+    blockedTimer = null;
     injectedSteers.clear();
     current = null;
     seenSessionId = null;
@@ -3628,6 +3654,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!harnessLogRelay) await startHarnessLogRelay(task);
       if (!usageRelay) await startUsageRelay(task);
       if (!changesRelay) await startChangesRelay(task);
+      if (!blockedRelay) startCommandBlockedRelay(task);
       resends = 0;
       const best = executor ?? account;
       const singleLayer = armDecision?.arm === "single_layer";
@@ -4692,7 +4719,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const d = parseReply(replyText, task.id);
       // The last lines of the run, before the attempt ends and Argus stops taking them.
       if (d.kind !== "progress" && !isFailureNotice)
-        await Promise.all([logRelay?.drain(), harnessLogRelay?.drain(), changesRelay?.drain()]);
+        await Promise.all([
+          logRelay?.drain(),
+          harnessLogRelay?.drain(),
+          changesRelay?.drain(),
+          blockedRelay?.poll(),
+        ]);
       // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
       if (d.kind !== "progress" || isFailureNotice) await drainUsage();
       if (current !== task) {
@@ -5468,6 +5500,10 @@ export function fromEnv(): ChannelAdapter | null {
     },
     selectModels: modelsFromEnv(),
     singleLayer: singleLayerFromEnv(process.env),
+    claudeProjectsDir: async () => {
+      const group = await argusGroup();
+      return group ? claudeProjectsDir(group.id) : null;
+    },
     delegateLogFile: async () => {
       const dir = await argusGroupDir();
       return dir ? path.join(dir, DELEGATE_LOG_FILE) : null;
