@@ -140,5 +140,6 @@ def test_unresolvable_base_fails(
 
 
 def test_real_repo_passes(capsys: pytest.CaptureFixture[str]) -> None:
-    code = main([], ROOT)
+    # HEAD always resolves; origin/main is absent in shallow or fork clones.
+    code = main(["--base", "HEAD"], ROOT)
     assert (code, capsys.readouterr().out) == (0, "")
