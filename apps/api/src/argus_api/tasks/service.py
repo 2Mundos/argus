@@ -1703,6 +1703,9 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
     )
     await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
     await tx.conn.execute("DELETE FROM task_changes WHERE task_id = ?", (task_id,))
+    await tx.conn.execute(
+        "DELETE FROM task_command_blocks WHERE task_id = ?", (task_id,)
+    )
     await steers.close_task(tx, task_id)
     error = row["error"] or ""
     await record(

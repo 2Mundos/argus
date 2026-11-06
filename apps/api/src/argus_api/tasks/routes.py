@@ -59,6 +59,7 @@ from argus_api.paging import DEFAULT_LIMIT
 from argus_api.settings import service as settings_svc
 from argus_api.tasks import (
     changes,
+    command_blocked,
     delivery,
     finalization,
     log,
@@ -525,6 +526,28 @@ async def put_changes(
     body = changes.prepare(body, (token,) if token else ())
     async with db.write() as tx:
         return await changes.store(tx, agent_id, task_id, body)
+
+
+@router.post("/{task_id}/command-blocked")
+async def post_command_blocked(
+    task_id: str,
+    body: command_blocked.CommandBlockedWrite,
+    db: DbDep,
+    agent_id: AgentDep,
+    token: TokenDep,
+) -> command_blocked.CommandBlockedAccepted:
+    """Report a command the guard denied in the attempt you hold (agent token). `rule`
+    is one of the guard's closed ids (422 `unknown_rule` otherwise); the reason is
+    Argus's own. The command is redacted, cleaned and cut to 200 characters before it
+    is stored. Records a `task.command_blocked` event once per `tool_use_id` and at
+    most 20 per attempt (`status` says `recorded`, `duplicate` or `dropped`); the task
+    is untouched. Fenced like progress: a stale attempt is 409 `stale_attempt`."""
+    async with db.snapshot() as snap:  # refuse cheaply before the redaction
+        await command_blocked.admit(snap, agent_id, task_id, body)
+    async with db.write() as tx:
+        return await command_blocked.store(
+            tx, agent_id, task_id, body, (token,) if token else ()
+        )
 
 
 @router.get("/{task_id}/changes")
