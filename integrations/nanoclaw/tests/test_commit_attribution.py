@@ -511,9 +511,16 @@ def test_gate_rejects_identity_env(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         ("git commit -m ok", False),
         ("GIT_COMMITTER_EMAIL=x git commit -m ok", True),
+        ("GIT_AUTHOR_NAME=x git commit -m ok", True),
         ("export GIT_AUTHOR_NAME=x", True),
         ("git config user.email x@y.z && git status", True),
         ("git config --get user.email", False),
+        # Identity strings inside a commit message are text, not an override.
+        ('git commit -m "GIT_AUTHOR_NAME=x"', False),
+        ('git commit -m "ARGUS_GIT_AUTHOR_NAME=x"', False),
+        # A non-commit git command mentioning "commit" is not a commit.
+        ("git log --grep commit --no-verify", False),
+        ('git commit -m "Co-Authored-By: foo"', True),
     ],
 )
 def test_bash_identity_overrides(command: str, blocked: bool) -> None:
