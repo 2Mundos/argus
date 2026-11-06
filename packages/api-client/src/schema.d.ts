@@ -4869,6 +4869,11 @@ export interface components {
             assignee_agent_id: string | null;
             /** Attempt */
             attempt: number;
+            /**
+             * Auto Merge
+             * @default false
+             */
+            auto_merge?: boolean;
             /** Block Reason */
             block_reason: string | null;
             /** Budget Usd */

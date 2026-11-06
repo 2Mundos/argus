@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # Settings
@@ -200,6 +200,31 @@ active; off disables it for new attempts. A project value takes precedence over
 the global one. The claim carries the effective value as `command_guard_enabled`;
 the NanoClaw channel sets `ARGUS_COMMAND_GUARD=off` for that attempt when it is
 false, so a change applies to attempts claimed afterwards.
+
+## 3.10 Auto-merge
+
+Key `delivery.auto_merge`, scopes `global` and `project`, boolean, default
+`false`. A project value takes precedence over the global one. It applies only to
+tasks whose [deliverable](task-deliverable.spec.md) is `pr_merged`, whoever created
+them: the operator's setting is the grant, so a task's own `input` is not consulted.
+On, for such a task:
+
+- the claim carries `auto_merge: true`, and the worker's prompt authorizes it to
+  merge its own pull request once the delivery preconditions hold (the same
+  preconditions as `delivery.allow_merge`: exact head, required checks green,
+  review findings resolved);
+- a completion succeeds only with the PR merged on the forge
+  ([task deliverable](task-deliverable.spec.md) 3.4): an open or unreadable PR is
+  refused and the worker keeps its claim to merge and complete again. The task does
+  not wait in `in_review` for a manager to confirm the merge. Its own `review`,
+  checklist and independent-review gates still apply.
+
+Off, `pr_merged` behaves as before: the worker may not merge unless the task input
+grants it, and the merged PR is confirmed by a decision. The claim carries the
+effective value (`auto_merge`), so the change applies to attempts claimed
+afterwards; the completion gate reads the setting when the worker completes.
+Other deliverables are unaffected. Admin only, like every setting; a worker cannot
+widen it.
 
 # 4. Open Questions
 

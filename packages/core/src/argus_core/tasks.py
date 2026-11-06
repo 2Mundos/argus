@@ -648,3 +648,6 @@ class ClaimedTask(Task):
     # Effective `command_guard.enabled` for this task's project (settings 3.9); the
     # worker turns the command-guard hook off for the attempt when false.
     command_guard_enabled: bool = True
+    # Effective `delivery.auto_merge` for this task's project (settings 3.10): with a
+    # `pr_merged` deliverable the worker may merge its own PR.
+    auto_merge: bool = False

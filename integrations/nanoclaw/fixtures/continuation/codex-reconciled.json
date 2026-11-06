@@ -4,6 +4,7 @@
   "archived_at": null,
   "assignee_agent_id": null,
   "attempt": 2,
+  "auto_merge": false,
   "block_reason": null,
   "budget_usd": null,
   "command_guard_enabled": true,

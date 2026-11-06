@@ -69,6 +69,15 @@ class PrSearch:
     report: str
 
 
+@dataclass(frozen=True)
+class MergeRead:
+    """The forge's state of the PR of a `pr_merged` task under `delivery.auto_merge`,
+    read by the caller before the write (3.4). `state` is `unknown` when no PR could
+    be read."""
+
+    state: PrState
+
+
 async def check_creatable(
     conn: aiosqlite.Connection,
     project: str | None,
@@ -105,11 +114,27 @@ async def check_complete(
     result: TaskResult,
     have: Continuation,
     search: PrSearch | None = None,
+    merge: MergeRead | None = None,
 ) -> bool:
     """Refuse a completion without the evidence Argus holds (3.4). True when the
-    deliverable also depends on the forge, so the task must wait for review."""
+    deliverable also depends on the forge, so the task must wait for review. Under
+    auto-merge (`merge` set) a `pr_merged` task needs the merge itself, so it never
+    waits."""
     level = Deliverable(row["deliverable"])
-    if advice := await _missing(conn, row, agent_id, result, have, level, search):
+    advice = await _missing(conn, row, agent_id, result, have, level, search)
+    if advice is None and merge is not None and level is Deliverable.PR_MERGED:
+        if merge.state is PrState.MERGED:
+            return False
+        advice = (
+            "merge the pull request yourself once its checks pass, then complete"
+            " again; "
+            + (
+                "the forge could not confirm it merged"
+                if merge.state is PrState.UNKNOWN
+                else f"the forge shows it {merge.state}, not merged"
+            )
+        )
+    if advice:
         raise ValidationFailedError(
             f"deliverable {level} is not met: {advice}",
             code="deliverable_missing",

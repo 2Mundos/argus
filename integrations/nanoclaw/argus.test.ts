@@ -519,6 +519,27 @@ describe("renderTask", () => {
     expect(text).not.toContain("Do not merge pull requests unless");
   });
 
+  it("lets the auto_merge setting authorize merge for a pr_merged task only", () => {
+    const repo = {
+      repository_url: "https://git.example.test/org/repo.git",
+      required_capabilities: ["repository:write"],
+    };
+    const merged = task({ ...repo, deliverable: "pr_merged", auto_merge: true });
+    expect(taskAuthorizesMerge(merged as any)).toBe(true);
+    const text = renderTask(merged as any, new Map());
+    expect(text).toContain("This task explicitly authorizes merge");
+    expect(text).toContain("accepted only after the forge shows it merged");
+    // Authority comes from the setting, not from who wrote the task.
+    expect(taskAuthorizesMerge({ ...merged, prompt_trust: "worker" } as any)).toBe(true);
+    for (const over of [
+      { deliverable: "pr_green", auto_merge: true },
+      { deliverable: "pr_merged", auto_merge: false },
+      { deliverable: "pr_merged" },
+    ]) {
+      expect(taskAuthorizesMerge(task({ ...repo, ...over }) as any)).toBe(false);
+    }
+  });
+
   it("does not treat spec mentions, negations, or non-boolean input as merge grants", () => {
     const repo = { repository_url: "https://git.example.test/org/repo.git" };
     const deny = "Do not merge pull requests unless";

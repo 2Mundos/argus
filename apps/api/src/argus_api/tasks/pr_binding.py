@@ -112,6 +112,38 @@ async def find_pr(
     )
 
 
+async def read_merge(
+    db: Database,
+    checker: delivery.PrChecker,
+    task_id: str,
+    agent_id: str,
+    attempt: int,
+    search: deliverable.PrSearch | None,
+) -> deliverable.MergeRead | None:
+    """The PR state a `pr_merged` completion needs under `delivery.auto_merge`
+    (task deliverable spec 3.4), read here and outside the write. None when the
+    setting is off for the task's project or no such gate is due (another
+    deliverable, a caller that is not the assignee)."""
+    from argus_api.settings import service as settings_svc
+
+    async with db.read() as conn:
+        row = await service.task_row(conn, task_id)
+        if (
+            Deliverable(row["deliverable"]) is not Deliverable.PR_MERGED
+            or row["state"] != "claimed"
+            or row["assignee_agent_id"] != agent_id
+            or row["attempt"] != attempt
+            or not await settings_svc.auto_merge_enabled(conn, row["project"])
+        ):
+            return None
+        if search is not None and search.match is not None:
+            return deliverable.MergeRead(search.match.state)
+        seen = await delivery.delivery_of(
+            conn, checker, await service.get_task(conn, task_id)
+        )
+    return deliverable.MergeRead(seen.pr_state if seen else PrState.UNKNOWN)
+
+
 def _pushed_heads(have: Continuation) -> set[str]:
     heads = {
         a.head_sha

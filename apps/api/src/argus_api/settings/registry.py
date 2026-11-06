@@ -149,6 +149,16 @@ REGISTRY: dict[str, SettingDefinition] = {
             "it for new attempts."
         ),
     ),
+    "delivery.auto_merge": SettingDefinition(
+        key="delivery.auto_merge",
+        schema={"type": "boolean"},
+        default=False,
+        scopes=["global", "project"],
+        description=(
+            "Workers merge their own pull request for pr_merged tasks, and those "
+            "tasks succeed only once the PR is merged."
+        ),
+    ),
     "orchestrator.enabled": SettingDefinition(
         key="orchestrator.enabled",
         schema={"type": "boolean"},
