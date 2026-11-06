@@ -3,8 +3,23 @@
 // Built on the forge clients (argus-gitea-api / argus-github-api): no token, no HTTP
 // client of its own. Each command prints one JSON line and exits with a code from EXIT.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  closeSync,
+  constants as fsc,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   createGatewayFetch,
   errorPayload,
@@ -459,9 +474,429 @@ async function deliver(api, o, ctx) {
   };
 }
 
+// ---- attach ----
+// The worker holds no Argus credential. `attach` copies the file into the bridge's spool
+// directory, appends a request line, and waits for the receipt the Argus channel (host)
+// writes after it stored and verified the bytes (spec 3.10). Keep the file names and the
+// record shapes in step with argus-attach-relay.ts.
+
+const ATTACH_PROTOCOL = 1;
+const ATTACH_CAPABILITY = "artifact-attach";
+const ATTACH_REQUESTS_FILE = "argus-task-attach.jsonl";
+const ATTACH_RECEIPTS_FILE = "argus-task-attach-receipts.jsonl";
+const ATTACH_STATUS_FILE = "argus-task-attach-status.json";
+const ATTACH_SPOOL_DIR = "argus-task-attach-spool";
+const ATTACH_ROLES = ["report", "delegate_report", "policy_snapshot", "qa_receipt", "other"];
+const ATTACH_DEFAULT_WAIT_S = 20;
+const ATTACH_POLL_MS = 500;
+const ATTACH_CHUNK = 1024 * 1024;
+const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
+const ARTIFACT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const HEX32 = /^[0-9a-f]{32}$/;
+const HEX64 = /^[0-9a-f]{64}$/;
+/** Error codes that mean "refused by policy or state": exit 12, not worth retrying unchanged. */
+const ATTACH_REFUSED = new Set([
+  "symlink",
+  "not_regular",
+  "outside_roots",
+  "bridge_file",
+  "empty_file",
+  "too_large",
+  "stale_attempt",
+  "wrong_task",
+  "no_active_attempt",
+  "attempt_ended",
+  "attempt_completed",
+  "invalid_request",
+  "unsupported_protocol",
+  "too_many",
+]);
+
+class AttachError extends Error {
+  constructor(code, message, extra = {}) {
+    super(message);
+    this.code = code;
+    this.extra = extra;
+  }
+}
+
+/** An Argus artifact name from a file name; keep in step with artifactName() in argus.ts. */
+export function artifactName(filename) {
+  const base = filename.split(/[\\/]/).pop() ?? "";
+  const clean = base
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[._-]+/, "");
+  if (clean.length <= 200) return clean || "attachment";
+  const dot = clean.lastIndexOf(".");
+  const ext = dot > 0 && clean.length - dot <= 20 ? clean.slice(dot) : "";
+  const stem = ext ? clean.slice(0, dot) : clean;
+  return stem.slice(0, 200 - ext.length) + ext;
+}
+
+/** The directory the host and this helper share (where argus-delegate writes its relay files). */
+export function bridgeDir(env) {
+  if (env.ARGUS_TASK_LOG_FILE) return dirname(env.ARGUS_TASK_LOG_FILE);
+  return dirname(env.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json");
+}
+
+function allowedRoots(env) {
+  const roots = (env.ARGUS_TASK_ATTACH_ROOTS || env.ARGUS_DELEGATE_ROOTS || "/workspace")
+    .split(":")
+    .filter(Boolean);
+  const real = [];
+  for (const root of roots) {
+    try {
+      real.push(realpathSync(root));
+    } catch {
+      // a root that does not exist allows nothing
+    }
+  }
+  return real;
+}
+
+const inside = (root, file) => {
+  const rel = relative(root, file);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+};
+
+function readBridgeStatus(dir) {
+  const missing = (why) =>
+    new AttachError(
+      "prerequisite_missing",
+      `capability ${ATTACH_CAPABILITY} is not available: ${why}. The Argus channel must offer it for the active attempt (${join(dir, ATTACH_STATUS_FILE)}); this image or channel may be too old, or no attempt is active. Nothing was stored; do not ask the orchestrator to read worker-local files.`,
+      { capability: ATTACH_CAPABILITY },
+    );
+  const status = readJson(join(dir, ATTACH_STATUS_FILE));
+  if (!status) throw missing("the channel's status file is absent or unreadable");
+  if (status.capability !== ATTACH_CAPABILITY)
+    throw missing("the channel offers another capability");
+  if (status.v !== ATTACH_PROTOCOL)
+    throw missing(
+      `attach protocol ${status.v} is not supported (this helper speaks ${ATTACH_PROTOCOL})`,
+    );
+  if (
+    typeof status.task_id !== "string" ||
+    !status.task_id ||
+    !Number.isSafeInteger(status.attempt) ||
+    !Number.isSafeInteger(status.max_bytes)
+  )
+    throw missing("the channel's status file is malformed");
+  return status;
+}
+
+function jsonLines(file) {
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of text.split("\n")) {
+    try {
+      const rec = JSON.parse(line);
+      if (rec && typeof rec === "object" && !Array.isArray(rec)) out.push(rec);
+    } catch {
+      // a torn or foreign line
+    }
+  }
+  return out;
+}
+
+/** Open the file without following a final link, and check it is a plain file under a root. */
+function openSource(file, roots, dir, maxBytes) {
+  let linkStat;
+  try {
+    linkStat = lstatSync(file);
+  } catch {
+    throw new AttachError("not_found", `no such file: ${file}`);
+  }
+  if (linkStat.isSymbolicLink())
+    throw new AttachError("symlink", "the path is a symbolic link; attach the real file");
+  let real;
+  try {
+    real = realpathSync(file);
+  } catch {
+    throw new AttachError("not_found", `no such file: ${file}`);
+  }
+  if (!roots.some((root) => inside(root, real)))
+    throw new AttachError(
+      "outside_roots",
+      `the file is outside the allowed roots (${roots.join(", ") || "none"}); copy it under /workspace first`,
+    );
+  let bridge;
+  try {
+    bridge = realpathSync(dir);
+  } catch {
+    bridge = dir;
+  }
+  if (
+    [ATTACH_REQUESTS_FILE, ATTACH_RECEIPTS_FILE, ATTACH_STATUS_FILE].some(
+      (n) => real === join(bridge, n),
+    ) ||
+    inside(join(bridge, ATTACH_SPOOL_DIR), real)
+  )
+    throw new AttachError("bridge_file", "the attach bridge's own files cannot be attached");
+  let fd;
+  try {
+    fd = openSync(real, fsc.O_RDONLY | fsc.O_NOFOLLOW | fsc.O_NONBLOCK);
+  } catch {
+    throw new AttachError("not_regular", "the file cannot be opened as a plain file");
+  }
+  const st = fstatSync(fd);
+  if (!st.isFile()) {
+    closeSync(fd);
+    throw new AttachError("not_regular", "the path is not a regular file");
+  }
+  if (st.size === 0) {
+    closeSync(fd);
+    throw new AttachError("empty_file", "the file is empty; nothing to attach");
+  }
+  if (st.size > maxBytes) {
+    closeSync(fd);
+    throw new AttachError("too_large", `the file is ${st.size} bytes; the limit is ${maxBytes}`);
+  }
+  return { fd, st };
+}
+
+/** Copy the open file into a new spool file, hashing what was copied; the file must not change. */
+function spoolCopy(fd, st, dest) {
+  const out = openSync(dest, "wx", 0o644);
+  const hash = createHash("sha256");
+  const buf = Buffer.alloc(ATTACH_CHUNK);
+  let total = 0;
+  try {
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, total);
+      if (n === 0) break;
+      hash.update(buf.subarray(0, n));
+      writeSync(out, buf, 0, n);
+      total += n;
+      if (total > st.size) break;
+    }
+  } finally {
+    closeSync(out);
+  }
+  const after = fstatSync(fd);
+  if (total !== st.size || after.size !== st.size || after.mtimeMs !== st.mtimeMs) {
+    rmSync(dest, { force: true });
+    throw new AttachError(
+      "file_changed",
+      "the file changed while it was being read; retry once it is final",
+    );
+  }
+  return hash.digest("hex");
+}
+
+/** The worker-side check of a host receipt for this very request: nothing else is success. */
+function checkReceipt(rec, want) {
+  const bad = (why) =>
+    new AttachError("invalid_receipt", `the channel's receipt is not valid: ${why}`);
+  if (rec.v !== ATTACH_PROTOCOL || rec.type !== "receipt") throw bad("wrong record type");
+  if (rec.task_id !== want.task_id || rec.attempt !== want.attempt)
+    throw bad("it is for another task or attempt");
+  if (rec.request_id !== want.request_id) throw bad("it is for another request");
+  if (rec.ok === false) {
+    const e = rec.error ?? {};
+    const code = typeof e.code === "string" && /^[a-z_]{1,40}$/.test(e.code) ? e.code : "refused";
+    throw new AttachError(code, String(e.message ?? "the channel refused the file").slice(0, 300), {
+      retryable: e.retryable === true,
+      request_id: want.request_id,
+    });
+  }
+  if (rec.ok !== true) throw bad("ok is missing");
+  if (typeof rec.artifact_id !== "string" || !ARTIFACT_ID.test(rec.artifact_id))
+    throw bad("artifact_id is missing");
+  if (typeof rec.name !== "string" || !ARTIFACT_NAME.test(rec.name)) throw bad("name is invalid");
+  if (rec.bytes !== want.bytes) throw bad("bytes differ from the file");
+  if (rec.sha256 !== want.sha256) throw bad("sha256 differs from the file");
+  return {
+    stored: true,
+    task_id: rec.task_id,
+    attempt: rec.attempt,
+    artifact_id: rec.artifact_id,
+    name: rec.name,
+    role: ATTACH_ROLES.includes(rec.role) ? rec.role : null,
+    bytes: rec.bytes,
+    sha256: rec.sha256,
+    duplicate: rec.duplicate === true,
+    renamed: rec.renamed === true,
+    request_id: want.request_id,
+  };
+}
+
+async function attach(_api, o, ctx) {
+  if (o.file === undefined) throw usage("attach requires --file ABSOLUTE_PATH");
+  if (!isAbsolute(o.file)) throw usage("--file must be an absolute path");
+  if (o.role !== undefined && !ATTACH_ROLES.includes(o.role))
+    throw usage(`--role must be one of ${ATTACH_ROLES.join(", ")}`);
+  const capS =
+    o.max === undefined
+      ? Math.min(ATTACH_DEFAULT_WAIT_S, waitCap(undefined, ctx.env))
+      : waitCap(o.max, ctx.env);
+  const dir = bridgeDir(ctx.env);
+  const status = readBridgeStatus(dir);
+  const name = artifactName(o.name ?? basename(o.file));
+  const role = o.role ?? null;
+  const start = ctx.now();
+  const { fd, st } = openSource(o.file, allowedRoots(ctx.env), dir, status.max_bytes);
+  const spool = join(dir, ATTACH_SPOOL_DIR);
+  const temp = join(spool, `.tmp-${randomBytes(8).toString("hex")}`);
+  let sha;
+  try {
+    sha = spoolCopy(fd, st, temp);
+  } catch (error) {
+    if (error instanceof AttachError) throw error;
+    rmSync(temp, { force: true });
+    throw new AttachError(
+      "prerequisite_missing",
+      `capability ${ATTACH_CAPABILITY} is not available: the spool directory ${spool} is not writable`,
+      { capability: ATTACH_CAPABILITY },
+    );
+  } finally {
+    closeSync(fd);
+  }
+  const want = {
+    task_id: status.task_id,
+    attempt: status.attempt,
+    request_id: createHash("sha256")
+      .update([status.task_id, status.attempt, name, role ?? "", sha].join("\n"))
+      .digest("hex")
+      .slice(0, 32),
+    bytes: st.size,
+    sha256: sha,
+  };
+  const receiptsFile = join(dir, ATTACH_RECEIPTS_FILE);
+  const requestsFile = join(dir, ATTACH_REQUESTS_FILE);
+  const receipts = () => jsonLines(receiptsFile).filter((r) => HEX32.test(r.request_id ?? ""));
+  const done = receipts().find((r) => r.request_id === want.request_id && r.ok === true);
+  if (done) {
+    rmSync(temp, { force: true });
+    return { code: EXIT.ok, result: checkReceipt(done, want) };
+  }
+  // The same request already waiting for the host: wait for it, do not queue a second.
+  const waiting = jsonLines(requestsFile).find(
+    (r) =>
+      r.type === "attach" &&
+      r.request_id === want.request_id &&
+      HEX32.test(r.nonce ?? "") &&
+      !receipts().some((x) => x.nonce === r.nonce),
+  );
+  let nonce;
+  if (waiting) {
+    rmSync(temp, { force: true });
+    nonce = waiting.nonce;
+  } else {
+    nonce = randomBytes(16).toString("hex");
+    renameSync(temp, join(spool, nonce));
+    let handle;
+    try {
+      handle = openSync(requestsFile, fsc.O_WRONLY | fsc.O_APPEND | fsc.O_NOFOLLOW);
+    } catch {
+      rmSync(join(spool, nonce), { force: true });
+      throw new AttachError(
+        "prerequisite_missing",
+        `capability ${ATTACH_CAPABILITY} is not available: the request file ${requestsFile} cannot be appended to`,
+        { capability: ATTACH_CAPABILITY },
+      );
+    }
+    try {
+      writeSync(
+        handle,
+        `${JSON.stringify({
+          v: ATTACH_PROTOCOL,
+          type: "attach",
+          request_id: want.request_id,
+          nonce,
+          task_id: want.task_id,
+          attempt: want.attempt,
+          name,
+          role,
+          bytes: want.bytes,
+          sha256: want.sha256,
+          at: new Date(ctx.now()).toISOString(),
+        })}\n`,
+      );
+    } finally {
+      closeSync(handle);
+    }
+  }
+  for (;;) {
+    const mine = receipts().find(
+      (r) => r.nonce === nonce || (r.request_id === want.request_id && r.ok === true),
+    );
+    if (mine) return { code: EXIT.ok, result: checkReceipt(mine, want) };
+    const current = readJson(join(dir, ATTACH_STATUS_FILE));
+    if (current?.task_id !== want.task_id || current?.attempt !== want.attempt) {
+      throw new AttachError(
+        "attempt_ended",
+        "the attempt ended before the channel stored the file",
+        {
+          request_id: want.request_id,
+        },
+      );
+    }
+    if (ctx.now() - start >= capS * 1000) {
+      return {
+        code: EXIT.pending,
+        result: {
+          stored: false,
+          pending: true,
+          task_id: want.task_id,
+          attempt: want.attempt,
+          name,
+          bytes: want.bytes,
+          sha256: want.sha256,
+          request_id: want.request_id,
+          waited_s: (ctx.now() - start) / 1000,
+          note: "no receipt yet: not stored until a receipt is printed; run the same command again",
+        },
+      };
+    }
+    await ctx.sleep(ATTACH_POLL_MS);
+  }
+}
+
 // ---- CLI ----
 
+const ATTACH_HELP = `usage: argus-task attach --file ABSOLUTE_PATH [--name NAME] [--role ROLE] [--max SECONDS]
+
+Store a file as a task artifact of the attempt you are running. Do this BEFORE you reply
+COMPLETE: the artifacts are fixed when the attempt ends, and an unattached file is lost.
+
+  --file   absolute path of a regular file under /workspace (no symbolic link; at most the
+           size the channel offers, 25 MiB by default; not empty)
+  --name   artifact name (default: the file name); sanitized to [A-Za-z0-9._-]
+  --role   ${ATTACH_ROLES.join(" | ")} (default: none)
+  --max    seconds to wait for the receipt (default ${ATTACH_DEFAULT_WAIT_S}, at most ARGUS_TASK_WAIT_MAX_S)
+
+The channel stores the file, reads it back and writes a receipt. Success is only the JSON line
+{"stored":true,"task_id":...,"attempt":...,"artifact_id":...,"name":...,"bytes":...,"sha256":...};
+that is your proof. COMPLETE then lists every artifact you attached; do not paste IDs yourself.
+The same file, name and role again returns the same receipt (no duplicate). The same name with
+other bytes is stored under a hashed name ("renamed":true). send_file is a chat attachment, not a receipt.
+
+Examples:
+  argus-task attach --file /workspace/agent/report.md --name report.md --role report
+  argus-task attach --file /workspace/project/.argus-delegate/report.md --role delegate_report
+
+Exit codes: 0 stored (receipt printed), 10 no receipt yet (run it again; nothing duplicates),
+12 refused (symlink, not a regular file, outside /workspace, empty, too large, stale or ended
+attempt), 1 error (no channel support, file changed while read, storage failed, bad receipt;
+the error JSON on stderr says retryable), 2 usage.
+`;
+
 const COMMANDS = {
+  attach: {
+    summary:
+      "attach --file PATH [--name N] [--role R]: store a report or delegate output as an artifact before COMPLETE; exits 0 only with the channel's receipt",
+    options: { file: "string", name: "string", role: "string", max: "int" },
+    local: true,
+    help: ATTACH_HELP,
+    run: attach,
+  },
   wait: {
     summary:
       "wait ci|review --pr N: block until CI on the head SHA finishes or a new review/comment lands; exits 10 at the cap, 11 on a steer",
@@ -499,8 +934,9 @@ ${lines.join("\n")}
 Global options: --repository URL (default ARGUS_REPOSITORY_URL).
 There is no completion subcommand: finish by replying COMPLETE: (plain text, then the
 JSON object); the Argus channel submits it. Do not run argus-task to complete.
-Output: one JSON line on stdout. Exit codes: 0 done/ready, 10 still pending,
-11 interrupted by a steer, 12 not ready or rebase conflict, 1 error, 2 usage.
+Output: one JSON line on stdout. Exit codes: 0 done/ready/stored, 10 still pending,
+11 interrupted by a steer, 12 not ready, rebase conflict or attach refused, 1 error, 2 usage.
+Run argus-task attach --help for storing a report or delegate output as an artifact.
 Wait cap: --max seconds, clamped to ARGUS_TASK_WAIT_MAX_S (default ${DEFAULT_MAX_S}).
 `;
 }
@@ -526,31 +962,49 @@ export async function main(argv, env = process.env, io = {}) {
     }
     const definition = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : null;
     if (!definition) throw usage("unknown command; run argus-task --help");
+    if (definition.help && ["--help", "-h", "help"].includes(rest[0])) {
+      stdout.write(definition.help);
+      return EXIT.ok;
+    }
     let positional;
     if (definition.positional) [positional, ...rest] = rest;
-    const options = parseArgs(rest, {
-      repository: "string",
-      ...(definition.noPr ? {} : { number: "string" }),
-      ...definition.options,
-    });
+    const options = parseArgs(
+      rest,
+      definition.local
+        ? definition.options
+        : {
+            repository: "string",
+            ...(definition.noPr ? {} : { number: "string" }),
+            ...definition.options,
+          },
+    );
     if (definition.positional) options[definition.positional] = positional;
-    if (!definition.noPr && !definition.optionalPr && options.number === undefined)
+    if (
+      !definition.local &&
+      !definition.noPr &&
+      !definition.optionalPr &&
+      options.number === undefined
+    )
       throw usage(`${command} requires --pr`);
-    const repository = options.repository ?? env.ARGUS_REPOSITORY_URL;
-    if (!repository)
-      throw policy("no repository: pass --repository URL or set ARGUS_REPOSITORY_URL");
-    const fetchImpl =
-      io.fetch ?? createGatewayFetch({ proxy: env.HTTPS_PROXY ?? env.https_proxy ?? "" });
-    const api = repositoryClient(repository, allowlistFrom(env), fetchImpl, {
-      sleep: io.retrySleep,
-    });
+    // A local command talks to the Argus channel's files, not to the forge.
+    let api = null;
+    if (!definition.local) {
+      const repository = options.repository ?? env.ARGUS_REPOSITORY_URL;
+      if (!repository)
+        throw policy("no repository: pass --repository URL or set ARGUS_REPOSITORY_URL");
+      const fetchImpl =
+        io.fetch ?? createGatewayFetch({ proxy: env.HTTPS_PROXY ?? env.https_proxy ?? "" });
+      api = repositoryClient(repository, allowlistFrom(env), fetchImpl, {
+        sleep: io.retrySleep,
+      });
+    }
     const git = io.git ?? defaultGit;
     const cwd = io.cwd ?? process.cwd();
     const ctx = {
       env,
       git,
       cwd,
-      dir: signalDir(git, cwd),
+      dir: definition.local ? null : signalDir(git, cwd),
       now: io.now ?? Date.now,
       sleep: io.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms))),
     };
@@ -558,6 +1012,12 @@ export async function main(argv, env = process.env, io = {}) {
     stdout.write(`${JSON.stringify(result)}\n`);
     return code;
   } catch (error) {
+    if (error instanceof AttachError) {
+      stderr.write(
+        `${JSON.stringify({ error: { code: error.code, message: error.message, ...error.extra } })}\n`,
+      );
+      return ATTACH_REFUSED.has(error.code) ? EXIT.not_ready : EXIT.error;
+    }
     stderr.write(`${JSON.stringify({ error: errorPayload(error) })}\n`);
     return error instanceof GiteaError && error.code === "usage" ? EXIT.usage : EXIT.error;
   }

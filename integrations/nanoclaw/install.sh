@@ -28,6 +28,8 @@ cp "$here/argus-git-identity.test.ts" "$target/src/channels/argus-git-identity.t
 cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
 cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
 cp "$here/argus-changes-relay.ts" "$target/src/channels/argus-changes-relay.ts"
+# argus-task attach bridge (task-helpers spec 3.10): the host side of the worker's artifact upload.
+cp "$here/argus-attach-relay.ts" "$target/src/channels/argus-attach-relay.ts"
 cp "$here/argus-command-blocked.ts" "$target/src/channels/argus-command-blocked.ts"
 # Single-layer coding run experiment (single-layer-experiment spec): off by default.
 cp "$here/argus-single-layer.ts" "$target/src/channels/argus-single-layer.ts"
@@ -542,7 +544,7 @@ cp "$here/overlays/claude-rate-limit.ts" "$here/overlays/claude-rate-limit.test.
 # Codex's usage limit ("You've hit your usage limit … try again at …") likewise.
 cp "$here/overlays/codex-usage-limit.ts" "$here/overlays/codex-usage-limit.test.ts" "$providers_dir/"
 python3 "$here/patch-claude-rate-limit.py" "$target"
-# The harness's own token usage (claude.ts, codex.ts) for the host to post (account usage spec 3.9).
+# The harness's own token usage (claude.ts, codex.ts) for the host to post (account usage spec 3.10).
 cp "$here/overlays/harness-usage.ts" "$here/overlays/harness-usage.test.ts" "$providers_dir/"
 python3 "$here/patch-harness-usage.py" "$target"
 

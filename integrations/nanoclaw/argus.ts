@@ -67,6 +67,14 @@ import {
   runtimeProviders,
   verifyRepositoryAssignment,
 } from "./argus-accounts.js";
+import {
+  ATTACH_RECEIPTS_FILE,
+  ATTACH_REQUESTS_FILE,
+  type AttachRequest,
+  type AttachStored,
+  createAttachRelay,
+  resetAttachSpool,
+} from "./argus-attach-relay.js";
 import { CHANGES_RELAY_FILE, createChangesRelay } from "./argus-changes-relay.js";
 import {
   type ChatTurnUsage,
@@ -700,7 +708,7 @@ function repositoryTaskLines(
     ...(readOnly
       ? []
       : [
-          `Task helper (when \`command -v argus-task\` finds it; run argus-task --help): prefer it to sleeping and re-polling ${helper}. argus-task wait ci|review --pr N blocks without using model turns until CI on the PR head finishes or a new review or comment lands; exit 10 means still pending (call it again), 11 means an operator steer arrived (read it first). Give your shell tool a timeout above $ARGUS_TASK_WAIT_MAX_S seconds. argus-task pr-ready --pr N exits 0 when mergeable or 12 with reasons; ci-digest --pr N prints the failed jobs' error lines (about 2 KB); deliver [--title T] [--body-file F] pushes your branch (rebasing onto the base only when clean), creates or updates its PR, and exits 12 with the conflicting files on a rebase conflict.`,
+          `Task helper (when \`command -v argus-task\` finds it; run argus-task --help): prefer it to sleeping and re-polling ${helper}. argus-task wait ci|review --pr N blocks without using model turns until CI on the PR head finishes or a new review or comment lands; exit 10 means still pending (call it again), 11 means an operator steer arrived (read it first). Give your shell tool a timeout above $ARGUS_TASK_WAIT_MAX_S seconds. argus-task pr-ready --pr N exits 0 when mergeable or 12 with reasons; ci-digest --pr N prints the failed jobs' error lines (about 2 KB); deliver [--title T] [--body-file F] pushes your branch (rebasing onto the base only when clean), creates or updates its PR, and exits 12 with the conflicting files on a rebase conflict. argus-task attach --file PATH stores a report or delegate output as an artifact (see How to respond).`,
           `To open a PR (you can; push your branch first, then): ${helper} create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: ${helper} update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
         ]),
   ];
@@ -1170,6 +1178,20 @@ const PHASE_RULES: Record<ContinuationPhase, string[]> = {
   ],
 };
 
+/**
+ * How a worker stores a report or a delegate output file as a task artifact (task helpers
+ * spec 3.10). The channel injects it into every task; keep the examples in step with
+ * `argus-task attach --help`.
+ */
+export const ATTACH_GUIDANCE = [
+  "Files you want kept (a report, or a delegate output file written with --out): store each as an artifact with `argus-task attach --file <absolute-path> [--name NAME] [--role report|delegate_report|policy_snapshot|qa_receipt|other]`,",
+  "BEFORE you reply COMPLETE: the attempt's artifacts are fixed when it ends, and a file you never attached is lost with it. The command prints one JSON line and exits 0 only when the channel has",
+  "stored and verified the file; that line's `artifact_id`, `name`, `bytes` and `sha256` are the receipt. Exit 10 means no receipt yet: run the same command again (it never duplicates). Exit 12 means refused",
+  "(not a regular file under /workspace, over the size limit, or the attempt is no longer active): fix the cause, do not retry unchanged. A file that is not an artifact is not stored, whatever you say in COMPLETE.",
+  "Examples: `argus-task attach --file /workspace/agent/report.md --name report.md --role report`; `argus-task attach --file <checkout>/.argus-delegate/<file> --role delegate_report`.",
+  "On COMPLETE the channel lists every artifact you attached in this attempt in the result; you do not paste artifact IDs. `send_file` is a chat attachment, not a receipt: use `argus-task attach` when you need the artifact ID.",
+];
+
 /** Rules that hold for every attempt. */
 export const OPERATING_RULES = [
   "Operating rules (mandatory):",
@@ -1187,13 +1209,14 @@ export const OPERATING_RULES = [
   '- To finish: reply `COMPLETE:` with a JSON object `{"summary": "...", "checklist": [{"id": "<checklist id>", "status": "done|pending|verification_missing", "evidence": "..."}]}`',
   "  covering every checklist id. Only evidenced items count as done; a result with open items goes to review, not to success.",
   '  `COMPLETE:` is plain reply text and the Argus channel submits it; there is no completion command. A `<message to="argus">...</message>` envelope is',
-  "  stripped if you use it, but only when it is the whole reply. No `argus-task` subcommand completes a task.",
+  "  stripped if you use it, but only when it is the whole reply. No `argus-task` subcommand completes a task (`argus-task attach` only stores a file as an artifact).",
 ];
 
 /** What Argus checks before it accepts COMPLETE, from authenticated task metadata (task deliverable spec 3.4). */
 const DELIVERABLE_RULES: Record<string, string> = {
   knowledge: "write a knowledge page with `write_knowledge`.",
-  artifact: "upload an artifact and list its id in the result's `artifacts`.",
+  artifact:
+    "store an artifact with `argus-task attach --file <absolute-path>` (attached artifacts are listed in the result for you).",
   subtasks: "create at least one subtask.",
   branch:
     "push the branch and report it with `report_observations` (artifact kind branch, state open).",
@@ -1354,6 +1377,7 @@ export function renderTask(
     'and ask the question; you will be given the answer. For a missing tool or environment start with "ASSIST:"',
     "(see the operating rules). A directive must be the first thing in your reply. `COMPLETE:` is the reply text itself, not a command;",
     'the channel also accepts it as exactly `<message to="argus">COMPLETE: ...</message>` with nothing else in the reply.',
+    ...ATTACH_GUIDANCE,
   ];
   const lines = [
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
@@ -1567,6 +1591,7 @@ const LOG_BATCH_BYTES = 60 * 1024; // under the 64 KiB server limit
 const LOG_LINE_CHARS = 2000;
 const LOG_PENDING_MAX = 2000;
 const LOG_POLL_MS = 2000;
+const ATTACH_POLL_MS = 500; // a worker waits for the receipt, so poll faster than the logs
 const LOG_BACKOFF_MIN_MS = 2000;
 const LOG_BACKOFF_MAX_MS = 30_000;
 const LOG_READ_MAX = 4 * 1024 * 1024; // per poll; a longer record is skipped
@@ -1996,7 +2021,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let renderCurrent: (() => string) | null = null;
   // Artifacts uploaded for the task in flight (agent attachments), by artifact id,
   // and attachments that could not be stored, for the completion to report.
-  let attached = new Map<string, { name: string; sha: string }>();
+  let attached = new Map<string, { name: string; sha: string; role?: string | null }>();
   let attachFailures: string[] = [];
   let resends = 0;
   let account: { id: string; name: string; provider: string } | null = null;
@@ -2062,6 +2087,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let usageTimer: ReturnType<typeof setInterval> | null = null;
   let changesRelay: ReturnType<typeof createChangesRelay> | null = null;
   let changesTimer: ReturnType<typeof setInterval> | null = null;
+  let attachRelay: ReturnType<typeof createAttachRelay> | null = null;
+  let attachTimer: ReturnType<typeof setInterval> | null = null;
   let blockedRelay: ReturnType<typeof createCommandBlockedRelay> | null = null;
   let blockedTimer: ReturnType<typeof setInterval> | null = null;
   // Stall visibility: remember a session once seen; fail if it vanishes without a reply.
@@ -2513,7 +2540,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   /**
    * Post the usage the container reports (delegate runs and the harness's own turns) with
-   * this host's token, for the accounts it really holds (account usage spec 3.9). Best
+   * this host's token, for the accounts it really holds (account usage spec 3.10). Best
    * effort: a measurement never fails the task.
    */
   async function startUsageRelay(task: { id: string; attempt: number }): Promise<void> {
@@ -2590,6 +2617,116 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
+   * Serve `argus-task attach` (task helpers spec 3.10): the worker has no Argus credential, so
+   * it spools the file and asks here; this host uploads it for the attempt it holds and writes
+   * the receipt. Best effort: without it `attach` reports the missing capability.
+   */
+  async function startAttachRelay(task: { id: string; attempt: number }): Promise<void> {
+    try {
+      const logFile = await cfg.delegateLogFile?.();
+      if (!logFile) return;
+      const dir = path.dirname(logFile);
+      await resetRelayFile(path.join(dir, ATTACH_REQUESTS_FILE));
+      await resetRelayFile(path.join(dir, ATTACH_RECEIPTS_FILE));
+      await resetAttachSpool(dir);
+      const relay = createAttachRelay({
+        dir,
+        task,
+        now: nowMs,
+        active: () => current?.id === task.id && current.attempt === task.attempt,
+        store: (req) => storeAttachment(task, req),
+        warn: (message, fields) => log.warn(message, fields),
+      });
+      await relay.open();
+      attachRelay = relay;
+      attachTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? ATTACH_POLL_MS);
+      attachTimer.unref?.();
+    } catch (err) {
+      log.warn("Could not start the attach relay", { err: String(err).slice(0, 200) });
+    }
+  }
+
+  /**
+   * Record one `argus-task attach` file as an artifact of the attempt: idempotent for the
+   * same name and bytes, a hashed name for a taken name with other bytes, and the stored
+   * artifact is read back (name, size, sha256 and a server-side verify) before it counts.
+   */
+  async function storeAttachment(
+    t: { id: string; attempt: number },
+    req: AttachRequest & { data: Buffer },
+  ): Promise<AttachStored> {
+    if (completedAttempt === `${t.id}:${t.attempt}`)
+      return {
+        ok: false,
+        code: "attempt_completed",
+        message: "the attempt already completed",
+        retryable: false,
+      };
+    const requested = artifactName(req.name);
+    const find = (n: string) => [...attached.entries()].find(([, a]) => a.name === n);
+    const known = (n: string): AttachStored | null => {
+      const hit = find(n);
+      return hit && hit[1].sha === req.sha256
+        ? {
+            ok: true,
+            artifact_id: hit[0],
+            name: n,
+            role: hit[1].role ?? null,
+            bytes: req.bytes,
+            sha256: req.sha256,
+            duplicate: true,
+            renamed: n !== requested,
+          }
+        : null;
+    };
+    const again = known(requested) ?? known(withHashSuffix(requested, req.sha256));
+    if (again) return again;
+    const name = find(requested) ? withHashSuffix(requested, req.sha256) : requested;
+    try {
+      const id = await ensureArtifact(t, name, req.data, req.sha256, mediaTypeFor(name), req.role);
+      const { data: stored } = await client.call("GET", `/artifacts/${id}`);
+      const { data: verdict } = await client.call("POST", `/artifacts/${id}/verify`);
+      if (
+        stored?.task_id !== t.id ||
+        stored?.attempt !== t.attempt ||
+        stored?.size !== req.bytes ||
+        stored?.sha256 !== req.sha256 ||
+        typeof stored?.name !== "string" ||
+        verdict?.ok !== true ||
+        verdict?.size !== req.bytes ||
+        verdict?.sha256 !== req.sha256
+      )
+        return {
+          ok: false,
+          code: "storage_mismatch",
+          message: "the stored artifact does not match the bytes sent; nothing was recorded",
+          retryable: false,
+        };
+      attached.set(id, { name: stored.name, sha: req.sha256, role: stored.role ?? req.role });
+      return {
+        ok: true,
+        artifact_id: id,
+        name: stored.name,
+        role: stored.role ?? req.role,
+        bytes: req.bytes,
+        sha256: req.sha256,
+        duplicate: false,
+        renamed: stored.name !== requested,
+      };
+    } catch (err) {
+      if (!(err instanceof ArgusError))
+        return { ok: false, code: "upload_failed", message: "the upload failed", retryable: true };
+      const lost = err.status === 409 && CLAIM_LOST.includes(err.code);
+      return {
+        ok: false,
+        code: lost ? "stale_attempt" : err.permanent ? err.code : "upload_failed",
+        message: `${err.status} ${err.code}: ${err.message}`,
+        retryable: !lost && !err.permanent,
+      };
+    }
+  }
+
+  /**
    * Report the commands the guard denied, read from the Claude transcript (command guard
    * spec 3). Best effort: a report never fails the task.
    */
@@ -2638,6 +2775,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     harnessLogTimer = null;
     changesRelay?.stop();
     changesRelay = null;
+    attachRelay?.stop();
+    attachRelay = null;
+    if (attachTimer) clearInterval(attachTimer);
+    attachTimer = null;
     if (changesTimer) clearInterval(changesTimer);
     changesTimer = null;
     blockedRelay?.stop();
@@ -3662,6 +3803,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!harnessLogRelay) await startHarnessLogRelay(task);
       if (!usageRelay) await startUsageRelay(task);
       if (!changesRelay) await startChangesRelay(task);
+      if (!attachRelay) await startAttachRelay(task);
       if (!blockedRelay) startCommandBlockedRelay(task);
       resends = 0;
       const best = executor ?? account;
@@ -4460,13 +4602,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     bytes: Uint8Array,
     sha: string,
     mediaType = "text/markdown; charset=utf-8",
+    role?: string | null,
   ): Promise<string> {
     // Artifact names are unique per (task, attempt) and immutable: a name that is
     // taken is reused only if it holds these very bytes, else a hashed name is used.
     const store = async (n: string): Promise<{ id: string; stored: boolean }> => {
       try {
         return {
-          id: (await client.upload(t.id, t.attempt, n, bytes, mediaType)).data.id,
+          id: (await client.upload(t.id, t.attempt, n, bytes, mediaType, role ?? undefined)).data
+            .id,
           stored: true,
         };
       } catch (err) {
@@ -4731,6 +4875,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           logRelay?.drain(),
           harnessLogRelay?.drain(),
           changesRelay?.drain(),
+          attachRelay?.drain(),
           blockedRelay?.poll(),
         ]);
       // Usage first, on every way out (a failure notice may rotate the leases it is billed to).
@@ -5428,7 +5573,7 @@ export async function resumeClaudeSessionFromEnv(
 }
 
 /**
- * Resume is opt-in (quota resume spec 3.9): only ARGUS_QUOTA_RESUME=1 turns it on;
+ * Resume is opt-in (quota resume spec 3.10): only ARGUS_QUOTA_RESUME=1 turns it on;
  * without it every offered session falls back to a fresh one (not_available).
  */
 export function quotaResumeFromEnv(

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-30
-updated: 2026-10-31
+updated: 2026-11-06
 ---
 
 # Task inputs: hand bytes to a later attempt through the NanoClaw channel
@@ -40,6 +40,8 @@ endpoint in the API, `integrations/nanoclaw/argus-inputs.ts` with its calls in
 - No new storage. Bytes stay in the attachment store of
   [MCP operations 3.2](mcp-operations.spec.md); there is no second copy and no
   new table.
+- The reverse direction (worker file to artifact) is `argus-task attach`
+  ([task helpers 3.10](task-helpers.spec.md)); it does not touch inputs.
 - No new worker credential, token in the container, network fetch of arbitrary
   URLs, host-path parameter or filesystem read by the remote MCP.
 - No widening of grants: only attachments an orchestrator shared with

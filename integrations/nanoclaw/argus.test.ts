@@ -993,6 +993,7 @@ function resultArgus(
     attempt: number;
     sha256: string;
     bytes: Uint8Array;
+    role?: string | null;
   }> = [];
   const failures = [...(opts.completeFailures ?? [])];
   const uploadFailures = [...(opts.uploadFailures ?? [])];
@@ -1037,11 +1038,30 @@ function resultArgus(
         attempt,
         sha256: createHash("sha256").update(bytes).digest("hex"),
         bytes,
+        role: u.searchParams.get("role"),
       };
       artifacts.push(a);
       return json(201, { id: a.id, name, sha256: a.sha256, size: bytes.length });
     }
     if (path.endsWith("/artifacts") && init.method === "GET") return json(200, artifacts);
+    const stored = /^\/artifacts\/([^/]+)(\/verify)?$/.exec(path);
+    if (stored) {
+      const a = artifacts.find((x) => x.id === stored[1]);
+      if (!a) return json(404, { detail: { code: "not_found", message: "no artifact" } });
+      const meta = {
+        id: a.id,
+        task_id: "t1",
+        attempt: a.attempt,
+        name: a.name,
+        role: a.role ?? null,
+      };
+      return json(
+        200,
+        stored[2]
+          ? { ok: true, size: a.bytes.length, sha256: a.sha256 }
+          : { ...meta, size: a.bytes.length, sha256: a.sha256 },
+      );
+    }
     if (path.endsWith("/complete") && failures.length) {
       const f = failures.shift()!;
       if (f === "network") throw new TypeError("fetch failed");
@@ -1052,7 +1072,11 @@ function resultArgus(
   return { calls, fetchImpl, artifacts };
 }
 
-async function inFlight(fake: ReturnType<typeof resultArgus>, over = {}) {
+async function inFlight(
+  fake: ReturnType<typeof resultArgus>,
+  over = {},
+  config: Partial<ArgusConfig> = {},
+) {
   const tasks = [task(over)];
   const base = fake.fetchImpl;
   const wrapped = (async (url: string, init: RequestInit) => {
@@ -1063,7 +1087,10 @@ async function inFlight(fake: ReturnType<typeof resultArgus>, over = {}) {
     }
     return base(url, init);
   }) as unknown as typeof fetch;
-  const h = harness({ calls: fake.calls, fetchImpl: wrapped } as ReturnType<typeof fakeArgus>);
+  const h = harness(
+    { calls: fake.calls, fetchImpl: wrapped } as ReturnType<typeof fakeArgus>,
+    config,
+  );
   live.push(h.adapter as any);
   await h.adapter.setup(h.setup);
   await until(() => h.inbound.length === 1);
@@ -1403,6 +1430,114 @@ describe("artifact name collisions", () => {
     const added = fake.artifacts.find((a) => a.id !== "art-old");
     expect(added?.name).toBe(`result-attempt-1-${sha8(text)}.md`);
     expect(new TextDecoder().decode(added?.bytes)).toBe(text);
+  });
+});
+
+describe("argus-task attach through the channel", () => {
+  const nonce = (c: string) => c.repeat(32);
+  const body = "# report\nall green\n";
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const open = async (fakeOpts: Parameters<typeof resultArgus>[0] = {}) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argus-attach-"));
+    const fake = resultArgus(fakeOpts);
+    const h = await inFlight(
+      fake,
+      {},
+      {
+        delegateLogFile: async () => path.join(dir, "argus-task.log"),
+        logPollMs: 20,
+      },
+    );
+    const status = path.join(dir, "argus-task-attach-status.json");
+    await until(() => fs.existsSync(status));
+    const request = async (id: string, text: string, over: Record<string, unknown> = {}) => {
+      fs.writeFileSync(path.join(dir, "argus-task-attach-spool", nonce(id)), text);
+      fs.appendFileSync(
+        path.join(dir, "argus-task-attach.jsonl"),
+        `${JSON.stringify({
+          v: 1,
+          type: "attach",
+          request_id: nonce(id),
+          nonce: nonce(id),
+          task_id: "t1",
+          attempt: 1,
+          name: "report.md",
+          role: "report",
+          bytes: Buffer.byteLength(text),
+          sha256: sha(text),
+          ...over,
+        })}\n`,
+      );
+      const receipts = path.join(dir, "argus-task-attach-receipts.jsonl");
+      await until(() => fs.readFileSync(receipts, "utf8").includes(nonce(id)));
+      return fs
+        .readFileSync(receipts, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+        .find((r) => r.nonce === nonce(id));
+    };
+    return { dir, fake, h, request };
+  };
+
+  it("records the artifact for the attempt, verifies it, and completion lists only recorded ids", async () => {
+    const { dir, fake, h, request } = await open();
+    const r = await request("a", body);
+    expect(r).toMatchObject({
+      ok: true,
+      task_id: "t1",
+      attempt: 1,
+      artifact_id: "art-1",
+      name: "report.md",
+      role: "report",
+      bytes: Buffer.byteLength(body),
+      sha256: sha(body),
+      duplicate: false,
+      renamed: false,
+    });
+    expect(new TextDecoder().decode(fake.artifacts[0]?.bytes)).toBe(body);
+    expect(fake.calls.some((c) => c.path === "/artifacts/art-1/verify")).toBe(true);
+    const same = await request("b", body); // same bytes and name: the existing artifact
+    expect(same).toMatchObject({ ok: true, artifact_id: "art-1", duplicate: true });
+    const other = await request("c", `${body}more`); // same name, other bytes: hashed name
+    expect(other).toMatchObject({ ok: true, renamed: true, artifact_id: "art-2" });
+    expect(other.name).toBe(withHashSuffix("report.md", sha(`${body}more`)));
+    expect(fake.artifacts).toHaveLength(2);
+    await reply(h, "COMPLETE: done");
+    expect(completes(fake)[0]?.body.result.artifacts).toEqual(["art-1", "art-2"]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("refuses a stale attempt and a bytes mismatch with an error receipt and stores nothing", async () => {
+    const { dir, fake, request } = await open();
+    expect((await request("d", body, { attempt: 0 })).error.code).toBe("stale_attempt");
+    expect((await request("e", body, { sha256: sha("other") })).error.code).toBe(
+      "integrity_mismatch",
+    );
+    expect(fake.artifacts).toHaveLength(0);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("reports a storage failure as a retryable error receipt, then stores once on retry", async () => {
+    const { dir, fake, h, request } = await open({
+      uploadFailures: [new Response("oops", { status: 503 })],
+    });
+    const failed = await request("f", body);
+    expect(failed).toMatchObject({ ok: false, error: { retryable: true } });
+    expect(fake.artifacts).toHaveLength(0);
+    expect(await request("7", body)).toMatchObject({ ok: true, artifact_id: "art-1" });
+    await request("8", body); // a re-delivered identical request adds no second upload
+    expect(fake.artifacts).toHaveLength(1);
+    await reply(h, "COMPLETE: done");
+    expect(completes(fake)[0]?.body.result.artifacts).toEqual(["art-1"]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  it("withdraws the offer when the attempt completes, so a late attach finds no capability", async () => {
+    const { dir, h } = await open();
+    await reply(h, "COMPLETE: done");
+    await until(() => !fs.existsSync(path.join(dir, "argus-task-attach-status.json")));
+    fs.rmSync(dir, { recursive: true });
   });
 });
 
