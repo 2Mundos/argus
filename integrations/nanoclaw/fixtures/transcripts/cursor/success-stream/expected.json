@@ -1,0 +1,16 @@
+{
+  "result": {
+    "is_error": false,
+    "subtype": "success"
+  },
+  "usageRecordPresent": true,
+  "usage": {
+    "measurement": "measured",
+    "input_tokens": 14799,
+    "output_tokens": 116,
+    "cached_input_tokens": 0,
+    "cost_usd": null,
+    "model": null,
+    "turns": 1
+  }
+}

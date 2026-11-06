@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import { parseUsage } from "./engines/usage.mjs";
 import {
   claudeAuthExpiredError,
   claudeAuthExpiredFailure,
@@ -64,7 +65,37 @@ export function deriveCodex(events: CodexEvent[]) {
   };
 }
 
-export const DERIVE = { claude: deriveClaude, codex: deriveCodex } as const;
+interface CursorEvent {
+  type?: string;
+  subtype?: string;
+  is_error?: boolean;
+  usage?: unknown;
+}
+
+function cursorStdoutFromEvents(events: CursorEvent[]): string {
+  return events.map((ev) => JSON.stringify(ev)).join("\n");
+}
+
+/** Cursor CLI (`agent`) stream-json: same usage path as executor `agent` in usage.mjs. */
+export function deriveCursor(events: CursorEvent[]) {
+  const result = events.findLast((ev) => ev.type === "result");
+  const usageRecordPresent =
+    result !== undefined &&
+    result.usage !== null &&
+    result.usage !== undefined &&
+    typeof result.usage === "object";
+  const usage = parseUsage("agent", cursorStdoutFromEvents(events));
+  return {
+    result: {
+      is_error: result?.is_error,
+      subtype: result?.subtype,
+    },
+    usageRecordPresent,
+    usage,
+  };
+}
+
+export const DERIVE = { claude: deriveClaude, codex: deriveCodex, cursor: deriveCursor } as const;
 
 export function readEvents(path: string): unknown[] {
   return readFileSync(path, "utf8")

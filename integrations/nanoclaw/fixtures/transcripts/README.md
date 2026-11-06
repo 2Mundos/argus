@@ -5,7 +5,8 @@ or the network. Design: [engine transcript replay](../../../../docs/drafts/2026-
 
 **Status:** two Claude recordings are committed: `claude/success-stream` (a full
 `claude -p` stream-json run, Claude Code 2.1.296) and `claude/success-result` (a lone
-result event). `transcripts.test.ts` replays both. Session-limit and auth-failure
+result event). `cursor/success-stream` (Cursor agent CLI stream-json, success) is
+committed. `transcripts.test.ts` replays these. Session-limit and auth-failure
 cases are still to record.
 Custom and local bridge-error cases (OpenRouter 402/429, Strata unavailable) are
 also not recorded yet: no raw evidence exists on the worker.
