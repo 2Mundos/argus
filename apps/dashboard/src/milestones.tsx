@@ -121,15 +121,21 @@ export function ProgressPie({ percent }: { percent: number }) {
   const value = Math.min(100, Math.max(0, Math.round(percent)));
   return (
     <span className="progress-pie" role="img" aria-label={`${value}% complete`}>
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <circle className="track" cx="8" cy="8" r={PIE_RADIUS} />
-        <circle
-          className="value"
-          cx="8"
-          cy="8"
-          r={PIE_RADIUS}
-          strokeDasharray={`${(value / 100) * PIE_CIRCUMFERENCE} ${PIE_CIRCUMFERENCE}`}
-        />
+      <svg viewBox="0 0 16 16" aria-hidden="true" className={value === 100 ? "done" : undefined}>
+        {value === 100 ? (
+          <path className="check" d="M3 8.5l3.2 3.2L13 4.8" />
+        ) : (
+          <>
+            <circle className="track" cx="8" cy="8" r={PIE_RADIUS} />
+            <circle
+              className="value"
+              cx="8"
+              cy="8"
+              r={PIE_RADIUS}
+              strokeDasharray={`${(value / 100) * PIE_CIRCUMFERENCE} ${PIE_CIRCUMFERENCE}`}
+            />
+          </>
+        )}
       </svg>
       <span>{value}%</span>
     </span>
@@ -163,7 +169,6 @@ export function TaskSignal({ task, now }: { task: Signal; now: number }) {
     <>
       <NoSignal task={task} now={now} />
       <MilestoneLine task={task} now={now} />
-      {task.progress_percent != null && <ProgressPie percent={task.progress_percent} />}
       {note && (
         <span className={quiet ? "progress stale" : "progress"}>
           <span className="small" title={task.progress_message ?? undefined}>

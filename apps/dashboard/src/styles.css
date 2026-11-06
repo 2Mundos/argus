@@ -1687,6 +1687,29 @@ main > section.home > .page-header {
   font-weight: 400;
   line-height: 1.35;
 }
+.task-card {
+  position: relative;
+}
+.task-card .progress-pie {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.55rem;
+  opacity: 0.5;
+}
+.task-card.has-pie .title {
+  padding-right: 1.6rem;
+}
+/* The card shows the pie alone; its track matches the card, so use a visible one. */
+.task-card .progress-pie > span {
+  display: none;
+}
+.task-card .progress-pie svg {
+  width: 16px;
+  height: 16px;
+}
+.task-card .progress-pie .track {
+  stroke: color-mix(in srgb, var(--muted) 35%, transparent);
+}
 .task-card > * {
   /* Grid items default to min-width:auto; long nowrap badges then spill past the card. */
   min-width: 0;
@@ -1777,6 +1800,16 @@ main > section.home > .page-header {
 }
 .progress-pie .track {
   stroke: var(--surface-2);
+}
+.progress-pie svg.done {
+  transform: none;
+}
+.progress-pie .check {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .progress-pie .value {
   stroke: var(--accent);
@@ -4321,4 +4354,18 @@ button.link.account-name {
 }
 .project-card .badge {
   margin-right: 0.35rem;
+}
+
+/* Compact header actions: small buttons and a quiet toggle. */
+button.compact {
+  padding: 0.2rem 0.7rem;
+  font-size: 12.5px;
+  border-radius: 999px;
+}
+.page-header-actions {
+  gap: 0.5rem;
+}
+label.header-toggle {
+  font-size: 12.5px;
+  color: var(--muted);
 }

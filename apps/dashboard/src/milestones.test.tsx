@@ -48,7 +48,7 @@ describe("TaskSignal", () => {
     expect(screen.getByText("PR opened")).toBeTruthy();
   });
 
-  it("keeps the progress pie when a milestone supersedes the note", () => {
+  it("hides the note when a milestone supersedes it", () => {
     render(
       <TaskSignal
         now={NOW}
@@ -60,8 +60,6 @@ describe("TaskSignal", () => {
         }}
       />,
     );
-    expect(screen.getByRole("img", { name: "40% complete" })).toBeTruthy();
-    expect(screen.getByText("40%")).toBeTruthy();
     expect(screen.queryByText("Delegating implementation")).toBeNull();
   });
 
