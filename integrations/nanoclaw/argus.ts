@@ -80,6 +80,7 @@ import {
 import {
   type CheckpointFailure,
   checkpointTaskWorkspace,
+  defaultNodeId,
   maxCheckpointBytesFromEnv,
   parseCheckpointRef,
   restoreTaskWorkspace,
@@ -2378,6 +2379,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           worker_version: cfg.workerVersion ?? null,
           engine: engineInUse,
           executor: executor?.provider ?? null,
+          node_id: defaultNodeId(),
           features: ["steer", "task-inputs"],
         },
       });

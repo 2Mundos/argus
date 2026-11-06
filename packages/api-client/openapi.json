@@ -1815,6 +1815,18 @@
             "title": "Features",
             "type": "array"
           },
+          "node_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
           "worker_version": {
             "anyOf": [
               {
@@ -24762,6 +24774,28 @@
           },
           "owner_agent_id": {
             "title": "Owner Agent Id",
+            "type": "string"
+          },
+          "owner_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Node Id"
+          },
+          "owner_status": {
+            "default": "unknown",
+            "enum": [
+              "live",
+              "stale",
+              "ended",
+              "unknown"
+            ],
+            "title": "Owner Status",
             "type": "string"
           }
         },

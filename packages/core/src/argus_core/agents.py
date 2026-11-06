@@ -23,6 +23,10 @@ class AgentState(StrEnum):
 
 LIVE = frozenset({AgentState.ACTIVE, AgentState.DRAINING})
 
+# Heartbeat cadence and the loss threshold (worker lifecycle 3.4).
+HEARTBEAT_INTERVAL_S = 30
+LOST_AFTER_S = 3 * HEARTBEAT_INTERVAL_S
+
 
 class AgentRuntime(BaseModel):
     """What an agent says it runs, sent on heartbeat. Self-reported: it proves a
@@ -31,6 +35,9 @@ class AgentRuntime(BaseModel):
     worker_version: str | None = Field(default=None, max_length=100)
     engine: str | None = Field(default=None, max_length=100)
     executor: str | None = Field(default=None, max_length=100)
+    # The node the worker runs on (`ARGUS_NODE_ID`, else its hostname): where its
+    # task workspace lives. Self-reported, like the rest of this object.
+    node_id: str | None = Field(default=None, max_length=200)
     # Capabilities the worker will act on. `steer` means it injects operator steers.
     features: list[str] = Field(default_factory=list, max_length=16)
 

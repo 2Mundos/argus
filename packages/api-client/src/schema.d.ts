@@ -4024,6 +4024,8 @@ export interface components {
             executor?: string | null;
             /** Features */
             features?: string[];
+            /** Node Id */
+            node_id?: string | null;
             /** Worker Version */
             worker_version?: string | null;
         };
@@ -11820,6 +11822,14 @@ export interface components {
             checkpoint: "available" | "unavailable" | "unknown";
             /** Owner Agent Id */
             owner_agent_id: string;
+            /** Owner Node Id */
+            owner_node_id?: string | null;
+            /**
+             * Owner Status
+             * @default unknown
+             * @enum {string}
+             */
+            owner_status?: "live" | "stale" | "ended" | "unknown";
         };
         /**
          * Yield

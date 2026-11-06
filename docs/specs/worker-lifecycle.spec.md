@@ -302,8 +302,11 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   and rejected pairs; a rejected pair does not renew that task or prevent other
   valid pairs from renewing. Agent liveness can refresh even when a task lease is
   rejected. Workers do not heartbeat per task. A heartbeat may carry an
-  optional `runtime` (`worker_version`, `engine`, `executor`), shown by pool
-  inspection as self-reported ([MCP operations](mcp-operations.spec.md) 3.3).
+  optional `runtime` (`worker_version`, `engine`, `executor`, `node_id`), shown by
+  pool inspection as self-reported ([MCP operations](mcp-operations.spec.md) 3.3).
+  `node_id` is where the worker runs (`ARGUS_NODE_ID`, else its hostname), which the
+  task read shows as the workspace owner's node
+  ([task workspace](task-workspace.spec.md) 3.5).
 - The **reaper** loop (every 10 s) independently expires task leases whose
   deadline has passed, including leases belonging to agents still sending
   heartbeats. It also marks agents with

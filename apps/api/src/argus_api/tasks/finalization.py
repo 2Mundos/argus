@@ -1,10 +1,12 @@
 """What follows an attempt's execution (task finalization spec): when the claim
 ended, the worker's checkpoint follow-up, and the derived step shown on the read."""
 
+import json
 from datetime import datetime
 from typing import Literal
 
 import aiosqlite
+from argus_core.agents import LOST_AFTER_S
 from pydantic import BaseModel, Field
 
 from argus_api.db import Tx, ts
@@ -39,11 +41,20 @@ class Finalization(BaseModel):
     checkpoint: CheckpointFacts | None
 
 
+OwnerStatus = Literal["live", "stale", "ended", "unknown"]
+
+
 class WorkspaceFacts(BaseModel):
     """Who holds the task's current workspace and whether its work is recoverable.
     Never a path or a checkpoint reference: the API knows neither."""
 
     owner_agent_id: str
+    owner_node_id: str | None = None
+    """The node the owner last reported on heartbeat; null when it reported none."""
+    owner_status: OwnerStatus = "unknown"
+    """`live` while the owner is active or draining and heard from within the loss
+    threshold; `stale` when it has gone silent past it; `ended` when gone or lost;
+    `unknown` when there is no agent row."""
     checkpoint: Literal["available", "unavailable", "unknown"]
 
 
@@ -54,13 +65,45 @@ _CHECKPOINT_STATUS: dict[str | None, Literal["available", "unavailable"]] = {
 }
 
 
-def workspace_facts(row: aiosqlite.Row | None) -> WorkspaceFacts | None:
+def _owner_node_id(runtime: str | None) -> str | None:
+    """The `node_id` in an agent's self-reported runtime JSON, or None."""
+    if not runtime:
+        return None
+    try:
+        value = json.loads(runtime)
+    except (TypeError, ValueError):
+        return None
+    node = value.get("node_id") if isinstance(value, dict) else None
+    return node if isinstance(node, str) and node else None
+
+
+def _owner_status(
+    state: str | None, heartbeat: str | None, now: datetime
+) -> OwnerStatus:
+    """Whether the owner is still around, from its stored state and heartbeat."""
+    if state is None:
+        return "unknown"
+    if state in ("gone", "lost"):
+        return "ended"
+    if state not in ("active", "draining"):
+        return "unknown"
+    if heartbeat is None:
+        return "stale"
+    silent = (now - datetime.fromisoformat(heartbeat)).total_seconds()
+    return "stale" if silent > LOST_AFTER_S else "live"
+
+
+def workspace_facts(row: aiosqlite.Row | None, now: datetime) -> WorkspaceFacts | None:
     """The newest attempt's worker and checkpoint status; None with no attempt.
     `running`, no step recorded and any unrecognised state are `unknown`."""
     if row is None:
         return None
     return WorkspaceFacts(
         owner_agent_id=row["agent_id"],
+        owner_node_id=_owner_node_id(row["owner_runtime"]),
+        owner_status=_owner_status(
+            row["owner_state"], row["owner_last_heartbeat_at"], now
+        ),
         checkpoint=_CHECKPOINT_STATUS.get(row["checkpoint_state"], "unknown"),
     )
 
@@ -191,8 +234,11 @@ async def newest(
     conn: aiosqlite.Connection, task_id: str, task_state: str, now: datetime
 ) -> tuple[Finalization | None, WorkspaceFacts | None]:
     async with conn.execute(
-        "SELECT * FROM task_attempts WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        "SELECT t.*, a.state AS owner_state,"
+        " a.last_heartbeat_at AS owner_last_heartbeat_at, a.runtime AS owner_runtime"
+        " FROM task_attempts t LEFT JOIN agents a ON a.id = t.agent_id"
+        " WHERE t.task_id = ? ORDER BY t.id DESC LIMIT 1",
         (task_id,),
     ) as cur:
         row = await cur.fetchone()
-    return derive(row, task_state, now), workspace_facts(row)
+    return derive(row, task_state, now), workspace_facts(row, now)
