@@ -9,9 +9,11 @@ set -eu
 
 VERSION="${CURSOR_AGENT_VERSION:-2026.10.16-e3cb207}"
 SHA256_X64="${CURSOR_AGENT_SHA256_X64:-3aa3f48cd7a3909a98c9b3f2a4085f0c021088bf826690b22c61f424c843e552}"
+SHA256_ARM64="${CURSOR_AGENT_SHA256_ARM64:-4cf077f150eb8d1e270bf1dea69700184c39a4847fe192d523f5bb34d4b62597}"
 
 case "$(uname -m)" in
   x86_64|amd64) arch=x64; sha="$SHA256_X64" ;;
+  aarch64|arm64) arch=arm64; sha="$SHA256_ARM64" ;;
   *) echo "cursor agent: no pinned checksum for $(uname -m); add one before building here" >&2; exit 1 ;;
 esac
 

@@ -102,10 +102,20 @@ jobs:
           echo "Created release $TAG"
 
   # Worker images for `argus worker setup` (docs/specs/local-workers.spec.md 3.1):
-  # the NanoClaw host with its built checkout, and the ~6 GB agent image.
+  # the NanoClaw host with its built checkout, and the ~6 GB agent image. Each
+  # architecture builds natively (QEMU would take hours for the agent image) and
+  # pushes `<tag>-<arch>`; `worker-manifests` joins them under the release tag.
   worker-images:
     needs: publish
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,6 +135,7 @@ jobs:
         env:
           TAG: ${{ needs.publish.outputs.tag }}
           OWNER: ${{ needs.publish.outputs.owner }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           host="$OWNER/argus-nanoclaw-host"
@@ -132,12 +143,32 @@ jobs:
           IMAGE_LABELS="org.opencontainers.image.version=$TAG
           org.opencontainers.image.revision=$(git rev-parse HEAD)
           org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            deploy/nanoclaw-host/build-release.sh "$host:$TAG" "$agent:$TAG"
+            deploy/nanoclaw-host/build-release.sh "$host:$TAG-$ARCH" "$agent:$TAG-$ARCH"
+          docker push "$host:$TAG-$ARCH"
+          docker push "$agent:$TAG-$ARCH"
+
+  worker-manifests:
+    needs: [publish, worker-images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Join the per-architecture images
+        env:
+          TAG: ${{ needs.publish.outputs.tag }}
+          OWNER: ${{ needs.publish.outputs.owner }}
+        run: |
+          set -euo pipefail
           newest=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-          for image in "$host" "$agent"; do
-            docker push "$image:$TAG"
-            if [ "$TAG" = "$newest" ]; then
-              docker tag "$image:$TAG" "$image:latest"
-              docker push "$image:latest"
-            fi
+          for image in "$OWNER/argus-nanoclaw-host" "$OWNER/argus-nanoclaw-agent"; do
+            tags=(-t "$image:$TAG")
+            [ "$TAG" = "$newest" ] && tags+=(-t "$image:latest")
+            docker buildx imagetools create "${tags[@]}" "$image:$TAG-amd64" "$image:$TAG-arm64"
           done
