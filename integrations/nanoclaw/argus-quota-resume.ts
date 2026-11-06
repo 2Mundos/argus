@@ -55,10 +55,10 @@ export function decideQuotaResume(
 export const RUNNER_MAX_TRANSCRIPT_BYTES = 12 * 1024 * 1024;
 export const RUNNER_MAX_TRANSCRIPT_AGE_MS = 14 * 86_400_000;
 
-type TranscriptHit = { id: string; path: string; size: number; mtimeMs: number };
+export type TranscriptHit = { id: string; path: string; size: number; mtimeMs: number };
 
 /** The session transcripts under `<projectsDir>/<project>/<session id>.jsonl`. */
-async function transcripts(projectsDir: string, sinceMs = 0): Promise<TranscriptHit[]> {
+export async function transcripts(projectsDir: string, sinceMs = 0): Promise<TranscriptHit[]> {
   const { readdir, stat } = await import("node:fs/promises");
   const path = await import("node:path");
   const found: TranscriptHit[] = [];

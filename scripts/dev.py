@@ -81,6 +81,7 @@ KEEP_TABLES = (
     "settings",
     "task_attempts",
     "task_changes",
+    "task_command_blocks",
     "task_creation_keys",
     "task_deps",
     "task_draft_publications",

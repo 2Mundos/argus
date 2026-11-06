@@ -5022,6 +5022,50 @@
         "title": "CodexLoginStart",
         "type": "object"
       },
+      "CommandBlockedAccepted": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "CommandBlockedAccepted",
+        "type": "object"
+      },
+      "CommandBlockedWrite": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "command": {
+            "maxLength": 16000,
+            "title": "Command",
+            "type": "string"
+          },
+          "rule": {
+            "maxLength": 100,
+            "title": "Rule",
+            "type": "string"
+          },
+          "tool_use_id": {
+            "pattern": "^[A-Za-z0-9_.:-]{1,200}$",
+            "title": "Tool Use Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "tool_use_id",
+          "rule",
+          "command"
+        ],
+        "title": "CommandBlockedWrite",
+        "type": "object"
+      },
       "Commit": {
         "properties": {
           "sha": {
@@ -34681,6 +34725,64 @@
           }
         ],
         "summary": "Put Changes",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/command-blocked": {
+      "post": {
+        "description": "Report a command the guard denied in the attempt you hold (agent token). `rule`\nis one of the guard's closed ids (422 `unknown_rule` otherwise); the reason is\nArgus's own. The command is redacted, cleaned and cut to 200 characters before it\nis stored. Records a `task.command_blocked` event once per `tool_use_id` and at\nmost 20 per attempt (`status` says `recorded`, `duplicate` or `dropped`); the task\nis untouched. Fenced like progress: a stale attempt is 409 `stale_attempt`.",
+        "operationId": "post_command_blocked_api_tasks__task_id__command_blocked_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandBlockedWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandBlockedAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Post Command Blocked",
         "tags": [
           "tasks"
         ]

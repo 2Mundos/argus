@@ -2913,6 +2913,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/command-blocked": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Command Blocked
+         * @description Report a command the guard denied in the attempt you hold (agent token). `rule`
+         *     is one of the guard's closed ids (422 `unknown_rule` otherwise); the reason is
+         *     Argus's own. The command is redacted, cleaned and cut to 200 characters before it
+         *     is stored. Records a `task.command_blocked` event once per `tool_use_id` and at
+         *     most 20 per attempt (`status` says `recorded`, `duplicate` or `dropped`); the task
+         *     is untouched. Fenced like progress: a stale attempt is 409 `stale_attempt`.
+         */
+        post: operations["post_command_blocked_api_tasks__task_id__command_blocked_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/complete": {
         parameters: {
             query?: never;
@@ -5068,6 +5093,22 @@ export interface components {
         CodexLoginStart: {
             /** Name */
             name?: string | null;
+        };
+        /** CommandBlockedAccepted */
+        CommandBlockedAccepted: {
+            /** Status */
+            status: string;
+        };
+        /** CommandBlockedWrite */
+        CommandBlockedWrite: {
+            /** Attempt */
+            attempt: number;
+            /** Command */
+            command: string;
+            /** Rule */
+            rule: string;
+            /** Tool Use Id */
+            tool_use_id: string;
         };
         /** Commit */
         Commit: {
@@ -17376,6 +17417,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChangesAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_command_blocked_api_tasks__task_id__command_blocked_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommandBlockedWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommandBlockedAccepted"];
                 };
             };
             /** @description Validation Error */
