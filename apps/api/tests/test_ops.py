@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from api_support import FakeClock
-from argus_api import ops, reaper
+from argus_api import ops, ops_routes, reaper
 from argus_api.db import Database
 from argus_api.main import app
 from argus_api.tasks import service as tasks
@@ -273,6 +273,120 @@ def test_system_summary_for_any_valid_token(client: TestClient) -> None:
         "instances",
         "docker",
     }
+
+
+def _guard_stats(
+    *, passes: int = 0, errors: int = 0, success_at: float | None = None
+) -> ops.LoopStats:
+    """A guard LoopStats with explicit monotonic evidence (interval 10 → stale after 30 s)."""
+    s = ops.LoopStats("disk_guard", 10)
+    s.passes_total = passes
+    s.errors_total = errors
+    if success_at is not None:
+        s.last_success_mono = success_at
+        s.last_duration_s = 0.5
+    return s
+
+
+@pytest.mark.parametrize(
+    ("stats", "enabled", "now", "state", "age"),
+    [
+        (_guard_stats(passes=3, success_at=100.0), True, 110.0, "healthy", 10.0),
+        # A past error with a recent success is healthy; the counter stays visible.
+        (
+            _guard_stats(passes=3, errors=1, success_at=100.0),
+            True,
+            110.0,
+            "healthy",
+            10.0,
+        ),
+        # Heartbeat older than the stale window, no errors: the loop stopped.
+        (_guard_stats(passes=3, success_at=100.0), True, 131.0, "stale", 31.0),
+        (_guard_stats(), True, 500.0, "never_run", None),
+        (_guard_stats(passes=2, errors=2), True, 500.0, "failed", None),
+        (
+            _guard_stats(passes=3, errors=1, success_at=100.0),
+            True,
+            200.0,
+            "failed",
+            100.0,
+        ),
+        # Disabled wins over whatever the counters say.
+        (_guard_stats(), False, 500.0, "disabled", None),
+        (_guard_stats(passes=3, success_at=100.0), False, 110.0, "disabled", 10.0),
+    ],
+)
+def test_disk_guard_loop_states_from_counters_and_a_fake_clock(
+    stats: ops.LoopStats, enabled: bool, now: float, state: str, age: float | None
+) -> None:
+    out = ops_routes.disk_guard_loop_out(stats, enabled, now)
+    assert out.state == state
+    assert out.last_success_age_s == age
+    assert out.stale_after_s == 30
+    assert out.passes_total == stats.passes_total
+    assert out.errors_total == stats.errors_total
+
+
+@pytest.fixture
+def guard_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[TestClient]:
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "true")
+    with TestClient(app) as c:
+        yield c
+
+
+def test_system_reports_the_guard_loop_without_touching_readiness_or_the_disk(
+    guard_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = guard_client
+    app_state = client.app.state
+    stats: ops.LoopStats = app_state.disk_guard_loop
+    assert stats is app_state.disk_guard.stats
+    assert "disk_guard" not in app_state.loops
+    readyz_before = client.get("/readyz").text
+    before = (stats.passes_total, stats.errors_total, stats.last_success_mono)
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise AssertionError("diagnostic read must not measure or act")
+
+    guard = app_state.disk_guard
+    monkeypatch.setattr(type(guard), "measure_once", boom)
+    monkeypatch.setattr(type(guard), "run_pass", boom)
+    monkeypatch.setattr(type(guard), "run", boom)
+
+    res = client.get("/api/system", headers=ADMIN)
+    assert res.status_code == 200
+    body = res.json()
+    loop = body["disk_guard_loop"]
+    assert loop["state"] == "healthy"
+    assert set(loop) == {
+        "state",
+        "stale_after_s",
+        "last_success_age_s",
+        "last_duration_s",
+        "errors_total",
+        "passes_total",
+    }
+    assert "disk_guard" not in body["loops"]
+    # Measurement state stays in its own block.
+    assert "measurement" in body["disk_guard"]
+    assert "state" not in body["disk_guard"]
+    assert str(client.app.state.settings.data_dir) not in res.text
+    assert (
+        stats.passes_total,
+        stats.errors_total,
+        stats.last_success_mono,
+    ) == before
+    assert client.get("/readyz").text == readyz_before
+    assert "disk_guard" not in client.get("/readyz").text
+
+
+def test_disabled_guard_reports_disabled_loop(client: TestClient) -> None:
+    body = client.get("/api/system", headers=ADMIN).json()
+    assert body["disk_guard_loop"]["state"] == "disabled"
 
 
 def test_unready_returns_503(

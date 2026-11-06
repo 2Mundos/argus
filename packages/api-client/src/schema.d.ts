@@ -6063,6 +6063,30 @@ export interface components {
          */
         DifficultySource: "declared" | "inferred";
         /**
+         * DiskGuardLoopOut
+         * @description Execution health of the guard loop (heartbeat), not of its measurement.
+         *
+         *     A fresh loop can report a `stale` measurement and a stale loop can still hold
+         *     a recent one; read `disk_guard.measurement` for the latter.
+         */
+        DiskGuardLoopOut: {
+            /** Errors Total */
+            errors_total: number;
+            /** Last Duration S */
+            last_duration_s: number | null;
+            /** Last Success Age S */
+            last_success_age_s: number | null;
+            /** Passes Total */
+            passes_total: number;
+            /** Stale After S */
+            stale_after_s: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "healthy" | "stale" | "never_run" | "failed" | "disabled";
+        };
+        /**
          * DiskGuardOut
          * @description Authenticated disk-guard visibility; no paths or device identifiers.
          *
@@ -10418,6 +10442,7 @@ export interface components {
             /** Disk Free Bytes */
             disk_free_bytes: number;
             disk_guard: components["schemas"]["DiskGuardOut"];
+            disk_guard_loop: components["schemas"]["DiskGuardLoopOut"];
             /** Events Total */
             events_total: number;
             /** Loops */

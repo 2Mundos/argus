@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # Operations Spec
@@ -109,6 +109,9 @@ its last pass finished, how long it took, and how many passes failed. These feed
 `/readyz`, `/api/metrics`, and the Home System widgets. They are not persisted: after a
 restart they start empty and readiness waits (up to the stale window) for the
 first pass.
+
+The disk-guard loop keeps the same record but outside the readiness set; its
+authenticated reading is in 3.5 (Visibility).
 
 ## 3.4 System widgets
 
@@ -293,6 +296,25 @@ not include filesystem paths, `st_dev` values, container/daemon identifiers, or
 the Docker root path. `/readyz` and `/healthz` stay unauthenticated and carry no
 paths or identifiers.
 
+The system summary also carries `disk_guard_loop`, the guard loop's execution
+health (heartbeat), separate from `disk_guard` (measurement and admission). It is
+read from the in-memory `LoopStats` only (`app.state.disk_guard_loop`, not in the
+readiness `loops`): no measurement, filesystem traversal or write. Fields: `state`,
+`stale_after_s`, `last_success_age_s`, `last_duration_s`, `passes_total`,
+`errors_total`. `state` is one of:
+
+| State | Meaning |
+| --- | --- |
+| `disabled` | `ARGUS_DISK_GUARD_ENABLED` is false; no loop runs (wins over the counters) |
+| `never_run` | enabled, no pass recorded yet |
+| `healthy` | last success within the stale window (`max(3 × interval, 30 s)`); past errors stay visible in `errors_total` |
+| `stale` | no errors, but the last success is older than the stale window: the loop stopped advancing |
+| `failed` | errors recorded and no success within the stale window (or ever) |
+
+Stale *execution* (`disk_guard_loop.state`) and stale *measurement*
+(`disk_guard.measurement`, from the measurement timestamps) are independent: either
+can be stale while the other is fine. Neither affects `/readyz`.
+
 ### Verification boundary
 
 **Synthetic (every CI run).** `test_disk_guard*.py` and `test_disk_pause.py` use
@@ -411,7 +433,9 @@ while paused; the API process owns the loop; the two draft changes (resume gated
 2.5 GiB only, failed-measurement pause threshold). Still open:
 
 1. Absolute thresholds, or a percentage floor on small disks.
-2. Whether guard loop staleness fails `/readyz`.
+2. Whether guard loop staleness fails `/readyz`. Still open and unchanged: staleness
+   is now visible to authenticated callers (`disk_guard_loop`, 3.5 Visibility) but
+   does not affect readiness.
 3. Data-directory band: pause and shed when sessions may not be the writers.
 
 # 4. Open Questions

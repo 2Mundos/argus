@@ -80,6 +80,21 @@ class LoopOut(BaseModel):
     passes_total: int
 
 
+class DiskGuardLoopOut(BaseModel):
+    """Execution health of the guard loop (heartbeat), not of its measurement.
+
+    A fresh loop can report a `stale` measurement and a stale loop can still hold
+    a recent one; read `disk_guard.measurement` for the latter.
+    """
+
+    state: Literal["healthy", "stale", "never_run", "failed", "disabled"]
+    stale_after_s: float
+    last_success_age_s: float | None
+    last_duration_s: float | None
+    errors_total: int
+    passes_total: int
+
+
 class PoolOut(BaseModel):
     name: str
     desired: int
@@ -136,7 +151,35 @@ class SystemSummary(BaseModel):
     database: DatabaseOut
     disk_free_bytes: int
     disk_guard: DiskGuardOut
+    disk_guard_loop: DiskGuardLoopOut
     loops: dict[str, LoopOut]
+
+
+def disk_guard_loop_out(
+    stats: ops.LoopStats, enabled: bool, now: float
+) -> DiskGuardLoopOut:
+    """Classify the guard loop from in-memory counters only (`now` is monotonic)."""
+    age = None if stats.last_success_mono is None else now - stats.last_success_mono
+    stale = age is None or age > stats.stale_after_s
+    state: Literal["healthy", "stale", "never_run", "failed", "disabled"]
+    if not enabled:
+        state = "disabled"
+    elif stats.passes_total == 0:
+        state = "never_run"
+    elif stats.errors_total and stale:
+        state = "failed"
+    elif stale:
+        state = "stale"
+    else:
+        state = "healthy"
+    return DiskGuardLoopOut(
+        state=state,
+        stale_after_s=stats.stale_after_s,
+        last_success_age_s=age,
+        last_duration_s=stats.last_duration_s,
+        errors_total=stats.errors_total,
+        passes_total=stats.passes_total,
+    )
 
 
 def _disk_guard_out(request: Request) -> DiskGuardOut:
@@ -187,6 +230,9 @@ async def system(
         ),
         disk_free_bytes=snap.disk_free_bytes,
         disk_guard=_disk_guard_out(request),
+        disk_guard_loop=disk_guard_loop_out(
+            request.app.state.disk_guard_loop, settings.disk_guard_enabled, now
+        ),
         loops={
             name: LoopOut(
                 status=st.status(),

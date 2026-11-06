@@ -174,7 +174,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         }
         # Disk guard keeps its own LoopStats but must not join readiness `loops`
         # (operations 3.5: /readyz checks stay database/reaper/reconciler/disk/secrets).
+        # `app.state.disk_guard_loop` exposes it to authenticated /system only.
         disk_guard_stats = LoopStats("disk_guard", settings.disk_guard_interval_s)
+        app.state.disk_guard_loop = disk_guard_stats
         app.state.disk_guard = DiskGuard(
             settings,
             db,
