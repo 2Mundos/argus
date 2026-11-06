@@ -297,6 +297,12 @@ async function prReady(api, o) {
     .map((r) => r.user.login);
   if (requesters.length) reasons.push("changes_requested");
   if (pr.mergeable === false) reasons.push("not_mergeable");
+  // A push during any read above leaves evidence for an old head: check the head once more.
+  // A failed or head-less read propagates, so the result never claims a head it did not confirm.
+  const final = (await api.getPullRequest(o.number))?.head?.sha;
+  if (typeof final !== "string")
+    throw new GiteaError("bad_response", "PR response has no head SHA");
+  if (final !== head && !reasons.includes("head_moved")) reasons.push("head_moved");
   return {
     code: reasons.length ? EXIT.not_ready : EXIT.ok,
     result: {

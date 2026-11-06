@@ -284,6 +284,55 @@ describe("pr-ready", () => {
     assert.deepEqual(r.out.reasons, ["head_moved"]);
   });
 
+  it("is not ready when the head moves while reviews load", async () => {
+    const moved = "b".repeat(40);
+    for (const extra of [[], ["--skip-review"]]) {
+      let flipped = false;
+      const r = await run(["pr-ready", "--pr", "7", ...extra], {
+        routes: routes({
+          "GET /pulls/7": () => pr({ mergeable: true, head: { sha: flipped ? moved : HEAD } }),
+          "GET /pulls/7/reviews": () => {
+            flipped = true;
+            return [];
+          },
+          [`GET /statuses/${moved}`]: [{ id: 1, context: "test", status: "success" }],
+          [`GET /commits/${moved}/status`]: { state: "success" },
+          [`GET /commits/${moved}/statuses`]: [],
+        }),
+      });
+      assert.equal(r.code, EXIT.not_ready, extra.join(" "));
+      assert.deepEqual(r.out.reasons, ["head_moved"]);
+    }
+  });
+
+  it("names the stable head when ready, also with --skip-review", async () => {
+    for (const extra of [[], ["--skip-review"]]) {
+      const r = await run(["pr-ready", "--pr", "7", ...extra], { routes: routes() });
+      assert.equal(r.code, EXIT.ok, r.err);
+      assert.equal(r.out.ready, true);
+      assert.equal(r.out.head_sha, HEAD);
+    }
+  });
+
+  it("fails closed when the final head read fails", async () => {
+    for (const extra of [[], ["--skip-review"]]) {
+      let loaded = false;
+      const r = await run(["pr-ready", "--pr", "7", ...extra], {
+        routes: routes({
+          "GET /pulls/7": () =>
+            loaded ? new Response("{}", { status: 500 }) : pr({ mergeable: true }),
+          "GET /pulls/7/reviews": () => {
+            loaded = true;
+            return [];
+          },
+        }),
+      });
+      assert.notEqual(r.code, EXIT.ok, extra.join(" "));
+      assert.notEqual(r.out?.ready, true);
+      assert.notEqual(r.err, "");
+    }
+  });
+
   it("lists every reason it is not ready", async () => {
     const r = await run(["pr-ready", "--pr", "7"], {
       routes: routes({
