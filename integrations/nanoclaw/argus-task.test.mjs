@@ -570,6 +570,8 @@ describe("deliver", () => {
     const origin = join(scratch, `o${repoCount++}.git`);
     git(["init", "-q", "--bare", "-b", "main", origin]);
     const seed = repo();
+    git(["config", "user.email", "t@example.com"], seed);
+    git(["config", "user.name", "t"], seed);
     writeFileSync(join(seed, "a.txt"), "one\n");
     git(["add", "."], seed);
     git(["commit", "-qm", "seed"], seed);
