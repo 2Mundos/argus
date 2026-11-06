@@ -1,5 +1,6 @@
 """Execution versus follow-up of an attempt (task-finalization.spec.md)."""
 
+import json
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,6 +9,7 @@ import pytest
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks.finalization import CHECKPOINT_STALE_S, derive, workspace_facts
+from argus_core.agents import LOST_AFTER_S
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "test-admin-token-" + "x" * 32
@@ -164,7 +166,12 @@ def test_workspace_owner_and_checkpoint_status(client: TestClient) -> None:
         assert res.status_code == 200, res.text
         return res.json()["workspace"]
 
-    assert workspace() == {"owner_agent_id": agent_id, "checkpoint": "unknown"}
+    assert workspace() == {
+        "owner_agent_id": agent_id,
+        "owner_node_id": None,
+        "owner_status": "live",
+        "checkpoint": "unknown",
+    }
     client.post(
         f"/api/tasks/{task['id']}/complete",
         json={"attempt": 1, "result": {"summary": "ok"}},
@@ -177,13 +184,34 @@ def test_workspace_owner_and_checkpoint_status(client: TestClient) -> None:
     assert workspace()["checkpoint"] == "available"
     # The worker's own read shows no reference, detail or path-like value.
     body = client.get(f"/api/tasks/{task['id']}", headers=worker).json()["workspace"]
-    assert body == {"owner_agent_id": agent_id, "checkpoint": "available"}
+    assert body == {
+        "owner_agent_id": agent_id,
+        "owner_node_id": None,
+        "owner_status": "live",
+        "checkpoint": "available",
+    }
     assert "checkpoint:" not in str(body) and "/" not in str(body)
 
 
 def test_workspace_is_null_without_an_attempt(client: TestClient) -> None:
     task = client.post("/api/tasks", json={"project": "demo", "title": "t"}).json()
     assert client.get(f"/api/tasks/{task['id']}").json()["workspace"] is None
+
+
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _attempt_row(**overrides: object) -> dict[str, object]:
+    """A newest-attempt row as the join returns it, with a live owner by default."""
+    row: dict[str, object] = {
+        "agent_id": "agt_1",
+        "checkpoint_state": None,
+        "owner_state": "active",
+        "owner_last_heartbeat_at": NOW.isoformat(),
+        "owner_runtime": None,
+    }
+    row.update(overrides)
+    return row
 
 
 @pytest.mark.parametrize(
@@ -198,7 +226,40 @@ def test_workspace_is_null_without_an_attempt(client: TestClient) -> None:
     ],
 )
 def test_workspace_facts_maps_checkpoint_state(state: str | None, status: str) -> None:
-    facts = workspace_facts({"agent_id": "agt_1", "checkpoint_state": state})
+    facts = workspace_facts(_attempt_row(checkpoint_state=state), NOW)
     assert facts is not None
     assert (facts.owner_agent_id, facts.checkpoint) == ("agt_1", status)
-    assert workspace_facts(None) is None
+    assert workspace_facts(None, NOW) is None
+
+
+@pytest.mark.parametrize(
+    ("state", "heartbeat", "status"),
+    [
+        ("active", NOW.isoformat(), "live"),
+        ("draining", NOW.isoformat(), "live"),
+        ("active", (NOW - timedelta(seconds=LOST_AFTER_S + 1)).isoformat(), "stale"),
+        ("active", None, "stale"),
+        ("gone", NOW.isoformat(), "ended"),
+        ("lost", NOW.isoformat(), "ended"),
+        (None, NOW.isoformat(), "unknown"),
+        ("from_a_newer_version", NOW.isoformat(), "unknown"),
+    ],
+)
+def test_workspace_facts_maps_owner_status(
+    state: str | None, heartbeat: str | None, status: str
+) -> None:
+    facts = workspace_facts(
+        _attempt_row(owner_state=state, owner_last_heartbeat_at=heartbeat), NOW
+    )
+    assert facts is not None
+    assert facts.owner_status == status
+
+
+def test_workspace_facts_maps_owner_node_id() -> None:
+    reported = workspace_facts(
+        _attempt_row(owner_runtime=json.dumps({"node_id": "host-a"})), NOW
+    )
+    assert reported is not None and reported.owner_node_id == "host-a"
+    for runtime in (None, "", "not json", json.dumps({}), json.dumps({"node_id": ""})):
+        facts = workspace_facts(_attempt_row(owner_runtime=runtime), NOW)
+        assert facts is not None and facts.owner_node_id is None

@@ -163,11 +163,28 @@ describe("TaskDetail workspace", () => {
     ["unavailable", /work cannot be restored or inspected/],
     ["unknown", /none recorded yet, still running, or state not recognised/],
   ])("shows the owner and a %s checkpoint", async (checkpoint, text) => {
-    await show({ owner_agent_id: "agent-7", checkpoint });
+    await show({
+      owner_agent_id: "agent-7",
+      owner_status: "live",
+      owner_node_id: "host-a",
+      checkpoint,
+    });
     expect(screen.getByText("Workspace")).toBeTruthy();
     expect(screen.getByText("agent-7")).toBeTruthy();
     expect(screen.getByText(text)).toBeTruthy();
-    expect(screen.getByText(/newest attempt's worker/)).toBeTruthy();
+    expect(screen.getByText(/owner is live/)).toBeTruthy();
+    expect(screen.getByText(/on host-a/)).toBeTruthy();
+  });
+
+  it("shows a silent owner and omits a node it never reported", async () => {
+    await show({
+      owner_agent_id: "agent-7",
+      owner_status: "stale",
+      owner_node_id: null,
+      checkpoint: "available",
+    });
+    expect(screen.getByText(/owner went silent/)).toBeTruthy();
+    expect(screen.queryByText(/on host-a/)).toBeNull();
   });
 
   it("explains a null workspace instead of hiding the row", async () => {

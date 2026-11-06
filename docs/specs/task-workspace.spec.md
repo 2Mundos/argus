@@ -142,8 +142,15 @@ step does not run then. An existing origin URL with userinfo is reported as
 attempt row, or null when the task has no attempt:
 
 - `owner_agent_id`: the worker that holds the current workspace, the `agent_id` of
-  the newest attempt. The API does not know the node id (`ARGUS_NODE_ID` lives on
-  the worker), so none is shown.
+  the newest attempt.
+- `owner_node_id`: the node the owner last reported on heartbeat
+  (`ARGUS_NODE_ID`, else its hostname), or null when it never reported one. The
+  agent's `runtime` carries it, so the API knows where the workspace lives without
+  reading the worker's filesystem.
+- `owner_status`: whether the owner is still there, from its stored state and
+  heartbeat: `live` (active or draining, heard from within the loss threshold),
+  `stale` (recorded live but silent past it), `ended` (gone or lost), or `unknown`
+  (no agent row).
 - `checkpoint`: whether the attempt's work is recoverable, from `checkpoint_state`
   ([task finalization](task-finalization.spec.md) 3.2):
 
@@ -154,9 +161,11 @@ attempt row, or null when the task has no attempt:
 | `running`, none recorded, unrecognised | `unknown` |
 
 No path rule: the response never carries a host path, the `checkpoint:<id>:<sha>`
-reference or `checkpoint_detail`; the API knows no workspace path. The field sits
-behind the task read scope. Lists and the MCP `get_task` tool (a pass-through) show
-the same single-task read only. The dashboard display is not built.
+reference or `checkpoint_detail`; the API knows no workspace path. The node id is an
+identifier, not a host path. The field sits behind the task read scope. Lists and the
+MCP `get_task` tool (a pass-through) show the same single-task read only. The
+dashboard's task detail "Workspace" row shows the owner, its node id when reported,
+and its status.
 
 # 4. Open Questions
 

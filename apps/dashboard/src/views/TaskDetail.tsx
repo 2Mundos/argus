@@ -33,6 +33,13 @@ const CHECKPOINT_TEXT = {
   unknown: "checkpoint unknown: none recorded yet, still running, or state not recognised",
 } as const;
 
+const OWNER_STATUS_TEXT = {
+  live: "owner is live",
+  stale: "owner went silent; it may no longer be running",
+  ended: "owner has ended",
+  unknown: "owner may no longer be running",
+} as const;
+
 function LastError({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const needsMore = text.length > ERROR_EXCERPT;
@@ -365,7 +372,8 @@ export function TaskDetail({
                   {CHECKPOINT_TEXT[task.workspace.checkpoint]}
                   <span className="muted small">
                     {" "}
-                    (owner is the newest attempt's worker; it may no longer be running)
+                    ({OWNER_STATUS_TEXT[task.workspace.owner_status ?? "unknown"]}
+                    {task.workspace.owner_node_id ? ` on ${task.workspace.owner_node_id}` : ""})
                   </span>
                 </>
               ) : (

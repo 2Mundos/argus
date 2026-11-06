@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Annotated
 
 from argus_core.agents import (
+    HEARTBEAT_INTERVAL_S,
     Agent,
     AgentRegister,
     AgentRuntime,
@@ -94,7 +95,7 @@ async def register(
     return Registration(
         agent=reg.agent,
         token=reg.token,
-        heartbeat_interval_s=service.HEARTBEAT_INTERVAL_S,
+        heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
     )
 
 
@@ -185,7 +186,7 @@ async def heartbeat(
         state=hb.state,
         renewed=[RenewedLease(**vars(r)) for r in hb.renewed],
         rejected=[RejectedLease(**vars(r)) for r in hb.rejected],
-        heartbeat_interval_s=service.HEARTBEAT_INTERVAL_S,
+        heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
         steers=hb.steers,
     )
 

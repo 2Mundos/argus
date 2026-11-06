@@ -10,6 +10,7 @@ from uuid import uuid4
 import aiosqlite
 from argus_core.agents import (
     LIVE,
+    LOST_AFTER_S,
     Agent,
     AgentRegister,
     AgentRuntime,
@@ -38,9 +39,6 @@ from argus_api.tasks.service import RejectedLease, RenewedLease
 from argus_api.tasks.steers import SteerNotice
 
 log = logging.getLogger(__name__)
-
-HEARTBEAT_INTERVAL_S = 30
-LOST_AFTER_S = 3 * HEARTBEAT_INTERVAL_S
 
 _ARCHIVABLE = frozenset({AgentState.LOST, AgentState.GONE})
 
