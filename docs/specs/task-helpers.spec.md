@@ -166,7 +166,7 @@ set:
 | `ci_failed` | A check on the head SHA failed |
 | `ci_missing` | No check has reported on the head SHA |
 | `ci_unknown` | A check on the head SHA reports a state the helper does not recognize (and none is failing or running) |
-| `head_moved` | The head changed between the PR read and the review read; call again |
+| `head_moved` | The head changed since the PR read: it is read again after all evidence is loaded, also with `--skip-review`; a ready result names the head checked; call again |
 | `review_missing` | No agentic review with a finding count covers the head SHA (`review-findings`) |
 | `review_findings` | The agentic review for the head SHA has findings |
 | `changes_requested` | A reviewer's latest non-comment review requests changes (dismissed ones are skipped) |
