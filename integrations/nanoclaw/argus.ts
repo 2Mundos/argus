@@ -99,7 +99,7 @@ import {
   scopeCommandGuard,
   scopeGitIdentity,
 } from "./argus-git-identity.js";
-import { workerCommandGuardBlock } from "./argus-guard.js";
+import { sessionImageCommandGuardBlock, workerCommandGuardBlock } from "./argus-guard.js";
 import {
   consumedReceipts,
   type InputReceipt,
@@ -377,9 +377,18 @@ export interface ArgusConfig {
    */
   workspaceRoot?: () => Promise<string | null>;
   /**
-   * Claude Code managed settings the worker can read (default `ARGUS_CLAUDE_MANAGED_SETTINGS`).
-   * Unset: the image path `/etc/claude-code/managed-settings.json`, which must register the
-   * command guard hook for a guarded engine to start.
+   * The image the group's next agent session runs (command guard spec 3): its
+   * `/etc/claude-code/managed-settings.json` must register the command guard hook for a
+   * guarded engine to start. The managed settings live in the agent image, not on the
+   * NanoClaw host this channel runs on. Production: the group's `image_tag`, else
+   * NanoClaw's `CONTAINER_IMAGE`, as the container runner picks it.
+   */
+  sessionImage?: () => Promise<string>;
+  /** Test seam: print a file from an image (default `readImageFile`, a throwaway container). */
+  readImageFile?: (image: string, path: string) => Promise<string>;
+  /**
+   * Without `sessionImage` (test adapters): managed settings on this filesystem (default
+   * `ARGUS_CLAUDE_MANAGED_SETTINGS`, else `/etc/claude-code/managed-settings.json`).
    */
   managedSettingsPath?: string;
   /** Test seam: the first retry delay of a task input download (default 1 s, doubling). */
@@ -3565,10 +3574,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       scopeTaskGitIdentity(claimedGitIdentity(task.git_identity));
       scopeTaskCommandGuard(task.command_guard_enabled);
-      let envBlock: { reason: string; error: string } | null = workerCommandGuardBlock(
-        engine,
-        cfg.managedSettingsPath,
-      );
+      let envBlock: { reason: string; error: string } | null = cfg.sessionImage
+        ? await sessionImageCommandGuardBlock(engine, cfg.sessionImage, cfg.readImageFile)
+        : workerCommandGuardBlock(engine, cfg.managedSettingsPath);
       step = "repository preflight";
       if (!envBlock) envBlock = await repositoryPreflight(task);
       let workspace: TaskWorkspace | null = null;
@@ -5219,6 +5227,15 @@ async function argusGroup(): Promise<{ id: string; name: string; folder: string 
   return (wiring ? await getAgentGroup(wiring.agent_group_id) : undefined) ?? null;
 }
 
+/** The image NanoClaw's container runner starts the group's next session in. */
+async function nanoclawSessionImage(): Promise<string> {
+  const group = await argusGroup();
+  if (!group) throw new Error("no agent group is wired to the argus channel");
+  const { getContainerConfig } = await import("../db/container-configs.js");
+  const { CONTAINER_IMAGE } = await import("../config.js");
+  return (await getContainerConfig(group.id))?.image_tag || CONTAINER_IMAGE;
+}
+
 /** The Argus agent group's directory on the host (what the container mounts as its workspace). */
 /**
  * ARGUS_CAPABILITIES plus what this channel can always do: it materializes task inputs
@@ -5428,6 +5445,7 @@ export function fromEnv(): ChannelAdapter | null {
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
     probeRepository: sessionRepositoryProbe(nanoclawPreflightRunner(argusGroup)),
+    sessionImage: nanoclawSessionImage,
     startupReady: nanoclawStartupReady,
     runtime,
     closeSession: closeSessionFromEnv,

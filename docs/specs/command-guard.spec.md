@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-01
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Command guard
@@ -64,16 +64,21 @@ bypass. Background: draft (removed; in git history),
 - **Fail open.** A parse or runtime error in the guard allows the command.
 - **Missing guard.** When the guard is enabled, an image without it is an
   environment block (`env_guard_missing`), not a silent unguarded run. At claim,
-  before any lease, the worker checks the Claude managed settings at
-  `ARGUS_CLAUDE_MANAGED_SETTINGS` (or the channel's `managedSettingsPath`), else
-  `/etc/claude-code/managed-settings.json`, for a `PreToolUse` `Bash` hook running
-  `command_guard.py`; a missing, unreadable or malformed file, or a missing hook,
-  blocks the task. An unset path is not a pass. Skipped only when the guard is off
-  (`ARGUS_COMMAND_GUARD=0|off`) and for engines without a hook. The image sets
-  `ARGUS_CLAUDE_MANAGED_SETTINGS` to that path, and its build smoke
-  (`engines/probe-managed-settings.sh`) fails if the file does not register
-  `command_guard.py` exactly once and `repeat_guard.py`, or if the guard does not
-  block `rm -rf /`.
+  before any lease, the worker reads `/etc/claude-code/managed-settings.json` from
+  the image the agent session will run (the agent group's `image_tag`, else
+  NanoClaw's `CONTAINER_IMAGE`, as NanoClaw's container runner picks it) for a
+  `PreToolUse` `Bash` hook running `command_guard.py`. It reads it through a
+  throwaway container (`docker run --rm --pull=never --network=none --entrypoint
+  cat`), never from its own filesystem: the worker runs in the NanoClaw host image,
+  which has no managed settings. An image that cannot be resolved or is not on the
+  daemon, a missing, unreadable or malformed file, or a missing hook blocks the task.
+  Skipped only when the guard is off (`ARGUS_COMMAND_GUARD=0|off`) and for engines
+  without a hook. A test adapter without a session image reads the channel's
+  `managedSettingsPath`, else `ARGUS_CLAUDE_MANAGED_SETTINGS`, else that path, on
+  its own filesystem. The agent image sets `ARGUS_CLAUDE_MANAGED_SETTINGS` to that
+  path, and its build smoke (`engines/probe-managed-settings.sh`) fails if the file
+  does not register `command_guard.py` exactly once and `repeat_guard.py`, or if the
+  guard does not block `rm -rf /`.
 - **Registration.** Claude Code managed settings baked into the image
   (`/etc/claude-code/managed-settings.json`, source
   `engines/claude-managed-settings.json`), so a project's own `.claude` settings
@@ -141,6 +146,8 @@ Not built yet (section 3 marks each **not implemented**):
   `pytest integrations/nanoclaw/tests/test_tools_layer_permissions.py` (Docker
   probe when available).
 - Verified: rule tables (block and allow, shell forms), the hook's stdin/stdout
-  contract, fail-open and the env opt-out, at unit level.
+  contract, fail-open and the env opt-out, at unit level; the claim-time presence
+  check against a stubbed session image (`argus-guard.test.ts`,
+  `argus-single-layer.test.ts`).
 - Not verified: the image build, that Claude Code loads the managed settings and
   honours the deny, a blocked `rm -rf ~` on a disposable worker, Codex.
