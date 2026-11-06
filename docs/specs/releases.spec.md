@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # Releases
@@ -9,7 +9,7 @@ updated: 2026-11-04
 # 1. Purpose and Scope
 
 A release is a SemVer tag `vX.Y.Z` on `main`, a notes document committed with
-it, and one container image built from that tag. One command cuts it; pushing
+it, and one container image (`linux/amd64` and `linux/arm64`, built with QEMU/buildx) built from that tag. One command cuts it; pushing
 the tag builds and publishes everything else.
 
 - `make release` (`scripts/release.py`) infers the next version from the
@@ -132,9 +132,7 @@ to an advanced workflow with the same ignore.
 
 # 4. Open Questions
 
-1. Multi-arch images. The Dockerfile already selects `sops` per architecture,
-   but the runner has not been verified with QEMU/buildx; the workflow builds
-   `linux/amd64` only.
+1. Worker images are still `linux/amd64` only (see the local-workers spec).
 
 # 5. Constraints
 

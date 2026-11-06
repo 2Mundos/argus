@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-06
 ---
 
 # Local workers
@@ -44,7 +44,7 @@ at the same version as Argus.
 - No remote Docker hosts or Kubernetes: `worker setup` prepares this machine.
 - No change to how the fleet starts, leases or isolates workers. The launcher
   produces the same settings `provision.sh` documents.
-- No arm64 images until the release workflow builds multi-arch ([releases](releases.spec.md), open question 1).
+- No arm64 worker images (the API image is multi-arch) ([releases](releases.spec.md), open question 1).
 
 # 3. Decisions Made
 
