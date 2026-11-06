@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Session resume: resume the same native conversation after an interruption
@@ -31,6 +31,8 @@ The scope is `task_attempts.native_session` (migration `0066`),
   session is gone, and no cross-node or cross-engine resume. Those stay in P4 of
   [worker efficiency](../drafts/2026-10-24.worker-efficiency.draft.md).
 - No Codex, Cursor, Copilot, custom or local resume (3.6).
+- No resume on a mid-attempt account switch: the conversation is replayed from the
+  task text (4.2).
 - No claim that the credential swap works inside a live session (4.2).
 - No change to the attempt counter, failure counts, the quota patterns or
   `awaiting_quota`.
@@ -167,6 +169,17 @@ claude-agent-sdk 0.3.296, against a local fake Messages API
   resuming a conversation whose session died (OOM, crash, host restart) has not
   been run against a real provider or a disposable node. The opt-in gate (3.9) is
   unchanged.
+- **A mid-attempt account switch.** When the attempt keeps running and the
+  exhausted report names a replacement account, Argus keeps no native session:
+  3.2 records one only when no account is left. The channel recycles the runtime
+  and re-sends the task text with "Please continue this task." in a new session of
+  the same attempt, so the conversation is replayed from the task text, not
+  resumed. The task workspace stays on the same node, because the recycle only
+  stops session containers; across nodes this is unsupported (see [task
+  checkpoint](task-checkpoint.spec.md)). Proof: the API side by
+  `test_a_mid_attempt_switch_keeps_the_attempt_but_no_native_session` (fake API,
+  pytest); the channel re-send by `argus-accounts.test.ts` (vitest, needs a
+  NanoClaw checkout, not run for this spec update).
 - **Codex with another account.** Unverified, so unsupported (3.6).
 
 ## 4.3 Risks
