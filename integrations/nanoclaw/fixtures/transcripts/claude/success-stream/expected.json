@@ -1,0 +1,11 @@
+{
+  "result": {
+    "is_error": false,
+    "subtype": "success",
+    "terminal_reason": "completed"
+  },
+  "rateLimitError": null,
+  "rateLimitFailure": null,
+  "authExpiredError": null,
+  "authExpiredFailure": null
+}

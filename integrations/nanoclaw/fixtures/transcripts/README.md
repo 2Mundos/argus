@@ -3,9 +3,10 @@
 Real engine output, recorded once and replayed in tests without Docker, a model
 or the network. Design: [engine transcript replay](../../../../docs/drafts/2026-11-04.engine-transcript-replay.draft.md).
 
-**Status:** one recording is committed (`claude/success-result`, a lone result
-event, not a full stream) and `transcripts.test.ts` replays it. Other cases are
-still to record.
+**Status:** two Claude recordings are committed: `claude/success-stream` (a full
+`claude -p` stream-json run, Claude Code 2.1.296) and `claude/success-result` (a lone
+result event). `transcripts.test.ts` replays both. Session-limit and auth-failure
+cases are still to record.
 
 ## Layout
 
