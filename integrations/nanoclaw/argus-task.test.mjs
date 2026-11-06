@@ -328,7 +328,7 @@ describe("pr-ready", () => {
         }),
       });
       assert.notEqual(r.code, EXIT.ok, extra.join(" "));
-      assert.notEqual(r.out?.ready, true);
+      assert.equal(r.out, null);
       assert.notEqual(r.err, "");
     }
   });
