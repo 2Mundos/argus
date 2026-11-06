@@ -159,6 +159,16 @@ REGISTRY: dict[str, SettingDefinition] = {
             "tasks succeed only once the PR is merged."
         ),
     ),
+    "review.acceptance": SettingDefinition(
+        key="review.acceptance",
+        schema={"type": "boolean"},
+        default=True,
+        scopes=["global", "project"],
+        description=(
+            "Completed tasks wait in review for acceptance; off lets them succeed "
+            "directly (a green or merged PR deliverable still needs the forge)."
+        ),
+    ),
     "orchestrator.enabled": SettingDefinition(
         key="orchestrator.enabled",
         schema={"type": "boolean"},

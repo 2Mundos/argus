@@ -167,6 +167,15 @@ review), with no `deliverable_pending`. A PR that merged before the worker repor
 it counts. The setting is read at completion, so turning it off lets the next
 completion take the pending path below.
 
+**Acceptance off.** With `review.acceptance` off ([settings](settings.spec.md) 3.11)
+no completion waits in review, so a `pr_green` or `pr_merged` task gets the same
+completion-time forge read as auto-merge: `merged` passes either level, `pr_green`
+also passes with an open PR whose head checks are `success`; anything else, or a PR
+the forge cannot confirm, is `422 deliverable_missing` and the worker keeps its
+claim. A PR found by the binding search carries no check read, so for `pr_green` it
+passes only merged; a worker that reports its PR gets the full read. The task's
+`review` mode and open checklist items do not hold it.
+
 `pr_green` and `pr_merged` depend on facts that change after the worker is done.
 A completion with an open PR artifact for either goes to `in_review` (a review
 decision for the orchestrator is opened even when `review` is `none`) with

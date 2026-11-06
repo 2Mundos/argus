@@ -70,12 +70,13 @@ class PrSearch:
 
 
 @dataclass(frozen=True)
-class MergeRead:
-    """The forge's state of the PR of a `pr_merged` task under `delivery.auto_merge`,
-    read by the caller before the write (3.4). `state` is `unknown` when no PR could
-    be read."""
+class ForgeGate:
+    """The forge's word on the task's PR, read by the caller before the write for a
+    completion that must not wait in review (3.4). `state` is `unknown` when no PR
+    could be read; `checks` is None when they were not read."""
 
     state: PrState
+    checks: CheckState | None
 
 
 async def check_creatable(
@@ -114,26 +115,20 @@ async def check_complete(
     result: TaskResult,
     have: Continuation,
     search: PrSearch | None = None,
-    merge: MergeRead | None = None,
+    gate: ForgeGate | None = None,
+    acceptance: bool = True,
 ) -> bool:
     """Refuse a completion without the evidence Argus holds (3.4). True when the
-    deliverable also depends on the forge, so the task must wait for review. Under
-    auto-merge (`merge` set) a `pr_merged` task needs the merge itself, so it never
-    waits."""
+    deliverable also depends on the forge, so the task must wait for review. With
+    `gate` (auto-merge, or acceptance off) a green or merged deliverable needs the
+    forge's word now, so it never waits; without acceptance and without a gate it
+    fails closed."""
     level = Deliverable(row["deliverable"])
     advice = await _missing(conn, row, agent_id, result, have, level, search)
-    if advice is None and merge is not None and level is Deliverable.PR_MERGED:
-        if merge.state is PrState.MERGED:
+    if advice is None and level in FORGE_DELIVERABLES and (gate or not acceptance):
+        advice = _forge_advice(level, gate)
+        if advice is None:
             return False
-        advice = (
-            "merge the pull request yourself once its checks pass, then complete"
-            " again; "
-            + (
-                "the forge could not confirm it merged"
-                if merge.state is PrState.UNKNOWN
-                else f"the forge shows it {merge.state}, not merged"
-            )
-        )
     if advice:
         raise ValidationFailedError(
             f"deliverable {level} is not met: {advice}",
@@ -141,6 +136,25 @@ async def check_complete(
             details=[advice],
         )
     return level in FORGE_DELIVERABLES
+
+
+def _forge_advice(level: Deliverable, gate: ForgeGate | None) -> str | None:
+    """What the worker must do before completing, or None when the forge confirms."""
+    if gate is None or gate.state is PrState.UNKNOWN:
+        return "the forge could not confirm the pull request; complete again"
+    if gate.state is PrState.MERGED:
+        return None
+    if level is Deliverable.PR_MERGED:
+        return (
+            "merge the pull request once its checks pass, then complete again;"
+            f" the forge shows it {gate.state}, not merged"
+        )
+    if gate.state is PrState.OPEN and gate.checks is CheckState.SUCCESS:
+        return None
+    return (
+        "make the checks of the pull request head pass, then complete again;"
+        f" the pull request is {gate.state}, checks {gate.checks or 'unread'}"
+    )
 
 
 def _has_artifact(have: Continuation, kind: ArtifactKind) -> bool:

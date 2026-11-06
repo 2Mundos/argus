@@ -460,7 +460,7 @@ async def complete_task(
         agent_id,
         body.attempt,
     )
-    merge = await pr_binding.read_merge(
+    gate = await pr_binding.read_gate(
         db, request.app.state.pr_checker, task_id, agent_id, body.attempt, search
     )
     async with db.write() as tx:
@@ -472,7 +472,7 @@ async def complete_task(
             body.result,
             model_policy_path=settings.model_policy_path,
             pr_search=search,
-            pr_merge=merge,
+            pr_gate=gate,
         )
 
 

@@ -39,6 +39,7 @@ export function Settings() {
   const difficultyExecutors = byKey.get("difficulty.executors");
   const gitIdentity = byKey.get("git.identity");
   const autoMerge = byKey.get("delivery.auto_merge");
+  const acceptance = byKey.get("review.acceptance");
   const orchestratorEnabled = byKey.get("orchestrator.enabled");
   const orchestratorRuntime = byKey.get("orchestrator.runtime");
   const orchestratorModel = byKey.get("orchestrator.model");
@@ -111,7 +112,28 @@ export function Settings() {
             />
           </div>
           <div className="card">
-            <AutoMergeSection project={project} setting={autoMerge} onChanged={() => reload()} />
+            <ToggleSection
+              title="Auto-merge"
+              settingKey="delivery.auto_merge"
+              project={project}
+              setting={autoMerge}
+              onChanged={() => reload()}
+            >
+              Workers merge their own pull request for tasks whose deliverable is a merged PR, and
+              those tasks succeed only once the forge shows it merged.
+            </ToggleSection>
+          </div>
+          <div className="card">
+            <ToggleSection
+              title="Acceptance"
+              settingKey="review.acceptance"
+              project={project}
+              setting={acceptance}
+              onChanged={() => reload()}
+            >
+              Completed tasks wait in review for acceptance. Off, they succeed directly; a green or
+              merged PR deliverable still needs the forge to confirm it.
+            </ToggleSection>
           </div>
           <div className="card">
             <IndependentReviewSection
@@ -573,12 +595,15 @@ function IndependentReviewSection(props: {
   );
 }
 
-function AutoMergeSection(props: {
+function ToggleSection(props: {
+  title: string;
+  settingKey: string;
+  children: string;
   project: string | null;
   setting?: SettingValue;
   onChanged: () => void;
 }) {
-  const { project, setting, onChanged } = props;
+  const { title, settingKey, children, project, setting, onChanged } = props;
   const enabled = setting?.value === true;
   const action = useAction();
   const [failure, setFailure] = useState<string>();
@@ -599,19 +624,18 @@ function AutoMergeSection(props: {
   return (
     <section>
       <div className="toolbar">
-        <h3>Auto-merge</h3>
+        <h3>{title}</h3>
       </div>
       <p className="muted small">
-        Workers merge their own pull request for tasks whose deliverable is a merged PR, and those
-        tasks succeed only once the forge shows it merged. Currently{" "}
-        <strong>{enabled ? "on" : "off"}</strong> ({setting ? sourceLabel(setting.source) : "…"}).
+        {children} Currently <strong>{enabled ? "on" : "off"}</strong> (
+        {setting ? sourceLabel(setting.source) : "…"}).
       </p>
       <div className="toolbar model-actions">
         <ActionButton
           type="button"
           disabled={action.busy}
           pending={action.is("toggle")}
-          action={() => write(() => putSetting("delivery.auto_merge", !enabled, project), "toggle")}
+          action={() => write(() => putSetting(settingKey, !enabled, project), "toggle")}
         >
           {enabled ? "Turn off" : "Turn on"}
         </ActionButton>
@@ -619,7 +643,7 @@ function AutoMergeSection(props: {
           type="button"
           disabled={action.busy || !overridden}
           pending={action.is("reset")}
-          action={() => write(() => resetSetting("delivery.auto_merge", project), "reset")}
+          action={() => write(() => resetSetting(settingKey, project), "reset")}
         >
           Reset to inherited
         </ActionButton>

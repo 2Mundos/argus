@@ -20,7 +20,7 @@ from argus_core.continuation import (
     clean,
 )
 from argus_core.delivery import DeliveryReconciliation, PrBinding, PrState
-from argus_core.tasks import Deliverable, Task
+from argus_core.tasks import FORGE_DELIVERABLES, Deliverable, Task
 
 from argus_api.db import Database
 from argus_api.errors import ConflictError, ValidationFailedError
@@ -112,36 +112,46 @@ async def find_pr(
     )
 
 
-async def read_merge(
+async def read_gate(
     db: Database,
     checker: delivery.PrChecker,
     task_id: str,
     agent_id: str,
     attempt: int,
     search: deliverable.PrSearch | None,
-) -> deliverable.MergeRead | None:
-    """The PR state a `pr_merged` completion needs under `delivery.auto_merge`
-    (task deliverable spec 3.4), read here and outside the write. None when the
-    setting is off for the task's project or no such gate is due (another
+) -> deliverable.ForgeGate | None:
+    """The forge's word a completion needs when it may not wait in review (task
+    deliverable spec 3.4): a `pr_merged` task under `delivery.auto_merge`, or a
+    green or merged one with `review.acceptance` off. Read here and outside the
+    write. None when no such gate is due (the settings leave the review path, another
     deliverable, a caller that is not the assignee)."""
     from argus_api.settings import service as settings_svc
 
     async with db.read() as conn:
         row = await service.task_row(conn, task_id)
+        level = Deliverable(row["deliverable"])
         if (
-            Deliverable(row["deliverable"]) is not Deliverable.PR_MERGED
+            level not in FORGE_DELIVERABLES
             or row["state"] != "claimed"
             or row["assignee_agent_id"] != agent_id
             or row["attempt"] != attempt
-            or not await settings_svc.auto_merge_enabled(conn, row["project"])
         ):
             return None
-        if search is not None and search.match is not None:
-            return deliverable.MergeRead(search.match.state)
-        seen = await delivery.delivery_of(
-            conn, checker, await service.get_task(conn, task_id)
-        )
-    return deliverable.MergeRead(seen.pr_state if seen else PrState.UNKNOWN)
+        project = row["project"]
+        if not await settings_svc.acceptance_enabled(conn, project) or (
+            level is Deliverable.PR_MERGED
+            and await settings_svc.auto_merge_enabled(conn, project)
+        ):
+            if search is not None and search.match is not None:
+                return deliverable.ForgeGate(search.match.state, None)
+            seen = await delivery.delivery_of(
+                conn, checker, await service.get_task(conn, task_id)
+            )
+        else:
+            return None
+    if seen is None:
+        return deliverable.ForgeGate(PrState.UNKNOWN, None)
+    return deliverable.ForgeGate(seen.pr_state, seen.checks_combined)
 
 
 def _pushed_heads(have: Continuation) -> set[str]:

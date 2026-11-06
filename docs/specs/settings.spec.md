@@ -226,6 +226,27 @@ afterwards; the completion gate reads the setting when the worker completes.
 Other deliverables are unaffected. Admin only, like every setting; a worker cannot
 widen it.
 
+## 3.11 Acceptance
+
+Key `review.acceptance`, scopes `global` and `project`, boolean, default `true`
+(today's behaviour). A project value takes precedence over the global one. On, a
+completed task waits in `in_review` for acceptance whenever its `review` mode, an
+open checklist item, a task with no structured acceptance that already holds a PR,
+or a green or merged deliverable still to confirm says so.
+
+Off, a completion never enters `in_review` for those reasons: the task goes
+straight to `succeeded` and no review decision opens. Checklist reports are still
+stored. A `pr_green` or `pr_merged` deliverable does not lose its evidence: the
+completion needs the forge to show the PR merged (or, for `pr_green`, open with
+green checks on the head) at that moment, read before the write
+([task deliverable](task-deliverable.spec.md) 3.4); anything else is `422
+deliverable_missing` and the worker keeps its claim. Unconfirmed is never success.
+It is read when the worker completes.
+
+It does not change independent review (3.5), which is its own opt-in and still holds
+a code task in `in_review` while on, nor the manager operations that move a task
+there on request ([task deliverable](task-deliverable.spec.md) 3.8).
+
 # 4. Open Questions
 
 - Should orchestrators be allowed to write project overrides? Phase 1 says admin

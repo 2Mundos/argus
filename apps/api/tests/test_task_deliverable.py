@@ -387,7 +387,8 @@ def test_auto_merge_succeeds_only_with_the_merged_pr(
     else:
         # Refused, and the worker keeps its claim to merge and complete again.
         assert (res.status_code, code(res)) == (422, "deliverable_missing")
-        assert "merge the pull request" in res.json()["detail"]["details"][0]
+        advice = res.json()["detail"]["details"][0]
+        assert ("merge the pull request" if pull else "could not confirm") in advice
     assert state(client, task_id) == outcome
 
 
@@ -410,6 +411,60 @@ def test_auto_merge_follows_the_project_override_and_off_keeps_the_review_path(
     assert client.delete(off).status_code == 200
     create(client, "pr_merged")
     assert claim(client, w)["auto_merge"] is True
+
+
+ACCEPTANCE = "/api/settings/review.acceptance"
+
+
+@pytest.mark.parametrize(
+    ("level", "pull", "statuses", "outcome"),
+    [
+        ("pr_open", None, None, "succeeded"),
+        ("pr_green", open_pr(), CI_OK, "succeeded"),
+        ("pr_green", merged_pr(), [], "succeeded"),
+        ("pr_green", open_pr(), CI_RED, "claimed"),
+        ("pr_green", open_pr(), [], "claimed"),
+        ("pr_merged", merged_pr(), [], "succeeded"),
+        ("pr_merged", open_pr(), CI_OK, "claimed"),
+    ],
+)
+def test_with_acceptance_off_no_task_waits_in_review(
+    client: TestClient, level: str, pull: dict | None, statuses: list, outcome: str
+) -> None:
+    assert client.put(ACCEPTANCE, json={"value": False}).status_code == 200
+    w = worker(client)
+    # A review mode and an unstructured PR would hold it in review with acceptance on.
+    task_id = create(client, level, review="human").json()["id"]
+    claimed = claim(client, w)
+    pr_opened(client, w, claimed)
+    if pull is not None:
+        forge(client, full_forge(pull, statuses=statuses))
+    res = complete(client, w, claimed)
+    if outcome == "claimed":
+        assert (res.status_code, code(res)) == (422, "deliverable_missing")
+    else:
+        assert res.status_code == 200, res.text
+    assert state(client, task_id) == outcome
+    assert (
+        client.get("/api/decisions", params={"subject_id": task_id}).json()["items"]
+        == []
+    )
+
+
+def test_acceptance_follows_the_project_override(client: TestClient) -> None:
+    w = worker(client)
+    assert client.put(ACCEPTANCE, json={"value": False}).status_code == 200
+    on = f"/api/projects/demo/settings/{ACCEPTANCE.rsplit('/', 1)[1]}"
+    assert client.put(on, json={"value": True}).status_code == 200
+    create(client, "pr_open")
+    claimed = claim(client, w)
+    pr_opened(client, w, claimed)
+    assert complete(client, w, claimed).json()["state"] == "in_review"  # on for demo
+    assert client.delete(on).status_code == 200
+    create(client, "pr_open")
+    claimed = claim(client, w)
+    pr_opened(client, w, claimed)
+    assert complete(client, w, claimed).json()["state"] == "succeeded"  # inherits off
 
 
 def test_an_unreachable_forge_never_closes_the_task(client: TestClient) -> None:

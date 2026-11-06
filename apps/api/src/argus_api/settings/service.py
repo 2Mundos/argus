@@ -31,6 +31,7 @@ GIT_IDENTITY_KEY = "git.identity"
 TASK_DEFAULT_BUDGET_KEY = "task_default_budget_usd"
 COMMAND_GUARD_KEY = "command_guard.enabled"
 AUTO_MERGE_KEY = "delivery.auto_merge"
+ACCEPTANCE_KEY = "review.acceptance"
 
 
 class GitIdentity(NamedTuple):
@@ -314,6 +315,11 @@ async def claim_command_guard_enabled(conn: aiosqlite.Connection, project: str) 
 async def auto_merge_enabled(conn: aiosqlite.Connection, project: str) -> bool:
     """Whether `delivery.auto_merge` is on for a project: override, else global."""
     return bool((await _setting(conn, Path(), project, AUTO_MERGE_KEY)).value)
+
+
+async def acceptance_enabled(conn: aiosqlite.Connection, project: str) -> bool:
+    """Whether completed tasks wait for acceptance in `in_review`: override, else global."""
+    return bool((await _setting(conn, Path(), project, ACCEPTANCE_KEY)).value)
 
 
 async def task_default_budget(
