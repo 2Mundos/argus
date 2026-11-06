@@ -1,0 +1,71 @@
+{
+  "id": "ordinary-two-artifacts-control",
+  "control": true,
+  "source": "draft:docs/drafts/2026-11-04.repeat-call-reminder.draft.md (no incident cited)",
+  "prompt": "You are a worker. Claim a task, read its input artifacts art-0101 and then art-0102, and finish the task. The change is already made in your workspace.",
+  "world": [
+    {
+      "tool": "claim_task",
+      "times": 1,
+      "result": {
+        "task": {
+          "id": "task-0101",
+          "attempt": 2,
+          "title": "Add retry to uploader",
+          "spec": "Add bounded retry to the uploader in example-org/example-repo.",
+          "acceptance": ["retries 3 times"],
+          "knowledge_refs": []
+        }
+      }
+    },
+    {
+      "tool": "heartbeat",
+      "result": {
+        "state": "active",
+        "leases": [{ "task_id": "task-0101", "attempt": 2, "ok": true }],
+        "steers": []
+      }
+    },
+    {
+      "tool": "read_artifact",
+      "when": { "artifact_id": "art-0101" },
+      "times": 1,
+      "result": {
+        "text": "Retry the upload up to 3 times with a fixed delay.",
+        "bytes": 46,
+        "truncated": false,
+        "ref": null
+      }
+    },
+    {
+      "tool": "read_artifact",
+      "when": { "artifact_id": "art-0102" },
+      "times": 1,
+      "result": {
+        "text": "Test: zero retries still uploads once.",
+        "bytes": 38,
+        "truncated": false,
+        "ref": null
+      }
+    },
+    {
+      "tool": "report_progress",
+      "result": { "ok": true }
+    },
+    {
+      "tool": "complete_task",
+      "result": { "id": "task-0101", "state": "in_review" }
+    }
+  ],
+  "checks": {
+    "in_order": true,
+    "expect": [
+      { "tool": "claim_task" },
+      { "tool": "read_artifact", "args": { "artifact_id": "art-0101" } },
+      { "tool": "read_artifact", "args": { "artifact_id": "art-0102" } },
+      { "tool": "complete_task", "args": { "task_id": "task-0101" } }
+    ],
+    "forbid": [{ "tool": "fail_task" }],
+    "max_calls": 10
+  }
+}
