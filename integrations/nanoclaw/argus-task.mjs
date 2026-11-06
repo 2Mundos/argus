@@ -361,7 +361,7 @@ export function digestLog(text, budget) {
   return { text: kept.reverse().join("\n"), truncated: false };
 }
 
-const failed = (x) => isFailed(x.conclusion ?? x.status);
+const failed = (x) => FAILED_STATES.has(x.conclusion ?? x.status);
 
 async function ciDigest(api, o) {
   if ((o.number === undefined) === (o["run-id"] === undefined))
