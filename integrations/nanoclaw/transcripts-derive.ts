@@ -6,6 +6,7 @@ import {
   claudeRateLimitError,
   claudeRateLimitFailure,
 } from "./overlays/claude-rate-limit.js";
+import { codexUsageLimitFailure } from "./overlays/codex-usage-limit.js";
 
 const NOW = new Date("2026-10-20T22:06:00Z");
 
@@ -42,7 +43,28 @@ export function deriveClaude(events: ClaudeEvent[]) {
   };
 }
 
-export const DERIVE = { claude: deriveClaude } as const;
+interface CodexEvent {
+  type?: string;
+  usage?: unknown;
+  error?: { message?: string };
+}
+
+/**
+ * What the channel derives from a `codex exec --json` stream. Only `turn.failed` carries the
+ * final failure; top-level `error` events are retry notices. Fields follow
+ * fixtures/codex-0.162.1/PIN.md.
+ */
+export function deriveCodex(events: CodexEvent[]) {
+  const failed = events.findLast((ev) => ev.type === "turn.failed");
+  const completed = events.findLast((ev) => ev.type === "turn.completed" && ev.usage != null);
+  return {
+    turnFailed: failed !== undefined,
+    codexUsageLimitFailure: codexUsageLimitFailure(failed?.error?.message) ?? null,
+    usage: completed?.usage ?? null,
+  };
+}
+
+export const DERIVE = { claude: deriveClaude, codex: deriveCodex } as const;
 
 export function readEvents(path: string): unknown[] {
   return readFileSync(path, "utf8")
