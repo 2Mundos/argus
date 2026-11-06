@@ -872,7 +872,13 @@ describe("outcome classification: denial, network, unproven and session failures
   it.each([
     ["401 from the forge", failed("unauthorized", { http_status: 401 }), "forge_denied"],
     ["403 from the forge", failed("forbidden", { http_status: 403 }), "forge_denied"],
-    ["404 from the forge", failed("not_found", { http_status: 404 }), "forge_denied"],
+    // A bare 404 cannot tell a missing repository from a private one nothing was injected for.
+    ["404 from the forge", failed("not_found", { http_status: 404 }), "unknown"],
+    [
+      "404 from a response that proves a credential",
+      failed("not_found", { http_status: 404, visibility: "private" }),
+      "forge_denied",
+    ],
     [
       "a private repository without push",
       failed("policy_denied", { ...publicNoBit, visibility: "private" }),
@@ -1193,10 +1199,12 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       throw missing(`probe ${++n}`);
     });
     const { done, events } = preflight({ probe: probeCalls, rearm });
-    expect(await done).toMatchObject({
-      outcome: "unknown",
-      error: `repository preflight unknown: probe ${REARM_MAX_ATTEMPTS + 1}`,
-    });
+    const result = await done;
+    expect(result.outcome).toBe("unknown");
+    expect(result.error).toMatch(
+      new RegExp(`^repository preflight unknown: probe ${REARM_MAX_ATTEMPTS + 1} \\[`),
+    );
+    expect(events[0].diagnosis).toBe("rearm_exhausted");
     expect(rearm).toHaveBeenCalledTimes(REARM_MAX_ATTEMPTS);
     expect(probeCalls).toHaveBeenCalledTimes(REARM_MAX_ATTEMPTS + 1);
     expect(events[0]).toMatchObject({ rearmed: true, rearm_attempts: REARM_MAX_ATTEMPTS });
@@ -1228,9 +1236,9 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       throw missing(`probe ${++n}`);
     });
     const { done, events } = preflight({ probe: probeCalls, rearm });
-    expect(await done).toMatchObject({ error: "repository preflight unknown: probe 2" });
+    expect((await done).error).toMatch(/^repository preflight unknown: probe 2 \[/);
     expect(probeCalls).toHaveBeenCalledTimes(2);
-    expect(events[0]).toMatchObject({ rearm_attempts: 1 });
+    expect(events[0]).toMatchObject({ rearm_attempts: 1, diagnosis: "rearm_failed" });
   });
 
   it("a non-injection failure after a re-arm is final", async () => {
@@ -1297,12 +1305,11 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
         throw new Error("OneCLI GET /agents failed: 500");
       },
     });
-    expect(await done).toMatchObject({
-      outcome: "unknown",
-      error: "repository preflight unknown: first",
-    });
+    const result = await done;
+    expect(result.outcome).toBe("unknown");
+    expect(result.error).toMatch(/^repository preflight unknown: first \[/);
     expect(probeCalls).toHaveBeenCalledTimes(1);
-    expect(events[0].rearmed).toBe(false);
+    expect(events[0]).toMatchObject({ rearmed: false, diagnosis: "rearm_failed" });
   });
 
   it("an untyped probe error is session_failure and a failing emit changes nothing", async () => {

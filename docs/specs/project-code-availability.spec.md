@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Project code availability
@@ -50,7 +50,7 @@ workspace specs.
 | Condition | Channel behaviour |
 | --- | --- |
 | Project has no repository (no record URL, no pool entry) | Unchanged: no repository lease, no workspace, no `task.repository_url`. |
-| Project has a configured repository | Before injection: resolve URL, take the task-scoped **`repository` lease**, apply OneCLI secrets, confirm both are assigned to the agent (OneCLI admin reads), run repository preflight ([failure classes 3.3.1](failure-classes.spec.md)), re-arming the lease (bounded, with backoff) when the probe proves no credential was attached, prepare the [task workspace](task-workspace.spec.md), set `task.repository_url`, include workspace and read rules in the trusted prompt. |
+| Project has a configured repository | Before injection: resolve URL, take the task-scoped **`repository` lease**, apply OneCLI secrets, confirm both are assigned to the agent (OneCLI admin reads), run repository preflight ([failure classes 3.3.1](failure-classes.spec.md)), re-arming the lease (bounded, with backoff) when the probe proves no credential was attached or independent exact-agent evidence shows the injection missing for a 404 (none is wired in production, so that 404 stays fail-closed), prepare the [task workspace](task-workspace.spec.md), set `task.repository_url`, include workspace and read rules in the trusted prompt. |
 | Same, and task lists **`repository:write`** | Preflight requires **write** (`permissions.push` on the forge GET, as today). Worker may fetch, commit, push, and use forge helpers for mutation. Checkpoints and publish paths unchanged. |
 | Same, and task does **not** list **`repository:write`** | Preflight requires **read** (repository GET with pull/admin/push on the forge permissions object; on a public repository this does not prove the credential was attached, and the evidence says `authentication: unknown`). Workspace is the same path and branch naming; prompt states **read-only**: no push, no publishing commits, no opening PRs; it lists only the forge helper's read commands and grants no merge. `argus-delegate` and forge helpers that mutate the remote remain unavailable without write. |
 

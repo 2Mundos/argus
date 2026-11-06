@@ -1,7 +1,7 @@
 ---
-status: implemented
+status: partial
 created: 2026-10-24
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Failure classes
@@ -303,17 +303,45 @@ therefore runs in a bounded, ephemeral, model-free session:
   helper creates the file exclusively with mode 0600 and never follows a planted link. The
   result directory is owned by the container's mapped user (or chowned to it when the host
   is root); a user that cannot write it fails closed.
-- **Bounded re-arms when no credential was attached.** A probe that fails `unknown` with the forge's
-  200 and no permissions object (the helper's `policy_denied`) does not prove the assignment is
-  wrong: the gateway injects only through the policy rule OneCLI publishes for the assignment,
-  and that publication can lag the admin read or fail. The host re-applies the repository lease
-  (the same secrets and assignments; no new lease) and probes again, up to 4 rounds, waiting
-  1 s, 2 s, 4 s and 8 s before each (the wait is injectable, so tests run instantly). A burst of
-  failed publications (for example OneCLI's P2028 transaction timeout) is thus survived. Only
-  this shape is retried: a 401/403/404, an answer that proves a credential, a network error or a
-  session failure is final, as is a re-arm that throws (the last probe's failure is kept). When
-  the last round fails too, that failure is final. The evidence event carries `rearmed` (at
-  least one re-arm) and `rearm_attempts` (how many) and the last probe. The write-access denial
+- **Four layers, kept apart.** The preflight distinguishes (1) the **registered lease** the
+  host holds (`lease`), (2) the **desired OneCLI assignment** (`assignment`, admin reads),
+  (3) the **effective published policy** the gateway injects by, and (4) the **observed
+  injection** on the probe request. Layers 3 and 4 are not readable through OneCLI's admin
+  API (only `GET /agents`, `/secrets` and `/agents/{id}/secrets` exist in the adapter), so
+  the event reports them as `injection` (`observed` when the answer proves authentication,
+  `absent` when a 200 has no permissions object or independent evidence says so, else
+  `unknown`) and `independent_evidence` (`not_consulted`, `unavailable`, `missing`,
+  `observed`, `inconclusive`, `mismatch`, `error`), and a closed `diagnosis` (`none`,
+  `assignment`, `missing_injection`, `injection_unverifiable`, `injection_evidence_mismatch`,
+  `forge_denied`, `unknown_evidence`, `network`, `session`, `rearm_failed`,
+  `rearm_exhausted`, `rearm_unproven`). A matching assignment never proves injection.
+- **Bounded re-arms when no credential was attached.** The gateway injects only through the
+  policy rule OneCLI publishes for the assignment, and that publication can lag the admin read
+  or fail. The host re-applies the repository lease (the same secrets and assignments, the
+  same host- and path-exact scopes; no new lease; idempotent PATCH/PUT) and probes again, up
+  to 4 rounds, waiting 1 s, 2 s, 4 s and 8 s before each (the wait is injectable). Only two
+  shapes authorize a re-arm, and only with the lease held and the assignment confirmed for
+  this exact repository:
+  1. a probe that fails with the forge's 200 and no permissions object (the helper's
+     `policy_denied`), which shows no credential was attached;
+  2. a **404 that proves no authentication** (the probe keeps no body, so a missing repository
+     and a private one nothing was injected for look alike) **together with independent
+     exact-agent evidence** that the injection is missing. The runtime supplies that evidence
+     through `InjectionEvidenceSource`; its answer must name this OneCLI agent and this
+     repository (`origin/owner/repo`), else it is ignored (`mismatch`). **Production supplies
+     none** (`unavailableInjectionEvidence`): no supported OneCLI policy-rule or request-log
+     read exists, so such a 404 ends `unknown` with diagnosis `injection_unverifiable`, which
+     names the missing evidence source. A 404 is never classified as transient and a retry
+     alone is never a fix.
+
+  Everything else is final: a 401/403, an answer that proves a credential (including a
+  missing push or read permission), a bare 404, a network error, a session failure, another
+  agent's or repository's evidence, another worker's success, a stale or revoked lease. A
+  re-arm that throws stops with `rearm_failed` and its non-secret hint (the probe's evidence is
+  kept in the event); a failure that survives all rounds stops with `rearm_exhausted`. The cap,
+  the backoff and the counters are unchanged, nothing is requeued, and no attempt or failure
+  count is reset. After a re-arm only a probe that proves an authenticated credential and the
+  required access ends the preflight `ok` (`rearm_unproven` otherwise). The write-access denial
   hint depends on the verdict: when it shows no credential was attached (200, no permissions
   object, authentication unknown) it says the gateway attached none because its policy rule is
   not materialized in OneCLI and to re-apply the repository assignment, rather than that the
@@ -326,9 +354,9 @@ therefore runs in a bounded, ephemeral, model-free session:
   | `ok` | Accepted (below) | none |
   | `assignment_missing` | No task-scoped lease, no OneCLI agent, a repository secret absent, unassigned or scoped to another host or path, or the session's agent group is not the lease's agent | `env_repository_unavailable` |
   | `assignment_unverified` | OneCLI's admin API could not be read for the check | `env_repository_unavailable` |
-  | `forge_denied` | The forge answered 401, 403 or 404, or a response that proves a credential was attached (a private repository) lacks the required permission. A 401 does not say whether the credential was absent or invalid | `env_repository_unreachable` |
+  | `forge_denied` | The forge answered 401 or 403, or a 404 or other response that proves a credential was attached (a private repository) lacks the required permission. A 401 does not say whether the credential was absent or invalid | `env_repository_unreachable` |
   | `network_failure` | The request did not get a forge answer: proxy or network error, timeout | `env_repository_unreachable` |
-  | `unknown` | The answer cannot prove authentication or token scope: a public (or unlabelled) repository whose response lacks the permissions object or the required permission, or any other forge answer (5xx, rate limit, another repository) | `env_repository_unreachable` |
+  | `unknown` | The answer cannot prove authentication or token scope: a public (or unlabelled) repository whose response lacks the permissions object or the required permission, a 404 that proves no authentication (a missing repository, or a private one nothing was injected for), or any other forge answer (5xx, rate limit, another repository) | `env_repository_unreachable` |
   | `session_failure` | The preflight session itself failed: no proxy in the contribution, a driver refusal, a missing verdict, the deadline, an unavailable gateway, an incomplete teardown | `env_repository_unreachable` |
 
   A response that does not prove a credential is never called anonymous: an unproven case is
@@ -339,7 +367,7 @@ therefore runs in a bounded, ephemeral, model-free session:
   and Git hosts and their scoped path patterns, the probe outcome with the forge's HTTP
   status, whether the permissions object was present, the push bit, the repository's
   visibility and whether authentication is proven, whether the lease was re-armed and how
-  many times (`rearm_attempts`), and the evidence source of each part
+  many times (`rearm_attempts`), the `injection`, `independent_evidence` and `diagnosis` values above, and the evidence source of each part
   (`onecli_admin_read`, `preflight_session_verdict`, `host`). Every field is a closed value,
   a bounded integer, or a host and path the host derived itself; nothing the container wrote
   is copied as text. No secret value, header, proxy URL or userinfo, or credential-bearing URL
@@ -456,6 +484,16 @@ and whether the model's or the work's own output can forge it.
 | `argus-oom` OOM classification | Container runtime `docker inspect` structured data: `OOMKilled`, `ExitCode 137`, `Name` | Structured field (3.2.1) | Yes (137 required) | No — only container runtime data |
 
 # 4. Open Questions
+
+## Open items
+
+- Full recovery of a private-repository 404 whose injection is missing is pending a
+  supported OneCLI evidence or rule read (published policy rule or request log for the exact
+  agent). The host-side interface (`InjectionEvidenceSource`) and the bounded re-arm exist and
+  are tested, but production wires no source, so that 404 stays fail-closed
+  (`injection_unverifiable`). The spec moves to `implemented` when such a source is wired.
+
+## Questions
 
 - Should one `env_repository_*` block hold the project's other ready tasks until
   it is unblocked, or is one cheap preflight per task fine?

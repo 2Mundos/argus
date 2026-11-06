@@ -134,6 +134,7 @@ import {
   seedClaudeContinuation,
 } from "./argus-quota-resume.js";
 import {
+  type InjectionEvidenceSource,
   nanoclawPreflightRunner,
   nanoclawStartupReady,
   PREFLIGHT_TOTAL_MS,
@@ -141,6 +142,7 @@ import {
   runRepositoryPreflight,
   safeText,
   sessionRepositoryProbe,
+  unavailableInjectionEvidence,
 } from "./argus-repo-preflight.js";
 import {
   type ArmDecision,
@@ -369,6 +371,12 @@ export interface ArgusConfig {
     access?: "read" | "write",
     agentIdentifier?: string,
   ) => Promise<ProbeEvidence | void>;
+  /**
+   * Independent exact-agent evidence on whether the gateway injects the repository credential,
+   * consulted only for a 404 that proves no authentication. `fromEnv` leaves it absent: the
+   * OneCLI adapter has no supported policy or request-log read, so such a 404 stays fail-closed.
+   */
+  injectionEvidence?: InjectionEvidenceSource;
   /**
    * Settles when the host may start work: NanoClaw's startup adoption has finished
    * successfully. The claim loop claims nothing before it (adoption stops any session
@@ -3416,6 +3424,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       access,
       lease: activeRepositoryLease,
       verifyAssignment: () => verifyRepositoryAssignment(acc.onecli, target, url),
+      agentIdentifier: target.identifier,
+      injectionEvidence: cfg.injectionEvidence ?? unavailableInjectionEvidence,
       probe: async () => {
         if (!cfg.probeRepository) throw new Error("no repository preflight session is configured");
         const probe = cfg.probeRepository(

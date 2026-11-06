@@ -194,8 +194,8 @@ export function verdictEvidence(verdict: unknown): ProbeEvidence | null {
 }
 
 /**
- * The outcome of a failed child. A forge refusal (401/403/404) is a denial; a missing
- * permission is a denial only when the answer proves a credential was attached, since a
+ * The outcome of a failed child. A 401/403 is a denial, a 404 only with proven authentication;
+ * a missing permission is a denial only when the answer proves a credential was attached, since a
  * public repository answers without one. Anything that cannot prove it is `unknown`.
  */
 export function failedOutcome(
@@ -205,8 +205,12 @@ export function failedOutcome(
   switch (evidence.helper_error) {
     case "unauthorized":
     case "forbidden":
-    case "not_found":
       return "forge_denied";
+    // A 404 is a denial only when the answer proves a credential was attached. The probe
+    // keeps no body, so a bare 404 cannot tell a missing repository from a private one the
+    // gateway injected nothing for: it stays fail-closed as `unknown`.
+    case "not_found":
+      return evidence.authentication === "proven" ? "forge_denied" : "unknown";
     case "network_error":
       return "network_failure";
     case "policy_denied":
@@ -232,6 +236,46 @@ export function injectionMissing(evidence: ProbeEvidence | null): boolean {
     evidence.authentication === "unknown"
   );
 }
+
+/**
+ * A 404 for a repository the lease and the confirmed assignment authorize, with no proof a
+ * credential was attached. It is either a repository that does not exist or a private one the
+ * gateway injected nothing for; the probe has no body, so only independent evidence can tell.
+ */
+export function injectionUnprovenNotFound(evidence: ProbeEvidence | null): boolean {
+  return (
+    evidence?.helper_error === "not_found" &&
+    evidence.http_status === 404 &&
+    evidence.authentication === "unknown"
+  );
+}
+
+/**
+ * Independent, exact-agent evidence on whether the gateway injects the repository credential
+ * (for example the effective published policy rule or a request log). The runtime supplies it;
+ * the adapter has no supported source today (`unavailableInjectionEvidence`). The echoed agent
+ * and repository must be the ones asked about: another agent's or repository's answer, or
+ * another worker's success, never counts.
+ */
+export type InjectionEvidence =
+  | { state: "unavailable" }
+  | {
+      state: "missing" | "observed" | "inconclusive";
+      /** The OneCLI agent identifier the evidence is about. */
+      agent: string;
+      /** The repository identity (`origin/owner/repo`) the evidence is about. */
+      repository: string;
+    };
+
+export type InjectionEvidenceSource = (query: {
+  agent: string;
+  repository: string;
+}) => Promise<InjectionEvidence>;
+
+/** Production wiring: OneCLI's admin API has no policy-rule or request-log read to ask. */
+export const unavailableInjectionEvidence: InjectionEvidenceSource = async () => ({
+  state: "unavailable",
+});
 
 /**
  * The positive the preflight accepts. Anything else, however close, fails closed:
@@ -338,6 +382,24 @@ export function preflightReason(outcome: PreflightOutcome): string | null {
     : "env_repository_unreachable";
 }
 
+/**
+ * What the last failure means, separating a missing injection from a true forge denial and
+ * from evidence that cannot tell. Every value is fixed text; none comes from the container.
+ */
+export type PreflightDiagnosis =
+  | "none"
+  | "assignment"
+  | "missing_injection"
+  | "injection_unverifiable"
+  | "injection_evidence_mismatch"
+  | "forge_denied"
+  | "unknown_evidence"
+  | "network"
+  | "session"
+  | "rearm_failed"
+  | "rearm_exhausted"
+  | "rearm_unproven";
+
 /** One preflight's non-secret evidence (failure-classes spec 3.3.1, "Evidence events"). */
 export interface PreflightEvidenceEvent {
   event: "repository_preflight";
@@ -360,6 +422,23 @@ export interface PreflightEvidenceEvent {
     git_path: string;
   };
   probe: ({ source: "preflight_session_verdict" } & ProbeEvidence) | null;
+  /**
+   * Whether the gateway injected the credential on the probe request: `observed` (the answer
+   * proves authentication), `absent` (a 200 without permissions, or independent evidence says
+   * so), `unknown` (the evidence cannot tell).
+   */
+  injection: "observed" | "absent" | "unknown";
+  /** The independent exact-agent injection evidence consulted for a 404, if any. */
+  independent_evidence:
+    | "not_consulted"
+    | "unavailable"
+    | "missing"
+    | "observed"
+    | "inconclusive"
+    | "mismatch"
+    | "error";
+  /** The closed diagnosis of the last failure; `none` when the preflight passed. */
+  diagnosis: PreflightDiagnosis;
   /** Whether the lease was re-applied at least once (`rearm_attempts` > 0). */
   rearmed: boolean;
   /** How many times the lease was re-applied and the probe retried (at most REARM_MAX_ATTEMPTS). */
@@ -368,6 +447,18 @@ export interface PreflightEvidenceEvent {
 
 /** Re-arm and probe rounds after a probe that proves no credential was attached. */
 export const REARM_MAX_ATTEMPTS = 4;
+const DIAGNOSIS_HINTS: Readonly<Partial<Record<PreflightDiagnosis, string>>> = {
+  injection_unverifiable:
+    "a 404 with no proof of authentication may be a private repository the OneCLI gateway attached no credential to; no supported OneCLI evidence source can tell (independent injection evidence is unavailable), so the preflight stays fail-closed",
+  injection_evidence_mismatch:
+    "the independent injection evidence is not about this agent and repository; it was ignored",
+  rearm_failed:
+    "re-applying the repository lease failed, so the OneCLI policy rule could not be republished; check the OneCLI gateway",
+  rearm_exhausted: `the OneCLI policy rule stayed unpublished after ${REARM_MAX_ATTEMPTS} re-applications of the repository lease; check the OneCLI gateway`,
+  rearm_unproven:
+    "the probe after re-applying the repository lease did not prove an authenticated credential",
+};
+
 const REARM_BACKOFF_BASE_MS = 1_000;
 const REARM_BACKOFF_MAX_MS = 8_000;
 
@@ -393,6 +484,17 @@ export interface RepositoryPreflightInput {
    * was attached, then the probe runs again, up to REARM_MAX_ATTEMPTS times.
    */
   rearm?(): Promise<void>;
+  /**
+   * The OneCLI agent whose assignments were checked; with `injectionEvidence` it scopes the
+   * independent evidence to this exact agent.
+   */
+  agentIdentifier?: string;
+  /**
+   * Independent injection evidence for a 404 that proves no authentication. Absent or
+   * `unavailable`: the 404 stays fail-closed. Only a `missing` answer about this exact agent
+   * and repository, with the lease held and the assignment confirmed, authorizes a re-arm.
+   */
+  injectionEvidence?: InjectionEvidenceSource;
   /** Waits before re-arm round `round` (1-based); defaults to a bounded exponential delay. */
   backoff?(round: number): Promise<void>;
   /** Receives the event; a throw or rejection is ignored. */
@@ -442,11 +544,22 @@ export async function runRepositoryPreflight(
       git_path: host(repository.gitPathPattern),
     },
     probe: null,
+    injection: "unknown",
+    independent_evidence: "not_consulted",
+    diagnosis: "none",
     rearmed: false,
     rearm_attempts: 0,
   };
-  const finish = async (outcome: PreflightOutcome, detail?: string) => {
+  const finish = async (
+    outcome: PreflightOutcome,
+    detail?: string,
+    diagnosis?: PreflightDiagnosis,
+  ) => {
     event.outcome = outcome;
+    if (diagnosis) event.diagnosis = diagnosis;
+    else if (outcome !== "ok") event.diagnosis = diagnosisOf(outcome);
+    const hint = DIAGNOSIS_HINTS[event.diagnosis];
+    if (detail !== undefined && hint && outcome !== "ok") detail = `${detail} [${hint}]`;
     try {
       await input.emit?.(event);
     } catch {
@@ -489,6 +602,56 @@ export async function runRepositoryPreflight(
   const probeOnce = async () => {
     const evidence = await input.probe();
     if (evidence) event.probe = { source: "preflight_session_verdict", ...evidence };
+    event.injection = evidence?.authentication === "proven" ? "observed" : "unknown";
+    return evidence;
+  };
+  /**
+   * Whether this failure authorizes a re-arm. The held lease and the confirmed assignment
+   * (both checked above) authorize this exact repository; the failure must also show the
+   * credential was not injected: a 200 without permissions, or a 404 that proves no
+   * authentication together with independent evidence about this exact agent and repository.
+   */
+  const rearmAuthorized = async (
+    failure: RepositoryPreflightError,
+  ): Promise<{ rearm: true } | { rearm: false; diagnosis: PreflightDiagnosis }> => {
+    if (injectionMissing(failure.evidence)) {
+      event.injection = "absent";
+      return { rearm: true };
+    }
+    if (!injectionUnprovenNotFound(failure.evidence))
+      return { rearm: false, diagnosis: diagnosisOf(failure.outcome) };
+    const agent = input.agentIdentifier;
+    if (!agent || !input.injectionEvidence) {
+      event.independent_evidence = "unavailable";
+      return { rearm: false, diagnosis: "injection_unverifiable" };
+    }
+    const identity = `${repository.origin}/${repository.owner}/${repository.repo}`;
+    let answer: InjectionEvidence;
+    try {
+      answer = await input.injectionEvidence({ agent, repository: identity });
+    } catch {
+      event.independent_evidence = "error";
+      return { rearm: false, diagnosis: "injection_unverifiable" };
+    }
+    if (answer.state === "unavailable") {
+      event.independent_evidence = "unavailable";
+      return { rearm: false, diagnosis: "injection_unverifiable" };
+    }
+    if (answer.agent !== agent || answer.repository !== identity) {
+      event.independent_evidence = "mismatch";
+      return { rearm: false, diagnosis: "injection_evidence_mismatch" };
+    }
+    if (answer.state === "missing") {
+      event.independent_evidence = "missing";
+      event.injection = "absent";
+      return { rearm: true };
+    }
+    event.independent_evidence = oneOf(
+      answer.state,
+      ["observed", "inconclusive"] as const,
+      "inconclusive",
+    );
+    return { rearm: false, diagnosis: "unknown_evidence" };
   };
   try {
     await probeOnce();
@@ -502,19 +665,30 @@ export async function runRepositoryPreflight(
     // and leave the rule missing. Re-applying the lease republishes it, so re-arm and probe
     // again, bounded and with backoff, while the failure still proves no credential.
     let failure = error;
+    // A 404 is re-armed only on independent evidence of a missing injection (see
+    // `rearmAuthorized`); the cap, the backoff and the attempt counters are the same, nothing
+    // is requeued and no failure limit is touched.
     for (let round = 1; round <= REARM_MAX_ATTEMPTS; round++) {
-      if (!input.rearm || !injectionMissing(failure.evidence))
-        return finish(failure.outcome, failure.message);
+      if (!input.rearm) return finish(failure.outcome, failure.message);
+      const decision = await rearmAuthorized(failure);
+      if (!decision.rearm) return finish(failure.outcome, failure.message, decision.diagnosis);
       try {
         await (input.backoff ?? defaultBackoff)(round);
         await input.rearm();
       } catch {
-        return finish(failure.outcome, failure.message);
+        return finish(failure.outcome, failure.message, "rearm_failed");
       }
       event.rearmed = true;
       event.rearm_attempts = round;
       try {
-        await probeOnce();
+        const after = await probeOnce();
+        // Only a probe that proves an authenticated credential ends the recovery.
+        if (after?.authentication !== "proven")
+          return finish(
+            "unknown",
+            "the probe after re-applying the repository lease did not prove a credential",
+            "rearm_unproven",
+          );
         return finish("ok");
       } catch (retry) {
         if (!(retry instanceof RepositoryPreflightError))
@@ -524,7 +698,30 @@ export async function runRepositoryPreflight(
         failure = retry;
       }
     }
-    return finish(failure.outcome, failure.message);
+    const last = await rearmAuthorized(failure);
+    return finish(
+      failure.outcome,
+      failure.message,
+      last.rearm ? "rearm_exhausted" : last.diagnosis,
+    );
+  }
+}
+
+function diagnosisOf(outcome: PreflightOutcome): PreflightDiagnosis {
+  switch (outcome) {
+    case "ok":
+      return "none";
+    case "assignment_missing":
+    case "assignment_unverified":
+      return "assignment";
+    case "forge_denied":
+      return "forge_denied";
+    case "network_failure":
+      return "network";
+    case "session_failure":
+      return "session";
+    default:
+      return "unknown_evidence";
   }
 }
 
