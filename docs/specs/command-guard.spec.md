@@ -90,10 +90,13 @@ bypass. Background: draft (removed; in git history),
 - **Visibility (intended).** Each block is an informational, persistent
   `task.command_blocked` event with the reason and a redacted, truncated command.
   It is not a failure class and not an inbox item. The event type and its data
-  shape (`tool`, `rule`, `reason`) exist in `argus_core` (`events.py`) and the
-  task feed shows the rule id and reason; the hook emission, the worker route and
-  the Fleet presentation are **not implemented**; the hook currently only returns
-  the deny decision.
+  shape (`tool`, `rule`, `reason`) exist in `argus_core` (`events.py`). Fleet
+  activity (Home, Events, the status bar and the task feed share one event list)
+  shows the rule id and reason only, never command text, even if the event data
+  carries it. Readers see it through the existing event read model and its task
+  read scope; no failure, retry or inbox count includes it (tested). The hook
+  emission and the worker route are **not implemented**; the hook currently only
+  returns the deny decision.
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
@@ -109,13 +112,12 @@ bypass. Background: draft (removed; in git history),
 
 Not built yet (section 3 marks each **not implemented**):
 
-- `task.command_blocked` event emission and Fleet presentation: the event type
-  and data shape exist and the task feed shows the rule id and reason; still
-  missing are the hook emission, the worker route and the Fleet presentation.
+- `task.command_blocked` event emission: the event type, data shape and Fleet
+  presentation exist; still missing are the hook emission and the worker route.
 - Codex coverage (hook support and trusted-hash registration).
 
 - **Open item: event plumbing.** A worker route or channel to carry
-  `task.command_blocked` and its Fleet presentation, in
+  `task.command_blocked`, in
   [failure classes](failure-classes.spec.md).
 - Codex: hook support, trusted-hash registration, whether the hook runs inside
   Bubblewrap, and whether it survives `patch-codex-sandbox.py`.
