@@ -53,7 +53,8 @@ describe("Accounts: Claude wizard entry points", () => {
   it("adds a Claude account from the toolbar", async () => {
     render(<Accounts />);
     await screen.findByText("laude");
-    fireEvent.click(screen.getByRole("button", { name: "Add Claude account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
     expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Add Claude account");
     expect(screen.getByLabelText("Name")).toBeTruthy();
   });

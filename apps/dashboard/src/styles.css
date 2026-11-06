@@ -108,6 +108,23 @@ button:disabled:not(.primary) {
   cursor: not-allowed;
   filter: saturate(0.55);
 }
+button.compact {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.85rem;
+  border-radius: 5px;
+}
+.account-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+.account-type-grid button {
+  display: grid;
+  gap: 0.1rem;
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+}
 button.primary {
   background: var(--primary-bg);
   border-color: var(--primary-border);

@@ -171,6 +171,7 @@ describe("Accounts", () => {
   it("submits anthropic provider from catalogue", async () => {
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
     await screen.findByText(localBrokerNotice());
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "a1" } });
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "anthropic" } });
@@ -184,6 +185,7 @@ describe("Accounts", () => {
   it("submits openai provider from catalogue", async () => {
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
     await screen.findByLabelText("Provider");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "o1" } });
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "openai" } });
@@ -198,6 +200,7 @@ describe("Accounts", () => {
   it("submits a valid custom provider id", async () => {
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
     await screen.findByLabelText("Provider");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "c1" } });
     fireEvent.change(screen.getByLabelText("Provider"), {
@@ -216,6 +219,7 @@ describe("Accounts", () => {
   it("submits a gitea account from username and token fields", async () => {
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
     await screen.findByLabelText("Provider");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "g1" } });
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gitea" } });
@@ -230,6 +234,7 @@ describe("Accounts", () => {
   it("submits a github account from a single token field", async () => {
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
     await screen.findByLabelText("Provider");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "gh" } });
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "github" } });
@@ -245,6 +250,7 @@ describe("Accounts", () => {
     mock.enginesError = new Error("catalog down");
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
     expect(await screen.findByText(/catalog down/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
