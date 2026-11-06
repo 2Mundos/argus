@@ -122,7 +122,8 @@ every new dependency is judged against it.
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Task helpers](specs/task-helpers.spec.md) — `argus-task`: token-free waits on CI
   and reviews that a steer interrupts, PR readiness, CI failure digest, and one-call
-  delivery; a `waiting` milestone
+  delivery; a `waiting` milestone; `attach` stores a worker's report or delegate
+  output as a task artifact
 - [Stall visibility](specs/stall-visibility.spec.md) — fail a vanished session
   (`session_lost`), flag quiet claimed tasks in the inbox and worker rail, and
   explain late lease/agent expiry and the likely stall cause

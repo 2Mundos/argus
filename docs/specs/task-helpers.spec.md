@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-02
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # Task helpers (`argus-task`)
@@ -58,7 +58,7 @@ It picks the forge client from the repository URL (`repositoryClient`), reads th
 forge helpers, and adds no HTTP client of its own. It is on `PATH` for the harness and for
 every delegated executor.
 
-Commands: `wait`, `pr-ready`, `ci-digest`, `deliver`. Every command is stateless: it
+Commands: `wait`, `pr-ready`, `ci-digest`, `deliver`, `attach`. `attach` talks to the Argus channel's files, not to the forge, and needs no repository (3.10). Every other command is stateless: it
 derives everything from the forge, git and its arguments, so a call killed by an engine
 timeout loses nothing and the next call carries on.
 
@@ -68,10 +68,10 @@ Every command prints exactly one JSON line on stdout; diagnostics go to stderr. 
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Condition met (`wait`), ready (`pr-ready`), done (`ci-digest`, `deliver`) |
-| 10 | Still pending: the wait cap was reached first |
+| 0 | Condition met (`wait`), ready (`pr-ready`), done (`ci-digest`, `deliver`), stored with a receipt (`attach`) |
+| 10 | Still pending: the wait cap was reached first (`attach`: no receipt yet) |
 | 11 | Interrupted: a steer or cancel is pending (3.4) |
-| 12 | Not ready (`pr-ready`) or stopped on a conflict (`deliver`); `reasons` says why |
+| 12 | Not ready (`pr-ready`), stopped on a conflict (`deliver`) or refused (`attach`); `reasons` or the error code says why |
 | 1 | Error (forge unreachable, repository not allowlisted, git failure) |
 | 2 | Usage error |
 
@@ -211,10 +211,87 @@ and re-polling the forge helper, the four commands, exit codes 10, 11 and 12, an
 shell timeout. Images built before this change have no `argus-task`, so the line says to
 check `command -v argus-task` first.
 
-`argus-task` has no completion subcommand (only `wait`, `pr-ready`, `ci-digest`, `deliver`).
+`argus-task` has no completion subcommand (only `wait`, `pr-ready`, `ci-digest`, `deliver`, `attach`).
 A worker completes by replying `COMPLETE:` as plain text followed by the JSON object; the
 Argus channel submits it to `/tasks/{id}/complete` and strips a `<message to="argus">`
 envelope if the reply is exactly that.
+
+## 3.10 `attach`: store a report or delegate output as an artifact
+
+`argus-task attach --file ABSOLUTE_PATH [--name NAME] [--role ROLE] [--max SECONDS]` stores
+a worker's file as an artifact of the attempt it runs, with no orchestrator and no
+credential in the container. Before this, a worker's report or an `argus-delegate --out`
+file reached Argus only if the orchestrator read it from the worker, which it cannot.
+
+**Transport.** The container's agent group directory (the directory of
+`ARGUS_TASK_LOG_FILE`, `/workspace/agent`) is the file bridge the host channel already
+tails. `attach` reads the status file `argus-task-attach-status.json` (the channel offers
+capability `artifact-attach`, protocol 1, for the claimed task and attempt, with its size
+limit), copies the file into `argus-task-attach-spool/<nonce>` while hashing the copy,
+appends one request line to `argus-task-attach.jsonl`, and polls
+`argus-task-attach-receipts.jsonl`. The channel
+(`integrations/nanoclaw/argus-attach-relay.ts`, started at claim, stopped when the attempt
+ends) opens only `spool/<nonce>` (never a path the worker names, no links, one hard link),
+hashes what it read, uploads with the host's token through the lease-holder upload,
+reads the artifact back and calls the server-side verify, and only then appends the
+receipt. The bytes cross the bridge once, as a file; no log line, request or receipt
+carries them.
+
+**Receipt.** One JSON line, built by the channel from values it holds:
+`{stored, task_id, attempt, artifact_id, name, role, bytes, sha256, duplicate, renamed,
+request_id}`. `attach` prints it only after checking that task, attempt, request, size
+and SHA-256 are those of the file it sent. A failure prints no stdout and an
+`{"error": {"code", "message"}}` line on stderr. The channel keeps the recorded
+`artifact_id`s for the attempt; completion lists exactly those in `result.artifacts` and
+the worker never types an ID.
+
+**Exit codes** are the table in 3.2: 0 stored; 10 no receipt before the wait (default 20 s,
+`--max` clamped to `ARGUS_TASK_WAIT_MAX_S`; the rerun adopts the pending request); 12
+refused for `symlink`, `not_regular`, `outside_roots`, `bridge_file`, `empty_file`,
+`too_large`, `stale_attempt`, `wrong_task`, `no_active_attempt`, `attempt_ended`,
+`attempt_completed` or `invalid_request`; 1 for `prerequisite_missing` (below),
+`file_changed`, `upload_failed`, `storage_mismatch`, `invalid_receipt`; 2 usage (relative
+path, unknown role).
+
+**Idempotence and names.** The request id is a hash of task, attempt, sanitized name,
+role and content hash, so the same file, name and role gives the existing receipt
+(`duplicate: true`) without a second artifact. The same name with other bytes is stored
+under the hashed-name fallback (`report-<first 8 hex of sha256>.md`, the same
+`withHashSuffix` rule as completion) and the receipt says `renamed: true`; artifacts stay
+immutable and nothing is overwritten. The default name is the file's base name; names go
+through `artifactName` (letters, digits, `.`, `_`, `-`, at most 200 characters).
+
+**Roles** are the API's: `report`, `delegate_report`, `policy_snapshot`, `qa_receipt`,
+`other`; none by default. Examples: `--file /workspace/agent/report.md --role report`,
+`--file /workspace/project/.argus-delegate/report.md --role delegate_report`.
+
+**File safety.** An absolute path to a regular, non-empty file under the allowed roots
+(`ARGUS_TASK_ATTACH_ROOTS`, else `ARGUS_DELEGATE_ROOTS`, else `/workspace`, so sibling
+directories and delegate `--out` directories are included); the final component is not a
+link, the real path is under a root and is not one of the bridge's files. The size limit is
+25 MiB, below the API's `ARGUS_ARTIFACT_MAX_BYTES` because the channel holds the bytes to
+upload; the status file carries it. The file is hashed while it is copied and re-checked
+(size and mtime of the open handle) afterwards: a file that changed is `file_changed`, and
+the channel hashes the spooled copy again. At most 50 requests per attempt.
+
+**Ownership.** The channel serves a request only for the task and attempt it claimed and
+only while that claim is current. Another task, another attempt, a late request after the
+attempt ended or completed, a malformed field or a wrong protocol gets an error receipt
+with its code and uploads nothing. A request whose `request_id` or `nonce` is not well
+formed is ignored. Only IDs the channel itself recorded feed `result.artifacts`.
+
+**Missing support.** The status file is absent when the channel predates this feature, no
+attempt is active, or the bridge files are not writable. `attach` then exits 1 with
+`prerequisite_missing` naming `artifact-attach` and the file it looked for, stores
+nothing and says not to ask the orchestrator to read worker-local files. It never reports
+success without a receipt.
+
+**Guidance.** Every task prompt (read-only ones too) carries the order: attach each report
+or delegate output with `argus-task attach` BEFORE replying `COMPLETE:`; the printed
+receipt is the proof; completion then lists the recorded artifacts; no receipt means not
+stored. `argus-task attach --help` carries the examples and the exit codes. NanoClaw's
+`send_file` is unchanged: it posts a chat attachment to the user, is not a receipt, and
+does not create an artifact.
 
 # 4. Open Questions
 
@@ -242,7 +319,14 @@ envelope if the reply is exactly that.
   clamp, interrupt by a newer marker and not an older one, the `pr-ready` reasons
   including a moved head, digest deduplication and the printed-size bound, `deliver` on
   a clean rebase and on a conflict, the `waiting` kind validation, the host's symlink
-  refusals at each component, FIFOs, stale records and repost timing.
+  refusals at each component, FIFOs, stale records and repost timing. `attach`
+  (`argus-task-attach.test.mjs`, the real CLI against the real bridge with a fake store
+  that keeps the bytes): the receipt and its checks, same-bytes retry, the hashed-name
+  fallback, the pending exit and adoption, the wait cap, a forged receipt, an ended attempt,
+  each file refusal, usage errors, missing support, stale, cross-task, late and malformed
+  requests, a spool symlink and bytes that differ from the request, and every example in
+  `--help`. `tests/test_attach_packaging.py` pins the install, the image paths, the shared
+  file names and roles, and the guidance wording.
 
 # 6. Implementation Consequences
 
@@ -254,6 +338,9 @@ envelope if the reply is exactly that.
   regenerated; the dashboard renders it (`milestones.tsx`); MCP `report_progress` lists it.
 - NanoClaw channel: `argus-task-signals.ts` (marker, record reader, repost timing), called
   from `deliverSteers` and the heartbeat in `argus.ts`; installed by `install.sh`.
+- `attach` (3.10): `argus-attach-relay.ts` (installed by `install.sh`), `startAttachRelay`
+  and `storeAttachment` in `argus.ts`, and `ATTACH_GUIDANCE` in the task prompt. No Argus
+  API, schema, MCP tool or tool-description change.
 - `claude-managed-settings.json` sets the Claude cap; `argus-delegate` drops it for
   other executors (`waitCapEnv`).
 - The repository section of the task prompt (3.9).
