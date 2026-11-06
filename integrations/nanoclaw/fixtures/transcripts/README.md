@@ -47,4 +47,8 @@ they must come from real engine output, not hand-written strings.
 ## Rule
 
 An engine version bump re-records at least the success case and one failure case
-for that engine in the same PR.
+for that engine in the same PR. `make check-engine-transcripts` (part of `make
+lint`) enforces it: it reads each engine's pin, and when one differs from the
+merge base with `origin/main` it requires an added or changed `success-*` case
+and `failure-*` case under `transcripts/<engine>/`. Name cases by type, for
+example `success-result` and `failure-auth`.

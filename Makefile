@@ -53,6 +53,11 @@ lint: ## Ruff + Biome + docs validation.
 	python3 scripts/validate_docs.py
 	python3 scripts/check_specs.py
 	$(UV) run python scripts/check_tests.py --strict
+	$(MAKE) check-engine-transcripts
+
+.PHONY: check-engine-transcripts
+check-engine-transcripts: ## An engine version bump re-records its success and failure transcripts.
+	python3 scripts/check_engine_transcripts.py
 format: ## Auto-format Python and TypeScript.
 	$(UV) run ruff check --fix .
 	$(UV) run ruff format .
