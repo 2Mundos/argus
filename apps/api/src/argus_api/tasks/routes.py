@@ -340,6 +340,9 @@ async def claim_task(
                             conn, task.project
                         )
                     )
+                    auto_merge = await settings_svc.auto_merge_enabled(
+                        conn, task.project
+                    )
                     switch = await service.attempt_model_switch(
                         conn, task.id, task.attempt
                     )
@@ -363,6 +366,7 @@ async def claim_task(
                     difficulty_executors=difficulty_executors,
                     git_identity=git_identity,
                     command_guard_enabled=command_guard_enabled,
+                    auto_merge=auto_merge,
                 )
             remaining = deadline - loop.time()
             try:
@@ -456,6 +460,9 @@ async def complete_task(
         agent_id,
         body.attempt,
     )
+    gate = await pr_binding.read_gate(
+        db, request.app.state.pr_checker, task_id, agent_id, body.attempt, search
+    )
     async with db.write() as tx:
         return await service.complete(
             tx,
@@ -465,6 +472,7 @@ async def complete_task(
             body.result,
             model_policy_path=settings.model_policy_path,
             pr_search=search,
+            pr_gate=gate,
         )
 
 

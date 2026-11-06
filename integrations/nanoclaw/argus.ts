@@ -564,6 +564,8 @@ export interface ArgusTask {
   /** Effective git author for the task's project (settings 3.8); null/missing: use the pool's. */
   git_identity?: { name: string; email: string } | null;
   command_guard_enabled?: boolean;
+  /** Effective `delivery.auto_merge` (settings 3.10): a `pr_merged` task may merge its own PR. */
+  auto_merge?: boolean;
 }
 
 /** Empty difficulty executor chain and no pin: NanoClaw does the work (task difficulty / local harness). */
@@ -653,6 +655,8 @@ export function heldAccountFits(
 
 /** True only when an orchestrator-origin task's input explicitly sets delivery.allow_merge to boolean true. */
 export function taskAuthorizesMerge(task: ArgusTask): boolean {
+  // The operator's setting, delivered with the claim, is authenticated metadata.
+  if (task.auto_merge === true && task.deliverable === "pr_merged") return true;
   // `input` of a worker-created task is worker-authored: it can never grant authority.
   if (task.prompt_trust === "worker") return false;
   const delivery = task.input?.delivery;
@@ -1204,7 +1208,9 @@ export function deliverableLines(task: ArgusTask): string[] {
   const merge =
     task.deliverable === "pr_merged"
       ? taskAuthorizesMerge(task)
-        ? " You may merge it yourself once the checks pass."
+        ? task.auto_merge === true
+          ? " You must merge it yourself once the checks pass: COMPLETE is accepted only after the forge shows it merged."
+          : " You may merge it yourself once the checks pass."
         : " Do not merge it: a reviewer merges."
       : "";
   return [

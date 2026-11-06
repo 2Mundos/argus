@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Task deliverable
@@ -30,7 +30,7 @@ a task.
 - **One deliverable per task.** No lists, no combinations (a task may still write
   knowledge or open a PR beyond its deliverable; only the deliverable is checked).
 - **No auto-close.** Argus never polls the forge to accept a task. A `pr_green` or
-  `pr_merged` task waits for an orchestrator or human, as any reviewed task does
+  `pr_merged` task (except `pr_merged` under `delivery.auto_merge`, 3.4) waits for an orchestrator or human, as any reviewed task does
   ([delivery](task-delivery.spec.md) 3.4: merged is not accepted by itself). The
   delivery reconciliation (3.8) is an explicit manager request and ends in
   `in_review`, never in `succeeded`.
@@ -88,7 +88,8 @@ for the caller. Orchestrators still get an automatic read checkout for configure
 projects without setting any capability ([project code
 availability](project-code-availability.spec.md)); branch/pr deliverables still
 require `repository:write` here. `pr_merged` does not require `delivery.allow_merge`:
-a human or orchestrator may merge; the worker's prompt states whether it may.
+a human or orchestrator may merge; the worker's prompt states whether it may (the
+task input grants it, or `delivery.auto_merge` does, 3.4).
 
 ## 3.4 Completion gate
 
@@ -150,6 +151,30 @@ first and the forge is not read.
 - **Evidence only.** The bind waives nothing: the PR state and checks still decide
   the closure gate (3.5), and a bound `pr_green` or `pr_merged` goes to
   `in_review` with `deliverable_pending` like a reported one.
+
+**Auto-merge.** When the effective `delivery.auto_merge`
+([settings](settings.spec.md) 3.10) is on for the task's project, a `pr_merged`
+task is authorized to merge itself and is not left to a reviewer. Its completion
+needs the PR merged: `complete_task` reads the task's PR (the reported one, or the
+one the binding above found) with `PrChecker` before the write, never inside it, and
+`complete` accepts only when the forge shows it `merged`. An open, closed or
+unreadable PR is `422 deliverable_missing` naming the state and telling the worker
+to merge it, so the worker keeps its claim and can merge and complete again;
+unconfirmed is never success. A merged PR completes straight to the task's normal
+outcome (`succeeded`, or `in_review` for its own `review`, an open checklist item,
+a task with no structured acceptance that already holds a PR, or independent
+review), with no `deliverable_pending`. A PR that merged before the worker reported
+it counts. The setting is read at completion, so turning it off lets the next
+completion take the pending path below.
+
+**Acceptance off.** With `review.acceptance` off ([settings](settings.spec.md) 3.11)
+no completion waits in review, so a `pr_green` or `pr_merged` task gets the same
+completion-time forge read as auto-merge: `merged` passes either level, `pr_green`
+also passes with an open PR whose head checks are `success`; anything else, or a PR
+the forge cannot confirm, is `422 deliverable_missing` and the worker keeps its
+claim. A PR found by the binding search carries no check read, so for `pr_green` it
+passes only merged; a worker that reports its PR gets the full read. The task's
+`review` mode and open checklist items do not hold it.
 
 `pr_green` and `pr_merged` depend on facts that change after the worker is done.
 A completion with an open PR artifact for either goes to `in_review` (a review
@@ -333,8 +358,9 @@ audit record.
 
 # 4. Open Questions
 
-- Should Argus close `pr_merged` tasks itself once the forge shows the merge
-  (an in-process loop)? Deferred: it needs persisted forge state
+- Should Argus close `pr_merged` tasks itself once the forge shows the merge, for a
+  worker that is gone (an in-process loop)? `delivery.auto_merge` covers a worker
+  that merges and completes in its attempt. Deferred: it needs persisted forge state
   ([delivery](task-delivery.spec.md) 4) and a policy on who may auto-close.
 - `knowledge` evidence is the author's own write during the attempt. Linking a
   page to its task (a `task` source) would be exact, but the worker tools do not

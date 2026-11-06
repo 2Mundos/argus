@@ -1106,6 +1106,7 @@ async def complete(
     *,
     model_policy_path: Path | None = None,
     pr_search: deliverable.PrSearch | None = None,
+    pr_gate: deliverable.ForgeGate | None = None,
 ) -> Task:
     """Complete with the result envelope; `data` must match the kind's result
     schema and every listed artifact must belong to this task (3.11).
@@ -1125,8 +1126,9 @@ async def complete(
     # The deliverable's evidence comes first: the worker still holds its claim and can
     # fix the gap in this attempt (task deliverable spec 3.4).
     have = await deliverable.bind_found(tx, row, have, pr_search, f"agent:{agent_id}")
+    acceptance = await settings_svc.acceptance_enabled(tx.conn, row["project"])
     awaits_forge = await deliverable.check_complete(
-        tx.conn, row, agent_id, result, have, pr_search
+        tx.conn, row, agent_id, result, have, pr_search, pr_gate, acceptance
     )
     held = merge_acceptance(have.checklist, json.loads(row["acceptance"]))
     # A report naming an item this task does not hold came from another task's work
@@ -1158,7 +1160,9 @@ async def complete(
         "complete",
     )
     open_items = [i.id for i in items if i.status is not ItemStatus.DONE]
-    if not items and (row["attempt"] > 1 or have.artifacts or have.wip):
+    if not acceptance:
+        open_items = []  # nothing holds the result in review (settings 3.11)
+    elif not items and (row["attempt"] > 1 or have.artifacts or have.wip):
         # Continued work whose criteria Argus never held: nothing proves them, so the
         # result is reviewed (assisted reconciliation) instead of auto-accepted.
         open_items = ["acceptance_not_structured"]
@@ -1209,7 +1213,9 @@ async def complete(
         )
         or None,
         # Open criteria, or a PR that must still turn green or merge, need a decision.
-        review=Review.ORCHESTRATOR
+        review=Review.NONE
+        if not acceptance
+        else Review.ORCHESTRATOR
         if (open_items or awaits_forge) and Review(row["review"]) is Review.NONE
         else None,
     )

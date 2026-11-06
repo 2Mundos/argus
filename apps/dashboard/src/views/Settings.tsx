@@ -38,6 +38,8 @@ export function Settings() {
   const models = byKey.get("models");
   const difficultyExecutors = byKey.get("difficulty.executors");
   const gitIdentity = byKey.get("git.identity");
+  const autoMerge = byKey.get("delivery.auto_merge");
+  const acceptance = byKey.get("review.acceptance");
   const orchestratorEnabled = byKey.get("orchestrator.enabled");
   const orchestratorRuntime = byKey.get("orchestrator.runtime");
   const orchestratorModel = byKey.get("orchestrator.model");
@@ -108,6 +110,30 @@ export function Settings() {
               setting={gitIdentity}
               onChanged={() => reload()}
             />
+          </div>
+          <div className="card">
+            <ToggleSection
+              title="Auto-merge"
+              settingKey="delivery.auto_merge"
+              project={project}
+              setting={autoMerge}
+              onChanged={() => reload()}
+            >
+              Workers merge their own pull request for tasks whose deliverable is a merged PR, and
+              those tasks succeed only once the forge shows it merged.
+            </ToggleSection>
+          </div>
+          <div className="card">
+            <ToggleSection
+              title="Acceptance"
+              settingKey="review.acceptance"
+              project={project}
+              setting={acceptance}
+              onChanged={() => reload()}
+            >
+              Completed tasks wait in review for acceptance. Off, they succeed directly; a green or
+              merged PR deliverable still needs the forge to confirm it.
+            </ToggleSection>
           </div>
           <div className="card">
             <IndependentReviewSection
@@ -565,6 +591,68 @@ function IndependentReviewSection(props: {
         </p>
       )}
       {done && <p className="small">{done}</p>}
+    </section>
+  );
+}
+
+function ToggleSection(props: {
+  title: string;
+  settingKey: string;
+  children: string;
+  project: string | null;
+  setting?: SettingValue;
+  onChanged: () => void;
+}) {
+  const { title, settingKey, children, project, setting, onChanged } = props;
+  const enabled = setting?.value === true;
+  const action = useAction();
+  const [failure, setFailure] = useState<string>();
+  const overridden = setting?.source === (project === null ? "global" : "project");
+
+  async function write(change: () => Promise<unknown>, key: string) {
+    await action.run(async () => {
+      setFailure(undefined);
+      try {
+        await change();
+        onChanged();
+      } catch (e) {
+        setFailure(e instanceof Error ? e.message : String(e));
+      }
+    }, key);
+  }
+
+  return (
+    <section>
+      <div className="toolbar">
+        <h3>{title}</h3>
+      </div>
+      <p className="muted small">
+        {children} Currently <strong>{enabled ? "on" : "off"}</strong> (
+        {setting ? sourceLabel(setting.source) : "…"}).
+      </p>
+      <div className="toolbar model-actions">
+        <ActionButton
+          type="button"
+          disabled={action.busy}
+          pending={action.is("toggle")}
+          action={() => write(() => putSetting(settingKey, !enabled, project), "toggle")}
+        >
+          {enabled ? "Turn off" : "Turn on"}
+        </ActionButton>
+        <ActionButton
+          type="button"
+          disabled={action.busy || !overridden}
+          pending={action.is("reset")}
+          action={() => write(() => resetSetting(settingKey, project), "reset")}
+        >
+          Reset to inherited
+        </ActionButton>
+      </div>
+      {failure && (
+        <p className="error" role="alert">
+          {failure}
+        </p>
+      )}
     </section>
   );
 }

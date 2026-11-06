@@ -4236,6 +4236,11 @@
             "title": "Attempt",
             "type": "integer"
           },
+          "auto_merge": {
+            "default": false,
+            "title": "Auto Merge",
+            "type": "boolean"
+          },
           "block_reason": {
             "anyOf": [
               {
