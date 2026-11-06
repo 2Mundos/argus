@@ -2,6 +2,7 @@
 
 import asyncio
 
+from api_support import insert_agent
 from argus_api.db import Database
 from argus_api.eventlog.routes import WAIT_LIMIT, wait
 from argus_api.events import record
@@ -53,3 +54,41 @@ async def test_pages_of_at_most_the_limit(db: Database) -> None:
     assert len(first.events) == WAIT_LIMIT
     rest = await wait(db, first.next_cursor, wait_s=0)
     assert len(rest.events) == 5
+
+
+async def test_command_blocked_is_informational_and_read_scoped(db: Database) -> None:
+    await insert_agent(db, "w-1")
+    from argus_api.access import leased_projects, worker_event_filter
+    from argus_api.auth import Identity, Scope
+    from argus_core.events import TASK_COMMAND_BLOCKED, CommandBlocked
+
+    data = CommandBlocked(
+        tool="Bash", rule="rm_root", reason="deletes /", attempt=1, command="rm -rf /"
+    ).to_data()
+    async with db.write() as tx:
+        await record(tx, "worker", "task", "t-1", TASK_COMMAND_BLOCKED, data)
+        await record(tx, "worker", "task", "t-2", TASK_COMMAND_BLOCKED, data)
+        for task in ("t-1", "t-2"):
+            await tx.conn.execute(
+                "INSERT INTO tasks (id, kind, title, spec, acceptance, input,"
+                " required_capabilities, priority, state, requires_approval, review,"
+                " lease_ttl_s, max_attempts, created_by, created_at, updated_at, project)"
+                " VALUES (?, 'generic', 't', '', '[]', '{}', '[]', 0, 'ready',"
+                " 0, 'none', 60, 3, 'test', ?, ?, 'global')",
+                (task, tx.now, tx.now),
+            )
+        await tx.conn.execute(
+            "INSERT INTO task_lease_grants (task_id, agent_id, attempt, leased_at)"
+            " VALUES ('t-1', 'w-1', 1, ?)",
+            (tx.now,),
+        )
+    # Not an inbox row.
+    assert (await wait(db, 0, wait_s=0, inbox=True)).events == []
+    # A worker reads only the task it has leased; admins read both.
+    worker = Identity("tok", Scope.WORKER, "w-1", None)
+    async with db.read() as conn:
+        scope = worker_event_filter(worker, await leased_projects(conn, "w-1"))
+    assert scope is not None
+    got = await wait(db, 0, wait_s=0, scope=scope)
+    assert [e.subject_id for e in got.events] == ["t-1"]
+    assert len((await wait(db, 0, wait_s=0)).events) == 2

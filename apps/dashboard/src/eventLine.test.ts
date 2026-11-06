@@ -25,5 +25,9 @@ describe("eventLine", () => {
       "deletes /",
     );
     expect(describeEvent({ kind: "task.failed", data })).toBe("deletes /");
+    const withCommand = { ...data, command: "rm -rf / --token=s3cr3t" };
+    expect(describeEvent({ kind: "task.command_blocked", data: withCommand })).toBe(
+      "rm_root · deletes /",
+    );
   });
 });

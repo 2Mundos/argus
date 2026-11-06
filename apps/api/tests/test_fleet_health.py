@@ -545,3 +545,19 @@ async def test_attempt_less_not_reported_row_disqualifies_measured_task(
     y = (await health(db)).yield_
     assert y.measured_tasks == MIN_SAMPLES
     assert y.tokens_per_succeeded == 1000.0
+
+
+async def test_command_blocked_is_not_a_failure(db: Database) -> None:
+    await add_finished(db, "ok")
+    async with db.write() as tx:
+        await event(
+            tx.conn,
+            "ok",
+            "task.command_blocked",
+            NOW - timedelta(hours=1),
+            tool="Bash",
+            rule="rm_root",
+            reason="deletes /",
+        )
+    f = (await health(db)).failures
+    assert (f.total, f.groups) == (0, [])

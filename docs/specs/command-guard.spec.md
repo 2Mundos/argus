@@ -105,7 +105,10 @@ bypass. Background: draft (removed; in git history),
   (`status: duplicate`); an attempt records at most 20 events and later denials are
   `status: dropped`, not stored. A task retry clears the rows. A command can print the
   block message itself, so an event proves only that the transcript said so; it is
-  informational. The task feed shows the rule id and reason.
+  informational. Fleet activity (Home, Events, the status bar and the task feed share
+  one event list) shows the rule id and reason only, never command text. Readers see
+  it through the existing event read model and its task read scope; no failure, retry
+  or inbox count includes it (tested).
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
@@ -119,8 +122,7 @@ bypass. Background: draft (removed; in git history),
 
 ## Open items
 
-- Fleet presentation of blocks beyond the task feed line (counts per task or
-  project).
+- Counts of blocks per task or project in Fleet.
 - Codex coverage (hook support and trusted-hash registration).
 - Codex: hook support, trusted-hash registration, whether the hook runs inside
   Bubblewrap, and whether it survives `patch-codex-sandbox.py`.

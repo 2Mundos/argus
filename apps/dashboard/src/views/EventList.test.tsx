@@ -23,4 +23,29 @@ describe("EventList", () => {
     expect(screen.getByText(/rm_root · recursive delete of the filesystem root/)).toBeTruthy();
     expect(screen.getByText("command_blocked").className).toContain("state-blocked");
   });
+
+  it("never renders command text, even when the event data carries it", () => {
+    const events: ArgusEvent[] = [
+      {
+        id: 2,
+        at: "2026-01-01T00:00:00Z",
+        actor: "orchestrator",
+        kind: "task.command_blocked",
+        subject_type: "task",
+        subject_id: "task-abcd1234",
+        data: {
+          tool: "Bash",
+          rule: "rm_root",
+          reason: "recursive delete of the filesystem root",
+          command: "rm -rf / --token=s3cr3t",
+          command_text: "rm -rf / --token=s3cr3t",
+        },
+      },
+    ];
+    const { container } = render(<EventList events={events} />);
+    expect(container.textContent).toContain("rm_root · recursive delete of the filesystem root");
+    expect(container.textContent).not.toContain("rm -rf");
+    expect(container.textContent).not.toContain("s3cr3t");
+    expect(container.querySelector(".state-failed")).toBeNull();
+  });
 });
