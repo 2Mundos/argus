@@ -62,7 +62,9 @@ async def test_command_blocked_is_informational_and_read_scoped(db: Database) ->
     from argus_api.auth import Identity, Scope
     from argus_core.events import TASK_COMMAND_BLOCKED, CommandBlocked
 
-    data = CommandBlocked(tool="Bash", rule="rm_root", reason="deletes /").to_data()
+    data = CommandBlocked(
+        tool="Bash", rule="rm_root", reason="deletes /", attempt=1, command="rm -rf /"
+    ).to_data()
     async with db.write() as tx:
         await record(tx, "worker", "task", "t-1", TASK_COMMAND_BLOCKED, data)
         await record(tx, "worker", "task", "t-2", TASK_COMMAND_BLOCKED, data)
