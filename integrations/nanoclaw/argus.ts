@@ -1184,7 +1184,7 @@ const PHASE_RULES: Record<ContinuationPhase, string[]> = {
  * `argus-task attach --help`.
  */
 export const ATTACH_GUIDANCE = [
-  "Files you want kept (a report, an `argus-delegate --out` file): store each as an artifact with `argus-task attach --file <absolute-path> [--name NAME] [--role report|delegate_report|policy_snapshot|qa_receipt|other]`,",
+  "Files you want kept (a report, or a delegate output file written with --out): store each as an artifact with `argus-task attach --file <absolute-path> [--name NAME] [--role report|delegate_report|policy_snapshot|qa_receipt|other]`,",
   "BEFORE you reply COMPLETE: the attempt's artifacts are fixed when it ends, and a file you never attached is lost with it. The command prints one JSON line and exits 0 only when the channel has",
   "stored and verified the file; that line's `artifact_id`, `name`, `bytes` and `sha256` are the receipt. Exit 10 means no receipt yet: run the same command again (it never duplicates). Exit 12 means refused",
   "(not a regular file under /workspace, over the size limit, or the attempt is no longer active): fix the cause, do not retry unchanged. A file that is not an artifact is not stored, whatever you say in COMPLETE.",

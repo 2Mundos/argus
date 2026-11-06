@@ -1525,8 +1525,8 @@ describe("argus-task attach through the channel", () => {
     const failed = await request("f", body);
     expect(failed).toMatchObject({ ok: false, error: { retryable: true } });
     expect(fake.artifacts).toHaveLength(0);
-    expect(await request("g", body)).toMatchObject({ ok: true, artifact_id: "art-1" });
-    await request("h", body); // a re-delivered identical request adds no second upload
+    expect(await request("7", body)).toMatchObject({ ok: true, artifact_id: "art-1" });
+    await request("8", body); // a re-delivered identical request adds no second upload
     expect(fake.artifacts).toHaveLength(1);
     await reply(h, "COMPLETE: done");
     expect(completes(fake)[0]?.body.result.artifacts).toEqual(["art-1"]);
