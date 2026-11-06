@@ -23,6 +23,14 @@ class Audience(StrEnum):
     ANY = "any"  # orchestrators or admins
 
 
+# The review gate's choices (task deliverable spec 3.10). `accept_with_deviation`
+# succeeds over unmet acceptance items, which stay `verification_missing`, and needs
+# the answer text to record the deviation and who authorized it. Review decisions
+# opened with only accept/reject take it too.
+ACCEPT_WITH_DEVIATION = "accept_with_deviation"
+REVIEW_OPTIONS = ("accept", ACCEPT_WITH_DEVIATION, "reject")
+
+
 class DecisionState(StrEnum):
     OPEN = "open"
     ANSWERED = "answered"

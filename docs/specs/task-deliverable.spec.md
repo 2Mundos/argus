@@ -356,6 +356,43 @@ audit record.
   task with a bound PR is retried (3.7) or, once merged, reconciled to review
   (3.8), whose decision can still reject.
 
+## 3.10 Review disposition and accepted deviation
+
+A task's success says how it was reviewed. `review_disposition` on the task
+(`outcome`, `reason`, `unmet` item ids, `decided_by`, `decided_at`, `attempt`) is
+set on every move to `succeeded`:
+
+- `accepted`: a review decision (or independent review) accepted it with every
+  acceptance item `done`.
+- `accepted_with_deviation`: the owner accepted it over unmet items; `reason` is
+  the answer text.
+- `not_reviewed`: the task succeeded on completion without a review, for
+  example `review.acceptance` off ([settings](settings.spec.md) 3.11, `reason`
+  `acceptance_off`).
+
+Unmet criteria never read as met. On every success, an acceptance item that is
+not `done` is stored `verification_missing` (with the `unmet_at_success`
+reason) and listed in `unmet`; nothing marks it `done`.
+
+The review gate (`review=orchestrator` or `human`) has three choices, also on
+decisions opened before this change:
+
+- `accept` is `409 acceptance_unmet` (the unmet ids in `details`) while an
+  acceptance item lacks evidence. The ways forward: evidence the items
+  (`update_task_continuation`), `reject`, or the deviation below.
+- `accept_with_deviation` succeeds anyway and needs the answer text (`422
+  deviation_reason_required` when blank): what deviates and who authorized it.
+  It is meant for an owner-authorized exception; Argus records it, it does not
+  judge it. Delivery gates (3.5) still apply.
+- `reject` is unchanged.
+
+The decision preview reports the `acceptance_unmet` refusal and the items a
+deviation would leave unmet. REST (`POST /api/decisions/{id}/answer` and the
+batch route), MCP `answer_decision(s)`, inbox actions and the dashboard decision
+form all use the same service path; the task read and the dashboard task facts
+show the disposition. The way back from a deviation is a follow-up task: a
+succeeded task is terminal.
+
 # 4. Open Questions
 
 - Should Argus close `pr_merged` tasks itself once the forge shows the merge, for a
@@ -391,6 +428,12 @@ audit record.
   `independent_review` opens a decision for forge-gated deliverables.
 - `decisions`: the single and batch answer routes read the forge first and
   pass the result to `answer`.
+- 3.10: `0078_task_review_disposition.sql` (one nullable JSON column),
+  `argus_core.tasks.ReviewDisposition`, `argus_core.decisions.REVIEW_OPTIONS`,
+  `service._apply` (`_settle_acceptance`), `service.review` (deviation),
+  `check_acceptance_met`, the decision answer, preview and inbox effects, the
+  dashboard task facts. Tests: the refused accept, the blank-reason refusal, the
+  deviation's disposition and `verification_missing` items, acceptance off.
 - `apps/api/src/argus_api/tasks/pr_binding.py`: the binding (3.7) and the
   delivery reconciliation (3.8), their routes and MCP `reconcile_task_pr` and
   `reconcile_task_delivery`; `argus_core.delivery.PrBinding` and

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-10-31
+updated: 2026-11-06
 ---
 
 # Task models
@@ -37,6 +37,8 @@ the harness model the NanoClaw channel configures at claim, and the model
   supplies `base_url` ([local harness](local-harness.spec.md)).
 - No change of a running attempt: an edit never reaches a claimed task ([task
   edit](task-edit.spec.md) 3.4).
+- No credential, gateway grant or executable check from the route diagnostic
+  (3.5): it reports what is recorded and says `unknown` otherwise.
 
 # 3. Decisions Made
 
@@ -55,7 +57,9 @@ excluded by the task's `account_providers` is `422 validation_failed`
 account_providers`), at creation and on edit (checked against the merged task).
 
 Both are editable fields of [task edit](task-edit.spec.md): editable in
-`awaiting_approval`, `pending` and `ready` only, `null` clears, the object is
+`awaiting_approval`, `pending`, `ready` and `blocked` (a blocked task's route,
+with `account_providers` and `harness_account`; its state and open decision are
+kept), `null` clears, the object is
 replaced whole, the audit diff is `{from, to}` (no secret can be in it), and
 the attempt snapshot keeps them.
 
@@ -150,6 +154,37 @@ win on priority: the Strata local account (`strata-local`) or one custom account
   deleted account leaves a pinned task waiting until the pin is edited or
   cleared.
 
+## 3.5 Route diagnostic
+
+`GET /api/tasks/{id}/route` (managers; workers `403`) and the MCP tool
+`get_task_route` call one read-only function, `tasks.route.diagnose_route`. It
+writes nothing, makes no network call and returns no secret (accounts are id,
+name and status; error text is redacted and bounded). It returns:
+
+- the task's `state`, `block_reason`, `version`, `account_providers` and pins;
+- `resolution`: what the engine choice (3.2) gives now for the current
+  attempt's worker (engine providers, the one account, a fallback reason) and
+  the executor pin's provider;
+- `attempt`: the current attempt's agent and its recorded model executions
+  (layer, engine, executor, provider, account id, error code, for example an
+  Anthropic delegate run with `auth_missing`), with the task's redacted `error`
+  and its `failure_class`;
+- `providers`: every engine, executor-only and registered provider, with
+  whether a harness can run on it, the `executor_model` executor that names it
+  (`copilot` has neither: unsupported), whether `account_providers` allows it,
+  and its accounts as `usable`, `exhausted` (also when every slot is leased) or
+  `disabled`;
+- `worker`: the attempt agent's state, heartbeat and self-reported
+  `runtime_providers`, plus `gateway_access` (`unknown` or `denied`) and
+  `executor_binary` (`unknown` or `missing`), with the reporting line as
+  evidence.
+
+Account status is registry state. It never stands for "this agent may use the
+account through the gateway" or "the executable is installed": both are
+`unknown` unless an attempt reported the failure (`401 access_restricted`,
+`not_installed`), and the `note` says so. A wrong route is fixed with a
+blocked-task edit ([task edit](task-edit.spec.md) 3.4).
+
 # 4. Open Questions
 
 - Whether to pin only the engine or executor (policy model) without a model.
@@ -180,6 +215,11 @@ win on priority: the Strata local account (`strata-local`) or one custom account
 6. Harness account (3.4): the column, validation, claim gate, wake, lease and
    failover narrowing, the channel's re-lease on an unfit held account, MCP and
    REST arguments, and an account select on the dashboard create and edit forms.
+8. Route diagnostic (3.5): `tasks/route.py`, the REST route and MCP
+   `get_task_route`; blocked-task route edits in `argus_core.task_edit`. Tests:
+   manager only, an available Cursor account beside an Anthropic `auth_missing`
+   attempt, gateway `401 access_restricted`, a missing binary, Copilot
+   unsupported, redaction; a blocked edit keeps state and decision.
 7. Pin preference (3.2-3.4): `tasks.service` `engine_restriction` and the
    account `_narrowed`, `_pinned_account` and `_only` become a preference that
    falls back when the pinned provider or account has no usable account; the

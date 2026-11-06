@@ -1398,3 +1398,83 @@ def test_a_worker_report_of_the_bound_pr_leaves_the_binding() -> None:
     assert upsert_artifact([bound], moved)[0].provenance is (
         ContinuationProvenance.WORKER
     )
+
+
+# -- review disposition and accepted deviation (3.10) ------------------------------
+
+
+def checklist(client: TestClient, task_id: str) -> list[str]:
+    body = client.get(f"/api/tasks/{task_id}/continuation").json()
+    return [i["status"] for i in body["checklist"]]
+
+
+def unproven_artifact(client: TestClient, **extra) -> tuple[str, dict]:
+    """An artifact task completed with two acceptance items left without evidence."""
+    w = worker(client)
+    task_id = create(client, "artifact", acceptance=["a", "b"], **extra).json()["id"]
+    claimed = claim(client, w)
+    res = complete(client, w, claimed, **artifact(client, w, claimed))
+    assert res.status_code == 200, res.text
+    return task_id, res.json()
+
+
+def test_an_orchestrator_accept_never_closes_over_unproven_criteria(
+    client: TestClient,
+) -> None:
+    task_id, done = unproven_artifact(client, review="orchestrator")
+    assert done["state"] == "in_review" and done["review_disposition"] is None
+    [decision] = client.get("/api/decisions", params={"subject_id": task_id}).json()[
+        "items"
+    ]
+    assert decision["options"] == ["accept", "accept_with_deviation", "reject"]
+    answer = f"/api/decisions/{decision['id']}/answer"
+    refused = client.post(answer, json={"choice": "accept", "text": ""})
+    assert (refused.status_code, code(refused)) == (409, "acceptance_unmet")
+    no_reason = client.post(
+        answer, json={"choice": "accept_with_deviation", "text": " "}
+    )
+    assert (no_reason.status_code, code(no_reason)) == (
+        422,
+        "deviation_reason_required",
+    )
+    assert state(client, task_id) == "in_review"
+    assert checklist(client, task_id) == ["pending", "pending"]
+
+    ok = client.post(
+        answer,
+        json={
+            "choice": "accept_with_deviation",
+            "text": "owner (admin) accepted: b is out of scope",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    task = client.get(f"/api/tasks/{task_id}").json()
+    assert task["state"] == "succeeded"
+    got = task["review_disposition"]
+    assert (got["outcome"], len(got["unmet"]), got["reason"]) == (
+        "accepted_with_deviation",
+        2,
+        "owner (admin) accepted: b is out of scope",
+    )
+    assert checklist(client, task_id) == [
+        "verification_missing",
+        "verification_missing",
+    ]
+
+
+def test_acceptance_off_records_that_the_task_was_not_reviewed(
+    client: TestClient,
+) -> None:
+    assert client.put(ACCEPTANCE, json={"value": False}).status_code == 200
+    task_id, done = unproven_artifact(client, review="orchestrator")
+    assert done["state"] == "succeeded"
+    got = done["review_disposition"]
+    assert (got["outcome"], got["reason"], len(got["unmet"])) == (
+        "not_reviewed",
+        "acceptance_off",
+        2,
+    )
+    assert checklist(client, task_id) == [
+        "verification_missing",
+        "verification_missing",
+    ]

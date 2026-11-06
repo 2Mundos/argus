@@ -63,7 +63,8 @@ who may answer, what each answer does, what it holds up and labelled evidence: h
 only, nothing is executed); list_artifacts, verify_artifact and read_artifact
 check evidence; read_chat_attachment reads a file an admin attached to a chat; answer_decision or answer_decisions acts (give each answer a
 request_id, so retries are safe); get_tasks(ids) reads the effects back. edit_task changes a task's title, spec,
-acceptance, priority, capabilities, pins or dependencies (pass its `version`). To
+acceptance, priority, capabilities, pins or dependencies (pass its `version`);
+get_task_route explains a task's provider route and evidence before you re-pin it. To
 assemble related tasks before any worker can claim them, create_task_draft each one
 (depends_on_drafts links drafts) and publish_task_drafts them together. Lists
 are paged: `total` counts every match, follow `next_cursor` while `has_more`. If a
@@ -719,6 +720,18 @@ async def get_task_continuation(ctx: Context, task_id: str) -> dict:
     decisions (newest first) and `gaps` (what Argus does not know: unknown is not
     absent). Merged is not accepted: pending items stay pending."""
     return await _call(ctx, "GET", f"/tasks/{task_id}/continuation")
+
+
+@tool(MANAGERS)
+async def get_task_route(ctx: Context, task_id: str) -> dict:
+    """Read-only: why a task ran where it did and what it would use now. State, pins,
+    account_providers, the resolved engine providers/account, the current attempt's
+    executions (provider, account_id, error_code) and redacted error, per-provider
+    accounts (usable | exhausted | disabled; copilot unsupported) and the worker's
+    readiness. gateway_access and executor_binary stay `unknown` unless an attempt
+    reported denied/missing: an available account never proves agent access. Fix a
+    blocked task's route with edit_task."""
+    return await _call(ctx, "GET", f"/tasks/{task_id}/route")
 
 
 @tool(ANYONE)
@@ -1404,10 +1417,11 @@ async def edit_task(
     budget. Pass the task's `version` as expected_version (409 stale_version carries
     the current one). The task's `editable_fields` says what its state allows: ready,
     pending and awaiting_approval tasks take everything; in_review takes priority,
-    deliverable and budget_usd; blocked and claimed priority and budget_usd (raising
-    a spent budget continues a budget_exhausted task); finished ones nothing (409
-    task_not_editable). Returns the task with
-    its new `version`. Nothing is written when any field is refused."""
+    deliverable and budget_usd; blocked priority, budget_usd and the route
+    (account_providers, harness_model, executor_model, harness_account: state and open
+    decision kept, nothing leased or retried); claimed priority and budget_usd
+    (raising a spent budget continues a budget_exhausted task); finished ones nothing
+    (409 task_not_editable). Returns the task with its new `version`. Nothing is written when any field is refused."""
     return await _call(
         ctx,
         "PATCH",
@@ -1784,7 +1798,10 @@ async def answer_decision(
     request_id: str | None = None,
 ) -> dict:
     """Answer an open decision addressed to you: one of its options as `choice`
-    (e.g. approve/reject, accept/reject), and/or a text answer or notes. Pass a
+    (e.g. approve/reject, accept/reject), and/or a text answer or notes. A review
+    accept is 409 acceptance_unmet while criteria lack evidence; the owner-authorized
+    `accept_with_deviation` succeeds anyway and needs text naming the deviation and
+    who authorized it (unmet items stay verification_missing). Pass a
     fresh `request_id` so a retry returns the stored answer (`replayed`), not 409."""
     return await _call(
         ctx,

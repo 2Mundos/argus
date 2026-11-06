@@ -142,7 +142,8 @@ async def answer_decision(
     caller: ManagerDep,
 ) -> AnsweredDecision:
     """Answer an open decision. Approvals take `approve`/`reject`, reviews
-    `accept`/`reject` (with `text` as notes), questions their options or text.
+    `accept`/`accept_with_deviation`/`reject` (with `text` as notes; required for
+    `accept_with_deviation`), questions their options or text.
     With a `request_id`, a retry of the same answer by the same caller returns
     the stored decision with `replayed: true` instead of 409 decision_not_open."""
     forge = await service.forge_evidence(

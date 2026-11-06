@@ -241,7 +241,9 @@ completion needs the forge to show the PR merged (or, for `pr_green`, open with
 green checks on the head) at that moment, read before the write
 ([task deliverable](task-deliverable.spec.md) 3.4); anything else is `422
 deliverable_missing` and the worker keeps its claim. Unconfirmed is never success.
-It is read when the worker completes.
+It is read when the worker completes. The success is recorded as `not_reviewed`
+(`acceptance_off`), and acceptance items without evidence stay
+`verification_missing` ([task deliverable](task-deliverable.spec.md) 3.10).
 
 It does not change independent review (3.5), which is its own opt-in and still holds
 a code task in `in_review` while on, nor the manager operations that move a task

@@ -1139,7 +1139,8 @@ export interface paths {
         /**
          * Answer Decision
          * @description Answer an open decision. Approvals take `approve`/`reject`, reviews
-         *     `accept`/`reject` (with `text` as notes), questions their options or text.
+         *     `accept`/`accept_with_deviation`/`reject` (with `text` as notes; required for
+         *     `accept_with_deviation`), questions their options or text.
          *     With a `request_id`, a retry of the same answer by the same caller returns
          *     the stored decision with `replayed: true` instead of 409 decision_not_open.
          */
@@ -3374,6 +3375,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/route": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Route
+         * @description Read-only route diagnostic (task models 3.5): state, pins and
+         *     `account_providers`, what the engine role resolves to now, the current attempt's
+         *     evidence (provider, account id, error code, redacted error), per-provider
+         *     accounts with registry status, and the attempt worker's readiness. Gateway
+         *     access and the executor binary are `unknown` unless an attempt reported their
+         *     failure: account availability never proves an agent may use it. No secrets.
+         */
+        get: operations["get_route_api_tasks__task_id__route_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/steers": {
         parameters: {
             query?: never;
@@ -5008,6 +5034,7 @@ export interface components {
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            review_disposition?: components["schemas"]["ReviewDisposition"] | null;
             serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
             spec: string;
@@ -8147,6 +8174,16 @@ export interface components {
             /** Version */
             version: string | null;
         };
+        /** Observation */
+        Observation: {
+            /** Evidence */
+            evidence?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unknown" | "denied" | "missing";
+        };
         /**
          * ObservationRequest
          * @description What a worker runtime saw (by itself, outside any transaction) at claim.
@@ -9625,6 +9662,34 @@ export interface components {
          * @enum {string}
          */
         Review: "none" | "human" | "orchestrator";
+        /**
+         * ReviewDisposition
+         * @description How a task reached `succeeded` (task deliverable spec 3.10). `unmet` names the
+         *     acceptance items that were not `done`; they stay `verification_missing`.
+         */
+        ReviewDisposition: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            /** Decided By */
+            decided_by: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "accepted" | "accepted_with_deviation" | "not_reviewed";
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Unmet
+             * @default []
+             */
+            unmet?: string[];
+        };
         /** Revision */
         Revision: {
             /** Author */
@@ -9668,6 +9733,32 @@ export interface components {
             model?: string | null;
             routing_options?: components["schemas"]["RoutingOptions"] | null;
         };
+        /** RouteAccount */
+        RouteAccount: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "usable" | "exhausted" | "disabled";
+        };
+        /** RouteAttempt */
+        RouteAttempt: {
+            /** Agent Id */
+            agent_id: string;
+            /** Attempt */
+            attempt: number;
+            /**
+             * Claimed At
+             * Format: date-time
+             */
+            claimed_at: string;
+            /** Executions */
+            executions: components["schemas"]["RouteExecution"][];
+        };
         /** RouteDecision */
         RouteDecision: {
             /** Blocked */
@@ -9697,6 +9788,39 @@ export interface components {
             reason: string;
             /** Target */
             target: string;
+        };
+        /** RouteExecution */
+        RouteExecution: {
+            /** Account Id */
+            account_id: string | null;
+            /** Engine */
+            engine: string | null;
+            /** Error Code */
+            error_code: string | null;
+            /** Executor */
+            executor: string | null;
+            /** Layer */
+            layer: string;
+            /** Provider */
+            provider: string | null;
+            /** State */
+            state: string;
+        };
+        /** RouteProvider */
+        RouteProvider: {
+            /** Accounts */
+            accounts: components["schemas"]["RouteAccount"][];
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "supported" | "unsupported";
+            /** Engine Allowed */
+            engine_allowed: boolean;
+            /** Executor */
+            executor: string | null;
+            /** Provider */
+            provider: string;
         };
         /** RouteRequest */
         RouteRequest: {
@@ -9740,6 +9864,38 @@ export interface components {
              * @default false
              */
             touches_sensitive?: boolean;
+        };
+        /**
+         * RouteResolution
+         * @description What the engine role would use now, for the worker of the current attempt.
+         */
+        RouteResolution: {
+            /** Engine Account */
+            engine_account: string | null;
+            /** Engine Providers */
+            engine_providers: string[] | null;
+            /** Executor Provider */
+            executor_provider: string | null;
+            /** Fallback Reason */
+            fallback_reason: string | null;
+        };
+        /** RouteWorker */
+        RouteWorker: {
+            /** Agent Id */
+            agent_id: string;
+            executor_binary: components["schemas"]["Observation"];
+            gateway_access: components["schemas"]["Observation"];
+            /**
+             * Last Heartbeat At
+             * Format: date-time
+             */
+            last_heartbeat_at: string;
+            /** Name */
+            name: string;
+            /** Runtime Providers */
+            runtime_providers: string[] | null;
+            /** State */
+            state: string;
         };
         /** Routine */
         Routine: {
@@ -10419,6 +10575,7 @@ export interface components {
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            review_disposition?: components["schemas"]["ReviewDisposition"] | null;
             serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
             spec: string;
@@ -10801,6 +10958,7 @@ export interface components {
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            review_disposition?: components["schemas"]["ReviewDisposition"] | null;
             serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
             spec: string;
@@ -11212,6 +11370,7 @@ export interface components {
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            review_disposition?: components["schemas"]["ReviewDisposition"] | null;
             serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
             spec: string;
@@ -11278,6 +11437,36 @@ export interface components {
             /** Summary */
             summary: string;
             usage?: components["schemas"]["argus_core__tasks__Usage"] | null;
+        };
+        /** TaskRoute */
+        TaskRoute: {
+            /** Account Providers */
+            account_providers: string[] | null;
+            attempt: components["schemas"]["RouteAttempt"] | null;
+            /** Block Reason */
+            block_reason: string | null;
+            /** Error */
+            error: string | null;
+            executor_model: components["schemas"]["ExecutorModel"] | null;
+            /** Failure Class */
+            failure_class: string | null;
+            /** Harness Account */
+            harness_account: string | null;
+            harness_model: components["schemas"]["HarnessModel"] | null;
+            /**
+             * Note
+             * @default Account status is registry state. It does not prove that this agent may use the account through the credential gateway, nor that the executor binary is installed; those are `unknown` until an attempt reports them.
+             */
+            note?: string;
+            /** Providers */
+            providers: components["schemas"]["RouteProvider"][];
+            resolution: components["schemas"]["RouteResolution"];
+            state: components["schemas"]["TaskState"];
+            /** Task Id */
+            task_id: string;
+            /** Version */
+            version: string;
+            worker: components["schemas"]["RouteWorker"] | null;
         };
         /**
          * TaskState
@@ -18203,6 +18392,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_route_api_tasks__task_id__route_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRoute"];
                 };
             };
             /** @description Validation Error */

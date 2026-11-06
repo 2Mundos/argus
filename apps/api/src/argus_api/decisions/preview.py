@@ -45,6 +45,7 @@ _TASK_ACTION = {
     Effect.TASK_APPROVE: Action.APPROVE,
     Effect.TASK_CANCEL: Action.CANCEL,
     Effect.REVIEW_ACCEPT: Action.ACCEPT,
+    Effect.REVIEW_ACCEPT_DEVIATION: Action.ACCEPT,
     Effect.REVIEW_REJECT: Action.REJECT,
 }
 
@@ -205,7 +206,8 @@ async def preview(
     if (
         auth_error is None
         and task_row is not None
-        and effect in (Effect.REVIEW_ACCEPT, Effect.REVIEW_REJECT)
+        and effect
+        in (Effect.REVIEW_ACCEPT, Effect.REVIEW_ACCEPT_DEVIATION, Effect.REVIEW_REJECT)
     ):
         try:
             tasks.check_reviewer(task_row, caller.scope)
@@ -368,7 +370,9 @@ async def _transition(
         else:
             try:
                 row, new = await tasks.planned_state(snap.conn, task_row["id"], action)
-            except InvalidTransitionError as exc:
+                if effect is Effect.REVIEW_ACCEPT:
+                    tasks.check_acceptance_met(row)
+            except (InvalidTransitionError, DomainError) as exc:
                 error = exc
             else:
                 old = TaskState(row["state"])
@@ -388,6 +392,13 @@ async def _transition(
                             "decisions_cancelled",
                             ", ".join(ids[:MAX_CANCELLED]),
                         )
+                if effect is Effect.REVIEW_ACCEPT_DEVIATION and (
+                    unmet := tasks.unmet_acceptance(row)
+                ):
+                    add(
+                        "acceptance_unmet",
+                        "stay verification_missing: " + ", ".join(unmet),
+                    )
                 if effect is Effect.REVIEW_REJECT:
                     if bump := tasks.review_escalation(row):
                         add("difficulty_escalation", f"{bump['from']} -> {bump['to']}")

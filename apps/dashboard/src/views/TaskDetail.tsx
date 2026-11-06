@@ -339,6 +339,24 @@ export function TaskDetail({
               )}
               {task.oom_kill && <span className="muted"> · OOM-killed (kernel out of memory)</span>}
             </dd>
+            {task.review_disposition && (
+              <>
+                <dt>Review</dt>
+                <dd className="review-disposition">
+                  {reviewOutcomeText(task.review_disposition.outcome)}
+                  {task.review_disposition.reason && (
+                    <span className="muted"> · {task.review_disposition.reason}</span>
+                  )}
+                  {(task.review_disposition.unmet?.length ?? 0) > 0 && (
+                    <span className="muted">
+                      {" "}
+                      · {task.review_disposition.unmet?.length} acceptance item(s) verification
+                      missing
+                    </span>
+                  )}
+                </dd>
+              </>
+            )}
             {task.kind !== "generic" && (
               <>
                 <dt>Kind</dt>
@@ -631,4 +649,14 @@ export function TaskDetail({
       </aside>
     </div>
   );
+}
+
+const REVIEW_OUTCOMES: Record<string, string> = {
+  accepted: "accepted",
+  accepted_with_deviation: "accepted with recorded deviation",
+  not_reviewed: "not reviewed",
+};
+
+function reviewOutcomeText(outcome: string): string {
+  return REVIEW_OUTCOMES[outcome] ?? outcome;
 }

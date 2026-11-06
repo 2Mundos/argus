@@ -197,8 +197,12 @@ def test_orchestrator_review_is_answerable_by_an_orchestrator(
     a = row(page, tid)["actionable"]
     assert a["authority"]["audience"] == "orchestrator"
     assert a["authority"]["caller_may_attempt"] is True
-    assert [e["choice"] for e in a["effects"]] == ["accept", "reject"]
-    assert a["effects"][0]["effect"] == "the task succeeds"
+    assert [e["choice"] for e in a["effects"]] == [
+        "accept",
+        "accept_with_deviation",
+        "reject",
+    ]
+    assert a["effects"][0]["effect"].startswith("the task succeeds")
 
 
 def test_impact_counts_a_diamond_once(client: TestClient) -> None:

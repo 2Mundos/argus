@@ -36,7 +36,7 @@ from argus_core.continuation import (
     merge_acceptance,
 )
 from argus_core.custom_accounts import CustomConfig, serves_role
-from argus_core.decisions import Audience, DecisionKind
+from argus_core.decisions import REVIEW_OPTIONS, Audience, DecisionKind
 from argus_core.difficulty import Difficulty, DifficultySource, classify, escalated
 from argus_core.kinds import TaskKind
 from argus_core.quota import failure_class
@@ -59,6 +59,7 @@ from argus_core.tasks import (
     PromptTrust,
     RetryClass,
     Review,
+    ReviewDisposition,
     ServingAccount,
     StallCause,
     Task,
@@ -1212,6 +1213,7 @@ async def complete(
             | ({"deliverable_pending": row["deliverable"]} if awaits_forge else {})
         )
         or None,
+        disposition=("not_reviewed", None if acceptance else "acceptance_off"),
         # Open criteria, or a PR that must still turn green or merge, need a decision.
         review=Review.NONE
         if not acceptance
@@ -1760,7 +1762,7 @@ async def review_failed(
         subject_id=row["id"],
         kind=DecisionKind.REVIEW,
         question=f"Review the result of {row['title']!r} (attempt {row['attempt']}).",
-        options=list(_REVIEW_OPTIONS),
+        options=list(REVIEW_OPTIONS),
         audience=Audience.HUMAN if review is Review.HUMAN else Audience.ORCHESTRATOR,
         requested_by=actor,
     )
@@ -2732,12 +2734,32 @@ async def review(
     accept: bool,
     notes: str = "",
     forge: deliverable.ForgeRead | None = None,
+    deviation: bool = False,
 ) -> Task:
+    """Accept or reject a result in review. `deviation` accepts over unmet acceptance
+    items with `notes` as the recorded deviation (deliverable spec 3.10)."""
     row = await _row(tx.conn, task_id)
     check_reviewer(row, reviewer)
     if accept:
         deliverable.check_accept(row, forge)
-        await _apply(tx, row, Action.ACCEPT, actor, data={"notes": notes})
+        if not deviation:
+            check_acceptance_met(row)
+        elif not notes.strip():
+            raise ValidationFailedError(
+                "accept_with_deviation needs text: which criteria are unmet, why the"
+                " result is accepted anyway, and who authorized it",
+                code="deviation_reason_required",
+            )
+        await _apply(
+            tx,
+            row,
+            Action.ACCEPT,
+            actor,
+            data={"notes": notes},
+            disposition=("accepted_with_deviation", clean(notes))
+            if deviation
+            else None,
+        )
     else:
         # Rejection is not a failure: `failures` is untouched (3.2).
         spec = row["spec"]
@@ -3418,6 +3440,7 @@ async def _apply(
     review: Review | None = None,
     open_review_decision: bool = True,
     exhausted: bool = False,
+    disposition: tuple[str, str | None] | None = None,
 ) -> TaskState:
     """Validate and persist one transition, its event (`task.<action>` unless
     `event` names it), and its knock-on effects.
@@ -3427,7 +3450,9 @@ async def _apply(
     `open_review_decision=False` enters `in_review` without a human/orchestrator
     decision (independent code review gate; settings.spec.md 3.5).
     `exhausted=True` evaluates a fail/expire as if no attempt were left (the
-    automatic resume rule's fail with the cause, failure classes 3.2)."""
+    automatic resume rule's fail with the cause, failure classes 3.2).
+    `disposition` is the (outcome, reason) a success records; by default an accept
+    is `accepted` and anything else `not_reviewed` (deliverable spec 3.10)."""
     old = S(row["state"])
     failures = row["failures"] if counts_failure else -1
     new = transition(
@@ -3461,6 +3486,12 @@ async def _apply(
     if over_budget is not None:
         fields |= _budget_block(over_budget)
         data = {**(data or {}), "block_reason": BUDGET_EXHAUSTED}
+    if new is S.SUCCEEDED:
+        settled = await _settle_acceptance(tx, row, action, actor, disposition)
+        fields["review_disposition"] = settled.model_dump_json()
+        data = {**(data or {}), "disposition": settled.outcome}
+        if settled.unmet:
+            data["unmet"] = settled.unmet
     leaving_claim = old is S.CLAIMED and new is not S.CLAIMED
     if leaving_claim:
         fields |= {
@@ -3512,7 +3543,7 @@ async def _apply(
             subject_id=row["id"],
             kind=DecisionKind.REVIEW,
             question=f"Review the result of {row['title']!r} (attempt {row['attempt']}).",
-            options=list(_REVIEW_OPTIONS),
+            options=list(REVIEW_OPTIONS),
             audience=Audience.HUMAN
             if review is Review.HUMAN
             else Audience.ORCHESTRATOR,
@@ -3621,6 +3652,75 @@ def _interruption_reason(action: Action, data: dict[str, Any]) -> str:
     return "asked" if reason.startswith("waiting for decision") else reason
 
 
+def _unmet(items: list[ChecklistItem]) -> list[str]:
+    return [i.id for i in items if i.status is not ItemStatus.DONE]
+
+
+def _held_items(row: aiosqlite.Row, have: Continuation) -> list[ChecklistItem]:
+    return merge_acceptance(have.checklist, json.loads(row["acceptance"]))
+
+
+def unmet_acceptance(row: aiosqlite.Row) -> list[str]:
+    """The acceptance items a success would leave unproven (deliverable spec 3.10)."""
+    return _unmet(_held_items(row, cont.load(row)))
+
+
+def check_acceptance_met(row: aiosqlite.Row) -> None:
+    """A plain accept never closes over unproven criteria (deliverable spec 3.10)."""
+    if unmet := unmet_acceptance(row):
+        raise ConflictError(
+            f"task {row['id']} has acceptance items without evidence: {', '.join(unmet)};"
+            " evidence them (update_task_continuation), reject, or answer"
+            " accept_with_deviation with the deviation and who authorized it",
+            code="acceptance_unmet",
+            details=unmet,
+        )
+
+
+async def _settle_acceptance(
+    tx: Tx,
+    row: aiosqlite.Row,
+    action: Action,
+    actor: str,
+    disposition: tuple[str, str | None] | None,
+) -> ReviewDisposition:
+    """How the task succeeds. Items not `done` stay visibly unproven: a pending one
+    becomes `verification_missing`, never `done` (deliverable spec 3.10)."""
+    have = await cont.current(tx, row["id"])
+    items = _held_items(row, have)
+    unmet = _unmet(items)
+    if unmet:
+        settled = [
+            i.model_copy(
+                update={"status": ItemStatus.VERIFICATION_MISSING, "updated_at": tx.now}
+            )
+            if i.status is ItemStatus.PENDING
+            else i
+            for i in items
+        ]
+        await cont.store(
+            tx,
+            row["id"],
+            have,
+            have.model_copy(update={"checklist": settled}),
+            actor,
+            "unmet_at_success",
+        )
+    outcome, reason = disposition or (
+        ("accepted", None) if action is Action.ACCEPT else ("not_reviewed", None)
+    )
+    return ReviewDisposition.model_validate(
+        {
+            "outcome": outcome,
+            "reason": reason,
+            "unmet": unmet,
+            "decided_by": actor,
+            "decided_at": tx.now,
+            "attempt": row["attempt"],
+        }
+    )
+
+
 # Actions that end a claim without a result: what the next attempt must be told.
 # None: the reason is in the transition's data.
 _INTERRUPTIONS: dict[Action, str | None] = {
@@ -3632,7 +3732,6 @@ _INTERRUPTIONS: dict[Action, str | None] = {
 }
 
 _APPROVAL_OPTIONS = ("approve", "reject")
-_REVIEW_OPTIONS = ("accept", "reject")
 
 
 async def _created_last_hour(tx: Tx, actor: str) -> int:
@@ -3902,6 +4001,8 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
         data["result"] = json.loads(data["result"])
     if data["progress_data"] is not None:
         data["progress_data"] = json.loads(data["progress_data"])
+    if data["review_disposition"] is not None:
+        data["review_disposition"] = json.loads(data["review_disposition"])
     if data["account_providers"] is not None:
         data["account_providers"] = json.loads(data["account_providers"])
     for f in _PIN_FIELDS:

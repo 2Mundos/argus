@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # MCP operations
@@ -485,6 +485,21 @@ selects a `review` (or `in_review`) row, the orchestrator calls
 `get_task_delivery` for that task. Green checks do not authorize merge; merge is
 not acceptance. Partial forge failures and stale head are disclosed on the
 projection.
+
+## 3.2e Task route and review deviation
+
+`get_task_route(task_id)` (managers) is the read-only route diagnostic of [task
+models](task-models.spec.md) 3.5: pins, `account_providers`, the resolved route,
+the current attempt's executions and error, per-provider account status and
+worker readiness, with gateway access and the executor binary `unknown` unless
+an attempt reported them. Its fix is `edit_task` on the blocked task ([task
+edit](task-edit.spec.md) 3.4).
+
+`answer_decision` on a review takes `accept`, `accept_with_deviation` or
+`reject`. `accept` is `409 acceptance_unmet` while acceptance items lack
+evidence; `accept_with_deviation` needs the text that records the deviation
+([task deliverable](task-deliverable.spec.md) 3.10). `preview_decision` reports
+both.
 
 ## 3.3 P1 — fleet
 

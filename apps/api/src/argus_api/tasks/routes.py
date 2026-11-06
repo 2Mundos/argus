@@ -67,6 +67,7 @@ from argus_api.tasks import (
     prerequisites,
     quota_resume,
     resumability,
+    route,
     service,
     steers,
     views,
@@ -844,6 +845,18 @@ async def list_attempt_summaries(
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
         return await service.attempt_summaries(conn, task_id)
+
+
+@router.get("/{task_id}/route")
+async def get_route(task_id: str, db: DbDep, _: ManagerDep) -> route.TaskRoute:
+    """Read-only route diagnostic (task models 3.5): state, pins and
+    `account_providers`, what the engine role resolves to now, the current attempt's
+    evidence (provider, account id, error code, redacted error), per-provider
+    accounts with registry status, and the attempt worker's readiness. Gateway
+    access and the executor binary are `unknown` unless an attempt reported their
+    failure: account availability never proves an agent may use it. No secrets."""
+    async with db.snapshot() as snap:
+        return await route.diagnose_route(snap.conn, snap.now, task_id)
 
 
 @router.put("/{task_id}/dependencies")

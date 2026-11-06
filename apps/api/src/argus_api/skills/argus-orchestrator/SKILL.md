@@ -98,7 +98,7 @@ and `error`. Do not answer one per call.
 | --- | --- | --- |
 | `question` | its own `options`, and/or free `text` | The answer is appended to the task spec's "Clarifications"; the task returns to ready. |
 | `question` with `payload.category = "assistance"` | — | A worker is missing a tool, credential or service named in `resource`. Fix the cause (project runtime, account, pool), then answer with what changed. |
-| `review` | `accept` / `reject` | `accept` → succeeded (a `pr_green` or `pr_merged` task is accepted only once the forge shows it green or merged; otherwise `deliverable_unmet` or `deliverable_unverified`). `reject` → your `text` is appended to the spec as review notes and the task runs again at a higher difficulty. A rejection is not a failure. |
+| `review` | `accept` / `accept_with_deviation` / `reject` | `accept` → succeeded (a `pr_green` or `pr_merged` task is accepted only once the forge shows it green or merged; otherwise `deliverable_unmet` or `deliverable_unverified`; refused as `acceptance_unmet` while an acceptance item lacks evidence). `accept_with_deviation` → succeeded over the unmet items, which stay `verification_missing`; only when the owner authorized it, with `text` naming the deviation and who authorized it. `reject` → your `text` is appended to the spec as review notes and the task runs again at a higher difficulty. A rejection is not a failure. |
 | `approval`, `policy` (task) | `approve` / `reject` | `approve` → the task can start. **`reject` cancels the task.** |
 | `policy` (pool) | `approve` / `reject` | Approves or refuses a scale above the pool's cap. Usually `human`. |
 | `knowledge` | `accept` / `reject` | Publishes or drops a proposed knowledge page revision. |
@@ -130,7 +130,9 @@ when actionable is partial, stale or missing a field. Before `accept`:
 5. `get_task_log(id)` if the result is thin or contradicts the artifacts.
 
 Accept only if the acceptance criteria are met on the evidence. Otherwise
-reject with notes that say exactly what is missing. The notes become part of
+reject with notes that say exactly what is missing, or, only when the owner
+authorized it, `accept_with_deviation` with text recording the deviation and who
+authorized it. The task's `review_disposition` records which. The notes become part of
 the next attempt's spec.
 
 ## Stuck work
@@ -140,14 +142,18 @@ the next attempt's spec.
 | `pending` row with `failed_dependencies` | `retry_task` the dependency, or `set_task_dependencies` to drop it. |
 | `failed` task | `get_tasks(view="detail")` for `error`, `get_task_log`. `edit_task` is refused on a failed task, and `retry_task` returns it to `ready`, where a claim can follow at once. Read the log first (a retry deletes it). If the spec, difficulty, pins or capabilities need fixing, create a corrected follow-up task instead of retrying. |
 | `deliverable_missing`, but the worker's PR exists | Verify the PR on the forge, then `reconcile_task_pr` with the project repository, PR number, exact head SHA and a reason; it records evidence only. If the PR merged at that head, `reconcile_task_delivery` (same PR and head, the task's `attempt`, the failure event id, a reason) moves the task to `in_review` with a review decision; check the checklist before you accept. Otherwise `retry_task`, and the next attempt verifies instead of reimplementing. |
+| `blocked` on an auth or provider failure | `get_task_route(id)`: the attempt's provider, account and error code beside each provider's accounts. An available account does not prove the worker may use it (`gateway_access`, `executor_binary` stay `unknown` unless reported). Re-route with `edit_task` (`account_providers`, `harness_model`, `executor_model`, `harness_account`); the task stays blocked and its decision open until you answer or unblock it. |
 | `blocked` as `awaiting_quota` | `list_accounts` / `refresh_account_quota`; it wakes when an account can serve. Tell a human if every account is exhausted. |
 | `blocked` as `runtime_failed` | `get_project_runtime(project)`; read the `failed` reasons. Fixing it is an admin action. |
 | `claimed` but silent | `get_task_log(id)` and the agent in `list_agents`. To take it back, `release_task(id, reason, attempt)` (no attempt counted). |
 | Task no longer wanted | `cancel_task`. |
 
 `edit_task` only changes what the task's `editable_fields` allow: everything
-while `ready`, `pending` or `awaiting_approval`, only `priority` while
-`blocked`, `claimed` or `in_review`, nothing once finished.
+while `ready`, `pending` or `awaiting_approval`; `priority`, `budget_usd` and
+the route (`account_providers`, `harness_model`, `executor_model`,
+`harness_account`) while `blocked`; `priority` and `budget_usd` while `claimed`;
+`priority`, `deliverable` and `budget_usd` while `in_review`; nothing once
+finished.
 
 ### A task that cannot publish: missing `repository:write`
 

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Task edit
@@ -101,7 +101,8 @@ and the MCP tool description are driven by it.
 | State | Editable fields | Why |
 | --- | --- | --- |
 | `awaiting_approval`, `pending`, `ready` | all | nothing has run; the next claim sees the saved definition |
-| `blocked`, `claimed` | `priority`, `budget_usd` | queue order, and the budget, whose raise continues a `budget_exhausted` task; the title, spec, criteria, capabilities, pins or dependencies may already be in use by an attempt |
+| `blocked` | `priority`, `budget_usd`, `account_providers`, `harness_model`, `executor_model`, `harness_account` | as `claimed`, plus the route: a blocked task holds no claim, so a wrong provider or pin can be corrected before it runs again. The edit keeps the state, `block_reason` and any open decision; it leases nothing, grants no gateway access and does not unblock, retry or claim. Validation is the creation rules ([task models](task-models.spec.md) 3.1, 3.4) on the merged task |
+| `claimed` | `priority`, `budget_usd` | queue order, and the budget, whose raise continues a `budget_exhausted` task; the title, spec, criteria, capabilities, pins or dependencies may already be in use by an attempt |
 | `in_review` | `priority`, `deliverable`, `budget_usd` | queue order; the budget; and a deliverable that proved unreachable can be lowered ([task deliverable](task-deliverable.spec.md) 3.6); nothing else the reviewer may be reading changes |
 | `succeeded`, `failed`, `cancelled` | none | the record of what ran stays as it was |
 | archived (any) | none | archived tasks are read-only |

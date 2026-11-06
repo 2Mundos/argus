@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-04
+updated: 2026-11-06
 ---
 
 # Global account selection
@@ -344,6 +344,11 @@ isolation or sandbox/TLS restrictions.
   account, are unaffected. When `recover()` returns accounts to `available`
   after `exhausted_until`, claims work again. The overview reports this as
   `accounts.awaiting_quota`, with the refill time in `accounts.next_reset_at`.
+- **Availability is not access.** An `available` account means the registry
+  may lease it. It does not mean a given agent may use it through the
+  credential gateway or has the executable for it. The route diagnostic
+  ([task models](task-models.spec.md) 3.5) reports both as `unknown` unless an
+  attempt reported the failure.
 
 # 4. Open Questions
 
