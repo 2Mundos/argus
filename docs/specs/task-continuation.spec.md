@@ -83,6 +83,7 @@ The attempt snapshot (`task_attempts.definition`, [task edit](task-edit.spec.md)
 | `POST /tasks/{id}/observations` (holder, attempt-fenced) | artifact state/head, environment, WIP | `runtime_observed` / `worker_reported` |
 | `PATCH /tasks/{id}/continuation` (orchestrator/admin, `expected_revision`) | phase, objective, artifacts, WIP, checklist items and evidence, environment, retire decisions, clear reconciliation | `orchestrator` |
 | `complete` with `result.checklist` | item status and evidence | `worker_reported` |
+| merge elsewhere of the PR a blocked worker asked to have merged ([delivery](task-delivery.spec.md) 3.7) | PR artifact `merged`, phase `close_evidence`, objective | `argus_event` |
 | `POST /tasks/{id}/reconcile-pr` (orchestrator/admin, forge-verified repository and exact head; [deliverable](task-deliverable.spec.md) 3.7) | PR artifact | `orchestrator` |
 
 `POST /tasks/{id}/reconcile-delivery` ([deliverable](task-deliverable.spec.md)

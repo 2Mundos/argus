@@ -177,6 +177,12 @@ def _from_url(text: str, allowed: set[tuple[str, str, str]]) -> list[PrRef]:
     return out
 
 
+def url_ref(url: str, repo: tuple[str, str, str]) -> PrRef | None:
+    """The PR a URL names when it is in this repository, else None."""
+    found = _from_url(url, {repo})
+    return found[0] if found else None
+
+
 def extract(
     texts: list[str],
     artifacts: list[ContinuationArtifact],
