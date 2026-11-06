@@ -30,13 +30,23 @@
       "tool": "read_artifact",
       "when": { "artifact_id": "art-0101" },
       "times": 1,
-      "result": { "text": "Retry the upload up to 3 times with a fixed delay.", "bytes": 46, "truncated": false, "ref": null }
+      "result": {
+        "text": "Retry the upload up to 3 times with a fixed delay.",
+        "bytes": 46,
+        "truncated": false,
+        "ref": null
+      }
     },
     {
       "tool": "read_artifact",
       "when": { "artifact_id": "art-0102" },
       "times": 1,
-      "result": { "text": "Test: zero retries still uploads once.", "bytes": 38, "truncated": false, "ref": null }
+      "result": {
+        "text": "Test: zero retries still uploads once.",
+        "bytes": 38,
+        "truncated": false,
+        "ref": null
+      }
     },
     {
       "tool": "report_progress",
