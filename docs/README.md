@@ -195,7 +195,8 @@ every new dependency is judged against it.
 - [Task delivery](specs/task-delivery.spec.md) — read-only PR projection (state,
   exact-head checks/statuses, mergeability, review evidence; checklist and
   authorization separate) on REST, MCP and the dashboard; a merge is flagged for
-  review, never accepted; green does not authorize merge.
+  review, never accepted; green does not authorize merge; a merge elsewhere
+  closes the worker's obsolete merge question and resumes it to close with evidence.
 - [Task deliverable](specs/task-deliverable.spec.md) — what a task must leave behind; includes the runbook for reconciling a failed task whose PR merged (3.8) and the review disposition and accepted deviation (3.10)
   (response, knowledge, artifact, subtasks, branch, PR open, green or merged),
   validated at creation against capabilities and repository, at completion against

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-24
-updated: 2026-11-03
+updated: 2026-11-06
 ---
 
 # Task delivery
@@ -23,8 +23,10 @@ evidence call an orchestrator uses when working an inbox `review` row
 
 # 2. Non-Goals
 
-- No auto-close, no attempt spent, no state change: **merged is not accepted**
-  ([task continuation](task-continuation.spec.md) 3.1, 3.5). Delivery and CI stay the
+- No auto-close, no attempt spent: **merged is not accepted**
+  ([task continuation](task-continuation.spec.md) 3.1, 3.5). The projection itself
+  changes no state; the one explicit writer is the reconciler of 3.7, which only
+  closes a superseded merge question. Delivery and CI stay the
   NanoClaw worker's job; Argus observes. The one place the projection gates
   anything is accepting a task whose [deliverable](task-deliverable.spec.md) is
   `pr_green` or `pr_merged`: the accept reads it first and is refused short of
@@ -32,8 +34,9 @@ evidence call an orchestrator uses when working an inbox `review` row
 - No implication that green checks authorize merge, or that merge authorizes accept.
   Authorization (task/policy `allow_merge`, accept offer) is a separate projection
   from forge CI and from checklist evidence.
-- No new credential handling, service, table or migration. Nothing is persisted: the
-  state is read on request and never stored.
+- No new credential handling, service, table or migration. The projection stores
+  nothing: the state is read on request. 3.7 records what it observed as an event
+  and a continuation artifact.
 - No free-text guessing of references, and no repository presumed for a project.
 - No PR / CI state on task lists or inbox rows (one or more forge calls per row);
   detail and the delivery endpoint only. Inbox lists stay cheap; the orchestrator
@@ -161,24 +164,78 @@ review steps. MCP tool description states the same.
   `truncated_reviews`).
 - Cache and coalescing as in 3.2; overall wall budget 8 s.
 
+## 3.7 A merge elsewhere closes the merge question
+
+Argus receives no forge events, so a worker that asked for its PR to be merged
+(`ASSIST: pr-merge: <url>`, the typed resource `pr-merge`) stays blocked on that
+question when a person or bot merges the PR: no holder is left to `observe`, and
+the projection above is read-only by design. `decisions.merge_supersede` is the
+explicit seam: a background loop (`ARGUS_MERGE_SUPERSEDE_INTERVAL_S`, default
+60 s, `0` turns it off), not a GET, not the MCP tool.
+
+Each pass looks at up to 200 blocked tasks and reads the forge for at most 10 of
+them, outside any write; a task whose read did not change anything waits 60 s,
+doubling to 15 min (in memory, so a restart starts over within the same bound).
+A task is **eligible** only when all of these hold, checked before the read and
+again inside the write that acts on it:
+
+- it is `blocked`, not archived, and its only open decision is a `question` with
+  `category: assistance`, resource `pr-merge`, audience orchestrator, asked by a
+  worker, and its block reason is exactly `waiting for decision <id>`;
+- the project proves its repository (3.1), the task has one unambiguous PR, and
+  every PR artifact is that PR in that repository (no bare number under a foreign
+  URL, no second PR);
+- the forge read of that PR (3.2) is `merged` with head, merge commit and
+  `merged_at`, observed within the last 2 minutes, and a head the task reported
+  is the forge head.
+
+Anything else, including an unknown, stale, moved, mismatched or ambiguous
+observation or a forge failure, changes nothing. A historical question with free
+text (`merge the PR`, no typed resource), another resource, a human audience or an
+additional open question is left for the orchestrator, with one
+`task.merge_blocker_skipped` event naming the reason and decision (again only
+when the reason changes). Terminal, claimed and ready tasks are not candidates, so
+nothing is resurrected, no attempt or failure count changes and a task out of
+attempts or budget keeps its own block.
+
+When eligible, **one write** answers the question as `system:merge-supersede`
+through the ordinary answer path (so the task unblocks and the answer is an
+effective decision), records the merged PR as a continuation artifact (provenance
+`argus_event`, the forge's head and observation time), sets the explicit phase
+`close_evidence` with an objective carrying repository, PR, head and merge commit
+and forbidding another merge, a duplicate PR, reimplementation and reverting newer
+base changes, and writes `task.merge_blocker_superseded` (source, repository, PR,
+head, merge commit, `merged_at`, `checked_at`, the pending checklist ids and what
+is **not** asserted). Replays, concurrent answers and claims find the question
+closed and write nothing more.
+
+The task then goes through the normal claim by any worker, whether or not the
+former one or its session still exists, and ends only with a structured
+`complete` carrying per-criterion evidence. Argus does not complete, accept or
+tick anything, and the merge does not assert that `pr-ready`, checks, review or
+acceptance passed; the checklist, parser discrepancies and deviations stay as
+recorded for the worker and the review to settle.
+
 # 4. Open Questions
 
-- Persisting the observed state through `observe` (so it survives a forge outage and
-  appears on lists/inbox) is deferred until the read-time view proves insufficient.
+- Persisting every observed state (so it survives a forge outage and appears on
+  lists/inbox) is deferred; only the merge of 3.7 is stored.
 - Other forges: only Gitea and GitHub are read ([GitHub repositories](github-repositories.spec.md)).
 - Whether agentic-review comment parsing belongs in Argus or stays worker-side
   (`review-findings`); this projection may leave `agentic_finding_count` unknown.
 
 # 5. Constraints
 
-- Read-only; no write to the forge, no new required service, no migration.
+- Read-only toward the forge; no new required service, no migration. The reconciler
+  reads the forge outside every write and re-checks inside it.
 - Never log or return the credential; failures log only the PR URL.
 - English only.
 - Single-node: in-process checker, no broker.
 
 # 6. Implementation Consequences
 
-`argus_core.delivery` models (additive fields), `argus_api.tasks.delivery` (parser,
+`decisions.merge_supersede` and its loop in `main.py` (3.7), the NanoClaw
+`close_evidence` phase rule, `argus_core.delivery` models (additive fields), `argus_api.tasks.delivery` (parser,
 checker fetching PR + exact-head statuses/checks/optional protection/reviews,
 accept offer, checklist/authorization assembly), the REST route, the MCP tool
 description, `PrChecker` in app state, the dashboard `delivery.tsx` (show head,
@@ -190,7 +247,8 @@ MCP and UI.
 
 ## Verification boundary
 
-- Commands: `uv run pytest apps/api/tests/test_task_delivery.py`;
+- Commands: `uv run pytest apps/api/tests/test_task_delivery.py
+  apps/api/tests/test_merge_supersede.py`;
   `pnpm --filter @argus/dashboard exec vitest run src/delivery.test.tsx`;
   `make openapi-check`.
 - Verified: parser, mock-transport forge reads (Gitea/GitHub), partial failure,

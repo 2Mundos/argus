@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -975,7 +975,9 @@ Consequences for Argus:
      warning log, never silent progress), tolerating markdown
      decoration around it (`**FAIL:**`, `> FAIL:`, `- FAIL:`, `` `FAIL:` ``) and,
      for an upper-case keyword, ` - `/` – `/` — ` as the separator (`FAIL - why`).
-     Also `ASSIST: [resource:] text` (technical assistance) and the scoped
+     Also `ASSIST: [resource:] text` (technical assistance; the resource `pr-merge`
+     marks a request to merge the worker's PR, which Argus closes itself when the
+     PR merges elsewhere, [task delivery](task-delivery.spec.md) 3.7) and the scoped
      `ASK on <task-id>:` for the task in flight only ([task
      continuation](task-continuation.spec.md) 3.8).
      The rest of the reply, including further paragraphs, is the text. A 409

@@ -1165,7 +1165,8 @@ const PHASE_RULES: Record<ContinuationPhase, string[]> = {
     "Run only the pending checklist items and any review findings against the current code, with the real resources they need (see environment rules).",
   ],
   close_evidence: [
-    "Attempt objective (Argus-derived): CLOSE WITH EVIDENCE. Work and checks are recorded as done; gather and attach the missing proof for the checklist, then COMPLETE.",
+    "Attempt objective (Argus-derived): CLOSE WITH EVIDENCE. Work is recorded as delivered; gather and attach the missing proof for the checklist, then COMPLETE with per-item evidence.",
+    "If a recorded pull request is merged, it is the delivery: do not merge again, open another PR, reimplement, or revert newer base changes. A merge does not show that checks or review passed; mark an item you cannot verify as pending or verification_missing.",
   ],
 };
 
@@ -1175,6 +1176,7 @@ export const OPERATING_RULES = [
   "- Resolve facts and technical blockers yourself, inside the authorizations this task already carries.",
   "- If a concrete tool, credential, service or environment is missing, request it from the orchestrator with `ASSIST: <resource>: <what is needed>`.",
   "  That is technical assistance, not a decision about the goal; never repeat a scope question because of it.",
+  "  To ask for your pull request to be merged, use `ASSIST: pr-merge: <PR URL>`; Argus closes that request itself if the PR is merged elsewhere.",
   "- Use `ASK:` only for a real choice of scope, cost or permission that the effective decisions do not already settle. Do not ask whether to run a gate,",
   "  accept a partial result, or verify already-merged work. Effective decisions in effective_contract are final for this task unless superseded.",
   "- Never waive a gate, accept a partial result, force-push, merge, deploy or touch Production without an effective grant (see Grants). A synthetic Stage",

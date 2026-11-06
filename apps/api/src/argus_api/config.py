@@ -42,6 +42,8 @@ class Settings:
     # Started by the host launcher (local workers spec 3.6): messages name its commands.
     launcher: bool = False
     reconcile_interval_s: float = 5.0
+    # Pass interval of the merge-supersede reconciler (task delivery 3.7); 0 turns it off.
+    merge_supersede_interval_s: float = 60.0
     # Worker templates (worker launch 3). Nothing here has a personal default: a
     # template that needs a value is simply not ready until it is set.
     nanoclaw_install_dir: str | None = None
@@ -190,6 +192,9 @@ class Settings:
             ),
             public_url=os.environ.get("ARGUS_PUBLIC_URL") or None,
             reconcile_interval_s=float(os.environ.get("ARGUS_RECONCILE_INTERVAL_S", 5)),
+            merge_supersede_interval_s=float(
+                os.environ.get("ARGUS_MERGE_SUPERSEDE_INTERVAL_S", 60)
+            ),
             nanoclaw_install_dir=os.environ.get("ARGUS_NANOCLAW_INSTALL_DIR") or None,
             nanoclaw_instances_root=os.environ.get("ARGUS_NANOCLAW_INSTANCES_ROOT")
             or None,

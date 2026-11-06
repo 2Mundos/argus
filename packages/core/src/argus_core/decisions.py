@@ -66,6 +66,12 @@ class DecisionAnswer(BaseModel):
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+# The typed `resource` of an assistance question that only asks for a pull request to
+# be merged (task delivery spec 3.7). Only this exact resource lets Argus close the
+# question when the PR merges elsewhere; any other text stays for the orchestrator.
+MERGE_ASSISTANCE_RESOURCE = "pr-merge"
+
+
 class Ask(BaseModel):
     attempt: int
     question: str = Field(min_length=1, max_length=10_000)

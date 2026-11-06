@@ -34,6 +34,7 @@ from argus_api.compression import Compression
 from argus_api.config import Settings, refuse_preview_data
 from argus_api.conversations.routes import router as conversations_router
 from argus_api.db import Database, DataDirLock
+from argus_api.decisions import merge_supersede
 from argus_api.decisions.routes import router as decisions_router
 from argus_api.deps import get_db
 from argus_api.disk_guard import DiskGuard
@@ -235,6 +236,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                     app.state.loops["reconciler"],
                     app.state.workspace_cleanup.notify_terminated,
                 )
+            ),
+            *(
+                [
+                    asyncio.create_task(
+                        merge_supersede.run(
+                            db,
+                            app.state.pr_checker,
+                            settings.merge_supersede_interval_s,
+                        )
+                    )
+                ]
+                if settings.merge_supersede_interval_s > 0
+                else []
             ),
             *(
                 [
