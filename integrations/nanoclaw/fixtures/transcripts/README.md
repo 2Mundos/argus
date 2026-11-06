@@ -38,6 +38,9 @@ they must come from real engine output, not hand-written strings.
   + `source.md`).
 - **Trimming:** the recorder trims strings over 2000 characters, then 500, then
   120 if the case is still too large, and keeps the event structure.
+- **Redaction:** credentials, emails and home paths are masked; pass `--redact`
+  for repository names and anything else.
+- **expected.json** is drafted by `transcripts-derive.ts` (needs `bun`).
 - **Review:** a person checks the redaction and the expected values before
   committing.
 
