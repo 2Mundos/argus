@@ -101,8 +101,24 @@ function interruptAfter(dir, sinceMs) {
 
 // ---- CI ----
 
-const isPending = (s) => ["pending", "running", "queued", "in_progress", "waiting"].includes(s);
-const isFailed = (s) => ["failure", "error", "cancelled", "timed_out"].includes(s);
+const FAILED_STATES = new Set(["failure", "error", "cancelled", "timed_out"]);
+const PENDING_STATES = new Set([
+  "pending",
+  "queued",
+  "in_progress",
+  "waiting",
+  "requested",
+  "running",
+]);
+
+/** One of failure, pending, success, skipped or unknown; anything unrecognized is unknown. */
+function canonicalState(state) {
+  if (typeof state !== "string") return "unknown";
+  if (FAILED_STATES.has(state)) return "failure";
+  if (PENDING_STATES.has(state)) return "pending";
+  if (state === "success" || state === "neutral") return "success";
+  return state === "skipped" ? "skipped" : "unknown";
+}
 
 /** Newest status per context; agentic-review contexts are review, not CI. */
 export function ciSummary(statuses) {
@@ -114,17 +130,23 @@ export function ciSummary(statuses) {
   }
   const checks = [...latest.values()].map((s) => ({
     context: String(s.context ?? "ci").slice(0, 200),
-    state: s.status ?? s.state ?? "pending",
+    state: canonicalState(s.status ?? s.state),
   }));
-  const failed = checks.filter((c) => isFailed(c.state)).map((c) => c.context);
-  const running = checks.filter((c) => isPending(c.state)).length;
+  const failed = checks.filter((c) => c.state === "failure").map((c) => c.context);
+  const running = checks.filter((c) => c.state === "pending").length;
+  const has = (state) => checks.some((c) => c.state === state);
+  // failure > pending > unknown > success > skipped; skipped only when every check is.
   const state = !checks.length
     ? "missing"
     : failed.length
       ? "failure"
       : running
         ? "pending"
-        : "success";
+        : has("unknown")
+          ? "unknown"
+          : has("success")
+            ? "success"
+            : "skipped";
   return { state, total: checks.length, running, failed };
 }
 
@@ -276,6 +298,7 @@ async function prReady(api, o) {
   const ci = ciSummary(await api.ciStatuses(head));
   if (ci.state === "pending") reasons.push("ci_running");
   if (ci.state === "failure") reasons.push("ci_failed");
+  if (ci.state === "unknown") reasons.push("ci_unknown");
   if (ci.state === "missing") reasons.push("ci_missing");
   let review = null;
   if (!o["skip-review"]) {
@@ -344,7 +367,7 @@ export function digestLog(text, budget) {
   return { text: kept.reverse().join("\n"), truncated: false };
 }
 
-const failed = (x) => isFailed(x.conclusion ?? x.status);
+const failed = (x) => FAILED_STATES.has(x.conclusion ?? x.status);
 
 async function ciDigest(api, o) {
   if ((o.number === undefined) === (o["run-id"] === undefined))

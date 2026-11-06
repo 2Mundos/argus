@@ -27,8 +27,6 @@ function repo() {
   const dir = join(scratch, `r${repoCount++}`);
   mkdirSync(dir);
   git(["init", "-q", "-b", "main"], dir);
-  git(["config", "user.email", "t@example.com"], dir);
-  git(["config", "user.name", "t"], dir);
   return dir;
 }
 
@@ -103,6 +101,32 @@ describe("ciSummary", () => {
     assert.equal(ciSummary([]).state, "missing");
     assert.equal(ciSummary([{ context: "a", state: "error" }]).state, "failure");
   });
+
+  for (const [name, states, want] of [
+    ["an unknown string", ["success", "bogus"], "unknown"],
+    ["a missing state", ["success", undefined], "unknown"],
+    ["a Gitea warning", ["warning"], "unknown"],
+    ["neutral", ["neutral"], "success"],
+    ["skipped only", ["skipped", "skipped"], "skipped"],
+    ["skipped and success", ["skipped", "success"], "success"],
+    ["skipped and unknown", ["skipped", "bogus"], "unknown"],
+    ["cancelled", ["success", "cancelled"], "failure"],
+    ["timed_out", ["timed_out"], "failure"],
+    ["error", ["error"], "failure"],
+    ["failure beats pending and unknown", ["failure", "pending", "bogus"], "failure"],
+    ["pending beats unknown", ["bogus", "queued"], "pending"],
+    ["queued", ["queued"], "pending"],
+    ["in_progress", ["in_progress"], "pending"],
+    ["waiting", ["waiting"], "pending"],
+    ["requested", ["requested"], "pending"],
+    ["running", ["running"], "pending"],
+  ])
+    it(`summarizes ${name} as ${want}`, () => {
+      const statuses = states.map((state, i) => ({ id: i, context: `c${i}`, state }));
+      const ci = ciSummary(statuses);
+      assert.equal(ci.state, want);
+      assert.equal(ci.total, states.length);
+    });
 });
 
 describe("waitCap", () => {
@@ -131,6 +155,24 @@ describe("wait ci", () => {
     assert.equal(r.elapsed, 30);
     assert.deepEqual([r.out.state, r.out.failed, r.out.running], ["failure", ["lint"], 0]);
   });
+
+  for (const [name, status, state] of [
+    ["an unrecognized state", { status: "bogus" }, "unknown"],
+    ["a missing state", {}, "unknown"],
+    ["a Gitea warning", { status: "warning" }, "unknown"],
+    ["success", { status: "success" }, "success"],
+    ["skipped", { status: "skipped" }, "skipped"],
+  ])
+    it(`finishes with state ${state} for ${name}`, async () => {
+      const r = await run(["wait", "ci", "--pr", "7"], {
+        routes: {
+          "GET /pulls/7": pr(),
+          [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", ...status }],
+        },
+      });
+      assert.equal(r.code, EXIT.ok);
+      assert.equal(r.out.state, state);
+    });
 
   it("does not retry a failing request inside a wait; the next check is the retry", async () => {
     let checks = 0;
@@ -266,6 +308,20 @@ describe("pr-ready", () => {
     assert.equal(r.code, EXIT.ok, r.err);
     assert.deepEqual(r.out.reasons, []);
   });
+
+  for (const [name, status, reasons] of [
+    ["an unrecognized state", { status: "bogus" }, ["ci_unknown"]],
+    ["a missing state", {}, ["ci_unknown"]],
+    ["skipped", { status: "skipped" }, []],
+    ["neutral", { status: "neutral" }, []],
+  ])
+    it(`pr-ready with ${name} gives ${JSON.stringify(reasons)}`, async () => {
+      const r = await run(["pr-ready", "--pr", "7"], {
+        routes: routes({ [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", ...status }] }),
+      });
+      assert.equal(r.code, reasons.length ? EXIT.not_ready : EXIT.ok, r.err);
+      assert.deepEqual(r.out.reasons, reasons);
+    });
 
   it("is not ready when the head moved between its reads", async () => {
     let reads = 0;
@@ -455,6 +511,8 @@ describe("deliver", () => {
     const origin = join(scratch, `o${repoCount++}.git`);
     git(["init", "-q", "--bare", "-b", "main", origin]);
     const seed = repo();
+    git(["config", "user.email", "t@example.com"], seed);
+    git(["config", "user.name", "t"], seed);
     writeFileSync(join(seed, "a.txt"), "one\n");
     git(["add", "."], seed);
     git(["commit", "-qm", "seed"], seed);

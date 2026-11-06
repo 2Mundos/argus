@@ -85,10 +85,16 @@ argus-task wait review --pr N [--since CURSOR]
     [--interval SECONDS] [--max SECONDS]
 ```
 
-- `ci` returns when every check on the head SHA (or `--sha`) has finished, including
+- `ci` returns when no check on the head SHA (or `--sha`) is pending, including
   after one has already failed, so one result covers the whole run. The JSON carries the
-  overall result and the failed checks' names; a pending result says how many failed so
-  far.
+  overall `state` and the failed checks' names; a pending result says how many failed so
+  far. Each check's state is normalized and anything unrecognized, missing or malformed
+  (a Gitea `warning`, a status without a state) is `unknown`, never success. The overall
+  `state` is the first that applies: `failure` (failure, error, cancelled, timed_out),
+  `pending` (pending, queued, in_progress, waiting, requested, running), `unknown`,
+  `success` (success, neutral: executed, non-blocking), `skipped` (every check skipped;
+  a mix of skipped and success is `success`), or `missing` (no checks). An `unknown`
+  result exits 0 with state `unknown`: the wait is over, but the evidence is not a pass.
 - `review` returns when a review or comment newer than `--since` appears. The JSON
   carries the new items' ids, authors and kinds (not their bodies; the agent reads those
   with the forge helper) and a `cursor` for the next call.
@@ -159,6 +165,7 @@ set:
 | `ci_running` | A check on the head SHA has not finished |
 | `ci_failed` | A check on the head SHA failed |
 | `ci_missing` | No check has reported on the head SHA |
+| `ci_unknown` | A check on the head SHA reports a state the helper does not recognize (and none is failing or running) |
 | `head_moved` | The head changed since the PR read: it is read again after all evidence is loaded, also with `--skip-review`; a ready result names the head checked; call again |
 | `review_missing` | No agentic review with a finding count covers the head SHA (`review-findings`) |
 | `review_findings` | The agentic review for the head SHA has findings |

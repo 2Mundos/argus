@@ -225,7 +225,66 @@ describe("credential-free GitHub API helper", () => {
       "a skipped check run",
       [],
       [{ id: 2, name: "lint", status: "completed", conclusion: "skipped" }],
+      "skipped",
+    ],
+    [
+      "skipped and green check runs",
+      [],
+      [
+        { id: 2, name: "lint", status: "completed", conclusion: "skipped" },
+        { id: 3, name: "test", status: "completed", conclusion: "success" },
+      ],
       "success",
+    ],
+    [
+      "a neutral check run",
+      [],
+      [{ id: 2, name: "lint", status: "completed", conclusion: "neutral" }],
+      "success",
+    ],
+    [
+      "a completed check run without a conclusion",
+      [],
+      [{ id: 2, name: "lint", status: "completed", conclusion: null }],
+      "unknown",
+    ],
+    [
+      "a stale check run",
+      [],
+      [{ id: 2, name: "lint", status: "completed", conclusion: "stale" }],
+      "unknown",
+    ],
+    [
+      "a check run with an unrecognized status",
+      [],
+      [{ id: 2, name: "lint", status: "mystery", conclusion: "success" }],
+      "unknown",
+    ],
+    ["a check run with no status", [], [{ id: 2, name: "lint", conclusion: "success" }], "unknown"],
+    [
+      "a status with an unrecognized state behind a green check run",
+      [{ id: 1, context: "ci", state: "warning" }],
+      [{ id: 2, name: "test", status: "completed", conclusion: "success" }],
+      "unknown",
+    ],
+    ["a status without a state", [{ id: 1, context: "ci" }], [], "unknown"],
+    [
+      "unknown beside a running check run",
+      [],
+      [
+        { id: 2, name: "a", status: "completed", conclusion: "stale" },
+        { id: 3, name: "b", status: "queued" },
+      ],
+      "pending",
+    ],
+    [
+      "unknown beside a failed check run",
+      [],
+      [
+        { id: 2, name: "a", status: "completed", conclusion: "stale" },
+        { id: 3, name: "b", status: "completed", conclusion: "cancelled" },
+      ],
+      "failure",
     ],
     [
       "a running check run",
@@ -276,6 +335,43 @@ describe("credential-free GitHub API helper", () => {
       { id: 1, context: "ci", state: "success" },
       { id: 9, context: "quality / python", state: "failure" },
     ]);
+  });
+
+  it("gives ciStatuses canonical states, with unknown for unrecognized evidence", async () => {
+    const sha = "d".repeat(40);
+    const conclusions = ["cancelled", "timed_out", "neutral", "skipped", "stale", null];
+    const runs = conclusions.map((conclusion, i) => ({
+      id: 10 + i,
+      name: `c${i}`,
+      status: "completed",
+      conclusion,
+    }));
+    runs.push({ id: 20, name: "odd", status: "mystery" });
+    const { api } = client({
+      [`GET /commits/${sha}/status`]: {
+        statuses: [
+          { id: 1, context: "a", state: "error" },
+          { id: 2, context: "b", state: "warning" },
+          { id: 3, context: "c" },
+        ],
+      },
+      [`GET /commits/${sha}/check-runs`]: { total_count: runs.length, check_runs: runs },
+    });
+    assert.deepEqual(
+      (await api.ciStatuses(sha)).map((s) => s.state),
+      [
+        "failure",
+        "unknown",
+        "unknown",
+        "failure",
+        "failure",
+        "neutral",
+        "skipped",
+        "unknown",
+        "unknown",
+        "unknown",
+      ],
+    );
   });
 
   it("sends labels by name, refuses unknown ones, and removes by replacing the set", async () => {
