@@ -185,10 +185,18 @@ or approves.
 `argus-task deliver [--title T] [--body-file F] [--base B]` pushes the current branch,
 creates the PR or updates the open one for the branch, and prints `{url, number,
 head_sha, created}`. If the branch is behind its base it rebases first, only when the
-rebase applies cleanly; on a conflict it aborts the rebase, leaves the branch as it was,
-and exits 12 with `reasons: ["rebase_conflict"]` and the conflicting paths. It never
-force-pushes a branch it did not just rebase, and pushes with `--force-with-lease` when it
-did.
+rebase applies cleanly; on a conflict it aborts the rebase it started, leaves the branch
+as it was, and exits 12 with `reasons: ["rebase_conflict"]` and the conflicting paths. It
+never force-pushes a branch it did not just rebase, and pushes with `--force-with-lease`
+when it did.
+
+`merge-base --is-ancestor` exiting 1 means the branch is behind; any other failure is a Git
+error. Any other Git failure exits 1 with a bounded error (`git_failed`: subcommand, exit
+status, the first bytes of stderr) and no push or PR change. A merge, rebase, cherry-pick or revert
+already in progress is refused (`git_operation_in_progress`) and left untouched. A tracked
+change in the worktree when a rebase is needed is refused (`dirty_worktree`, with the count
+and first paths); nothing is stashed or reset. Only a rebase this invocation started is
+aborted; if the abort fails, that is the error.
 
 ## 3.7 `waiting` milestone
 

@@ -22,6 +22,13 @@ after(() => rmSync(scratch, { recursive: true, force: true }));
 const git = (args, cwd) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
+// Worker git fronts inject the project identity and reject identity writes; CI has none.
+function identity(dir) {
+  if (process.env.ARGUS_GIT_AUTHOR_NAME && process.env.ARGUS_GIT_AUTHOR_EMAIL) return;
+  git(["config", "user.email", "t@example.com"], dir);
+  git(["config", "user.name", "t"], dir);
+}
+
 let repoCount = 0;
 function repo() {
   const dir = join(scratch, `r${repoCount++}`);
@@ -628,16 +635,14 @@ describe("deliver", () => {
     const origin = join(scratch, `o${repoCount++}.git`);
     git(["init", "-q", "--bare", "-b", "main", origin]);
     const seed = repo();
-    git(["config", "user.email", "t@example.com"], seed);
-    git(["config", "user.name", "t"], seed);
+    identity(seed);
     writeFileSync(join(seed, "a.txt"), "one\n");
     git(["add", "."], seed);
     git(["commit", "-qm", "seed"], seed);
     git(["push", "-q", origin, "main"], seed);
     const work = join(scratch, `w${repoCount++}`);
     git(["clone", "-q", origin, work]);
-    git(["config", "user.email", "t@example.com"], work);
-    git(["config", "user.name", "t"], work);
+    identity(work);
     git(["checkout", "-qb", "feature"], work);
     return { origin, seed, work };
   }
@@ -689,6 +694,131 @@ describe("deliver", () => {
     assert.equal(git(["rev-parse", "HEAD"], work), before);
     assert.equal(git(["status", "--porcelain"], work), "");
     assert.deepEqual(created, []);
+  });
+
+  /** A clone one commit ahead whose base has moved, so deliver needs a rebase. */
+  function behind(file = "b.txt") {
+    const s = setup();
+    writeFileSync(join(s.work, file), "mine\n");
+    git(["add", "."], s.work);
+    git(["commit", "-qm", "mine"], s.work);
+    advance(s.seed, s.origin, "a.txt", "theirs\n");
+    return s;
+  }
+  const refuses = async ({ origin, work }, code) => {
+    const remote = git(["for-each-ref"], origin);
+    const created = [];
+    const r = await run(["deliver"], { routes: forgeRoutes(created), cwd: work });
+    assert.equal(r.code, EXIT.error);
+    assert.equal(JSON.parse(r.err).error.code, code);
+    assert.equal(git(["for-each-ref"], origin), remote);
+    assert.deepEqual(created, []);
+    assert.deepEqual(
+      r.calls.filter((c) => c.startsWith("POST") || c.startsWith("PATCH")),
+      [],
+    );
+    return r;
+  };
+
+  it("refuses a dirty worktree that needs a rebase and keeps the WIP", async () => {
+    const s = behind();
+    writeFileSync(join(s.work, "a.txt"), "wip\n");
+    const status = git(["status", "--porcelain"], s.work);
+    await refuses(s, "dirty_worktree");
+    assert.equal(readFileSync(join(s.work, "a.txt"), "utf8"), "wip\n");
+    assert.equal(git(["status", "--porcelain"], s.work), status);
+    assert.equal(existsSync(join(s.work, ".git", "rebase-merge")), false);
+  });
+
+  it("refuses a rebase already in progress without touching it", async () => {
+    const s = behind("a.txt");
+    git(["fetch", "-q", "origin", "main"], s.work);
+    assert.throws(() => git(["rebase", "FETCH_HEAD"], s.work));
+    const status = git(["status", "--porcelain"], s.work);
+    const index = readFileSync(join(s.work, ".git", "index"));
+    const r = await refuses(s, "git_operation_in_progress");
+    assert.match(JSON.parse(r.err).error.message, /rebase/);
+    assert.equal(existsSync(join(s.work, ".git", "rebase-merge")), true);
+    assert.equal(git(["status", "--porcelain"], s.work), status);
+    assert.deepEqual(readFileSync(join(s.work, ".git", "index")), index);
+  });
+
+  it("refuses a merge already in progress without touching it", async () => {
+    const s = setup();
+    git(["checkout", "-q", "-b", "other", "origin/main"], s.work);
+    writeFileSync(join(s.work, "o.txt"), "o\n");
+    git(["add", "."], s.work);
+    git(["commit", "-qm", "other"], s.work);
+    git(["checkout", "-q", "feature"], s.work);
+    git(["merge", "--no-commit", "--no-ff", "other"], s.work);
+    const status = git(["status", "--porcelain"], s.work);
+    const r = await refuses(s, "git_operation_in_progress");
+    assert.match(JSON.parse(r.err).error.message, /merge/);
+    assert.equal(git(["status", "--porcelain"], s.work), status);
+    assert.equal(existsSync(join(s.work, ".git", "MERGE_HEAD")), true);
+  });
+
+  it("reports a rebase that fails without state as a bounded git error", async () => {
+    const s = behind();
+    // The base adds a file that exists untracked here: the checkout refuses before any state.
+    writeFileSync(join(s.seed, "u.txt"), "theirs\n");
+    git(["add", "."], s.seed);
+    git(["commit", "-qm", "Add u"], s.seed);
+    git(["push", "-q", s.origin, "main"], s.seed);
+    writeFileSync(join(s.work, "u.txt"), "untracked\n");
+    const head = git(["rev-parse", "HEAD"], s.work);
+    const r = await refuses(s, "git_failed");
+    assert.match(JSON.parse(r.err).error.message, /^git rebase failed \(exit \d+\)/);
+    assert.equal(git(["rev-parse", "HEAD"], s.work), head);
+    assert.equal(readFileSync(join(s.work, "u.txt"), "utf8"), "untracked\n");
+    assert.equal(existsSync(join(s.work, ".git", "rebase-merge")), false);
+  });
+
+  it("treats a failing is-ancestor check as an operational error", async () => {
+    const { origin, work } = setup();
+    const calls = [];
+    const created = [];
+    const f = forge(forgeRoutes(created));
+    const code = await main(["deliver"], ENV, {
+      fetch: f.fetch,
+      cwd: work,
+      stdout: { write: () => {} },
+      stderr: { write: () => {} },
+      git: (args, cwd) => {
+        calls.push(args[0]);
+        if (args[0] === "merge-base") throw Object.assign(new Error("boom"), { status: 128 });
+        return git(args, cwd);
+      },
+    });
+    assert.equal(code, EXIT.error);
+    assert.equal(calls.includes("rebase"), false);
+    assert.equal(calls.includes("push"), false);
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+  });
+
+  it("bounds the stderr it relays", async () => {
+    const { work } = setup();
+    const f = forge(forgeRoutes([]));
+    const err = [];
+    const code = await main(["deliver"], ENV, {
+      fetch: f.fetch,
+      cwd: work,
+      stdout: { write: () => {} },
+      stderr: { write: (s) => err.push(s) },
+      git: (args, cwd) => {
+        if (args[0] === "fetch")
+          throw Object.assign(new Error("x"), {
+            status: 128,
+            stderr: `${"fatal line of stderr text. ".repeat(300)}\n\n`,
+          });
+        return git(args, cwd);
+      },
+    });
+    assert.equal(code, EXIT.error);
+    const { code: id, message } = JSON.parse(err.join("")).error;
+    assert.equal(id, "git_failed");
+    assert.match(message, /^git fetch failed \(exit 128\): fatal line of stderr text\. /);
+    assert.ok(message.length <= 201);
   });
 });
 
