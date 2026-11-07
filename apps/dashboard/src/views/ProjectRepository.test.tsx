@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Projects, taskCounts } from "./Projects";
 import { RepositoryBlockAction } from "./RepositoryBlockAction";
+import { TaskDefaultsEditor } from "./TaskDefaultsEditor";
 import { Tasks } from "./Tasks";
 
 /** A fake Argus behind the real API client: requests keep their real shape. */
@@ -19,6 +20,73 @@ const net = vi.hoisted(() => {
     unblocks: [] as string[],
     statsReads: 0,
     kinds: [{ name: "generic" }] as Record<string, unknown>[],
+    /** Stored task defaults by scope (`global` or a project slug). */
+    settings: {} as Record<string, Record<string, unknown>>,
+    settingWrites: [] as { method: string; scope: string; key: string; value?: unknown }[],
+    refuseSetting: null as string | null,
+  };
+  const BUILT_IN: Record<string, unknown> = {
+    deliverable: "response",
+    priority: 0,
+    difficulty: null,
+    required_capabilities: [],
+    budget_usd: null,
+    max_attempts: 3,
+    timeout_s: null,
+  };
+  const keys = Object.keys(BUILT_IN).map((f) => `task_default_${f}`);
+  const listSettings = (scope: string) => ({
+    scope,
+    settings: keys.map((key) => {
+      const own = scope !== "global" && key in (state.settings[scope] ?? {});
+      const global = key in (state.settings.global ?? {});
+      return {
+        key,
+        value: own
+          ? state.settings[scope]?.[key]
+          : global
+            ? state.settings.global?.[key]
+            : BUILT_IN[key.slice(13)],
+        source: own ? "project" : global ? "global" : "default",
+      };
+    }),
+  });
+  // The server's resolution (task-defaults.spec.md 3.2), cut down to what the tests use.
+  const effective = (slug: string, kind: string) => {
+    const k = state.kinds.find((x) => x.name === kind) ?? {};
+    const values: Record<string, unknown> = {};
+    const sources: Record<string, string> = {};
+    for (const field of Object.keys(BUILT_IN)) {
+      const key = `task_default_${field}`;
+      const kindValue =
+        field === "required_capabilities"
+          ? k.default_capabilities
+          : field === "timeout_s"
+            ? k.default_timeout_s
+            : undefined;
+      if (slug !== "global" && key in (state.settings[slug] ?? {})) {
+        [values[field], sources[field]] = [state.settings[slug]?.[key], "project"];
+      } else if (key in (state.settings.global ?? {})) {
+        [values[field], sources[field]] = [state.settings.global?.[key], "global"];
+      } else if (kindValue) {
+        [values[field], sources[field]] = [kindValue, "kind"];
+      } else {
+        values[field] = BUILT_IN[field];
+        sources[field] = field === "difficulty" ? "inferred" : "built_in";
+      }
+    }
+    const caps = values.required_capabilities as string[];
+    const problems =
+      String(values.deliverable).startsWith("pr_") && !caps.includes("repository:write")
+        ? [
+            {
+              code: "deliverable_capability",
+              field: "required_capabilities",
+              message: "a pull request deliverable needs the repository:write capability",
+            },
+          ]
+        : [];
+    return { project: slug, kind, values, sources, problems };
   };
   const Base = globalThis.Request;
   globalThis.Request = class extends Base {
@@ -34,7 +102,8 @@ const net = vi.hoisted(() => {
       status,
       headers: { "Content-Type": "application/json" },
     });
-  globalThis.fetch = (async (input: Request) => {
+  globalThis.fetch = (async (info: Request | string, init?: RequestInit) => {
+    const input = typeof info === "string" ? new Request(info, init) : info;
     const url = new URL(input.url);
     const path = url.pathname;
     if (path === "/api/projects/stats") {
@@ -68,11 +137,30 @@ const net = vi.hoisted(() => {
       return json(project);
     }
     if (path === "/api/task-kinds") return json(state.kinds);
-    if (path === "/api/projects/bare/settings")
-      return json({
-        scope: "bare",
-        settings: [{ key: "task_default_budget_usd", value: 3, source: "project" }],
-      });
+    const scoped = path.match(/^\/api\/(?:projects\/([^/]+)\/)?settings(?:\/([^/]+))?$/);
+    if (scoped) {
+      const scope = scoped[1] ?? "global";
+      const key = scoped[2];
+      if (!key) return json(listSettings(scope));
+      if (state.refuseSetting === key) {
+        return json(
+          { detail: { code: "admin_only", message: "only an admin can change it" } },
+          403,
+        );
+      }
+      state.settings[scope] ??= {};
+      if (input.method === "PUT") {
+        const { value } = (await input.json()) as { value: unknown };
+        state.settingWrites.push({ method: "PUT", scope, key, value });
+        (state.settings[scope] as Record<string, unknown>)[key] = value;
+      } else {
+        state.settingWrites.push({ method: "DELETE", scope, key });
+        delete state.settings[scope]?.[key];
+      }
+      return json({ key, value: null, source: "default" });
+    }
+    const defaults = path.match(/^\/api\/projects\/([^/]+)\/task-defaults$/);
+    if (defaults) return json(effective(defaults[1] as string, url.searchParams.get("kind") ?? ""));
     if (path === "/api/tasks" && input.method === "POST") {
       state.tasks.push((await input.json()) as Record<string, unknown>);
       return json({ id: "new" }, 201);
@@ -147,6 +235,10 @@ beforeEach(() => {
   net.kinds = [{ name: "generic" }, { name: "coder", default_capabilities: ["repository:write"] }];
   net.projects = [project("bare"), project("has", HAS), project("global")];
   net.stats = [stat("bare", null), stat("has", HAS), stat("global", null)];
+  net.settings = { bare: { task_default_budget_usd: 3 } };
+  net.settingWrites.length = 0;
+  net.refuseSetting = null;
+  window.location.hash = "";
 });
 afterEach(cleanup);
 
@@ -302,6 +394,7 @@ describe("new task with a project that has no repository", () => {
     await user.selectOptions(screen.getByLabelText("Kind"), "coder");
     expect(screen.getByRole("status").textContent).toMatch(/A worker will block this task/);
     // ...and typed capabilities replace them, as on the server.
+    await user.clear(screen.getByLabelText(/^Required capabilities/));
     await user.type(screen.getByLabelText(/^Required capabilities/), "other");
     expect(screen.getByRole("status").textContent).toMatch(/can still run/);
     await user.clear(screen.getByLabelText(/^Required capabilities/));
@@ -506,5 +599,287 @@ describe("blocked task without a repository", () => {
     expect(net.unblocks).toEqual([]);
     await user.click(await screen.findByRole("button", { name: "Unblock task" }));
     await waitFor(() => expect(net.unblocks).toEqual(["t1"]));
+  });
+});
+
+const hintOf = (control: HTMLElement) =>
+  document.getElementById(control.getAttribute("aria-describedby") ?? "")?.textContent;
+
+describe("new task defaults", () => {
+  it("prefills the project's effective defaults and sends only what was changed", async () => {
+    net.settings.has = {
+      task_default_deliverable: "pr_merged",
+      task_default_required_capabilities: ["repository:write"],
+      task_default_priority: 5,
+    };
+    const user = userEvent.setup();
+    await openForm(user);
+    await user.selectOptions(screen.getByLabelText("Project"), "has");
+    const deliverable = screen.getByLabelText("Deliverable") as HTMLSelectElement;
+    await waitFor(() => expect(deliverable.value).toBe("pr_merged"));
+    expect(hintOf(deliverable)).toBe("default, from project");
+    const caps = screen.getByLabelText(/^Required capabilities/) as HTMLInputElement;
+    expect(caps.value).toBe("repository:write");
+    expect(hintOf(screen.getByLabelText("Max attempts"))).toBe("default, built-in");
+    expect((screen.getByLabelText("Priority") as HTMLInputElement).value).toBe("5");
+
+    await user.type(screen.getByLabelText("Title"), "Ship it");
+    fireEvent.change(screen.getByLabelText("Max attempts"), { target: { value: "2" } });
+    expect(hintOf(screen.getByLabelText("Max attempts"))).toMatch(/^changed/);
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(net.tasks).toHaveLength(1));
+    const sent = net.tasks[0] as Record<string, unknown>;
+    expect(sent).toMatchObject({ project: "has", title: "Ship it", max_attempts: 2 });
+    for (const left of [
+      "deliverable",
+      "priority",
+      "required_capabilities",
+      "difficulty",
+      "timeout_s",
+      "budget_usd",
+    ]) {
+      expect(sent).not.toHaveProperty(left);
+    }
+  });
+
+  it("sends an explicit empty list, 0 priority, inference and no timeout as values", async () => {
+    net.settings.has = {
+      task_default_priority: 5,
+      task_default_difficulty: "hard",
+      task_default_timeout_s: 600,
+    };
+    const user = userEvent.setup();
+    await openForm(user);
+    await user.selectOptions(screen.getByLabelText("Project"), "has");
+    await user.selectOptions(screen.getByLabelText("Kind"), "coder");
+    const caps = screen.getByLabelText(/^Required capabilities/) as HTMLInputElement;
+    await waitFor(() => expect(caps.value).toBe("repository:write"));
+    expect(hintOf(caps)).toBe("default, from the kind");
+    expect((screen.getByLabelText(/^Timeout in minutes/) as HTMLInputElement).value).toBe("10");
+
+    await user.type(screen.getByLabelText("Title"), "Explicit");
+    await user.clear(caps);
+    fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "0" } });
+    await user.selectOptions(screen.getByLabelText(/^Difficulty/), "");
+    fireEvent.change(screen.getByLabelText(/^Timeout in minutes/), { target: { value: "" } });
+    // A field put back to its default is left out again.
+    fireEvent.change(screen.getByLabelText("Max attempts"), { target: { value: "9" } });
+    const attempts = screen.getByLabelText("Max attempts");
+    await user.click(
+      within(
+        document.getElementById(attempts.getAttribute("aria-describedby") ?? "") as HTMLElement,
+      ).getByRole("button", { name: "Use default" }),
+    );
+    expect((attempts as HTMLInputElement).value).toBe("3");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(net.tasks).toHaveLength(1));
+    const sent = net.tasks[0] as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      required_capabilities: [],
+      priority: 0,
+      difficulty: null,
+      timeout_s: null,
+    });
+    expect(sent).not.toHaveProperty("max_attempts");
+    expect(sent).not.toHaveProperty("deliverable");
+  });
+
+  it("says when the defaults would be refused, until the creator changes them", async () => {
+    net.settings.global = { task_default_deliverable: "pr_open" };
+    const user = userEvent.setup();
+    await openForm(user);
+    await user.selectOptions(screen.getByLabelText("Project"), "has");
+    expect(await screen.findByText(/Argus refuses this task: .*repository:write/)).toBeTruthy();
+    expect(hintOf(screen.getByLabelText("Deliverable"))).toBe("default, from global");
+    await user.selectOptions(screen.getByLabelText("Deliverable"), "response");
+    expect(screen.queryByText(/Argus refuses this task/)).toBeNull();
+  });
+});
+
+const group = (name: string) => screen.getByRole("group", { name: new RegExp(`^${name}`) });
+
+async function openDefaults(slug: string) {
+  window.location.hash = `#projects/${slug}/task-defaults`;
+  render(<Projects />);
+  return screen.findByRole("group", { name: /^Deliverable/ });
+}
+
+describe("project task defaults", () => {
+  it("overrides fields, saves them, and shows them after a reload", async () => {
+    const user = userEvent.setup();
+    await openDefaults("has");
+    expect(screen.getByRole("heading", { name: "has name" })).toBeTruthy();
+    const nav = screen.getByRole("navigation", { name: "Project sections" });
+    expect(
+      within(nav).getByRole("link", { name: "Task defaults" }).getAttribute("aria-current"),
+    ).toBe("page");
+    expect(within(nav).getByRole("link", { name: "Other settings" }).getAttribute("href")).toBe(
+      "#setup/settings/has",
+    );
+    expect(screen.getByText("No overrides: every field inherits.")).toBeTruthy();
+    expect(within(group("Deliverable")).getByText(/Effective now/).textContent).toMatch(
+      /A response \(summary\) built-in/,
+    );
+
+    await user.click(within(group("Deliverable")).getByRole("radio", { name: "Override" }));
+    await user.selectOptions(screen.getByLabelText("Deliverable value"), "pr_merged");
+    await user.click(
+      within(group("Required capabilities")).getByRole("radio", { name: "Override" }),
+    );
+    await user.type(screen.getByLabelText("Required capabilities value"), "repository:write");
+    expect(group("Deliverable").textContent).toMatch(/unsaved/);
+    await user.click(screen.getByRole("button", { name: "Save task defaults" }));
+    expect((await screen.findByRole("status")).textContent).toBe("Task defaults saved.");
+    expect(net.settingWrites).toEqual([
+      { method: "PUT", scope: "has", key: "task_default_deliverable", value: "pr_merged" },
+      {
+        method: "PUT",
+        scope: "has",
+        key: "task_default_required_capabilities",
+        value: ["repository:write"],
+      },
+    ]);
+    await waitFor(() =>
+      expect(within(group("Deliverable")).getByText(/Effective now/).textContent).toMatch(
+        /A pull request merged from project/,
+      ),
+    );
+    expect(group("Deliverable").textContent).not.toMatch(/unsaved/);
+
+    cleanup();
+    await openDefaults("has");
+    expect(
+      (within(group("Deliverable")).getByRole("radio", { name: "Override" }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect((screen.getByLabelText("Deliverable value") as HTMLSelectElement).value).toBe(
+      "pr_merged",
+    );
+  });
+
+  it("tells explicit empty values from inherit and resets to global with a delete", async () => {
+    net.settings.global = { task_default_budget_usd: 5, task_default_priority: 7 };
+    net.settings.has = { task_default_max_attempts: 5 };
+    const user = userEvent.setup();
+    await openDefaults("has");
+    expect(
+      within(group("Budget")).getByRole("radio", { name: /^Inherit \(global: \$5\)/ }),
+    ).toBeTruthy();
+
+    await user.click(within(group("Budget")).getByRole("radio", { name: "Override" }));
+    await user.clear(screen.getByLabelText("Budget (USD) value"));
+    await user.click(within(group("Priority")).getByRole("radio", { name: "Override" }));
+    fireEvent.change(screen.getByLabelText("Priority value"), { target: { value: "0" } });
+    await user.click(
+      within(group("Required capabilities")).getByRole("radio", { name: "Override" }),
+    );
+    await user.click(within(group("Max attempts")).getByRole("radio", { name: /^Inherit/ }));
+    await user.click(screen.getByRole("button", { name: "Save task defaults" }));
+    await screen.findByRole("status");
+    expect(net.settingWrites).toEqual([
+      { method: "PUT", scope: "has", key: "task_default_priority", value: 0 },
+      { method: "PUT", scope: "has", key: "task_default_required_capabilities", value: [] },
+      { method: "PUT", scope: "has", key: "task_default_budget_usd", value: null },
+      { method: "DELETE", scope: "has", key: "task_default_max_attempts" },
+    ]);
+    await waitFor(() =>
+      expect(within(group("Budget")).getByText(/Effective now/).textContent).toMatch(
+        /no budget from project/,
+      ),
+    );
+  });
+
+  it("blocks saving an invalid value and reports a field the server refused", async () => {
+    net.refuseSetting = "task_default_priority";
+    const user = userEvent.setup();
+    await openDefaults("has");
+    await user.click(within(group("Max attempts")).getByRole("radio", { name: "Override" }));
+    const attempts = screen.getByLabelText("Max attempts value");
+    fireEvent.change(attempts, { target: { value: "50" } });
+    expect(attempts.getAttribute("aria-invalid")).toBe("true");
+    expect(within(group("Max attempts")).getByText("Enter a number from 1 to 20.")).toBeTruthy();
+    const save = screen.getByRole("button", { name: "Save task defaults" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(attempts, { target: { value: "4" } });
+
+    await user.click(within(group("Priority")).getByRole("radio", { name: "Override" }));
+    fireEvent.change(screen.getByLabelText("Priority value"), { target: { value: "9" } });
+    await user.click(save);
+    expect((await within(group("Priority")).findByRole("alert")).textContent).toMatch(
+      /Not saved: only an admin can change it/,
+    );
+    expect(screen.getByText(/One field was not saved; the others were\./)).toBeTruthy();
+    expect(net.settingWrites).toEqual([
+      { method: "PUT", scope: "has", key: "task_default_max_attempts", value: 4 },
+    ]);
+    // The refused edit stays, unsaved, for another try.
+    expect((screen.getByLabelText("Priority value") as HTMLInputElement).value).toBe("9");
+    expect(group("Priority").textContent).toMatch(/unsaved/);
+  });
+
+  it("asks before a project switch drops unsaved edits and keeps the other project apart", async () => {
+    net.projects.push(project("other"));
+    net.settings.has = { task_default_deliverable: "pr_merged" };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    await openDefaults("has");
+    await user.click(within(group("Priority")).getByRole("radio", { name: "Override" }));
+    fireEvent.change(screen.getByLabelText("Priority value"), { target: { value: "3" } });
+
+    await user.selectOptions(screen.getByLabelText("Project"), "other");
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(window.location.hash).toBe("#projects/has/task-defaults");
+    expect((screen.getByLabelText("Priority value") as HTMLInputElement).value).toBe("3");
+
+    confirm.mockReturnValue(true);
+    await user.selectOptions(screen.getByLabelText("Project"), "other");
+    expect(await screen.findByRole("heading", { name: "other name" })).toBeTruthy();
+    await screen.findByRole("group", { name: /^Deliverable/ });
+    expect(
+      (within(group("Deliverable")).getByRole("radio", { name: /^Inherit/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(screen.queryByLabelText("Priority value")).toBeNull();
+    expect(net.settingWrites).toEqual([]);
+    confirm.mockRestore();
+  });
+
+  it("keeps the overview's repository actions and links each project from the list", async () => {
+    const user = userEvent.setup();
+    render(<Projects />);
+    const link = await screen.findByRole("link", { name: "has name" });
+    expect(link.getAttribute("href")).toBe("#projects/has");
+    window.location.hash = "#projects/has";
+    await screen.findByRole("navigation", { name: "Project sections" });
+    const card = screen.getByText(HAS).closest("article") as HTMLElement;
+    await user.click(within(card).getByRole("button", { name: "Edit repository" }));
+    expect(await screen.findByRole("dialog", { name: "Project repository" })).toBeTruthy();
+  });
+
+  it("says when the project does not exist", async () => {
+    window.location.hash = "#projects/nope";
+    render(<Projects />);
+    expect((await screen.findByRole("alert")).textContent).toMatch(/There is no project nope/);
+  });
+});
+
+describe("global task defaults", () => {
+  it("sets a global value and shows the problem it would cause", async () => {
+    const user = userEvent.setup();
+    render(<TaskDefaultsEditor project={null} />);
+    await screen.findByRole("group", { name: /^Deliverable/ });
+    expect(within(group("Deliverable")).getByRole("radio", { name: /^Built-in/ })).toBeTruthy();
+    await user.click(within(group("Deliverable")).getByRole("radio", { name: "Set" }));
+    await user.selectOptions(screen.getByLabelText("Deliverable value"), "pr_open");
+    await user.click(screen.getByRole("button", { name: "Save task defaults" }));
+    await screen.findByRole("status");
+    expect(net.settingWrites).toEqual([
+      { method: "PUT", scope: "global", key: "task_default_deliverable", value: "pr_open" },
+    ]);
+    expect(
+      await within(group("Required capabilities")).findByText(
+        /A task created with the saved defaults is refused: .*repository:write/,
+      ),
+    ).toBeTruthy();
   });
 });
