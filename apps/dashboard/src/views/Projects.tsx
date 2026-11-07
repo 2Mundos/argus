@@ -4,8 +4,11 @@ import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { PageHeader } from "../PageHeader";
 import { fetchSettings } from "../settings";
+import { useHash } from "../unsaved";
 import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ProjectRepositoryDialog } from "./ProjectRepositoryDialog";
+import { settingsHash } from "./Settings";
+import { TaskDefaultsEditor } from "./TaskDefaultsEditor";
 
 type Stats = Awaited<ReturnType<typeof loadStats>>[number];
 
@@ -37,7 +40,23 @@ export function taskCounts(tasks: Record<string, number>): [string, number][] {
   return [...known, ...extra];
 }
 
+const SECTIONS = { overview: "Overview", "task-defaults": "Task defaults" } as const;
+type Section = keyof typeof SECTIONS;
+
+/** `#projects` lists every project; `#projects/<slug>[/<section>]` opens one. */
+export function projectRoute(hash: string): { slug: string | null; section: Section } {
+  const [, slug, section] = hash.replace(/^#/, "").split("/");
+  return {
+    slug: slug ? decodeURIComponent(slug) : null,
+    section: section && section in SECTIONS ? (section as Section) : "overview",
+  };
+}
+
+export const projectHash = (slug: string, section: Section = "overview") =>
+  `#projects/${encodeURIComponent(slug)}${section === "overview" ? "" : `/${section}`}`;
+
 export function Projects() {
+  const route = projectRoute(useHash());
   const {
     data: projects,
     error: projectsError,
@@ -58,15 +77,54 @@ export function Projects() {
     reloadStats();
   }
 
+  const cardFor = (p: Project) => (
+    <ProjectCard
+      key={p.slug}
+      project={p}
+      stats={byslug.get(p.slug)}
+      statsUnknown={stats === undefined}
+      linked={route.slug === null}
+      onEdit={() => {
+        setNotice(undefined);
+        setEditing(p.slug);
+      }}
+    />
+  );
+  const selected = route.slug ? projects?.find((p) => p.slug === route.slug) : undefined;
+  const workspaceProjects = (projects ?? []).filter((p) => p.slug !== "global");
+
   return (
     <section className="projects">
-      <PageHeader
-        title="Projects"
-        lead="Each project's repository and what Argus holds for it. Workers clone the repository when they claim a task."
-      />
+      {route.slug === null ? (
+        <PageHeader
+          title="Projects"
+          lead="Each project's repository, task defaults and what Argus holds for it. Workers clone the repository when they claim a task."
+        />
+      ) : (
+        <PageHeader title={selected?.name ?? route.slug} lead={selected?.description || undefined}>
+          <label>
+            Project{" "}
+            <select
+              aria-label="Project"
+              value={route.slug}
+              onChange={(e) => {
+                window.location.hash = projectHash(e.target.value, route.section);
+              }}
+            >
+              {!selected && <option value={route.slug}>{route.slug}</option>}
+              {workspaceProjects.map((p) => (
+                <option key={p.slug} value={p.slug}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <a href="#projects">All projects</a>
+        </PageHeader>
+      )}
       <p className="muted small">
-        Changing a repository needs an admin token. Other tokens can read this page but are refused
-        when they save.
+        Changing a repository or a task default needs an admin token. Other tokens can read this
+        page but are refused when they save.
       </p>
       {notice && (
         <p className="notice" role="status">
@@ -91,21 +149,46 @@ export function Projects() {
         </p>
       )}
       {projects === undefined && !projectsError && <p className="muted">Loading projects…</p>}
-      {projects?.length === 0 && <p className="muted">No projects yet.</p>}
-      <div className="project-list">
-        {(projects ?? []).map((p) => (
-          <ProjectCard
-            key={p.slug}
-            project={p}
-            stats={byslug.get(p.slug)}
-            statsUnknown={stats === undefined}
-            onEdit={() => {
-              setNotice(undefined);
-              setEditing(p.slug);
-            }}
-          />
-        ))}
-      </div>
+      {route.slug === null ? (
+        <>
+          {projects?.length === 0 && <p className="muted">No projects yet.</p>}
+          <div className="project-list">{(projects ?? []).map(cardFor)}</div>
+        </>
+      ) : (
+        projects !== undefined &&
+        (route.slug === "global" ? (
+          <p className="muted">
+            The global scope has no repository or tasks of its own; its task defaults are the{" "}
+            <a href={settingsHash("global")}>global settings</a>.
+          </p>
+        ) : !selected ? (
+          <p className="error" role="alert">
+            There is no project <code>{route.slug}</code>. <a href="#projects">All projects</a>
+          </p>
+        ) : (
+          <>
+            <nav className="subtabs" aria-label="Project sections">
+              {(Object.keys(SECTIONS) as Section[]).map((section) => (
+                <a
+                  key={section}
+                  href={projectHash(selected.slug, section)}
+                  aria-current={section === route.section ? "page" : undefined}
+                >
+                  {SECTIONS[section]}
+                </a>
+              ))}
+              <a href={settingsHash(selected.slug)}>Other settings</a>
+            </nav>
+            {route.section === "task-defaults" ? (
+              <div className="card">
+                <TaskDefaultsEditor key={selected.slug} project={selected.slug} />
+              </div>
+            ) : (
+              cardFor(selected)
+            )}
+          </>
+        ))
+      )}
       {editing && (
         <ProjectRepositoryDialog slug={editing} onCancel={() => setEditing(null)} onSaved={saved} />
       )}
@@ -117,18 +200,27 @@ function ProjectCard({
   project,
   stats,
   statsUnknown,
+  linked,
   onEdit,
 }: {
   project: Project;
   stats: Stats | undefined;
   statsUnknown: boolean;
+  /** In the list, the name opens the project's workspace. */
+  linked: boolean;
   onEdit: () => void;
 }) {
   const isGlobal = project.slug === "global";
   return (
     <article className="card project-card">
       <header>
-        <h3>{project.name}</h3>
+        <h3>
+          {linked && !isGlobal ? (
+            <a href={projectHash(project.slug)}>{project.name}</a>
+          ) : (
+            project.name
+          )}
+        </h3>
         <code className="muted small">{project.slug}</code>
       </header>
       {project.description && <p className="muted">{project.description}</p>}
