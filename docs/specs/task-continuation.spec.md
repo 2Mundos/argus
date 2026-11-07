@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-06
+updated: 2026-11-07
 ---
 
 # Task continuation
@@ -38,7 +38,7 @@ prompt.
   specs. A task that predates the contract reads as an *incomplete* contract
   (3.7); no historical task is marked done.
 - No dashboard redesign: the fields are exposed on the task and in the OpenAPI
-  client; the existing views are unchanged.
+  client; the only view change is the read-only section of 3.10.
 - No new authority: grants still come only from authenticated task metadata
   ([prompt-data isolation](prompt-data-isolation.spec.md)).
 
@@ -233,6 +233,18 @@ checklist and that B's ids fail closed with `checklist_mismatch`.
 worker-created task is worker-authored and grants nothing. Force-push, Production
 access, deploy and waiving gates are never granted by the prompt.
 
+## 3.10 Dashboard presentation
+
+The task detail has a collapsed, read-only **Continuation** section. It requests
+`GET /tasks/{id}/continuation` only when first opened, refreshes on events whose
+subject is the task, and shows load errors with a local Retry. It displays what the
+API returns (phase and whether it is explicit or derived, objective, gaps with
+readable labels, every checklist item as `done`, `pending` or `verification
+missing` with its evidence, artifacts, environment, interruption, WIP, decisions),
+bounded and as plain text. An empty or unstructured checklist reads "nothing is
+confirmed complete". It describes the task as it stands, not the selected attempt,
+and offers no write action.
+
 # 4. Open Questions
 
 - Richer default observation (branch heads, commit presence) beyond PR state/SHA
@@ -241,7 +253,6 @@ access, deploy and waiving gates are never granted by the prompt.
   `ArgusConfig.observe`.
 - Whether `done` items reported by a worker should require orchestrator
   verification before dependents are promoted.
-- Dashboard presentation of the contract (phase, pending items, gaps).
 
 # 5. Constraints
 

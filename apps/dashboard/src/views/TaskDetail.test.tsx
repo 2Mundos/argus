@@ -10,10 +10,12 @@ const mock = vi.hoisted(() => ({
   artifacts: [] as Record<string, unknown>[],
   events: [] as Record<string, unknown>[],
   deliveryGate: null as Promise<void> | null,
+  paths: [] as string[],
 }));
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
   call: async (path: string) => {
+    mock.paths.push(path);
     if (path.includes("delivery") && mock.deliveryGate) await mock.deliveryGate;
     return path.includes("projects/stats")
       ? []
@@ -91,6 +93,7 @@ afterEach(() => {
   mock.artifacts = [];
   mock.events = [];
   mock.deliveryGate = null;
+  mock.paths = [];
 });
 describe("TaskDetail loading", () => {
   it("paints the task before the forge delivery read settles", async () => {
@@ -103,6 +106,18 @@ describe("TaskDetail loading", () => {
     render(<TaskDetail taskId="t1" onClose={() => {}} />);
     expect(await screen.findByText(/trace task/)).toBeTruthy();
     release();
+  });
+});
+
+describe("TaskDetail continuation", () => {
+  it("shows a collapsed Continuation section and does not fetch it before open", async () => {
+    mock.task = base;
+    mock.trace = { executions: [], timeline: [] };
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    await screen.findByText(/trace task/);
+    const section = screen.getByLabelText("Continuation") as HTMLDetailsElement;
+    expect(section.open).toBe(false);
+    expect(mock.paths.some((p) => p.includes("continuation"))).toBe(false);
   });
 });
 
