@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-05
+updated: 2026-11-07
 ---
 
 # Home
@@ -74,7 +74,7 @@ that returns.
   ([account usage](account-usage.spec.md)). Home adds no near-limit alert.
 - No model/LLM availability verdict. Heartbeats and `running` prove a process is
   alive, not that a model answers; Home says so and does not infer more.
-- No filters on links (no view supports them yet), no new tables, migrations,
+- No link filters beyond the task state of the four task links (section 3), no new tables, migrations,
   services or dependencies, and no write actions.
 - No invented time windows or thresholds.
 
@@ -110,7 +110,15 @@ that returns.
   health statement.
 - **No secrets.** The payload holds counts, enum values, provider and pool names and
   one timestamp; no credentials, secret references or free text.
-- Home keeps every other tab, `#tasks` included.
+- Home keeps every other tab, `#tasks` included. The blocked, awaiting-approval,
+  in-review and failed links open the Tasks board filtered to that state
+  (`#tasks?state=blocked`, `awaiting_approval`, `in_review`, `failed`). The filter
+  lives in the hash, so reload, back and forward keep it. The board shows the active
+  filter with a Clear control back to bare `#tasks`, requests only those states, and
+  reports the filtered total from the API. A repeatable `state` is the only filter;
+  unknown values, more than nine states or a query over 256 characters fall back to
+  the unfiltered board (`taskRoute.ts` is the one parser). Counts, thresholds and
+  acknowledgement rules are unchanged.
 
 ## Endpoint contract
 
@@ -133,7 +141,6 @@ knowledge: {pages_by_state, proposals_by_state}
 
 - Should failed tasks page after a defined window or once acknowledged? Needs an
   owner's decision and probably a field recording acknowledgement.
-- Links go to bare tabs; deep links with filters need view-level filter support.
 
 # 5. Constraints
 

@@ -188,7 +188,7 @@ export function attention(input: {
       human: false,
       count: o.tasks.blocked ?? 0,
       text: `${plural(o.tasks.blocked ?? 0, "blocked task")}.`,
-      href: "#tasks",
+      href: "#tasks?state=blocked",
     });
     add({
       id: "awaiting-approval",
@@ -196,7 +196,7 @@ export function attention(input: {
       human: true,
       count: o.tasks.awaiting_approval ?? 0,
       text: `${plural(o.tasks.awaiting_approval ?? 0, "task")} awaiting approval.`,
-      href: "#tasks",
+      href: "#tasks?state=awaiting_approval",
     });
     add({
       id: "decisions-open",
@@ -212,7 +212,7 @@ export function attention(input: {
       human: true,
       count: o.tasks.in_review ?? 0,
       text: `${plural(o.tasks.in_review ?? 0, "task")} in review.`,
-      href: "#tasks",
+      href: "#tasks?state=in_review",
     });
     // Failed tasks are history: nothing says whether anyone has dealt with them,
     // and no time window is defined, so they inform and never page.
@@ -222,7 +222,7 @@ export function attention(input: {
       human: false,
       count: o.tasks.failed ?? 0,
       text: `${plural(o.tasks.failed ?? 0, "failed task")} on record.`,
-      href: "#tasks",
+      href: "#tasks?state=failed",
     });
     add({
       id: "terminating",

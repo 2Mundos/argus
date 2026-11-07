@@ -3,12 +3,19 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Tasks } from "./Tasks";
 
-const mock = vi.hoisted(() => ({ items: [] as unknown[], loading: false }));
+const mock = vi.hoisted(() => ({
+  items: [] as unknown[],
+  loading: false,
+  calls: [] as unknown[],
+}));
 vi.mock("../api", () => ({
   api: { GET: () => ({}), POST: () => ({}) },
   call: async () => ({}),
   ENDED_STATES: ["succeeded", "failed", "cancelled"],
-  boardTasks: async () => ({ items: mock.items, total: mock.items.length, loading: mock.loading }),
+  boardTasks: async (_archived: boolean, opts?: { states?: string[] }) => {
+    mock.calls.push(opts?.states);
+    return { items: mock.items, total: mock.items.length, loading: mock.loading };
+  },
 }));
 vi.mock("../live", async () => {
   const React = await import("react");
@@ -29,6 +36,7 @@ afterEach(() => {
   cleanup();
   mock.items = [];
   mock.loading = false;
+  mock.calls = [];
 });
 
 describe("Tasks model chips", () => {
@@ -99,5 +107,34 @@ describe("Tasks board while the ended tasks load", () => {
     // Active columns are real: an empty one is a plain zero.
     expect(screen.getByLabelText("Running: 0")).toBeTruthy();
     expect(screen.queryByText(/Showing the newest/)).toBeNull();
+  });
+});
+
+describe("Tasks state filter", () => {
+  it("requests the filtered states, shows the chip and Clear, and hides other columns", async () => {
+    mock.items = [
+      {
+        id: "1",
+        title: "Stuck",
+        project: "global",
+        state: "blocked",
+        kind: "generic",
+        priority: 0,
+        attempt: 1,
+      },
+    ];
+    render(<Tasks filter={{ states: ["blocked"] }} />);
+    expect(await screen.findByRole("button", { name: /Stuck/ })).toBeTruthy();
+    expect(mock.calls).toEqual([["blocked"]]);
+    expect(screen.getByTestId("task-filter").textContent).toContain("blocked");
+    expect(screen.getByRole("link", { name: "Clear" }).getAttribute("href")).toBe("#tasks");
+    expect(screen.queryByLabelText(/^Done:/)).toBeNull();
+  });
+
+  it("shows no filter control when unfiltered", async () => {
+    render(<Tasks />);
+    await screen.findByLabelText("Running: 0");
+    expect(mock.calls).toEqual([[]]);
+    expect(screen.queryByTestId("task-filter")).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import { LiveProvider, useLiveData } from "./live";
 import { onboardingEvent, overviewEvent, systemEvent } from "./liveEvents";
 import { verdict } from "./overview";
 import { Icon, isCurrent, PrimaryNav, SIGN_OUT_ICON } from "./PrimaryNav";
+import { hashPath, parseTaskFilter, type TaskFilter } from "./taskRoute";
 import { Home } from "./views/Home";
 import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
@@ -75,28 +76,33 @@ const LEGACY: Record<string, string> = {
 
 export type Route =
   | { tab: "chat" | "dashboard" | "inbox" | "knowledge" | "projects" | "routines" }
-  | { tab: "tasks"; taskId: string | null }
+  | { tab: "tasks"; taskId: string | null; filter: TaskFilter }
   | { tab: "workers"; sub: WorkersSub }
   | { tab: "setup"; sub: SetupSub };
 
 function canonicalizeHash(): void {
   const raw = window.location.hash.slice(1);
   if (!raw) return;
-  const parts = raw.split("/");
+  const at = raw.indexOf("?");
+  const query = at < 0 ? "" : raw.slice(at);
+  const parts = hashPath(raw).split("/");
   const head = parts[0] ?? "";
   const mapped = LEGACY[head];
   if (!mapped) return;
   const rest = parts.slice(1);
   const next = rest.length ? `${mapped}/${rest.join("/")}` : mapped;
-  history.replaceState(null, "", `#${next}`);
+  history.replaceState(null, "", `#${next}${query}`);
 }
 
 export function parseRoute(): Route {
   canonicalizeHash();
-  const parts = window.location.hash.slice(1).split("/").filter(Boolean);
+  const hash = window.location.hash;
+  const parts = hashPath(hash).split("/").filter(Boolean);
   const head = parts[0] ?? "";
   const leaf = parts[1];
-  if (head === "tasks") return { tab: "tasks", taskId: leaf ?? null };
+  if (head === "tasks") {
+    return { tab: "tasks", taskId: leaf ?? null, filter: parseTaskFilter(hash) };
+  }
   if (head === "workers") {
     const sub = leaf && leaf in WORKERS_SUB ? (leaf as WorkersSub) : "agents";
     return { tab: "workers", sub };
@@ -128,7 +134,7 @@ export function homeHash(orchestrator: boolean): string {
 
 /** The hash to rewrite an empty or invalid one to, else null. */
 export function defaultHash(hash: string, orchestrator: boolean): string | null {
-  const head = hash.replace(/^#/, "").split("/")[0] ?? "";
+  const head = hashPath(hash).split("/")[0] ?? "";
   if (ROUTE_HEADS.has(head) || head in LEGACY) return null;
   return homeHash(orchestrator);
 }
@@ -348,7 +354,7 @@ function RouteView({
     case "inbox":
       return <Inbox />;
     case "tasks":
-      return <Tasks />;
+      return <Tasks filter={route.filter} />;
     case "knowledge":
       return <Knowledge />;
     case "projects":

@@ -190,12 +190,21 @@ export type TaskBoard = { items: TaskSummary[]; total: number; loading?: boolean
  * The tasks board: the newest tasks of the active and of the ended states, read as two
  * cursor chains in parallel. `onPage` first fires once the active tasks (few, and the
  * ones that matter) are in, so the board paints after one round trip rather than
- * after the first page of everything.
+ * after the first page of everything. With `states`, only those states are requested.
  */
 export async function boardTasks(
   archived = false,
-  opts?: { signal?: AbortSignal; onPage?: (board: TaskBoard) => void },
+  opts?: { signal?: AbortSignal; states?: TaskState[]; onPage?: (board: TaskBoard) => void },
 ): Promise<TaskBoard> {
+  // A state filter is one chain over exactly those states; the active/ended split is for the full board.
+  if (opts?.states?.length) {
+    const { items, total } = await newestTasks(5, archived, {
+      signal: opts.signal,
+      states: opts.states,
+      onPage: (page) => opts.onPage?.({ ...page, loading: false }),
+    });
+    return { items, total, loading: false };
+  }
   type Loaded = { items: TaskSummary[]; total: number };
   let active: Loaded | undefined;
   let ended: Loaded | undefined;

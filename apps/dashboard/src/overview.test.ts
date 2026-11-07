@@ -181,6 +181,23 @@ describe("attention", () => {
   });
 });
 
+describe("task attention links", () => {
+  it("open the board filtered to the matching state", () => {
+    const o = overview();
+    o.tasks.blocked = 1;
+    o.tasks.awaiting_approval = 1;
+    o.tasks.in_review = 1;
+    o.tasks.failed = 1;
+    const a = attention({ stream: "live", overview: ok(o), system: ok(system()) });
+    expect(Object.fromEntries(a.items.map((i) => [i.id, i.href]))).toEqual({
+      blocked: "#tasks?state=blocked",
+      "awaiting-approval": "#tasks?state=awaiting_approval",
+      "in-review": "#tasks?state=in_review",
+      failed: "#tasks?state=failed",
+    });
+  });
+});
+
 describe("distinct zero / unknown / error", () => {
   it("separates loading, ok, stale and error", () => {
     expect(sourceStatus({}, true)).toBe("loading");
