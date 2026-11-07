@@ -7738,6 +7738,66 @@
         "title": "DifficultySource",
         "type": "string"
       },
+      "DiskGuardLoopOut": {
+        "description": "Execution health of the guard loop (heartbeat), not of its measurement.\n\nA fresh loop can report a `stale` measurement and a stale loop can still hold\na recent one; read `disk_guard.measurement` for the latter.",
+        "properties": {
+          "errors_total": {
+            "title": "Errors Total",
+            "type": "integer"
+          },
+          "last_duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Duration S"
+          },
+          "last_success_age_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success Age S"
+          },
+          "passes_total": {
+            "title": "Passes Total",
+            "type": "integer"
+          },
+          "stale_after_s": {
+            "title": "Stale After S",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "healthy",
+              "stale",
+              "never_run",
+              "failed",
+              "disabled"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "stale_after_s",
+          "last_success_age_s",
+          "last_duration_s",
+          "errors_total",
+          "passes_total"
+        ],
+        "title": "DiskGuardLoopOut",
+        "type": "object"
+      },
       "DiskGuardOut": {
         "description": "Authenticated disk-guard visibility; no paths or device identifiers.\n\nPer-root `band` is instantaneous free-space for that root. Global\n`claim_admission` is latched hysteresis, so a root may show band \"warn\"\n(or \"ok\") while claim_admission is still \"refused\".",
         "properties": {
@@ -20167,6 +20227,9 @@
           "disk_guard": {
             "$ref": "#/components/schemas/DiskGuardOut"
           },
+          "disk_guard_loop": {
+            "$ref": "#/components/schemas/DiskGuardLoopOut"
+          },
           "events_total": {
             "title": "Events Total",
             "type": "integer"
@@ -20222,6 +20285,7 @@
           "database",
           "disk_free_bytes",
           "disk_guard",
+          "disk_guard_loop",
           "loops"
         ],
         "title": "SystemSummary",
