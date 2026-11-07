@@ -993,6 +993,27 @@ main > section.home > .page-header {
   color: var(--muted);
   line-height: 1.2;
 }
+.task-continuation summary {
+  cursor: pointer;
+}
+.task-continuation-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  min-width: 0;
+}
+.task-continuation-body p {
+  margin: 0;
+}
+.task-continuation-list {
+  margin: 0.1rem 0 0;
+  padding-left: 1.1rem;
+}
+.task-continuation-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .task-cost {
   display: flex;
   flex-direction: column;

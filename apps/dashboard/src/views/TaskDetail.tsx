@@ -18,6 +18,7 @@ import { AttemptStrip } from "./AttemptStrip";
 import { BudgetBlockAction } from "./BudgetBlockAction";
 import { EventList } from "./EventList";
 import { RepositoryBlockAction } from "./RepositoryBlockAction";
+import { TaskContinuation } from "./TaskContinuation";
 import { TaskCostTile } from "./TaskCost";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskSteers, useSteersSource } from "./TaskSteers";
@@ -460,6 +461,7 @@ export function TaskDetail({
             </dd>
           </dl>
           <TaskCostTile taskId={taskId} />
+          <TaskContinuation taskId={taskId} />
           {!!modelTrace?.executions.length && (
             <section className="task-models" aria-label="Models">
               <div className="task-models-list">
