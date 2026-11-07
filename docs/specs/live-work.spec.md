@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-19
-updated: 2026-10-29
+updated: 2026-11-07
 ---
 
 # Live work
@@ -134,7 +134,8 @@ The sources are:
 - Whether NanoClaw should send a progress note when the agent starts a tool or a
   delegated executor, so the feed shows activity between replies. Decide after
   watching real runs with this view.
-- Whether the log panel should offer a larger tail or a download.
+- Whether the log panel should offer a larger tail. (A download of the visible
+  excerpt is decided: [task live log](task-live-log.spec.md) 3.6.)
 
 # 5. Constraints
 

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-05
+updated: 2026-11-07
 ---
 
 # Task live log
@@ -127,6 +127,13 @@ run. URL schemes are bounded to 16 characters; names, URL users and passwords ar
   and has pause/resume (paused lines are buffered and shown on resume). When the
   stream reconnects, or a batch's `seq` skips past the newest line held (or past the
   empty tail's `last_seq` when none is held), it reads the missed lines with `after`.
+- **Download visible output** (Live panel and the terminal's output tabs, disabled
+  while no row is shown) saves the rows on screen as a plain text file: the loaded,
+  already redacted excerpt only, for the shown attempt, source filter and pause
+  cutoff, in order, with the `[delegate] ` prefix. It is not a full transcript and
+  fetches nothing new. A short `#` header names the task, attempt, source, cutoff and
+  line count. The file is `argus-task-<task id>-attempt-<n>-<source>.txt` (id
+  sanitized); its object URL is revoked after the click.
 - **No signal** uses the later of `progress_at` and `output_at`; the threshold is
   unchanged (`NO_SIGNAL_MINUTES`, `VITE_NO_SIGNAL_MINUTES`).
 

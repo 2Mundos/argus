@@ -96,6 +96,8 @@ export function TaskTerminal({
         <div className="term-bar-end">
           {onOutputTab ? (
             <TaskLogBarActions
+              taskId={taskId}
+              attempt={attempt}
               log={log}
               steer={steer}
               hideFilter

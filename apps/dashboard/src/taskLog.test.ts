@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { filterLines, type LogLine, logEvent, MAX_LINES, mergeLines } from "./taskLog";
+import {
+  filterLines,
+  type LogLine,
+  logDownload,
+  logEvent,
+  MAX_LINES,
+  mergeLines,
+  visibleLines,
+} from "./taskLog";
 
 const line = (seq: number, source: LogLine["source"] = "worker"): LogLine => ({
   seq,
@@ -49,5 +57,42 @@ describe("filterLines", () => {
     expect(filterLines(all, "all")).toHaveLength(2);
     expect(filterLines(all, "delegate").map((l) => l.seq)).toEqual([2]);
     expect(filterLines(all, "worker").map((l) => l.seq)).toEqual([1]);
+  });
+});
+
+describe("visibleLines and logDownload", () => {
+  const all = [line(1), line(2, "delegate"), line(3), line(4, "delegate")];
+
+  it("applies the pause cutoff, then the source filter", () => {
+    expect(visibleLines(all, "all", null).map((l) => l.seq)).toEqual([1, 2, 3, 4]);
+    expect(visibleLines(all, "all", 3).map((l) => l.seq)).toEqual([1, 2, 3]);
+    expect(visibleLines(all, "delegate", 3).map((l) => l.seq)).toEqual([2]);
+    expect(visibleLines(all, "worker", null).map((l) => l.seq)).toEqual([1, 3]);
+  });
+
+  it("writes only the given rows, with the header and the delegate prefix", () => {
+    const rows = visibleLines(all, "all", 3);
+    expect(logDownload("t1", 2, "all", rows, 3)).toEqual({
+      filename: "argus-task-t1-attempt-2-all.txt",
+      text: [
+        "# Argus task log: loaded excerpt, not a full transcript",
+        "# task: t1",
+        "# attempt: 2",
+        "# source: all",
+        "# cutoff: paused after seq 3",
+        "# lines: 3",
+        "",
+        "l1",
+        "[delegate] l2",
+        "l3",
+        "",
+      ].join("\n"),
+    });
+    expect(logDownload("t1", 2, "all", all, null).text).toContain("# cutoff: live\n");
+  });
+
+  it("sanitizes and caps the task id in the filename", () => {
+    const { filename } = logDownload(`a/b ${"x".repeat(80)}`, 1, "worker", [], null);
+    expect(filename).toBe(`argus-task-a-b-${"x".repeat(60)}-attempt-1-worker.txt`);
   });
 });
