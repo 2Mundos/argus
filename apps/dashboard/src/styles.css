@@ -4407,3 +4407,21 @@ label.header-toggle {
   font-size: 12.5px;
   color: var(--muted);
 }
+
+.task-search {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.task-search input[type="search"] {
+  flex: 1;
+  max-width: 28rem;
+}
+.match-snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}

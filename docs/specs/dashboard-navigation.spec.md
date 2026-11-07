@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-07
 ---
 
 # Dashboard navigation
@@ -42,6 +42,9 @@ the page. On a narrow screen the menu moves to a bar across the top.
 - **The wordmark in the menu is a link home**: `#chat` with the orchestrator on,
   `#dashboard` without it, the same page the app opens on. The login screen's stays
   plain text.
+- **A hash may carry a query string** (`#tasks?state=failed&q=retry`, the Tasks board state filter and search of
+  [task discovery](task-discovery.spec.md) §3.5). Routing, `isCurrent` and the
+  default-hash rewrite look only at the part before `?`.
 
 # 4. Open Questions
 

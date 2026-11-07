@@ -1,4 +1,4 @@
-import { type FormEvent, memo, useCallback, useState } from "react";
+import { type FormEvent, memo, useCallback, useEffect, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import {
   type ArgusEvent,
@@ -6,6 +6,7 @@ import {
   boardTasks,
   call,
   ENDED_STATES,
+  searchErrorMessage,
   type TaskBoard,
   type TaskKind,
   type TaskState,
@@ -20,6 +21,7 @@ import { repositoryNeed, repositoryState, repositoryWarning } from "../projectRe
 import { TaskLabel } from "../TaskLabel";
 import { executorPin, harnessPin, parseBudget } from "../taskEdit";
 import { NO_TASK_FILTER, type TaskFilter, tasksHash } from "../taskRoute";
+import { boundedSnippet } from "../taskSearch";
 import { WorkerChip } from "../WorkerChip";
 import { AccountPin } from "./AccountPin";
 import { useNow } from "./Activity";
@@ -81,7 +83,10 @@ async function updateBoard(
   signal: AbortSignal,
   archived: boolean,
   states: TaskState[],
+  q: string,
 ): Promise<BoardData> {
+  // Whether a changed task still matches is the server's call, so a search refetches.
+  if (q) return boardTasks(archived, { signal, states, q });
   const ids = [...new Set(events.map((event) => event.subject_id))];
   const known = new Set(data.items.map((task) => task.id));
   if (ids.some((id) => !known.has(id))) return boardTasks(archived, { signal, states });
@@ -111,7 +116,7 @@ async function updateBoard(
 }
 
 export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
-  const states = filter.states;
+  const { states, q } = filter;
   const filterKey = states.join(",");
   // `#tasks/<id>` (linked from Fleet) opens that task's detail.
   const [selected, setSelected] = useState<string | null>(
@@ -121,15 +126,31 @@ export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
   const [archiving, setArchiving] = useState(false);
   const [archived, setArchived] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const { data, error } = useLiveData(
+  // The submitted search lives in the URL filter; the text being typed is local.
+  const [draft, setDraft] = useState(q);
+  useEffect(() => setDraft(q), [q]);
+  const { data, error, reload } = useLiveData(
     (signal) =>
-      boardTasks(archived, { signal, states, onPage: (page) => reportPage(signal, page) }),
-    [archived, filterKey],
+      boardTasks(archived, {
+        signal,
+        states,
+        q: q || undefined,
+        onPage: (page) => reportPage(signal, page),
+      }),
+    [archived, filterKey, q],
     {
       accepts: boardEvent,
-      update: (data, events, signal) => updateBoard(data, events, signal, archived, states),
+      update: (data, events, signal) => updateBoard(data, events, signal, archived, states, q),
     },
   );
+  function search(e: FormEvent) {
+    e.preventDefault();
+    const text = draft.trim();
+    if (text === q) return reload();
+    // The hashchange handler applies it; a new `q` drops the old results and cursors.
+    window.location.hash = tasksHash({ states, q: text });
+  }
+  const failure = error ? searchErrorMessage(error) : undefined;
   const tasks = data?.items;
   const now = useNow(30_000);
   const openTask = useCallback((id: string) => setSelected(id), []);
@@ -185,72 +206,117 @@ export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
         <p className="muted small" data-testid="task-filter">
           Filtered by state:{" "}
           <span className="badge">{states.map((s) => s.replace("_", " ")).join(", ")}</span>{" "}
-          <a href="#tasks">Clear</a>
+          <a href={tasksHash({ q })}>Clear</a>
         </p>
       )}
+      <form role="search" className="task-search" onSubmit={search}>
+        <label htmlFor="task-search-input">Search tasks</label>
+        <input
+          id="task-search-input"
+          type="search"
+          value={draft}
+          placeholder="Words in a title or spec"
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button type="submit" className="compact">
+          Search
+        </button>
+        {(q || draft) && (
+          <button
+            type="button"
+            className="compact"
+            onClick={() => {
+              setDraft("");
+              window.location.hash = tasksHash({ states });
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </form>
       {archived && <p className="muted small">Showing archived tasks only.</p>}
-      {error && <p className="error">{error.message}</p>}
+      {q && (
+        <p className="muted small">
+          Literal text match on title and spec for “{q}”; it does not say a task covers the same
+          work.
+        </p>
+      )}
+      {failure && (
+        <p className="error" role="alert">
+          {failure.text}
+        </p>
+      )}
+      {q && !error && data && !data.loading && data.items.length === 0 && (
+        <p className="muted" role="status">
+          No tasks match “{q}”.
+        </p>
+      )}
       {data && !data.loading && data.total > data.items.length && (
         <p className="muted small">
           Showing the newest {data.items.length} of {data.total}
-          {states.length > 0 ? " matching" : ""} tasks.
+          {states.length > 0 || q ? " matching" : ""} tasks.
         </p>
       )}
-      <div className="board">
-        {boardSections(tasks, collapsed, data?.loading === true, states).map((section) =>
-          section.type === "chip" ? (
-            <div key={section.columns.map((c) => c.title).join("|")} className="column-empty-stack">
-              {section.columns.map((column) => (
-                <div
-                  key={column.title}
-                  className="column-chip"
-                  aria-label={`${column.title}: ${column.count}`}
-                >
-                  <span className="column-chip-label">
-                    {column.title} <span className="count">{column.count}</span>
-                  </span>
-                  {typeof column.count === "number" && column.count > 0 && (
-                    <button
-                      type="button"
-                      className="column-toggle"
-                      aria-label={`Expand ${column.title}`}
-                      onClick={() => expandColumn(column.title)}
-                    >
-                      ▸
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="column" key={section.title}>
-              <div className="column-head">
-                <h3>
-                  {section.title} <span className="count">{section.items.length}</span>
-                </h3>
-                <button
-                  type="button"
-                  className="column-toggle"
-                  aria-label={`Collapse ${section.title}`}
-                  onClick={() => collapseColumn(section.title)}
-                >
-                  ▾
-                </button>
-              </div>
-              <div className="column-body">
-                {section.items.map((task) => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    onOpen={openTask}
-                    now={task.state === "claimed" ? now : 0}
-                  />
+      {!(q && (error || (data && data.items.length === 0))) && (
+        <div className="board">
+          {boardSections(tasks, collapsed, data?.loading === true, states).map((section) =>
+            section.type === "chip" ? (
+              <div
+                key={section.columns.map((c) => c.title).join("|")}
+                className="column-empty-stack"
+              >
+                {section.columns.map((column) => (
+                  <div
+                    key={column.title}
+                    className="column-chip"
+                    aria-label={`${column.title}: ${column.count}`}
+                  >
+                    <span className="column-chip-label">
+                      {column.title} <span className="count">{column.count}</span>
+                    </span>
+                    {typeof column.count === "number" && column.count > 0 && (
+                      <button
+                        type="button"
+                        className="column-toggle"
+                        aria-label={`Expand ${column.title}`}
+                        onClick={() => expandColumn(column.title)}
+                      >
+                        ▸
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
-            </div>
-          ),
-        )}
-      </div>
+            ) : (
+              <div className="column" key={section.title}>
+                <div className="column-head">
+                  <h3>
+                    {section.title} <span className="count">{section.items.length}</span>
+                  </h3>
+                  <button
+                    type="button"
+                    className="column-toggle"
+                    aria-label={`Collapse ${section.title}`}
+                    onClick={() => collapseColumn(section.title)}
+                  >
+                    ▾
+                  </button>
+                </div>
+                <div className="column-body">
+                  {section.items.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      onOpen={openTask}
+                      now={task.state === "claimed" ? now : 0}
+                    />
+                  ))}
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+      )}
       {archiving && <ArchiveTasks onClose={() => setArchiving(false)} />}
       {creating && <NewTask onClose={() => setCreating(false)} />}
     </section>
@@ -299,6 +365,11 @@ const TaskCard = memo(
         {task.block_reason && task.state === "blocked" && (
           <span className="small muted">{task.block_reason}</span>
         )}
+        {task.matches?.map((hit) => (
+          <span key={hit.field} className="small muted match-snippet">
+            {hit.field}: {boundedSnippet(hit.snippet)}
+          </span>
+        ))}
       </button>
     );
   },
@@ -328,6 +399,7 @@ function cardFields(task: TaskSummary) {
     task.progress_kind,
     task.progress_data,
     task.output_at,
+    task.matches,
   ];
 }
 
