@@ -123,7 +123,7 @@ describe("Tasks state filter", () => {
         attempt: 1,
       },
     ];
-    render(<Tasks filter={{ states: ["blocked"] }} />);
+    render(<Tasks filter={{ states: ["blocked"], q: "" }} />);
     expect(await screen.findByRole("button", { name: /Stuck/ })).toBeTruthy();
     expect(mock.calls).toEqual([["blocked"]]);
     expect(screen.getByTestId("task-filter").textContent).toContain("blocked");

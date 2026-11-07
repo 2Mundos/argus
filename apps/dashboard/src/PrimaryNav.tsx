@@ -1,8 +1,9 @@
 import type { Route } from "./App";
+import { hashPath } from "./taskRoute";
 
 /** A menu entry is current on its page, or on any tab of its group. */
 export function isCurrent(href: string, route: Route): boolean {
-  return route.tab === href.slice(1).split("/")[0];
+  return route.tab === hashPath(href).split("/")[0];
 }
 
 const NAV_ICON: Record<string, string> = {

@@ -149,6 +149,8 @@ export async function newestTasks(
   opts?: {
     signal?: AbortSignal;
     states?: TaskState[];
+    /** Literal text search over title and spec, applied by the server on every page. */
+    q?: string;
     onPage?: (page: { items: TaskSummary[]; total: number }) => void;
   },
 ): Promise<{ items: TaskSummary[]; total: number }> {
@@ -158,7 +160,7 @@ export async function newestTasks(
   for (let n = 0; n < pages; n++) {
     const page = await call(
       api.GET("/api/tasks", {
-        params: { query: { limit: 100, cursor, archived, state: opts?.states } },
+        params: { query: { limit: 100, cursor, archived, state: opts?.states, q: opts?.q } },
         signal: opts?.signal,
       }),
     );
@@ -190,20 +192,28 @@ export type TaskBoard = { items: TaskSummary[]; total: number; loading?: boolean
  * The tasks board: the newest tasks of the active and of the ended states, read as two
  * cursor chains in parallel. `onPage` first fires once the active tasks (few, and the
  * ones that matter) are in, so the board paints after one round trip rather than
- * after the first page of everything. With `states`, only those states are requested.
+ * after the first page of everything. With `states` only those states are requested; with
+ * `q` the server filters too. Either way one cursor chain reads the board, and a failed read
+ * throws and is never returned as an empty board.
  */
 export async function boardTasks(
   archived = false,
-  opts?: { signal?: AbortSignal; states?: TaskState[]; onPage?: (board: TaskBoard) => void },
+  opts?: {
+    signal?: AbortSignal;
+    states?: TaskState[];
+    q?: string;
+    onPage?: (board: TaskBoard) => void;
+  },
 ): Promise<TaskBoard> {
-  // A state filter is one chain over exactly those states; the active/ended split is for the full board.
-  if (opts?.states?.length) {
-    const { items, total } = await newestTasks(5, archived, {
+  // A state or text filter is one chain; the active/ended split is for the full board.
+  if (opts?.states?.length || opts?.q !== undefined) {
+    const found = await newestTasks(5, archived, {
       signal: opts.signal,
-      states: opts.states,
+      states: opts.states?.length ? opts.states : undefined,
+      q: opts.q,
       onPage: (page) => opts.onPage?.({ ...page, loading: false }),
     });
-    return { items, total, loading: false };
+    return { ...found, loading: false };
   }
   type Loaded = { items: TaskSummary[]; total: number };
   let active: Loaded | undefined;
@@ -284,4 +294,18 @@ export async function fetchText(path: string): Promise<string> {
 
 export function token(): string | null {
   return currentToken;
+}
+
+/** Codes of the 422s the server returns for a search it will not run. */
+const SEARCH_VALIDATION: Record<string, string> = {
+  query_empty: "Enter a word to search for.",
+  query_too_broad: "Use at most 8 words, each at most 64 characters.",
+};
+
+/** What the board says about a failed read: a rejected search apart from a failed request. */
+export function searchErrorMessage(err: Error): { kind: "validation" | "failure"; text: string } {
+  if (err instanceof ApiError && err.status === 422 && err.code in SEARCH_VALIDATION) {
+    return { kind: "validation", text: SEARCH_VALIDATION[err.code] as string };
+  }
+  return { kind: "failure", text: `Could not load tasks: ${err.message}` };
 }

@@ -16,7 +16,8 @@ An orchestrator converting a product spec into work must be able to:
    on an expected base, or a listed artifact re-verified on disk — distinguished
    from the dependency merely having `state == succeeded`.
 
-In scope: a bounded text filter on the existing task list read; a read-only
+In scope: a bounded text filter on the existing task list read (also on the
+dashboard Tasks board); a read-only
 prerequisite evidence view over direct `depends_on` edges; permissions and
 freshness identical to existing task and delivery reads. Both surfaces are
 REST and MCP.
@@ -31,8 +32,9 @@ REST and MCP.
   when it `succeeded`, regardless of forge or artifact evidence.
 - No enforcing merged/verified delivery as a claim gate (`enforced: false`).
 - No semantic, vector, stemming, or ranking search — only literal substrings.
-- No new table, migration, required service, or forge write; the dashboard only
-  reads the prerequisites view (§3.2).
+- No new table, migration, required service or forge write. The dashboard changes
+  only by the Tasks board search of §3.5 and the read-only prerequisites panel of
+  §3.2; no other page gains search.
 
 # 3. Decisions Made
 
@@ -172,6 +174,33 @@ This view reports `enforced: false` and does not invent that policy. Any
 future enforcement needs its own spec change and must not silently alter
 `depends_on` semantics.
 
+## 3.5 Tasks board search
+
+The dashboard Tasks board has a search form (`role="search"`, a labelled
+`type="search"` field, a Search button; Enter submits). It is explicit: typing
+alone sends nothing.
+
+- **Server-side.** A submit sets `q` on `GET /api/tasks`; the board never filters
+  loaded cards. With `q` (or a state filter) the board reads one cursor chain
+  (all matching states, up to five pages of 100) instead of the active/ended
+  pair; `archived` and the live-event refetch carry the same `q` and states (an
+  event refetches the search, since only the server knows whether a changed
+  task still matches).
+- **URL.** The submitted text lives in the hash beside the state filter, one
+  encoding: `#tasks?state=failed&q=<encoded text>` (either part may be absent).
+  `#tasks` and `#tasks/<id>` are unchanged, and routing ignores the query
+  string. Submitting a different text, or Clear (drops `q`, keeps the state
+  filter), drops the old results and cursors. Resubmitting the same text
+  reloads it. The state filter's own Clear link drops the states and keeps `q`.
+- **Snippets.** Each card shows its `matches` as plain text, `field: snippet`,
+  cut at 200 characters and clamped to three lines. Never HTML.
+- **Three outcomes, never conflated.** No matches: "No tasks match". A 422
+  `query_empty` / `query_too_broad`: a validation message. Any other failure:
+  "Could not load tasks: …". A failed read hides the board; it is never drawn
+  as an empty page.
+- **Copy.** States that the match is literal over title and spec and does not
+  say a task covers the same work. No semantic or duplicate-detection claims.
+
 # 4. Open Questions
 
 - Should readiness or claim require `verdict == satisfied` for every direct
@@ -197,8 +226,11 @@ future enforcement needs its own spec change and must not silently alter
 3. `GET /api/tasks/{id}/prerequisites` + MCP `get_task_prerequisites`; SQL read
    of `task_deps`; bounded artifact re-hash; `PrChecker` detail fields.
 4. Regenerated `openapi.json` / `schema.d.ts`.
-5. Dashboard `TaskPrerequisites` panel, tested in `TaskDetail.test.tsx`.
-6. Tests: `test_task_search.py`, `test_task_prerequisites.py` (fake HTTP /
+5. Dashboard: `taskSearch.ts`, `boardTasks`/`newestTasks` `q`, `Tasks.tsx`
+   search form and snippets; tests in `api.test.ts`, `taskSearch.test.ts`,
+   `views/TasksSearch.test.tsx`.
+6. Dashboard `TaskPrerequisites` panel, tested in `TaskDetail.test.tsx`.
+7. Tests: `test_task_search.py`, `test_task_prerequisites.py` (fake HTTP /
    fixture only); existing delivery tests remain green.
 
 ## Verification boundary
@@ -211,5 +243,7 @@ future enforcement needs its own spec change and must not silently alter
   SQLite fixtures; prerequisite verdicts against a mock `httpx` transport and
   local artifact files; OpenAPI schema drift; docs index linkage.
 - **Not verified:** live forge credentials or network; production merge or
-  deploy; live rendering of the dashboard panel against a real forge; any claim that text match equals duplicate work; any
+  deploy; the board search and the prerequisites panel in a real browser
+  (jsdom tests only; no browser harness in the repo); live rendering of the panel
+  against a real forge; any claim that text match equals duplicate work; any
   enforcement of merged delivery on readiness.
