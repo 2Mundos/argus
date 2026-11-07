@@ -6,6 +6,7 @@ import { onboardingEvent, overviewEvent, systemEvent } from "./liveEvents";
 import { verdict } from "./overview";
 import { Icon, isCurrent, PrimaryNav, SIGN_OUT_ICON } from "./PrimaryNav";
 import { hashPath, parseTaskFilter, type TaskFilter } from "./taskRoute";
+import { confirmDiscard, subscribeHash } from "./unsaved";
 import { Home } from "./views/Home";
 import { LiveStatusBar } from "./views/LiveStatusBar";
 import { Login } from "./views/Login";
@@ -257,13 +258,18 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
     [],
     { accepts: onboardingEvent },
   );
-  useEffect(() => {
-    const onHash = () => {
-      setRoute(parseRoute());
-      setSelectedWorker(null);
-    };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+  // Hash changes pass the unsaved-edits guard first (unsaved.ts).
+  useEffect(
+    () =>
+      subscribeHash(() => {
+        setRoute(parseRoute());
+        setSelectedWorker(null);
+      }),
+    [],
+  );
+  // The worker panel replaces the page, so it asks before dropping unsaved edits too.
+  const openWorker = useCallback((id: string | null) => {
+    if (id === null || confirmDiscard()) setSelectedWorker(id);
   }, []);
   useEffect(() => {
     if (!onboarding) return;
@@ -276,7 +282,7 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
   const openSetup = useCallback((step: 1 | 2 | 3 = 1) => setOnboardingStep(step), []);
 
   return (
-    <WorkerPanelProvider selectedId={selectedWorker} openWorker={setSelectedWorker}>
+    <WorkerPanelProvider selectedId={selectedWorker} openWorker={openWorker}>
       <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
         <aside className="nav-side">
           <Brand as="a" href={homeHash(onboarding?.orchestrator ?? false)} />
