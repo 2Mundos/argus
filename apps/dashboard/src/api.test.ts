@@ -124,6 +124,21 @@ describe("boardTasks", () => {
     expect(board).toEqual({ items: [{ id: "a" }, { id: "e" }], total: 240, loading: false });
   });
 
+  it("requests only the filtered states in one chain and reports its filtered total", async () => {
+    const calls: string[][] = [];
+    vi.spyOn(api, "GET").mockImplementation((async (...args: unknown[]) => {
+      const init = args[1] as { params: { query: { state: string[] } } };
+      calls.push(init.params.query.state);
+      return {
+        data: { items: [{ id: "b" }], total: 7, has_more: false, next_cursor: null, omitted: [] },
+        response: new Response(null, { status: 200 }),
+      };
+    }) as typeof api.GET);
+    const board = await boardTasks(false, { states: ["blocked"] });
+    expect(calls).toEqual([["blocked"]]);
+    expect(board).toEqual({ items: [{ id: "b" }], total: 7, loading: false });
+  });
+
   it("reports the active tasks alone while the ended ones are loading", async () => {
     const { release } = serve("ended");
     let painted: (ids: string[]) => void = () => {};

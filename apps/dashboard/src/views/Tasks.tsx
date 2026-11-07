@@ -19,6 +19,7 @@ import { PageHeader } from "../PageHeader";
 import { repositoryNeed, repositoryState, repositoryWarning } from "../projectRepository";
 import { TaskLabel } from "../TaskLabel";
 import { executorPin, harnessPin, parseBudget } from "../taskEdit";
+import { NO_TASK_FILTER, type TaskFilter, tasksHash } from "../taskRoute";
 import { WorkerChip } from "../WorkerChip";
 import { AccountPin } from "./AccountPin";
 import { useNow } from "./Activity";
@@ -46,9 +47,12 @@ function boardSections(
   tasks: TaskSummary[] | undefined,
   collapsed: ReadonlySet<string>,
   loading: boolean,
+  only: TaskState[] = [],
 ): BoardSection[] {
   const sections: BoardSection[] = [];
+  // A state filter shows only the columns it can fill; the others were not requested.
   for (const column of COLUMNS) {
+    if (only.length && !column.states.some((state) => only.includes(state))) continue;
     const items = (tasks ?? []).filter((t) => column.states.includes(t.state));
     const asChip = items.length === 0 || collapsed.has(column.title);
     if (asChip) {
@@ -76,10 +80,11 @@ async function updateBoard(
   events: ArgusEvent[],
   signal: AbortSignal,
   archived: boolean,
+  states: TaskState[],
 ): Promise<BoardData> {
   const ids = [...new Set(events.map((event) => event.subject_id))];
   const known = new Set(data.items.map((task) => task.id));
-  if (ids.some((id) => !known.has(id))) return boardTasks(archived, { signal });
+  if (ids.some((id) => !known.has(id))) return boardTasks(archived, { signal, states });
   const batches = [];
   for (let i = 0; i < ids.length; i += 50) {
     batches.push(
@@ -96,15 +101,18 @@ async function updateBoard(
   const changed = pages.flatMap((page) => page.items as TaskSummary[]);
   if (
     changed.length !== ids.length ||
-    changed.some((task) => Boolean(task.archived_at) !== archived)
+    changed.some((task) => Boolean(task.archived_at) !== archived) ||
+    (states.length > 0 && changed.some((task) => !states.includes(task.state)))
   ) {
-    return boardTasks(archived, { signal });
+    return boardTasks(archived, { signal, states });
   }
   const replacements = new Map(changed.map((task) => [task.id, task]));
   return { ...data, items: data.items.map((task) => replacements.get(task.id) ?? task) };
 }
 
-export function Tasks() {
+export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
+  const states = filter.states;
+  const filterKey = states.join(",");
   // `#tasks/<id>` (linked from Fleet) opens that task's detail.
   const [selected, setSelected] = useState<string | null>(
     () => window.location.hash.match(/^#tasks\/(.+)$/)?.[1] ?? null,
@@ -114,11 +122,12 @@ export function Tasks() {
   const [archived, setArchived] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const { data, error } = useLiveData(
-    (signal) => boardTasks(archived, { signal, onPage: (page) => reportPage(signal, page) }),
-    [archived],
+    (signal) =>
+      boardTasks(archived, { signal, states, onPage: (page) => reportPage(signal, page) }),
+    [archived, filterKey],
     {
       accepts: boardEvent,
-      update: (data, events, signal) => updateBoard(data, events, signal, archived),
+      update: (data, events, signal) => updateBoard(data, events, signal, archived, states),
     },
   );
   const tasks = data?.items;
@@ -144,7 +153,8 @@ export function Tasks() {
           variant="panel"
           onClose={() => {
             setSelected(null);
-            if (window.location.hash.startsWith("#tasks/")) window.location.hash = "tasks";
+            if (window.location.hash.startsWith("#tasks/"))
+              window.location.hash = tasksHash(filter);
           }}
         />
       </section>
@@ -171,15 +181,23 @@ export function Tasks() {
           + New task
         </button>
       </PageHeader>
+      {states.length > 0 && (
+        <p className="muted small" data-testid="task-filter">
+          Filtered by state:{" "}
+          <span className="badge">{states.map((s) => s.replace("_", " ")).join(", ")}</span>{" "}
+          <a href="#tasks">Clear</a>
+        </p>
+      )}
       {archived && <p className="muted small">Showing archived tasks only.</p>}
       {error && <p className="error">{error.message}</p>}
       {data && !data.loading && data.total > data.items.length && (
         <p className="muted small">
-          Showing the newest {data.items.length} of {data.total} tasks.
+          Showing the newest {data.items.length} of {data.total}
+          {states.length > 0 ? " matching" : ""} tasks.
         </p>
       )}
       <div className="board">
-        {boardSections(tasks, collapsed, data?.loading === true).map((section) =>
+        {boardSections(tasks, collapsed, data?.loading === true, states).map((section) =>
           section.type === "chip" ? (
             <div key={section.columns.map((c) => c.title).join("|")} className="column-empty-stack">
               {section.columns.map((column) => (
