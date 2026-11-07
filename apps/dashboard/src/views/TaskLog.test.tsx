@@ -189,4 +189,101 @@ describe("TaskLog", () => {
       expect(mock.queries.at(-1)).toEqual({ attempt: 2, after: 41, limit: 1000 }),
     );
   });
+
+  describe("download", () => {
+    const blobs: Blob[] = [];
+    const clicked: string[] = [];
+    const revoked: string[] = [];
+
+    beforeEach(() => {
+      blobs.length = 0;
+      clicked.length = 0;
+      revoked.length = 0;
+      URL.createObjectURL = (b: Blob | MediaSource) => {
+        blobs.push(b as Blob);
+        return "blob:log";
+      };
+      URL.revokeObjectURL = (u: string) => {
+        revoked.push(u);
+      };
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+        this: HTMLAnchorElement,
+      ) {
+        clicked.push(this.download);
+      });
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    const button = () => screen.getByRole("button", { name: "Download visible output" });
+
+    it("is disabled while no row is shown, and makes no download", async () => {
+      mock.page = { attempt: 2, lines: [], last_seq: 0 };
+      render(<TaskLog taskId="t1" attempt={2} />);
+      await screen.findByText("No output yet.");
+      expect((button() as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(button());
+      expect(blobs).toHaveLength(0);
+    });
+
+    it("saves the visible rows as a loaded excerpt and revokes the URL", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      try {
+        render(<TaskLog taskId="t/1" attempt={2} />);
+        await vi.waitFor(() => expect(screen.getByText("first")).toBeTruthy());
+        emit("t/1", 2, 2, ["from delegate"], "delegate");
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        emit("t/1", 2, 3, ["hidden while paused"]);
+        fireEvent.click(button());
+        expect((blobs[0] as Blob).type).toBe("text/plain;charset=utf-8");
+        expect(await (blobs[0] as Blob).text()).toBe(
+          [
+            "# Argus task log: loaded excerpt, not a full transcript",
+            "# task: t/1",
+            "# attempt: 2",
+            "# source: all",
+            "# cutoff: paused after seq 2",
+            "# lines: 2",
+            "",
+            "first",
+            "[delegate] from delegate",
+            "",
+          ].join("\n"),
+        );
+        expect(clicked).toEqual(["argus-task-t-1-attempt-2-all.txt"]);
+        expect(document.querySelector("a[download]")).toBeNull();
+        expect(revoked).toEqual([]);
+        vi.runAllTimers();
+        expect(revoked).toEqual(["blob:log"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("follows the source filter, and an attempt switch carries no old rows", async () => {
+      const { rerender } = render(<TaskLog taskId="t1" attempt={2} />);
+      await screen.findByText("first");
+      emit("t1", 2, 2, ["from delegate"], "delegate");
+      fireEvent.change(screen.getByLabelText("Source"), { target: { value: "delegate" } });
+      fireEvent.click(button());
+      const text = await (blobs[0] as Blob).text();
+      expect(text).toContain("# source: delegate\n");
+      expect(text.endsWith("\n\n[delegate] from delegate\n")).toBe(true);
+      expect(clicked.at(-1)).toBe("argus-task-t1-attempt-2-delegate.txt");
+
+      fireEvent.change(screen.getByLabelText("Source"), { target: { value: "all" } });
+      mock.page = {
+        attempt: 3,
+        lines: [{ seq: 9, source: "worker", at, line: "new" }],
+        last_seq: 9,
+      };
+      rerender(<TaskLog taskId="t1" attempt={3} />);
+      await screen.findByText("new");
+      fireEvent.click(button());
+      const next = await (blobs[1] as Blob).text();
+      expect(next).toContain("# attempt: 3\n");
+      expect(next).not.toContain("first");
+      expect(next).not.toContain("from delegate");
+      expect(clicked.at(-1)).toBe("argus-task-t1-attempt-3-all.txt");
+    });
+  });
 });

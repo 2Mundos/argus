@@ -1,7 +1,14 @@
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { api, call } from "../api";
 import { useLive } from "../live";
-import { filterLines, type LogFilter, type LogLine, logEvent, mergeLines } from "../taskLog";
+import {
+  type LogFilter,
+  type LogLine,
+  logDownload,
+  logEvent,
+  mergeLines,
+  visibleLines,
+} from "../taskLog";
 import { type SteersSource, TaskSteers } from "./TaskSteers";
 
 const READ_LIMIT = 1000; // the API's largest page
@@ -160,13 +167,28 @@ export function useTaskLog(taskId: string, attempt: number): TaskLogState {
   };
 }
 
+function downloadText(filename: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export function TaskLogBarActions({
+  taskId,
+  attempt,
   log,
   steer,
   filter,
   onFilterChange,
   hideFilter = false,
 }: {
+  taskId: string;
+  attempt: number;
   log: TaskLogState;
   steer?: TaskLogSteer;
   filter: LogFilter;
@@ -174,6 +196,7 @@ export function TaskLogBarActions({
   hideFilter?: boolean;
 }) {
   const { lines, pausedAt, setPausedAt, steerOpen, setSteerOpen, behind, paused } = log;
+  const rows = visibleLines(lines, filter, pausedAt);
   return (
     <>
       {!hideFilter && (
@@ -199,6 +222,23 @@ export function TaskLogBarActions({
         onClick={() => setPausedAt(paused ? null : (lines.at(-1)?.seq ?? 0))}
       >
         {paused ? `Resume${behind ? ` (+${behind})` : ""}` : "Pause"}
+      </button>
+      <button
+        type="button"
+        className="term-action"
+        aria-label="Download visible output"
+        title={
+          rows.length === 0
+            ? "No output to download"
+            : "Download the visible output as a text file (loaded excerpt)"
+        }
+        disabled={rows.length === 0}
+        onClick={() => {
+          const file = logDownload(taskId, attempt, filter, rows, pausedAt);
+          downloadText(file.filename, file.text);
+        }}
+      >
+        Download
       </button>
       {steer?.claimed && (
         <button
@@ -230,10 +270,7 @@ export function TaskLogContent({
   filter: LogFilter;
 }) {
   const { pausedAt, steerOpen, setSteerOpen, error, box, atEnd, lines } = log;
-  const shown = filterLines(
-    pausedAt == null ? lines : lines.filter((l) => l.seq <= pausedAt),
-    filter,
-  );
+  const shown = visibleLines(lines, filter, pausedAt);
 
   useEffect(() => {
     if (pausedAt == null && atEnd.current && box.current)
@@ -301,7 +338,14 @@ export function TaskLog({
           <i />
         </span>
         <span className="term-title">{`live · attempt ${attempt}`}</span>
-        <TaskLogBarActions log={log} steer={steer} filter={filter} onFilterChange={setFilter} />
+        <TaskLogBarActions
+          taskId={taskId}
+          attempt={attempt}
+          log={log}
+          steer={steer}
+          filter={filter}
+          onFilterChange={setFilter}
+        />
       </div>
       <TaskLogContent taskId={taskId} attempt={attempt} steer={steer} log={log} filter={filter} />
     </section>

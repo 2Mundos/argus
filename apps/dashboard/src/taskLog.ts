@@ -48,3 +48,40 @@ export function mergeLines(have: LogLine[], more: LogLine[]): LogLine[] {
 export function filterLines(lines: LogLine[], filter: LogFilter): LogLine[] {
   return filter === "all" ? lines : lines.filter((l) => l.source === filter);
 }
+
+/** The rows the panel shows: up to the pause cutoff, then the source filter. */
+export function visibleLines(
+  lines: LogLine[],
+  filter: LogFilter,
+  pausedAt: number | null,
+): LogLine[] {
+  return filterLines(pausedAt == null ? lines : lines.filter((l) => l.seq <= pausedAt), filter);
+}
+
+/** A row as shown on screen. */
+export function lineText(l: LogLine): string {
+  return `${l.source === "delegate" ? "[delegate] " : ""}${l.line}`;
+}
+
+/** The download of the visible rows: a plain text excerpt, built from the rows shown only. */
+export function logDownload(
+  taskId: string,
+  attempt: number,
+  filter: LogFilter,
+  rows: LogLine[],
+  pausedAt: number | null,
+): { filename: string; text: string } {
+  const id = taskId.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 64);
+  const header = [
+    "# Argus task log: loaded excerpt, not a full transcript",
+    `# task: ${taskId}`,
+    `# attempt: ${attempt}`,
+    `# source: ${filter}`,
+    `# cutoff: ${pausedAt == null ? "live" : `paused after seq ${pausedAt}`}`,
+    `# lines: ${rows.length}`,
+  ];
+  return {
+    filename: `argus-task-${id}-attempt-${attempt}-${filter}.txt`,
+    text: `${header.join("\n")}\n\n${rows.map((l) => `${lineText(l)}\n`).join("")}`,
+  };
+}
