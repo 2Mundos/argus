@@ -25,6 +25,8 @@ cp "$here/argus-local-forward.test.ts" "$target/src/channels/argus-local-forward
 cp "$here/argus-accounts.ts" "$target/src/channels/argus-accounts.ts"
 cp "$here/argus-git-identity.ts" "$target/src/channels/argus-git-identity.ts"
 cp "$here/argus-git-identity.test.ts" "$target/src/channels/argus-git-identity.test.ts"
+cp "$here/argus-forge-review.ts" "$target/src/channels/argus-forge-review.ts"
+cp "$here/argus-forge-review.test.ts" "$target/src/channels/argus-forge-review.test.ts"
 cp "$here/argus-usage-relay.ts" "$target/src/channels/argus-usage-relay.ts"
 cp "$here/argus-usage-relay.test.ts" "$target/src/channels/argus-usage-relay.test.ts"
 cp "$here/argus-changes-relay.ts" "$target/src/channels/argus-changes-relay.ts"
@@ -460,6 +462,19 @@ assert old in s, "container-runner composeSessionSpec contributedEnv block chang
 open(p, "w").write(s.replace(old, new, 1))
 PY
   echo "patched $container_runner (host git identity → agent contributedEnv)"
+fi
+# The trusted forge-review policy (settings 3.12) rides the same list; extend a runner
+# patched before it existed.
+if [ -f "$container_runner" ] && ! grep -q "ARGUS_FORGE_REVIEW" "$container_runner"; then
+  python3 - "$container_runner" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "'ARGUS_COMMAND_GUARD']"
+assert old in s, "container-runner forwarded-env list changed upstream"
+open(p, "w").write(s.replace(old, "'ARGUS_COMMAND_GUARD', 'ARGUS_FORGE_REVIEW']", 1))
+PY
+  echo "patched $container_runner (host ARGUS_FORGE_REVIEW → agent contributedEnv)"
 fi
 
 codex_test="$target/container/agent-runner/src/providers/codex-app-server.test.ts"

@@ -666,3 +666,7 @@ class ClaimedTask(Task):
     # Effective `delivery.auto_merge` for this task's project (settings 3.10): with a
     # `pr_merged` deliverable the worker may merge its own PR.
     auto_merge: bool = False
+    # Effective `review.forge_agentic` (settings 3.12): the project requires the forge's
+    # agentic review for the exact head before a PR is ready or merged. Distinct from
+    # `review.independent`, the backend `code_review` child. Null: not delivered.
+    forge_agentic_review_required: bool | None = None

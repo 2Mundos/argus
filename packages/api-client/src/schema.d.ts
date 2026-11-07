@@ -4948,6 +4948,8 @@ export interface components {
             failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
+            /** Forge Agentic Review Required */
+            forge_agentic_review_required?: boolean | null;
             /** Git Identity */
             git_identity?: {
                 [key: string]: string;

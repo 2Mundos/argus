@@ -40,6 +40,7 @@ export function Settings() {
   const gitIdentity = byKey.get("git.identity");
   const autoMerge = byKey.get("delivery.auto_merge");
   const acceptance = byKey.get("review.acceptance");
+  const forgeAgentic = byKey.get("review.forge_agentic");
   const orchestratorEnabled = byKey.get("orchestrator.enabled");
   const orchestratorRuntime = byKey.get("orchestrator.runtime");
   const orchestratorModel = byKey.get("orchestrator.model");
@@ -133,6 +134,20 @@ export function Settings() {
             >
               Completed tasks wait in review for acceptance. Off, they succeed directly; a green or
               merged PR deliverable still needs the forge to confirm it.
+            </ToggleSection>
+          </div>
+          <div className="card">
+            <ToggleSection
+              title="Forge agentic review"
+              settingKey="review.forge_agentic"
+              project={project}
+              setting={forgeAgentic}
+              onChanged={() => reload()}
+            >
+              This repository's forge posts an agentic review on pull requests. On, a worker waits
+              for it and may not call a PR ready or merge without one for the exact head. Off, a
+              missing review is not a blocker; findings and requested changes that exist still are.
+              Separate from the review by a different model below.
             </ToggleSection>
           </div>
           <div className="card">

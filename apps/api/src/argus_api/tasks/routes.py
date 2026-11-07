@@ -344,6 +344,9 @@ async def claim_task(
                     auto_merge = await settings_svc.auto_merge_enabled(
                         conn, task.project
                     )
+                    forge_review = await settings_svc.forge_agentic_review_required(
+                        conn, task.project
+                    )
                     switch = await service.attempt_model_switch(
                         conn, task.id, task.attempt
                     )
@@ -368,6 +371,7 @@ async def claim_task(
                     git_identity=git_identity,
                     command_guard_enabled=command_guard_enabled,
                     auto_merge=auto_merge,
+                    forge_agentic_review_required=forge_review,
                 )
             remaining = deadline - loop.time()
             try:

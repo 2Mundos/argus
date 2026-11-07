@@ -4402,6 +4402,17 @@
             "title": "Failures",
             "type": "integer"
           },
+          "forge_agentic_review_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forge Agentic Review Required"
+          },
           "git_identity": {
             "anyOf": [
               {

@@ -159,6 +159,18 @@ REGISTRY: dict[str, SettingDefinition] = {
             "tasks succeed only once the PR is merged."
         ),
     ),
+    "review.forge_agentic": SettingDefinition(
+        key="review.forge_agentic",
+        schema={"type": "boolean"},
+        default=False,
+        scopes=["global", "project"],
+        description=(
+            "The project's forge posts an agentic review on pull requests, and a "
+            "worker may not call a PR ready or merge it without one for the exact "
+            "head. Off: a missing review is not a blocker; findings and changes "
+            "requested that exist still are."
+        ),
+    ),
     "review.acceptance": SettingDefinition(
         key="review.acceptance",
         schema={"type": "boolean"},

@@ -299,7 +299,23 @@ async function wait(api, o, ctx) {
 
 const CHANGES_REQUESTED = new Set(["REQUEST_CHANGES", "CHANGES_REQUESTED"]);
 
-async function prReady(api, o) {
+/**
+ * The forge agentic-review policy the Argus channel put in ARGUS_FORGE_REVIEW from the claim
+ * (settings 3.12): "required" | "off". Unset means a standalone helper outside an Argus
+ * session (legacy: --skip-review still applies). Anything else is unknown and fails closed
+ * as required, and --skip-review never relaxes a delivered policy.
+ */
+export function reviewPolicy(env) {
+  const v = env.ARGUS_FORGE_REVIEW;
+  if (v === undefined || v === "") return "unset";
+  return v === "off" ? "off" : "required";
+}
+
+async function prReady(api, o, ctx) {
+  const policy = reviewPolicy(ctx.env);
+  // Missing review is a reason only when policy requires one; an existing review is always read.
+  const needsReview = policy === "required" || (policy === "unset" && !o["skip-review"]);
+  const readsReview = policy !== "unset" || !o["skip-review"];
   const pr = await api.getPullRequest(o.number);
   const head = pr?.head?.sha;
   if (typeof head !== "string") throw new GiteaError("bad_response", "PR response has no head SHA");
@@ -310,12 +326,13 @@ async function prReady(api, o) {
   if (ci.state === "unknown") reasons.push("ci_unknown");
   if (ci.state === "missing") reasons.push("ci_missing");
   let review = null;
-  if (!o["skip-review"]) {
+  if (readsReview) {
     review = await api.reviewFindings(pr.number);
     // reviewFindings reads the PR again: a push in between would mix two heads' evidence.
     if (review.head_sha !== head) reasons.push("head_moved");
-    else if (!review.matches_head || review.finding_count === null) reasons.push("review_missing");
-    else if (review.finding_count > 0) reasons.push("review_findings");
+    else if (review.matches_head && review.finding_count > 0) reasons.push("review_findings");
+    else if (needsReview && (!review.matches_head || review.finding_count === null))
+      reasons.push("review_missing");
   }
   const latest = new Map();
   const reviews = (await api.listReviews(pr.number, { all: true, limit: 50 })).items;
@@ -342,6 +359,7 @@ async function prReady(api, o) {
       head_sha: head,
       ready: !reasons.length,
       reasons,
+      review_policy: policy,
       ci,
       review: review && {
         matches_head: review.matches_head,
@@ -1012,7 +1030,8 @@ const COMMANDS = {
     run: wait,
   },
   "pr-ready": {
-    summary: "--pr N: ready (0) or not (12) with reasons; never merges",
+    summary:
+      "--pr N: ready (0) or not (12) with reasons; never merges. Review per ARGUS_FORGE_REVIEW (required|off, from the Argus claim); --skip-review only when it is unset",
     options: { "skip-review": "bool" },
     run: prReady,
   },

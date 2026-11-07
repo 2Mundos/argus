@@ -113,6 +113,7 @@
   "failover": null,
   "failure_class": null,
   "failures": 0,
+  "forge_agentic_review_required": null,
   "git_identity": null,
   "harness_account": null,
   "harness_model": null,

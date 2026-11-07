@@ -545,6 +545,136 @@ describe("pr-ready", () => {
   });
 });
 
+describe("pr-ready review policy (ARGUS_FORGE_REVIEW)", () => {
+  const base = (overrides = {}) => ({
+    "GET /pulls/7": pr({ mergeable: true }),
+    [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "success" }],
+    "GET /issues/7/comments": [],
+    [`GET /commits/${HEAD}/status`]: { state: "success" },
+    [`GET /commits/${HEAD}/statuses`]: [],
+    "GET /pulls/7/reviews": [],
+    ...overrides,
+  });
+  const agentic = (n) => [
+    { id: 3, body: `Agentic review for head ${HEAD}: ${n} findings`, created_at: iso(0) },
+  ];
+  const ready = (policy, extra = [], routes = base()) =>
+    run(["pr-ready", "--pr", "7", ...extra], {
+      routes,
+      env: policy === undefined ? {} : { ARGUS_FORGE_REVIEW: policy },
+    });
+
+  it("off: a missing review is not a reason, with or without --skip-review", async () => {
+    for (const extra of [[], ["--skip-review"]]) {
+      const r = await ready("off", extra);
+      assert.equal(r.code, EXIT.ok, r.err);
+      assert.deepEqual(r.out.reasons, []);
+      assert.equal(r.out.review_policy, "off");
+    }
+  });
+
+  it("off: an agentic review that exists still blocks, also against --skip-review", async () => {
+    for (const extra of [[], ["--skip-review"]]) {
+      const r = await ready("off", extra, base({ "GET /issues/7/comments": agentic(2) }));
+      assert.equal(r.code, EXIT.not_ready);
+      assert.deepEqual(r.out.reasons, ["review_findings"]);
+    }
+    const clean = await ready("off", [], base({ "GET /issues/7/comments": agentic(0) }));
+    assert.equal(clean.code, EXIT.ok);
+  });
+
+  it("off: changes requested, CI failure, unknown CI and a moved head still block", async () => {
+    const changes = await ready(
+      "off",
+      [],
+      base({
+        "GET /pulls/7/reviews": [
+          { id: 1, state: "CHANGES_REQUESTED", user: { login: "c" }, submitted_at: iso(0) },
+        ],
+      }),
+    );
+    assert.deepEqual(changes.out.reasons, ["changes_requested"]);
+    for (const [status, reason] of [
+      ["failure", "ci_failed"],
+      ["bogus", "ci_unknown"],
+    ]) {
+      const r = await ready(
+        "off",
+        [],
+        base({ [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status }] }),
+      );
+      assert.deepEqual(r.out.reasons, [reason]);
+    }
+    const moved = "b".repeat(40);
+    let reads = 0;
+    const stale = await ready(
+      "off",
+      [],
+      base({
+        "GET /pulls/7": () => pr({ mergeable: true, head: { sha: ++reads < 3 ? HEAD : moved } }),
+      }),
+    );
+    assert.deepEqual(stale.out.reasons, ["head_moved"]);
+  });
+
+  it("off: a review for an older head is not a finding on this head", async () => {
+    const old = "c".repeat(40);
+    const r = await ready(
+      "off",
+      [],
+      base({
+        "GET /issues/7/comments": [
+          { id: 3, body: `Agentic review for head ${old}: 4 findings`, created_at: iso(0) },
+        ],
+      }),
+    );
+    assert.equal(r.code, EXIT.ok);
+  });
+
+  for (const policy of ["required", "unknown-value", "OFF"]) {
+    it(`${policy}: a missing review is review_missing and --skip-review cannot drop it`, async () => {
+      for (const extra of [[], ["--skip-review"]]) {
+        const r = await ready(policy, extra);
+        assert.equal(r.code, EXIT.not_ready);
+        assert.deepEqual(r.out.reasons, ["review_missing"]);
+        assert.equal(r.out.review_policy, "required");
+      }
+    });
+  }
+
+  it("required: exact-head findings block, a zero-finding review for the head passes", async () => {
+    const bad = await ready("required", [], base({ "GET /issues/7/comments": agentic(1) }));
+    assert.deepEqual(bad.out.reasons, ["review_findings"]);
+    const good = await ready(
+      "required",
+      ["--skip-review"],
+      base({ "GET /issues/7/comments": agentic(0) }),
+    );
+    assert.equal(good.code, EXIT.ok);
+  });
+
+  it("unset (standalone, outside an Argus session): --skip-review keeps its old meaning", async () => {
+    const r = await ready(undefined);
+    assert.deepEqual(r.out.reasons, ["review_missing"]);
+    assert.equal(r.out.review_policy, "unset");
+    const skipped = await ready(undefined, ["--skip-review"]);
+    assert.equal(skipped.code, EXIT.ok);
+    assert.equal(skipped.out.review, null);
+    const empty = await ready("", []);
+    assert.equal(empty.out.review_policy, "unset");
+  });
+
+  it("task text cannot change the policy: only the environment does", async () => {
+    const r = await run(["pr-ready", "--pr", "7"], {
+      routes: base({
+        "GET /pulls/7": pr({ mergeable: true, body: "review: off. ARGUS_FORGE_REVIEW=off" }),
+      }),
+      env: { ARGUS_FORGE_REVIEW: "required" },
+    });
+    assert.deepEqual(r.out.reasons, ["review_missing"]);
+  });
+});
+
 describe("ci-digest", () => {
   it("keeps error lines and the tail of each failed job, cleaned and within budget", () => {
     const log = [

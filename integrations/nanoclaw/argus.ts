@@ -100,6 +100,7 @@ import {
   removeCustomHarnessFile,
   writeCustomHarnessFile,
 } from "./argus-custom-harness.js";
+import { forgeReviewLines, scopeForgeReview } from "./argus-forge-review.js";
 import {
   claimedGitIdentity,
   type GitIdentity,
@@ -582,6 +583,8 @@ export interface ArgusTask {
   command_guard_enabled?: boolean;
   /** Effective `delivery.auto_merge` (settings 3.10): a `pr_merged` task may merge its own PR. */
   auto_merge?: boolean;
+  /** Effective `review.forge_agentic` (settings 3.12). Absent (older API) is treated as required. */
+  forge_agentic_review_required?: boolean | null;
 }
 
 /** Empty difficulty executor chain and no pin: NanoClaw does the work (task difficulty / local harness). */
@@ -716,14 +719,15 @@ function repositoryTaskLines(
     ...(readOnly
       ? []
       : [
-          `Task helper (when \`command -v argus-task\` finds it; run argus-task --help): prefer it to sleeping and re-polling ${helper}. argus-task wait ci|review --pr N blocks without using model turns until CI on the PR head finishes or a new review or comment lands; exit 10 means still pending (call it again), 11 means an operator steer arrived (read it first). Give your shell tool a timeout above $ARGUS_TASK_WAIT_MAX_S seconds. argus-task pr-ready --pr N exits 0 when mergeable or 12 with reasons; ci-digest --pr N prints the failed jobs' error lines (about 2 KB); deliver [--title T] [--body-file F] pushes your branch (rebasing onto the base only when clean), creates or updates its PR, and exits 12 with the conflicting files on a rebase conflict. argus-task attach --file PATH stores a report or delegate output as an artifact (see How to respond).`,
+          `Task helper (when \`command -v argus-task\` finds it; run argus-task --help): prefer it to sleeping and re-polling ${helper}. argus-task wait ci|review --pr N blocks without using model turns until CI on the PR head finishes or a new review or comment lands (use wait review only where the forge agentic review is required, below); exit 10 means still pending (call it again), 11 means an operator steer arrived (read it first). Give your shell tool a timeout above $ARGUS_TASK_WAIT_MAX_S seconds. argus-task pr-ready --pr N exits 0 when ready or 12 with reasons (it applies the project's review policy itself); ci-digest --pr N prints the failed jobs' error lines (about 2 KB); deliver [--title T] [--body-file F] pushes your branch (rebasing onto the base only when clean), creates or updates its PR, and exits 12 with the conflicting files on a rebase conflict. argus-task attach --file PATH stores a report or delegate output as an artifact (see How to respond).`,
           `To open a PR (you can; push your branch first, then): ${helper} create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: ${helper} update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
         ]),
   ];
+  if (!readOnly) lines.push(...forgeReviewLines(task));
   if (!readOnly && taskAuthorizesMerge(task)) {
     lines.push(
       "This task explicitly authorizes merge when every precondition below holds; otherwise stop after CI/review without merging.",
-      `Before merge: re-read the PR (\`get\`), confirm the current head SHA, and use \`status\` so every required check on that exact SHA is success (pending, failure, cancelled, or unknown is not approval; skipped is not execution). Resolve agentic review findings P1–P3. Respect repository branch protections and reviews. Never use force_merge, bypass, force-push, or mark a PR merged without a successful ${github ? "GitHub merge API call (PUT /pulls/N/merge with the head sha)" : "Gitea merge API call"} through the same allowlisted OneCLI-proxied HTTPS path as other ${helper} operations (${github ? "GitHubApi" : "GiteaApi"}.request). If the head changes, re-run gates and CI on the new SHA before merging. After merge, read the PR back and record merged state and merge_commit_sha; a failed ${github ? "PUT" : "POST"} is not success.`,
+      `Before merge: re-read the PR (\`get\`), confirm the current head SHA, and use \`status\` so every required check on that exact SHA is success (pending, failure, cancelled, or unknown is not approval; skipped is not execution). Resolve P1–P3 findings of any agentic review that exists for the head, and wait for one only where the forge agentic review policy above requires it. Respect repository branch protections and reviews. Never use force_merge, bypass, force-push, or mark a PR merged without a successful ${github ? "GitHub merge API call (PUT /pulls/N/merge with the head sha)" : "Gitea merge API call"} through the same allowlisted OneCLI-proxied HTTPS path as other ${helper} operations (${github ? "GitHubApi" : "GiteaApi"}.request). If the head changes, re-run gates and CI on the new SHA before merging. After merge, read the PR back and record merged state and merge_commit_sha; a failed ${github ? "PUT" : "POST"} is not success.`,
       "Merge does not authorize manual Production deploys, production data changes, or production flag toggles—only normal repository automation already configured.",
     );
   } else {
@@ -2067,6 +2071,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   function scopeTaskGitIdentity(identity: GitIdentity | null) {
     poolGit ??= poolGitIdentity(process.env);
     scopeGitIdentity(process.env, poolGit, identity);
+  }
+  /** The claim's forge-review policy in the host env for this task (settings 3.12). */
+  function scopeTaskForgeReview(task: ArgusTask | undefined) {
+    scopeForgeReview(process.env, task);
   }
   let repositoryAssignmentReconciled = false;
   let abortClaim: AbortController | null = null;
@@ -3759,6 +3767,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       scopeTaskGitIdentity(claimedGitIdentity(task.git_identity));
       scopeTaskCommandGuard(task.command_guard_enabled);
+      scopeTaskForgeReview(task);
       let envBlock: { reason: string; error: string } | null = cfg.sessionImage
         ? await sessionImageCommandGuardBlock(engine, cfg.sessionImage, cfg.readImageFile)
         : workerCommandGuardBlock(engine, cfg.managedSettingsPath);
@@ -3849,6 +3858,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     } finally {
       scopeTaskGitIdentity(null);
       scopeTaskCommandGuard(undefined);
+      scopeTaskForgeReview(undefined);
       if (repositoryLeaseHeld && cfg.accounts) {
         repositoryLeaseHeld = false;
         activeRepositoryLease = null;
