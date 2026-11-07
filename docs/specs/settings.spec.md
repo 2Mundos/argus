@@ -138,6 +138,9 @@ different model**, with `different_provider` shown as "…from a different provi
 - **Timing.** The mode is read when the task completes. Turning it on does not
   reopen succeeded tasks; turning it off lets a waiting gate pass on the next
   completion or a manager's `accept`.
+- **Not the forge's review.** This gate is Argus's own `code_review` child. It
+  never asks for, waits on, or counts a comment on the pull request. Whether a
+  worker needs the forge's agentic review is a separate key (3.12).
 
 ## 3.6 Routines
 
@@ -249,6 +252,41 @@ It does not change independent review (3.5), which is its own opt-in and still h
 a code task in `in_review` while on, nor the manager operations that move a task
 there on request ([task deliverable](task-deliverable.spec.md) 3.8).
 
+## 3.12 Forge agentic review
+
+Key `review.forge_agentic`, scopes `global` and `project`, boolean, default `false`.
+A project value takes precedence over the global one. It says that the project's
+forge posts an agentic review on pull requests ([gitea helper](gitea-helper.spec.md)
+3.4) and that a worker must have one for the exact head before it calls a PR ready or
+merges it. It is independent of `review.independent` (3.5): that key off does not
+turn this one on, and this one off does not disable that gate. Nothing is inferred
+from the forge's name, from missing comments, from a workspace file or from task
+text; a project without a configured agentic review is simply `false`.
+
+The claim carries the effective value as `forge_agentic_review_required`. The
+NanoClaw channel turns it into the attempt's trusted policy, `ARGUS_FORGE_REVIEW=
+required|off` in the worker host environment (forwarded to session shells like the
+git identity), and words the repository part of the task prompt from it:
+
+- **Required.** The worker waits for the agentic review of the exact head
+  (`argus-task wait review`) and resolves its P1–P3 findings. `pr-ready` reports
+  `review_missing` while none covers the head, and `--skip-review` cannot lift it.
+- **Off.** A missing agentic review is not a blocker and the worker is told not to
+  wait for or request one. It is not permission to ignore what exists: `pr-ready` still
+  reads the review for the head and reports `review_findings` for any finding count above
+  zero, and still reports `changes_requested`, failed or unknown CI, `not_mergeable` and
+  `head_moved`. `--skip-review` does not remove these either.
+- **Unknown.** An older API that omits the field, or a value other than `off`,
+  counts as required. Only a standalone `argus-task` with no policy at all
+  (`ARGUS_FORGE_REVIEW` unset, outside an Argus session) keeps the legacy
+  `--skip-review` ([task helpers](task-helpers.spec.md) 3.6).
+
+`delivery.auto_merge` (3.10) stays an authorization: it allows a merge once every
+precondition holds and does not decide which review is one of them. The policy is read
+at claim, so a change applies to attempts claimed afterwards. Upgrading changes one
+default: a repository whose workers relied on the always-required agentic review needs
+`review.forge_agentic` set to `true` for it (globally or for that project).
+
 # 4. Open Questions
 
 - Should orchestrators be allowed to write project overrides? Phase 1 says admin
@@ -259,6 +297,10 @@ there on request ([task deliverable](task-deliverable.spec.md) 3.8).
   different family? `different_provider` exists for the strict case.
 - Should the PR's agentic review ([gitea helper](gitea-helper.spec.md) 3.4) count
   as an independent review when its model is known? Needs a model on that comment.
+  Until then the two are separate keys (3.5, 3.12).
+- `ARGUS_FORGE_REVIEW` is a process environment variable: a worker with a shell could
+  set it for one command. It is a guard against mistakes and stale prompts, not against
+  a worker that bypasses its own helper; the merge itself is still checked on the forge.
 - Candidates for later keys: default task `review`, `max_attempts`, lease TTL,
   `ARGUS_MAX_TASKS_PER_AGENT_HOUR`, workspace cleanup.
 

@@ -177,7 +177,18 @@ set:
 | `changes_requested` | A reviewer's latest non-comment review requests changes (dismissed ones are skipped) |
 | `not_mergeable` | The forge reports `mergeable: false` |
 
-`--skip-review` drops the review reasons for repositories without agentic review.
+The review reasons follow the trusted policy in `ARGUS_FORGE_REVIEW` (`required` |
+`off`), set by the Argus channel from the claim ([settings](settings.spec.md) 3.12) and
+printed as `review_policy` (`required`, `off`, or `unset`):
+
+- `required`, or any other value: `review_missing` and `review_findings` as in the
+  table. `--skip-review` is ignored.
+- `off`: `review_missing` is never reported; an agentic review that covers the head
+  with findings is still `review_findings`. The CI, `changes_requested`,
+  `not_mergeable` and `head_moved` reasons are unchanged. `--skip-review` is ignored.
+- `unset`, a helper outside an Argus session: `--skip-review` drops both review
+  reasons for repositories without agentic review, as before.
+
 Unresolved review threads are not a reason: GitHub's REST API does not expose thread
 resolution, and a blocking review already shows as `changes_requested`. It never merges
 or approves.
