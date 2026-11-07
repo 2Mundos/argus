@@ -38,6 +38,11 @@ the page. On a narrow screen the menu moves to a bar across the top.
   first, the entries scrolling sideways if they do not fit, Sign out at the end;
   below 960 px only icons show, each keeping its text as its accessible name. The
   server status box is not shown there.
+- **Projects** opens a project at `#projects/<slug>` and its tabs at
+  `#projects/<slug>/<tab>` ([task defaults](task-defaults.spec.md) 3.7); Settings
+  opens a project's scope at `#setup/settings/<slug>`.
+- **Unsaved edits** hold navigation: a hash change away from a form with unsaved
+  edits asks first, and "no" puts the old hash back.
 - Every entry has its own icon.
 - **The wordmark in the menu is a link home**: `#chat` with the orchestrator on,
   `#dashboard` without it, the same page the app opens on. The login screen's stays
@@ -60,8 +65,8 @@ poll.
 
 # 6. Implementation Consequences
 
-`App.tsx` (menu, sign out, `isCurrent`, tab bar) and the layout and tab
-styles in `styles.css`.
+`App.tsx` (menu, sign out, `isCurrent`, tab bar), `unsaved.ts` (the hash and the
+unsaved-edits guard) and the layout and tab styles in `styles.css`.
 
 ## Verification boundary
 

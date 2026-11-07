@@ -287,6 +287,16 @@ at claim, so a change applies to attempts claimed afterwards. Upgrading changes 
 default: a repository whose workers relied on the always-required agentic review needs
 `review.forge_agentic` set to `true` for it (globally or for that project).
 
+## 3.13 Task defaults
+
+Keys `task_default_deliverable`, `task_default_priority`, `task_default_difficulty`,
+`task_default_required_capabilities`, `task_default_budget_usd`,
+`task_default_max_attempts` and `task_default_timeout_s`, scopes `global` and
+`project`: what a new task gets for a field it leaves out. Each key resolves on
+its own, so a project that overrides one inherits the rest. Values, precedence,
+the creation snapshot and `GET /api/projects/{slug}/task-defaults` are in
+[task defaults](task-defaults.spec.md).
+
 # 4. Open Questions
 
 - Should orchestrators be allowed to write project overrides? Phase 1 says admin
@@ -301,7 +311,7 @@ default: a repository whose workers relied on the always-required agentic review
 - `ARGUS_FORGE_REVIEW` is a process environment variable: a worker with a shell could
   set it for one command. It is a guard against mistakes and stale prompts, not against
   a worker that bypasses its own helper; the merge itself is still checked on the forge.
-- Candidates for later keys: default task `review`, `max_attempts`, lease TTL,
+- Candidates for later keys: default task `review`, lease TTL,
   `ARGUS_MAX_TASKS_PER_AGENT_HOUR`, workspace cleanup.
 
 # 5. Constraints

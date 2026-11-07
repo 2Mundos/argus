@@ -4425,3 +4425,39 @@ label.header-toggle {
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+
+/* -- task defaults ---------------------------------------------------------- */
+
+.task-default-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+.task-default {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.task-default.is-dirty {
+  border-color: var(--accent);
+}
+.task-default legend {
+  padding: 0 0.3rem;
+  font-weight: 600;
+}
+.task-default p {
+  margin: 0;
+}
+/* A New task field with the line saying where its default comes from. */
+.field {
+  display: grid;
+  gap: 0.2rem;
+  align-content: start;
+}
+.field-hint .link {
+  font-size: inherit;
+}

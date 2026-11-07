@@ -52,6 +52,7 @@ from argus_core.tasks import (
     MAX_DEPENDENCIES,
     TERMINAL,
     Action,
+    Deliverable,
     ExecutorModel,
     Failover,
     HarnessModel,
@@ -100,6 +101,7 @@ from argus_api.routines import failures as routine_failures
 from argus_api.runtime.gate import claim_gate
 from argus_api.tasks import continuation as cont
 from argus_api.tasks import cost as task_cost
+from argus_api.tasks import defaults as task_defaults
 from argus_api.tasks import deliverable, finalization, steers
 from argus_api.tasks.cost import BUDGET_EXHAUSTED
 
@@ -178,7 +180,11 @@ async def create_task(
             untrusted=untrusted,
             chat_turn=chat_turn,
         )
-    digest = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
+    # What was sent, not what defaults would fill: an omitted and a null budget
+    # differ, and a replay after a settings change returns the same task (3.3).
+    digest = hashlib.sha256(
+        body.model_dump_json(exclude_unset=True).encode()
+    ).hexdigest()
     async with tx.conn.execute(
         "SELECT request_digest, task_id FROM task_creation_keys"
         " WHERE actor = ? AND idempotency_key = ?",
@@ -232,13 +238,18 @@ async def _create_task(
     elif as_worker is not None:
         raise ForbiddenError("workers may only create subtasks (set parent_id)")
     own_pins = body.knowledge
-    body = _apply_kind_defaults(body, await kinds.get_kind(tx.conn, body.kind))
+    kind = await kinds.get_kind(tx.conn, body.kind)
+    body = _apply_kind_defaults(body, kind)
     if body.project is None:
         if body.parent_id is None:
             raise ValidationFailedError("project is required", code="project_required")
         body = body.model_copy(update={"project": parent["project"]})
     else:  # only an explicit name is refused: legacy `global` parents still inherit
         _refuse_global(body.project)
+    # The project first, then its task defaults (task defaults spec 3.2).
+    body, default_sources = task_defaults.resolve(
+        body, kind, await task_defaults.stored(tx.conn, body.project)
+    )
     # Worker-authored child tasks: immutable worker trust; always await approval so
     # injected prompts cannot silently become ready work for another agent.
     if as_worker is not None:
@@ -248,13 +259,9 @@ async def _create_task(
         prompt_trust = PromptTrust.WORKER
     else:
         prompt_trust = PromptTrust.ORCHESTRATOR
-    await _check_project_and_pins(tx.conn, body, own_pins)
-    if "budget_usd" not in body.model_fields_set:
-        # Omitted: the project's default; an explicit null keeps "no budget" (3.4).
-        from argus_api.settings import service as settings_svc
-
-        default = await settings_svc.task_default_budget(tx.conn, body.project)
-        body = body.model_copy(update={"budget_usd": default})
+    await _check_project_and_pins(
+        tx.conn, body, own_pins, task_defaults.hints(body.project, default_sources)
+    )
     harness_account = await _resolve_harness_account(
         tx.conn,
         body.harness_account,
@@ -308,7 +315,7 @@ async def _create_task(
             body.spec,
             json.dumps(body.acceptance),
             json.dumps(body.input),
-            json.dumps(sorted(set(body.required_capabilities))),
+            json.dumps(sorted(set(body.required_capabilities or []))),
             body.priority,
             state,
             int(body.requires_approval),
@@ -340,7 +347,15 @@ async def _create_task(
         "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
         [(task_id, d) for d in deps],
     )
-    await record(tx, actor, "task", task_id, "task.created", {"to": state})
+    # The defaults applied, by source: the creation-time snapshot (3.3).
+    await record(
+        tx,
+        actor,
+        "task",
+        task_id,
+        "task.created",
+        {"to": state, "defaults": default_sources},
+    )
     if over_limit:
         await decisions.open_decision(
             tx,
@@ -3785,16 +3800,15 @@ async def _dependency_failed_event(
 
 
 def _apply_kind_defaults(body: TaskCreate, kind: TaskKind) -> TaskCreate:
-    """Fill fields the creator left unset from the kind; validate the input."""
+    """Fill fields the creator left unset from the kind; validate the input. The
+    capabilities, attempts and timeout rank below the task defaults
+    (`task_defaults.resolve`)."""
     kinds.validate(kind.input_schema, body.input, "input")
     defaults = {
-        "required_capabilities": kind.default_capabilities,
         "lease_ttl_s": kind.default_lease_ttl_s,
-        "max_attempts": kind.default_max_attempts,
-        "timeout_s": kind.default_timeout_s,
         "review": kind.default_review,
     }
-    update = {
+    update: dict[str, Any] = {
         field: value
         for field, value in defaults.items()
         if value is not None and field not in body.model_fields_set
@@ -3811,9 +3825,15 @@ async def check_create(conn: aiosqlite.Connection, body: TaskCreate) -> None:
     the project and pinned pages. Routine templates are checked with it on save
     (routines spec 3.1)."""
     own_pins = body.knowledge
-    body = _apply_kind_defaults(body, await kinds.get_kind(conn, body.kind))
+    kind = await kinds.get_kind(conn, body.kind)
+    body = _apply_kind_defaults(body, kind)
     _refuse_global(body.project)
-    await _check_project_and_pins(conn, body, own_pins)
+    body, sources = task_defaults.resolve(
+        body, kind, await task_defaults.stored(conn, body.project)
+    )
+    await _check_project_and_pins(
+        conn, body, own_pins, task_defaults.hints(body.project, sources)
+    )
 
 
 def _refuse_global(project: str | None) -> None:
@@ -3826,7 +3846,10 @@ def _refuse_global(project: str | None) -> None:
 
 
 async def _check_project_and_pins(
-    conn: aiosqlite.Connection, body: TaskCreate, own_pins: list[str]
+    conn: aiosqlite.Connection,
+    body: TaskCreate,
+    own_pins: list[str],
+    hints: Callable[[deliverable.CreateProblem], list[str]],
 ) -> None:
     """`own_pins` are the caller's; a kind's pins are the admin's choice and may
     live in any project (task edit 3.1)."""
@@ -3839,7 +3862,11 @@ async def _check_project_and_pins(
                     f"unknown project: {body.project}", code="unknown_project"
                 )
     await deliverable.check_creatable(
-        conn, body.project, body.required_capabilities, body.deliverable
+        conn,
+        body.project,
+        body.required_capabilities or [],
+        body.deliverable or Deliverable.RESPONSE,
+        hints,
     )
     if body.knowledge:
         await _check_pages_exist(conn, body.knowledge)

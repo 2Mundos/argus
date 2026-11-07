@@ -23,7 +23,7 @@ from argus_core.knowledge import (
     Revision,
     SearchHit,
 )
-from argus_core.tasks import TaskCreate
+from argus_core.tasks import Deliverable, TaskCreate
 from fastapi import APIRouter, Path, Query, status
 
 from argus_api.access import (
@@ -144,6 +144,9 @@ async def checkout_project(
                     "workspace, confirm HEAD and the remote, and report the commit "
                     "SHA. Do not push or open a PR."
                 ),
+                # Read-only whatever the task defaults say (task defaults 3.4).
+                deliverable=Deliverable.RESPONSE,
+                required_capabilities=[],
             ),
             caller.actor,
             as_worker=None,

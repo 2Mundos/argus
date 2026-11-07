@@ -1,4 +1,4 @@
-import { type FormEvent, memo, useCallback, useEffect, useState } from "react";
+import { type FormEvent, memo, type ReactNode, useCallback, useEffect, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import {
   type ArgusEvent,
@@ -19,6 +19,13 @@ import { ProgressPie, TaskSignal } from "../milestones";
 import { PageHeader } from "../PageHeader";
 import { repositoryNeed, repositoryState, repositoryWarning } from "../projectRepository";
 import { TaskLabel } from "../TaskLabel";
+import {
+  fetchTaskDefaults,
+  sourceText,
+  splitCapabilities,
+  type TaskDefaultField,
+  toText,
+} from "../taskDefaults";
 import { executorPin, harnessPin, parseBudget } from "../taskEdit";
 import { NO_TASK_FILTER, type TaskFilter, tasksHash } from "../taskRoute";
 import { boundedSnippet } from "../taskSearch";
@@ -422,19 +429,21 @@ function NewTask({ onClose }: { onClose: () => void }) {
     spec: "",
     kind: "generic",
     project: "",
-    deliverable: "response" as Deliverable,
-    priority: 0,
-    capabilities: "",
     accountProviders: "",
-    timeoutMinutes: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",
-    difficulty: "" as "" | "trivial" | "simple" | "standard" | "hard",
     harnessModel: "",
     executorModel: "",
     harnessAccount: "",
-    // null until typed in: the field shows the project's `task_default_budget_usd`
+    // null until changed: the field shows the effective task default, which the server
+    // applies to a field the request leaves out (task-defaults.spec.md 3.3).
+    deliverable: null as Deliverable | null,
+    priority: null as string | null,
+    difficulty: null as "" | "trivial" | "simple" | "standard" | "hard" | null,
+    capabilities: null as string | null,
     budget: null as string | null,
+    maxAttempts: null as string | null,
+    timeoutMinutes: null as string | null,
   });
   const [error, setError] = useState<string>();
   const [configuring, setConfiguring] = useState<string | null>(null);
@@ -455,45 +464,94 @@ function NewTask({ onClose }: { onClose: () => void }) {
       ? "set"
       : "absent"
     : repositoryState(stats?.find((s) => s.slug === project));
-  // The kind's default capabilities apply when the field is empty, as on the server.
-  const typedCapabilities = form.capabilities
-    .split(",")
-    .map((c) => c.trim())
-    .filter(Boolean);
-  const capabilities = typedCapabilities.length
-    ? typedCapabilities
-    : (kinds?.find((k) => k.name === form.kind)?.default_capabilities ?? []);
-  const need = repositoryNeed(form.deliverable, capabilities);
-  const { data: settings } = useLiveData(
+  // What the server would give each field left out, for this project and kind.
+  const { data: defaults, error: defaultsError } = useLiveData(
     (signal) =>
-      project
-        ? call(
-            api.GET("/api/projects/{slug}/settings", {
-              params: { path: { slug: project } },
-              signal,
-            }),
-          ).catch(() => null)
-        : Promise.resolve(null),
-    [project],
+      project ? fetchTaskDefaults(project, form.kind, signal) : Promise.resolve(undefined),
+    [project, form.kind],
   );
-  const defaultBudget = settings?.settings?.find((v) => v.key === "task_default_budget_usd")?.value;
-  const budget = form.budget ?? (typeof defaultBudget === "number" ? String(defaultBudget) : "");
+  const shown = defaults?.values;
+  const deliverable = form.deliverable ?? shown?.deliverable ?? "response";
+  const capabilitiesText =
+    form.capabilities ??
+    toText(
+      "required_capabilities",
+      shown?.required_capabilities ??
+        kinds?.find((k) => k.name === form.kind)?.default_capabilities ??
+        [],
+    );
+  const need = repositoryNeed(deliverable, splitCapabilities(capabilitiesText));
+  const timeout = form.timeoutMinutes ?? (shown?.timeout_s ? String(shown.timeout_s / 60) : "");
+  // A refusal the defaults would cause; a changed deliverable or capability list is
+  // the creator's own choice, which the server checks on create.
+  const problems =
+    form.deliverable === null && form.capabilities === null
+      ? (defaults?.problems ?? []).filter(
+          (p) =>
+            p.code !== "deliverable_repository" ||
+            !(state === "absent" || state === "invalid" || state === "conflict"),
+        )
+      : [];
+  const hint = (field: TaskDefaultField, key: keyof typeof form) => {
+    const id = `new-task-${field}-default`;
+    const changed = form[key] !== null;
+    return {
+      describedBy: id,
+      node: (
+        <span className="muted small field-hint" id={id}>
+          {changed ? (
+            <>
+              changed{" "}
+              <button type="button" className="link" onClick={() => set(key, null as never)}>
+                Use default
+              </button>
+            </>
+          ) : defaults ? (
+            `default, ${sourceText(defaults.sources[field])}`
+          ) : (
+            "default"
+          )}
+        </span>
+      ),
+    };
+  };
+  const field = (
+    name: TaskDefaultField,
+    key: keyof typeof form,
+    label: ReactNode,
+    control: (describedBy: string) => ReactNode,
+  ) => {
+    const h = hint(name, key);
+    return (
+      <div className="field">
+        <label>
+          {label}
+          {control(h.describedBy)}
+        </label>
+        {h.node}
+      </div>
+    );
+  };
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     await action.run(async () => {
       try {
-        const capabilities = form.capabilities
-          .split(",")
-          .map((c) => c.trim())
-          .filter(Boolean);
         const accountProviders = form.accountProviders
           .split(",")
           .map((c) => c.trim())
           .filter(Boolean);
-        // Untouched, the server applies the same default the field shows.
+        // Only changed fields are sent: the server applies the default the others show.
         const parsed = form.budget === null ? null : parseBudget(form.budget);
         if (parsed && "error" in parsed) return setError(parsed.error);
+        const whole = (text: string | null, what: string) => {
+          if (text === null) return undefined;
+          if (!/^-?\d+$/.test(text.trim())) throw new Error(`${what} is a whole number.`);
+          return Number(text);
+        };
+        const priority = whole(form.priority, "Priority");
+        const maxAttempts = whole(form.maxAttempts, "Max attempts");
+        const minutes = form.timeoutMinutes?.trim();
         const harness = harnessPin(form.harnessModel);
         const executor = executorPin(form.executorModel);
         await call(
@@ -503,13 +561,20 @@ function NewTask({ onClose }: { onClose: () => void }) {
               spec: form.spec,
               kind: form.kind,
               project,
-              deliverable: form.deliverable,
-              priority: form.priority,
               requires_approval: form.requires_approval,
               review: form.review,
-              ...(form.difficulty ? { difficulty: form.difficulty } : {}),
-              ...(form.timeoutMinutes ? { timeout_s: Number(form.timeoutMinutes) * 60 } : {}),
-              ...(capabilities.length ? { required_capabilities: capabilities } : {}),
+              ...(form.deliverable !== null ? { deliverable: form.deliverable } : {}),
+              ...(priority !== undefined ? { priority } : {}),
+              ...(maxAttempts !== undefined ? { max_attempts: maxAttempts } : {}),
+              // An emptied difficulty asks for inference; an emptied timeout for the
+              // kind's, then the server's; an emptied list for no capabilities.
+              ...(form.difficulty !== null ? { difficulty: form.difficulty || null } : {}),
+              ...(minutes !== undefined
+                ? { timeout_s: minutes ? Math.round(Number(minutes) * 60) : null }
+                : {}),
+              ...(form.capabilities !== null
+                ? { required_capabilities: splitCapabilities(form.capabilities) }
+                : {}),
               ...(accountProviders.length ? { account_providers: accountProviders } : {}),
               ...(harness ? { harness_model: harness } : {}),
               ...(executor ? { executor_model: executor } : {}),
@@ -557,27 +622,39 @@ function NewTask({ onClose }: { onClose: () => void }) {
                 ))}
               </select>
             </label>
-            <label>
-              Deliverable
+            {field("deliverable", "deliverable", "Deliverable", (d) => (
               <select
-                value={form.deliverable}
+                value={deliverable}
+                aria-describedby={d}
                 onChange={(e) => set("deliverable", e.target.value as Deliverable)}
               >
-                {DELIVERABLES.map((d) => (
-                  <option key={d.value} value={d.value}>
-                    {d.label}
+                {DELIVERABLES.map((x) => (
+                  <option key={x.value} value={x.value}>
+                    {x.label}
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Priority
+            ))}
+            {field("priority", "priority", "Priority", (d) => (
               <input
                 type="number"
-                value={form.priority}
-                onChange={(e) => set("priority", Number(e.target.value))}
+                step={1}
+                value={form.priority ?? String(shown?.priority ?? 0)}
+                aria-describedby={d}
+                onChange={(e) => set("priority", e.target.value)}
               />
-            </label>
+            ))}
+            {field("max_attempts", "maxAttempts", "Max attempts", (d) => (
+              <input
+                type="number"
+                min={1}
+                max={20}
+                step={1}
+                value={form.maxAttempts ?? String(shown?.max_attempts ?? 3)}
+                aria-describedby={d}
+                onChange={(e) => set("maxAttempts", e.target.value)}
+              />
+            ))}
             <label>
               Review
               <select
@@ -606,27 +683,49 @@ function NewTask({ onClose }: { onClose: () => void }) {
               </button>
             </p>
           )}
-          <label>
-            Difficulty (trivial and simple work goes to a cheap executor; hard work to the
-            strongest)
-            <select
-              value={form.difficulty}
-              onChange={(e) => set("difficulty", e.target.value as typeof form.difficulty)}
-            >
-              <option value="">decide from the title and spec</option>
-              <option value="trivial">trivial</option>
-              <option value="simple">simple</option>
-              <option value="standard">standard</option>
-              <option value="hard">hard</option>
-            </select>
-          </label>
-          <label>
-            Required capabilities (comma-separated; empty uses the kind's default)
-            <input
-              value={form.capabilities}
-              onChange={(e) => set("capabilities", e.target.value)}
-            />
-          </label>
+          {problems.map((p) => (
+            <p key={p.code} className="error small">
+              With the defaults shown, Argus refuses this task: {p.message}
+            </p>
+          ))}
+          {defaultsError && (
+            <p className="muted small">
+              Could not read the task defaults ({defaultsError.message}); fields left as they are
+              still get the server's defaults.
+            </p>
+          )}
+          {field(
+            "difficulty",
+            "difficulty",
+            "Difficulty (trivial and simple work goes to a cheap executor; hard work to the strongest)",
+            (d) => (
+              <select
+                value={form.difficulty ?? shown?.difficulty ?? ""}
+                aria-describedby={d}
+                onChange={(e) =>
+                  set("difficulty", e.target.value as NonNullable<typeof form.difficulty>)
+                }
+              >
+                <option value="">decide from the title and spec</option>
+                <option value="trivial">trivial</option>
+                <option value="simple">simple</option>
+                <option value="standard">standard</option>
+                <option value="hard">hard</option>
+              </select>
+            ),
+          )}
+          {field(
+            "required_capabilities",
+            "capabilities",
+            "Required capabilities (comma-separated; empty: none)",
+            (d) => (
+              <input
+                value={capabilitiesText}
+                aria-describedby={d}
+                onChange={(e) => set("capabilities", e.target.value)}
+              />
+            ),
+          )}
           <label>
             Restrict to account providers (comma-separated, e.g. local; empty: any)
             <input
@@ -660,25 +759,30 @@ function NewTask({ onClose }: { onClose: () => void }) {
               onChange={(v) => set("executorModel", v)}
             />
           </label>
-          <label>
-            Budget (USD, estimated; empty: no budget)
+          {field("budget_usd", "budget", "Budget (USD, estimated; empty: no budget)", (d) => (
             <input
               type="number"
               min={0}
               step="any"
-              value={budget}
+              value={form.budget ?? toText("budget_usd", shown?.budget_usd)}
+              aria-describedby={d}
               onChange={(e) => set("budget", e.target.value)}
             />
-          </label>
-          <label>
-            Timeout in minutes (empty: the kind's, then the server's default)
-            <input
-              type="number"
-              min={1}
-              value={form.timeoutMinutes}
-              onChange={(e) => set("timeoutMinutes", e.target.value)}
-            />
-          </label>
+          ))}
+          {field(
+            "timeout_s",
+            "timeoutMinutes",
+            "Timeout in minutes (empty: the kind's, then the server's default)",
+            (d) => (
+              <input
+                type="number"
+                min={1}
+                value={timeout}
+                aria-describedby={d}
+                onChange={(e) => set("timeoutMinutes", e.target.value)}
+              />
+            ),
+          )}
           <label className="check">
             <input
               type="checkbox"

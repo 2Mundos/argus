@@ -2255,6 +2255,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{slug}/task-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Defaults
+         * @description What a task of `kind` created in the project now gets for each field it
+         *     leaves out, the source of each value, and the combinations creation would
+         *     refuse (task defaults spec 3.6).
+         */
+        get: operations["get_task_defaults_api_projects__slug__task_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/routines/{routine_id}": {
         parameters: {
             query?: never;
@@ -10792,8 +10814,7 @@ export interface components {
             account_providers?: string[] | null;
             /** Budget Usd */
             budget_usd?: number | null;
-            /** @default response */
-            deliverable?: components["schemas"]["Deliverable"];
+            deliverable?: components["schemas"]["Deliverable"] | null;
             /**
              * Depends On
              * @default []
@@ -10827,25 +10848,16 @@ export interface components {
              * @default 120
              */
             lease_ttl_s?: number;
-            /**
-             * Max Attempts
-             * @default 3
-             */
-            max_attempts?: number;
+            /** Max Attempts */
+            max_attempts?: number | null;
             /** Parent Id */
             parent_id?: string | null;
-            /**
-             * Priority
-             * @default 0
-             */
-            priority?: number;
+            /** Priority */
+            priority?: number | null;
             /** Project */
             project?: string | null;
-            /**
-             * Required Capabilities
-             * @default []
-             */
-            required_capabilities?: string[];
+            /** Required Capabilities */
+            required_capabilities?: string[] | null;
             /**
              * Requires Approval
              * @default false
@@ -10862,6 +10874,82 @@ export interface components {
             timeout_s?: number | null;
             /** Title */
             title: string;
+        };
+        /**
+         * TaskDefaultProblem
+         * @description A combination creation would refuse, e.g. `deliverable_capability`.
+         */
+        TaskDefaultProblem: {
+            /** Code */
+            code: string;
+            /** Field */
+            field: string;
+            /** Message */
+            message: string;
+        };
+        /** TaskDefaultSources */
+        TaskDefaultSources: {
+            /**
+             * Budget Usd
+             * @enum {string}
+             */
+            budget_usd: "project" | "global" | "kind" | "built_in" | "inferred";
+            /**
+             * Deliverable
+             * @enum {string}
+             */
+            deliverable: "project" | "global" | "kind" | "built_in" | "inferred";
+            /**
+             * Difficulty
+             * @enum {string}
+             */
+            difficulty: "project" | "global" | "kind" | "built_in" | "inferred";
+            /**
+             * Max Attempts
+             * @enum {string}
+             */
+            max_attempts: "project" | "global" | "kind" | "built_in" | "inferred";
+            /**
+             * Priority
+             * @enum {string}
+             */
+            priority: "project" | "global" | "kind" | "built_in" | "inferred";
+            /**
+             * Required Capabilities
+             * @enum {string}
+             */
+            required_capabilities: "project" | "global" | "kind" | "built_in" | "inferred";
+            /**
+             * Timeout S
+             * @enum {string}
+             */
+            timeout_s: "project" | "global" | "kind" | "built_in" | "inferred";
+        };
+        /** TaskDefaultValues */
+        TaskDefaultValues: {
+            /** Budget Usd */
+            budget_usd: number | null;
+            deliverable: components["schemas"]["Deliverable"];
+            difficulty: components["schemas"]["Difficulty"] | null;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Priority */
+            priority: number;
+            /** Required Capabilities */
+            required_capabilities: string[];
+            /** Timeout S */
+            timeout_s: number | null;
+        };
+        /** TaskDefaults */
+        TaskDefaults: {
+            /** Kind */
+            kind: string;
+            /** Problems */
+            problems: components["schemas"]["TaskDefaultProblem"][];
+            /** Project */
+            project: string;
+            sources: components["schemas"]["TaskDefaultSources"];
+            values: components["schemas"]["TaskDefaultValues"];
         };
         /** TaskDetail */
         TaskDetail: {
@@ -11052,8 +11140,7 @@ export interface components {
             account_providers?: string[] | null;
             /** Budget Usd */
             budget_usd?: number | null;
-            /** @default response */
-            deliverable?: components["schemas"]["Deliverable"];
+            deliverable?: components["schemas"]["Deliverable"] | null;
             /**
              * Depends On
              * @default []
@@ -11089,25 +11176,16 @@ export interface components {
              * @default 120
              */
             lease_ttl_s?: number;
-            /**
-             * Max Attempts
-             * @default 3
-             */
-            max_attempts?: number;
+            /** Max Attempts */
+            max_attempts?: number | null;
             /** Parent Id */
             parent_id?: string | null;
-            /**
-             * Priority
-             * @default 0
-             */
-            priority?: number;
+            /** Priority */
+            priority?: number | null;
             /** Project */
             project?: string | null;
-            /**
-             * Required Capabilities
-             * @default []
-             */
-            required_capabilities?: string[];
+            /** Required Capabilities */
+            required_capabilities?: string[] | null;
             /**
              * Requires Approval
              * @default false
@@ -16405,6 +16483,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_defaults_api_projects__slug__task_defaults_get: {
+        parameters: {
+            query?: {
+                kind?: string;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDefaults"];
                 };
             };
             /** @description Validation Error */

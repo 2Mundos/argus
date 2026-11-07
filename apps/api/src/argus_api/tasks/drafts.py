@@ -80,10 +80,16 @@ async def create_draft(tx: Tx, body: TaskDraftBody, actor: str) -> TaskDraft:
 async def edit_draft(
     tx: Tx, draft_id: str, changes: dict[str, Any], expected_version: str, actor: str
 ) -> TaskDraft:
-    """Merge a partial patch into an open draft's body: `null` resets a field."""
+    """Merge a partial patch into an open draft's body: `null` resets a field to
+    unset, so it takes the task default at publish. A stored null (an explicit
+    "no budget") is kept when the patch does not name it."""
     row = await _open_row(tx.conn, draft_id, expected_version)
     stored = json.loads(row["body"])
-    merged = {k: v for k, v in {**stored, **changes}.items() if v is not None}
+    merged = {
+        k: v
+        for k, v in {**stored, **changes}.items()
+        if not (k in changes and v is None)
+    }
     try:
         body = TaskDraftBody.model_validate(merged)
     except ValidationError as exc:

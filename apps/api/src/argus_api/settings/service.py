@@ -28,7 +28,7 @@ MODELS_KEY = "models"
 REVIEW_KEY = "review.independent"
 DIFFICULTY_EXECUTORS_KEY = "difficulty.executors"
 GIT_IDENTITY_KEY = "git.identity"
-TASK_DEFAULT_BUDGET_KEY = "task_default_budget_usd"
+TASK_DEFAULT_PREFIX = "task_default_"
 COMMAND_GUARD_KEY = "command_guard.enabled"
 AUTO_MERGE_KEY = "delivery.auto_merge"
 FORGE_AGENTIC_KEY = "review.forge_agentic"
@@ -332,13 +332,16 @@ async def acceptance_enabled(conn: aiosqlite.Connection, project: str) -> bool:
     return bool((await _setting(conn, Path(), project, ACCEPTANCE_KEY)).value)
 
 
-async def task_default_budget(
+async def task_defaults(
     conn: aiosqlite.Connection, project: str | None
-) -> float | None:
-    """`task_default_budget_usd` for a new task: project override, else global."""
+) -> dict[str, SettingValue]:
+    """Every `task_default_*` key for a new task in `project` (task defaults 3.1)."""
     scope = GLOBAL if project is None else project
-    value = (await _setting(conn, Path(), scope, TASK_DEFAULT_BUDGET_KEY)).value
-    return None if value is None else float(value)
+    return {
+        key: await _setting(conn, Path(), scope, key)
+        for key in registry.REGISTRY
+        if key.startswith(TASK_DEFAULT_PREFIX)
+    }
 
 
 def _check_scope(defn: SettingDefinition, scope: str) -> None:

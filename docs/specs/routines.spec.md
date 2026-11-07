@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-05
+updated: 2026-11-06
 ---
 
 # Routines
@@ -42,9 +42,11 @@ default `UTC`), `template` (json), `findings` (`off` | `approval` | `auto`),
 `enabled`, `next_run_at`, `last_run_at`, `last_task_id`, `created_by`, timestamps.
 
 `template` holds the task fields a creator may set today: `kind`, `title`, `spec`,
-`acceptance`, `input`, `required_capabilities`, `priority`, `review`, difficulty
-and model pins, plus the finding intake's `dedup_window` and `max_findings` (3.3),
-which stay out of the run task. It is validated with the task create rules when the routine is
+`acceptance`, `input`, `required_capabilities`, `priority`, `review`,
+`deliverable`, `max_attempts`, `timeout_s`, `budget_usd`, difficulty and model
+pins, plus the finding intake's `dedup_window` and `max_findings` (3.3), which stay
+out of the run task. A field the template leaves out takes the
+[task defaults](task-defaults.spec.md) of the project at each run. It is validated with the task create rules when the routine is
 saved, so a bad template fails on save, not at 3 a.m.
 
 ## 3.2 Scheduler

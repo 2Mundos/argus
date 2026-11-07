@@ -453,25 +453,30 @@ class TaskCreate(BaseModel):
     kind: str = "generic"
     acceptance: list[str] = []
     input: dict[str, Any] = {}
-    required_capabilities: list[str] = []
-    priority: int = 0
+    # Omitted or null here and in `priority`, `deliverable` and `max_attempts`: the
+    # project's task default, then the global one, the kind's and the built-in
+    # value (task defaults spec 3.2). `[]` is explicit: no capability.
+    required_capabilities: list[str] | None = None
+    priority: int | None = None
     requires_approval: bool = False
     review: Review = Review.NONE
     # What the task must leave behind (task deliverable spec); checked at creation,
     # completion and, for a PR that must be green or merged, at accept.
-    deliverable: Deliverable = Deliverable.RESPONSE
+    deliverable: Deliverable | None = None
     parent_id: str | None = None
     depends_on: list[str] = Field(default=[], max_length=MAX_DEPENDENCIES)
     # Required; a subtask may omit it to inherit its parent's project.
     project: str | None = None
     knowledge: list[str] = []  # page ids pinned to the task, delivered on claim
-    max_attempts: int = Field(default=3, ge=1, le=20)
+    max_attempts: int | None = Field(default=None, ge=1, le=20)
     lease_ttl_s: int = Field(default=120, ge=10, le=3600)
     # Wall-clock cap per attempt, counted from the claim; heartbeats and progress
-    # notes do not extend it. Unset: the kind's default, then the server's.
+    # notes do not extend it. Omitted: the task default; null or no default: the
+    # kind's, then the server's.
     timeout_s: int | None = Field(default=None, ge=60, le=7 * 24 * 3600)
-    # Unset: derived from the title and spec (task difficulty spec). The source
-    # defaults to `declared`; an orchestrator suggesting a level sends `inferred`.
+    # Omitted: the task default; null or no default: derived from the title and
+    # spec (task difficulty spec). The source defaults to `declared`; an
+    # orchestrator suggesting a level sends `inferred`.
     difficulty: Difficulty | None = None
     difficulty_source: DifficultySource | None = None
     # Restrict the task to these engine account providers (e.g. ["local"]); None:
@@ -483,7 +488,7 @@ class TaskCreate(BaseModel):
     # Pin the engine lease to one account (id or name; stored as its id), e.g. the
     # local Strata account or one custom account (task models spec 3.4).
     harness_account: AccountRef | None = None
-    # Cap on estimated spend (task cost spec 3.4). Omitted: the project's
+    # Cap on estimated spend (task cost spec 3.4). Omitted: the task default
     # `task_default_budget_usd`; an explicit null: no budget.
     budget_usd: float | None = Field(default=None, gt=0, le=BUDGET_MAX_USD)
 
