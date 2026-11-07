@@ -22,14 +22,25 @@ import {
   type SettingValue,
   sourceLabel,
 } from "../settings";
+import { useHash } from "../unsaved";
 import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ModelPreferences, ModelPreferencesEditor } from "./ModelPreferences";
 import { OrchestratorModelPicker } from "./OrchestratorModel";
+import { TaskDefaultsEditor } from "./TaskDefaultsEditor";
+
+/** `#setup/settings/<slug>` scopes the page to a project; the scope stays in the URL. */
+export function settingsScope(hash: string): string {
+  const slug = hash.match(/^#setup\/settings\/([^/]+)/)?.[1];
+  return slug ? decodeURIComponent(slug) : "global";
+}
+
+export const settingsHash = (scope: string) =>
+  scope === "global" ? "#setup/settings" : `#setup/settings/${encodeURIComponent(scope)}`;
 
 /** Global settings with per-project overrides (docs/specs/settings.spec.md). */
 export function Settings() {
   const { data: projects } = useLiveData((signal) => fetchProjects(signal), []);
-  const [scope, setScope] = useState<string>("global");
+  const scope = settingsScope(useHash());
   const project = scope === "global" ? null : scope;
   const { data, error, reload } = useLiveData((signal) => fetchSettings(project, signal), [scope]);
 
@@ -56,7 +67,9 @@ export function Settings() {
           <select
             aria-label="settings scope"
             value={scope}
-            onChange={(e) => setScope(e.target.value)}
+            onChange={(e) => {
+              window.location.hash = settingsHash(e.target.value);
+            }}
           >
             <option value="global">Global</option>
             {(projects ?? [])
@@ -89,6 +102,10 @@ export function Settings() {
               />
             </div>
           )}
+          <div className="card">
+            <h3>Task defaults</h3>
+            <TaskDefaultsEditor key={scope} project={project} />
+          </div>
           <div className="card">
             <ModelsSection project={project} setting={models} onChanged={() => reload()} />
           </div>
