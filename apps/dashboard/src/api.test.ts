@@ -1,6 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, boardTasks, loadToken, newestTasks, saveToken, setToken } from "./api";
+import {
+  ApiError,
+  api,
+  boardTasks,
+  call,
+  loadToken,
+  newestTasks,
+  saveToken,
+  searchErrorMessage,
+  setToken,
+} from "./api";
 
 const TOKEN_KEY = "argus.token";
 
@@ -149,5 +159,74 @@ describe("boardTasks", () => {
     expect(await first).toEqual(["a:true"]);
     release();
     await done;
+  });
+});
+
+describe("task search", () => {
+  const page = (next: string | null) =>
+    Promise.resolve({
+      data: { items: [], total: 0, has_more: next !== null, next_cursor: next, omitted: [] },
+      response: new Response(null, { status: 200 }),
+    });
+
+  it("forwards q on every page of a cursor chain", async () => {
+    const queries: unknown[] = [];
+    vi.spyOn(api, "GET").mockImplementation(((...args: unknown[]) => {
+      const init = args[1] as { params: { query: unknown } };
+      queries.push(init.params.query);
+      return page(queries.length < 2 ? "c1" : null);
+    }) as typeof api.GET);
+    await newestTasks(5, true, { q: "retry loop" });
+    expect(queries).toMatchObject([
+      { q: "retry loop", archived: true, cursor: undefined },
+      { q: "retry loop", archived: true, cursor: "c1" },
+    ]);
+  });
+
+  it("reads a searched board as one unfiltered chain", async () => {
+    const queries: { state?: unknown; q?: string }[] = [];
+    vi.spyOn(api, "GET").mockImplementation(((...args: unknown[]) => {
+      queries.push((args[1] as { params: { query: never } }).params.query);
+      return page(null);
+    }) as typeof api.GET);
+    expect(await boardTasks(false, { q: "x" })).toMatchObject({ items: [], loading: false });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatchObject({ q: "x", state: undefined });
+  });
+
+  it("sends no q for the normal board", async () => {
+    const queries: { q?: string }[] = [];
+    vi.spyOn(api, "GET").mockImplementation(((...args: unknown[]) => {
+      queries.push((args[1] as { params: { query: never } }).params.query);
+      return page(null);
+    }) as typeof api.GET);
+    await boardTasks(false);
+    expect(queries.every((query) => query.q === undefined)).toBe(true);
+  });
+
+  it("maps 422 search codes to validation and everything else to failure", async () => {
+    const reject = async (status: number, detail: unknown): Promise<Error> => {
+      try {
+        await call(
+          Promise.resolve({
+            error: { detail },
+            response: new Response(null, { status, statusText: "Bad" }),
+          }),
+        );
+      } catch (err) {
+        return err as Error;
+      }
+      throw new Error("call did not throw");
+    };
+    for (const code of ["query_empty", "query_too_broad"]) {
+      const err = await reject(422, { code, message: "m" });
+      expect(err).toBeInstanceOf(ApiError);
+      expect(searchErrorMessage(err).kind).toBe("validation");
+    }
+    expect(
+      searchErrorMessage(await reject(400, { code: "cursor_mismatch", message: "m" })).kind,
+    ).toBe("failure");
+    expect(searchErrorMessage(await reject(500, "boom")).text).toContain("boom");
+    expect(searchErrorMessage(new TypeError("Failed to fetch")).kind).toBe("failure");
   });
 });

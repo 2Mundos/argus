@@ -57,7 +57,7 @@ describe("PrimaryNav accessibility", () => {
   });
 
   it("marks only Tasks current on a task detail", () => {
-    expect(currentLabels({ tab: "tasks", taskId: "t1", filter: { states: [] } })).toEqual([
+    expect(currentLabels({ tab: "tasks", taskId: "t1", filter: { states: [], q: "" } })).toEqual([
       "Tasks",
     ]);
   });
