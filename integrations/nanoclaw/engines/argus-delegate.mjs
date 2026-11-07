@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 //   argus-delegate EXECUTOR [--cwd DIR] [--timeout SECONDS] [--prompt-file F]
 //                  [--out DIR] [--model M] [--read-only]
 //                  [--model-attempt N --fallback-reason REASON]
+//   argus-delegate EXECUTOR --auth-probe [--result-file F]
 //
 // EXECUTOR is claude | codex | opencode | agent | copilot. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
@@ -12,7 +13,8 @@ import { spawn, spawnSync } from "node:child_process";
 // the artifacts, and the run's token usage (`usage`, `run_key`, `usage_report`; see
 // usage.mjs). Exit codes: 0 ok, 1 executor failed, 64 usage, 77 cwd not
 // allowed, 78 no credentials (nothing was run, nothing else was tried), 124
-// timeout, 127 executor not installed.
+// timeout, 127 executor not installed. `--auth-probe` runs only the credential and install
+// gates (no prompt, no model, no CLI call beyond `--version`) and uses the same 0/78/127.
 //
 // Model retries follow a pinned policy; it never switches executor or provider, and it never reads the
 // content of a credential: it only checks that one is present.
@@ -691,6 +693,8 @@ function parseArgs(argv) {
     else if (a === "--model-attempt") opts.modelAttempt = Number(val());
     else if (a === "--fallback-reason") opts.fallbackReason = val();
     else if (a === "--read-only") opts.readOnly = true;
+    else if (a === "--auth-probe") opts.authProbe = true;
+    else if (a === "--result-file") opts.resultFile = val();
     else if (a.startsWith("--")) throw new Error(`unknown option ${a}`);
     else rest.push(a);
   }
@@ -708,7 +712,14 @@ function readStdin() {
   });
 }
 
-function finish(code, report) {
+function finish(code, report, resultFile) {
+  if (resultFile) {
+    try {
+      fs.writeFileSync(resultFile, `${JSON.stringify(report)}\n`);
+    } catch {
+      /* the exit code still says how it ended */
+    }
+  }
   process.stdout.write(`${JSON.stringify(report)}\n`);
   process.exit(code);
 }
@@ -832,6 +843,28 @@ export function executorJsonFailure(executor, stdoutText) {
   return null;
 }
 
+/**
+ * The credential and install gates of a run, without running anything: what `main` checks
+ * before it reads the prompt. Presence of a credential and an installed CLI only; it never
+ * contacts the provider, so a revoked or exhausted credential still passes.
+ */
+export function authProbe(executor, e = process.env, { claudeStub = CLAUDE_GATEWAY_STUB } = {}) {
+  let identity = { engine: e.ARGUS_ENGINE || "unknown", executor, probe: "auth_present" };
+  if (executor === "claude") {
+    const restored = restoreClaudeGatewayAuth(e, claudeStub);
+    e = restored.env;
+    if (restored.source) identity = { ...identity, auth_source: restored.source };
+  }
+  e = prepareExecutorEnv(executor, e, path.join(os.tmpdir(), "argus-auth-probe"));
+  e = withCliToolsPath(e);
+  const auth = authStatus(executor, e, os.homedir(), null);
+  if (!auth.ok)
+    return { code: 78, report: { ...identity, blocked: "auth_missing", need: auth.need } };
+  if (versionOf(executor, e) === null)
+    return { code: 127, report: { ...identity, blocked: "not_installed" } };
+  return { code: 0, report: { ...identity, ok: true } };
+}
+
 export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_STUB } = {}) {
   let parsed;
   try {
@@ -843,6 +876,10 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   let identity = { engine: e.ARGUS_ENGINE || "unknown", executor };
   if (!EXECUTORS.includes(executor))
     finish(64, { ...identity, error: "usage", detail: "unknown executor", executors: EXECUTORS });
+  if (opts.authProbe) {
+    const probed = authProbe(executor, e, { claudeStub });
+    finish(probed.code, probed.report, opts.resultFile);
+  }
 
   let snapshot;
   let selection;

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-04
+updated: 2026-11-07
 ---
 
 # Engines, executors and the local model
@@ -119,7 +119,9 @@ In scope:
   the agent image or session env without changing the global default.
 - **No silent fallback.** `argus-delegate` for an executor without
   credentials exits `78` and prints `{"blocked":"auth_missing"}`. It never
-  substitutes another executor or provider. A route passes over an engine without
+  substitutes another executor or provider. `argus-delegate EXECUTOR --auth-probe`
+  runs only those credential and install gates (exit `0`, `78`, `127`) for the
+  [executor probe](failure-classes.spec.md). A route passes over an engine without
   an available account explicitly: the decision names that engine and why
   ([codex accounts](codex-accounts.spec.md)); with nothing usable it is
   `blocked`.
