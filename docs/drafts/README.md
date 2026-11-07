@@ -22,3 +22,4 @@ Every draft in this directory with its status, kept in sync by
 | [Postmortems](2026-11-04.postmortems.draft.md) | `implemented` |
 | [Repeat-call reminder](2026-11-04.repeat-call-reminder.draft.md) | `partial` |
 | [Tool description rules](2026-11-04.tool-description-rules.draft.md) | `draft` |
+| [Project review recommendations](2026-11-06.project-review-recommendations.draft.md) | `draft` |

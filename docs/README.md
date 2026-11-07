@@ -273,6 +273,9 @@ every new dependency is judged against it.
   recorded raw engine output replayed through the channel's parsers, no model
 - [Postmortems](drafts/2026-11-04.postmortems.draft.md) — a dated record of why a
   bug escaped the process, ending in the guardrails added
+- [Project review recommendations](drafts/2026-11-06.project-review-recommendations.draft.md) —
+  ordered work to restore Python test collection, automate operational evidence,
+  validate the Codex sandbox, and strengthen documentation navigation and checks
 - [Tool description rules](drafts/2026-11-04.tool-description-rules.draft.md) —
   writing rules for MCP tool text and a per-role token difference on every change
 - [DeepSeek Harness as an engine](drafts/2026-11-04.dsh-engine.draft.md) — `dsh`
