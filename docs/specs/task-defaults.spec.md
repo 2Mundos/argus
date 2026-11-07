@@ -1,7 +1,7 @@
 ---
-status: partial
+status: implemented
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
 ---
 
 # Task defaults
@@ -166,28 +166,33 @@ two writes. The per-key `source` of the stored values stays in `GET
 
 ## 3.7 Dashboard
 
-- **Settings → Task defaults**: a first-class section with one control per field,
-  showing the global value or "built-in"/"inferred", with reset to built-in.
-- **Projects** becomes a project workspace: a project list or selector with the
-  selection kept in the URL, and per project **Overview / Repository** (the
-  existing repository editing, remediation entry points, runtime and Git identity),
-  **Task defaults** and the other project settings. Not one tab per key.
-- Project **Task defaults**: per field, inherit or override, the effective value
-  and its source (project, global, built-in, inferred), and reset to inherited. An
-  empty capability list, priority `0`, no budget and the timeout or difficulty
-  fallback are distinct choices from "inherit". After a save, a switch of project or
-  a refresh the form shows the saved values; leaving with unsaved edits asks first.
-  Loading, empty, validation and save errors are shown; `problems` (3.6) are shown
-  beside the fields they name.
-- **New task** and drafts show the effective defaults for the chosen project and
-  send only the fields the user changed, so the server applies 3.2.
-
-## 3.8 Open items
-
-- Dashboard: Settings → Task defaults section (3.7).
-- Dashboard: Projects workspace with per-project Task defaults (3.7).
-- Dashboard: New task form that sends only changed fields and shows effective
-  defaults ([task cost](task-cost.spec.md) 3.7 prefill replaced).
+- **Settings → Task defaults** (`#setup/settings`, or `#setup/settings/<slug>` for
+  a project's scope): one control per field, "Built-in" or "Set" with a typed
+  input checked as the registry checks it, the effective value and its source, and
+  the `problems` of 3.6 beside the fields they name.
+- **Projects** is a project workspace. `#projects` lists the projects, each name
+  linking to `#projects/<slug>`; a project page has a project selector and the tabs
+  **Overview** (repository, its editing and remediation, task counts, Git author)
+  and **Task defaults** (`#projects/<slug>/task-defaults`), plus a link to the
+  project's other settings. The selection lives in the URL, so reload and shared
+  links keep it. Runtime images have no dashboard page
+  ([project runtime](project-runtime.spec.md)).
+- Project **Task defaults**: per field, Inherit (naming the global or built-in value
+  it takes) or Override, the effective value and its source (project, global, the
+  kind, built-in, inferred). Choosing Inherit and saving deletes the override. An
+  empty capability list, priority `0`, no budget and the difficulty or timeout
+  fallback are overrides, distinct from Inherit. Fields save one by one; a refused
+  one keeps its edit and says why while the others save. After a save, a switch of
+  project or a reload the form shows the saved values.
+- **Unsaved edits**: leaving a dirty form by any hash change (menu, tab, project
+  selector, back) or opening a worker asks first and stays on "no"; reloading or
+  closing the page gets the browser's prompt.
+- **New task** prefills each defaultable field from the effective defaults of the
+  chosen project and kind, labels where each comes from, re-reads them when either
+  changes, and shows the problems the defaults would cause. It sends only the
+  fields the user changed ("Use default" takes a change back); an emptied field
+  sends its explicit empty value (no capabilities, inference, no timeout, no
+  budget).
 
 # 4. Open Questions
 
@@ -218,3 +223,6 @@ two writes. The per-key `source` of the stored values stays in `GET
   omitted fields take the project's task defaults.
 - Routine templates accept `deliverable`, `max_attempts` and `timeout_s`.
 - OpenAPI and the dashboard client are regenerated.
+- Dashboard: `taskDefaults.ts` (fields, parsing, labels), `TaskDefaultsEditor`
+  (Settings and the project tab), the `Projects` workspace, the New task form in
+  `Tasks.tsx`, and `unsaved.ts` for the leave guard.

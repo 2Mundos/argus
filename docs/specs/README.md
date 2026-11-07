@@ -70,7 +70,7 @@ Every spec in this directory with its status, kept in sync by
 | [Task checkpoint: keep a task's unpublished work across attempts and workers](task-checkpoint.spec.md) | `implemented` |
 | [Task continuation](task-continuation.spec.md) | `implemented` |
 | [Task cost and budget](task-cost.spec.md) | `implemented` |
-| [Task defaults](task-defaults.spec.md) | `partial` |
+| [Task defaults](task-defaults.spec.md) | `implemented` |
 | [Task deliverable](task-deliverable.spec.md) | `implemented` |
 | [Task delivery](task-delivery.spec.md) | `implemented` |
 | [Task dependencies](task-dependencies.spec.md) | `implemented` |
