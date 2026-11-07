@@ -558,3 +558,24 @@ describe("credential-free GitHub API helper", () => {
     assert.match(out, /^usage: argus-github-api create /);
   });
 });
+
+describe("deadline across paginated CI reads", () => {
+  it("starts no check-runs page once the shared deadline has passed", async () => {
+    let now = 0;
+    const next = { link: `<${API}/commits/x/check-runs?page=2>; rel="next"` };
+    let page = 0;
+    const { fetch, calls } = forge({
+      "GET /commits/abc/check-runs": () => {
+        now += 10;
+        return Response.json(
+          { check_runs: [{ id: ++page, name: `c${page}`, status: "completed" }] },
+          { headers: next },
+        );
+      },
+    });
+    const api = new GitHubApi(REPO, [REPO], fetch, { sleep: async () => {} });
+    api.deadline = { at: 25, now: () => now };
+    await assert.rejects(api.checkRuns("abc"), { code: "deadline_exceeded" });
+    assert.equal(calls.length, 3); // starts at 0, 10, 20; the one at 30 is refused
+  });
+});

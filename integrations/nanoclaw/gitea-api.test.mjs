@@ -784,6 +784,37 @@ describe("argus-gitea-api command matrix", () => {
     assert.deepEqual(sleeps, [2000]);
   });
 
+  it("stops retrying at the deadline: no backoff sleeps past it, no request after it", async () => {
+    let now = 0;
+    let fetches = 0;
+    const sleeps = [];
+    const api = new GiteaApi(
+      "https://git.example.test/team/project",
+      ["https://git.example.test/team/project"],
+      async () => {
+        fetches++;
+        return Response.json({ message: "boom" }, { status: 503, headers: { "retry-after": "2" } });
+      },
+      {
+        now: () => now,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+          now += ms;
+        },
+      },
+    );
+    api.deadline = { at: 5000, now: () => now };
+    await assert.rejects(api.request("/pulls/7"), { code: "deadline_exceeded" });
+    assert.deepEqual(sleeps, [2000, 2000]); // a third 2 s sleep would end at 6 s
+    assert.equal(fetches, 3);
+    now = 5000;
+    await assert.rejects(api.request("/pulls/7"), { code: "deadline_exceeded" });
+    assert.equal(fetches, 3);
+    api.deadline = null;
+    api.maxRetries = 0;
+    await assert.rejects(api.request("/pulls/7"), { code: "server_error" });
+  });
+
   it("bounds GET retries on 5xx and classifies the final failure", async () => {
     const gitea = mockGitea(({ route }) =>
       route === "/pulls/7" ? Response.json({ message: "boom" }, { status: 503 }) : undefined,
