@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { download } from "../api";
 import { TaskDetail } from "./TaskDetail";
@@ -11,11 +11,18 @@ const mock = vi.hoisted(() => ({
   events: [] as Record<string, unknown>[],
   deliveryGate: null as Promise<void> | null,
   paths: [] as string[],
+  prereq: {} as Record<string, unknown>,
+  prereqFail: [] as Error[],
 }));
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
   call: async (path: string) => {
     mock.paths.push(path);
+    if (path.includes("prerequisites")) {
+      const failure = mock.prereqFail.shift();
+      if (failure) throw failure;
+      return mock.prereq;
+    }
     if (path.includes("delivery") && mock.deliveryGate) await mock.deliveryGate;
     return path.includes("projects/stats")
       ? []
@@ -94,6 +101,8 @@ afterEach(() => {
   mock.events = [];
   mock.deliveryGate = null;
   mock.paths = [];
+  mock.prereq = {};
+  mock.prereqFail = [];
 });
 describe("TaskDetail loading", () => {
   it("paints the task before the forge delivery read settles", async () => {
@@ -342,5 +351,131 @@ describe("TaskDetail history window", () => {
     mock.events = Array.from({ length: 49 }, (_, i) => event(i, "task.progress"));
     await open();
     expect(screen.queryByText(truncation)).toBeNull();
+  });
+});
+
+describe("TaskDetail dependency delivery", () => {
+  const dep = (over: Record<string, unknown> = {}, evidence: Record<string, unknown> = {}) => ({
+    task_id: "dep1",
+    title: "Build the parser",
+    state: "succeeded",
+    task_succeeded: true,
+    verdict: "unsatisfied",
+    why: "open",
+    evidence: {
+      pr: "o/r#7",
+      pr_state: "open",
+      checked_at: "2026-11-07T10:00:00Z",
+      source: "forge",
+      artifacts: [],
+      notes: [],
+      ...evidence,
+    },
+    ...over,
+  });
+  const view = (items: unknown[], over: Record<string, unknown> = {}) => ({
+    task_id: "t1",
+    version: "v",
+    enforced: false,
+    expected_base: null,
+    items,
+    omitted: [],
+    partial: [],
+    ...over,
+  });
+  const open = async () => {
+    mock.task = { ...base, depends_on: ["dep1"] };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    const section = screen.getByLabelText("Dependency delivery") as HTMLDetailsElement;
+    expect(mock.paths.some((p) => p.includes("prerequisites"))).toBe(false);
+    await act(async () => {
+      section.open = true;
+      section.dispatchEvent(new Event("toggle"));
+    });
+  };
+  const requests = () => mock.paths.filter((p) => p.includes("prerequisites")).length;
+
+  it("is absent without dependencies", async () => {
+    mock.task = base;
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+    expect(screen.queryByLabelText("Dependency delivery")).toBeNull();
+  });
+
+  it("loads lazily once and shows title, link, state, verdict, why and freshness apart", async () => {
+    mock.prereq = view([dep()]);
+    await open();
+    expect(requests()).toBe(1);
+    const link = screen.getByRole("link", { name: "Build the parser" });
+    expect(link.getAttribute("href")).toBe("#tasks/dep1");
+    expect(screen.getByText("Task state").nextElementSibling?.textContent).toBe(
+      "succeeded (succeeded)",
+    );
+    const verdict = screen.getByText("Delivery verdict").nextElementSibling?.textContent;
+    expect(verdict).toContain("unsatisfied");
+    expect(verdict).toContain("why: open");
+    expect(screen.getByText("Checked").nextElementSibling?.textContent).toContain("source: forge");
+    expect(screen.getByText(/grants no claim, merge or acceptance permission/)).toBeTruthy();
+  });
+
+  it("keeps unknown as unknown and a failed task apart from delivery", async () => {
+    mock.prereq = view([
+      dep(
+        { state: "failed", task_succeeded: false, verdict: "unknown", why: "forge_unavailable" },
+        {
+          pr_state: "unknown",
+          checked_at: null,
+          source: null,
+          artifacts: [
+            {
+              id: "a1",
+              name: "out.tgz",
+              sha256: "x",
+              size: 5,
+              verified: "unknown",
+              checked_at: "",
+            },
+          ],
+        },
+      ),
+    ]);
+    await open();
+    expect(screen.getByText("Task state").nextElementSibling?.textContent).toBe(
+      "failed (not succeeded)",
+    );
+    expect(screen.getByText("Delivery verdict").nextElementSibling?.textContent).toContain(
+      "unknown",
+    );
+    expect(screen.getByText("Checked").nextElementSibling?.textContent).toBe("not checked");
+    expect(screen.getByText(/out\.tgz · verified: unknown/)).toBeTruthy();
+  });
+
+  it("discloses partial and omitted dependencies", async () => {
+    mock.prereq = view([dep({ verdict: "satisfied", why: "merged" })], {
+      partial: ["forge:o/r#7"],
+      omitted: ["dependencies"],
+    });
+    await open();
+    expect(screen.getByText(/Incomplete reads: forge:o\/r#7/)).toBeTruthy();
+    expect(screen.getByText(/Omitted \(truncated\): dependencies/)).toBeTruthy();
+  });
+
+  it("keeps a failure local and Retry re-issues one request", async () => {
+    mock.prereqFail = [new Error("boom")];
+    mock.prereq = view([dep()]);
+    await open();
+    expect(screen.getByText(/Could not load prerequisites: boom/)).toBeTruthy();
+    expect(screen.getByText(/trace task/)).toBeTruthy();
+    expect(requests()).toBe(1);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(requests()).toBe(2);
+    expect(screen.getByRole("link", { name: "Build the parser" })).toBeTruthy();
   });
 });

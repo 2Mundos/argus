@@ -21,6 +21,7 @@ import { RepositoryBlockAction } from "./RepositoryBlockAction";
 import { TaskContinuation } from "./TaskContinuation";
 import { TaskCostTile } from "./TaskCost";
 import { TaskEditForm } from "./TaskEditForm";
+import { TaskPrerequisites } from "./TaskPrerequisites";
 import { TaskSteers, useSteersSource } from "./TaskSteers";
 import { TaskTerminal } from "./TaskTerminal";
 
@@ -461,6 +462,7 @@ export function TaskDetail({
             </dd>
           </dl>
           <TaskCostTile taskId={taskId} />
+          {task.depends_on.length > 0 && <TaskPrerequisites taskId={taskId} />}
           <TaskContinuation taskId={taskId} />
           {!!modelTrace?.executions.length && (
             <section className="task-models" aria-label="Models">
