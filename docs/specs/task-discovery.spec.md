@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-31
-updated: 2026-11-04
+updated: 2026-11-07
 ---
 
 # Task discovery and prerequisite evidence
@@ -31,7 +31,8 @@ REST and MCP.
   when it `succeeded`, regardless of forge or artifact evidence.
 - No enforcing merged/verified delivery as a claim gate (`enforced: false`).
 - No semantic, vector, stemming, or ranking search — only literal substrings.
-- No new table, migration, required service, forge write, or dashboard change.
+- No new table, migration, required service, or forge write; the dashboard only
+  reads the prerequisites view (§3.2).
 
 # 3. Decisions Made
 
@@ -138,6 +139,20 @@ Response shape:
   in-flight coalescing; richer callers share that cache so one PR is still
   read once per window ([task delivery](task-delivery.spec.md) 3.2).
 
+- **Dashboard panel.** Task detail shows a collapsed "Dependency delivery"
+  disclosure when the task has dependencies. Nothing is fetched on mount: the
+  first open issues one `GET /api/tasks/{id}/prerequisites`, and only an
+  explicit Refresh or Retry issues another. It does not ride the live event
+  refresh (each read can fan out to the forge), and there is no polling or
+  per-dependency request. A failed read stays inside the panel with a Retry
+  button; the rest of the task detail renders. Per dependency it shows the title
+  (linked to that task), the task state with `task_succeeded`, and, labelled
+  separately, the delivery `verdict`, `why`, `checked_at` / `source` and the PR
+  and artifact evidence. `unknown` is shown as `unknown`. `partial` and
+  `omitted` are disclosed in words, and the copy states that the view is
+  evidence only (`enforced: false`) and grants no claim, merge or acceptance
+  permission.
+
 ## 3.3 Permissions and freshness
 
 - Task search and the prerequisites view use the same read scope as a task
@@ -182,7 +197,8 @@ future enforcement needs its own spec change and must not silently alter
 3. `GET /api/tasks/{id}/prerequisites` + MCP `get_task_prerequisites`; SQL read
    of `task_deps`; bounded artifact re-hash; `PrChecker` detail fields.
 4. Regenerated `openapi.json` / `schema.d.ts`.
-5. Tests: `test_task_search.py`, `test_task_prerequisites.py` (fake HTTP /
+5. Dashboard `TaskPrerequisites` panel, tested in `TaskDetail.test.tsx`.
+6. Tests: `test_task_search.py`, `test_task_prerequisites.py` (fake HTTP /
    fixture only); existing delivery tests remain green.
 
 ## Verification boundary
@@ -195,5 +211,5 @@ future enforcement needs its own spec change and must not silently alter
   SQLite fixtures; prerequisite verdicts against a mock `httpx` transport and
   local artifact files; OpenAPI schema drift; docs index linkage.
 - **Not verified:** live forge credentials or network; production merge or
-  deploy; dashboard UI; any claim that text match equals duplicate work; any
+  deploy; live rendering of the dashboard panel against a real forge; any claim that text match equals duplicate work; any
   enforcement of merged delivery on readiness.
