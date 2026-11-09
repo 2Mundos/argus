@@ -119,7 +119,7 @@ async function attach(b, argv, { host = true, env = {}, onSleep } = {}) {
       sleep: async (ms) => {
         t += ms;
         if (host) await b.relay.poll();
-        onSleep?.(t);
+        await onSleep?.(t);
       },
       stdout: { write: (s) => out.push(s) },
       stderr: { write: (s) => err.push(s) },
