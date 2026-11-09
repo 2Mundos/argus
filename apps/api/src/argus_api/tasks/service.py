@@ -86,6 +86,7 @@ from argus_api.accounts.usage import (
 from argus_api.db import Snapshot, Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.disk_guard import DiskGuard
+from argus_api.engine_choice import EngineAccount, EngineChoice
 from argus_api.errors import (
     ConflictError,
     ForbiddenError,
@@ -555,33 +556,6 @@ async def executor_provider(conn: aiosqlite.Connection, task_id: str) -> str | N
     """The provider of the task's pinned executor, None when not pinned."""
     pin = (await _row(conn, task_id))["executor_model"]
     return None if pin is None else ExecutorModel.model_validate_json(pin).provider
-
-
-@dataclass(frozen=True)
-class EngineAccount:
-    """An engine account as the pin preference sees it: `status` is `usable`
-    (available or past its reset, below `max_leases` or held by the caller),
-    `exhausted` (held back, or every slot leased out) or `disabled`."""
-
-    id: str
-    provider: str
-    status: str
-
-
-@dataclass(frozen=True)
-class EngineChoice:
-    """The engine role's effective provider set for one task (task models spec 3.2).
-    `providers` None means every engine provider; `account` the one account it may
-    use; `reason` (`exhausted`, `disabled`, `offline`) is set when a pin fell back."""
-
-    providers: list[str] | None
-    account: str | None = None
-    reason: str | None = None
-
-    def fits(self, provider: str, account_id: str) -> bool:
-        return (self.providers is None or provider in self.providers) and (
-            self.account is None or account_id == self.account
-        )
 
 
 def pinned_provider(row: aiosqlite.Row) -> str | None:

@@ -53,6 +53,7 @@ from argus_api.accounts.eligibility import engine_pool
 from argus_api.accounts.local_health import HEALTH_REASONS
 from argus_api.db import Tx, ts
 from argus_api.disk_guard import DiskGuard
+from argus_api.engine_choice import EngineChoice
 from argus_api.errors import (
     ConflictError,
     ForbiddenError,
@@ -1242,7 +1243,7 @@ class _Scope(NamedTuple):
 
     providers: list[str] | None
     account: str | None
-    choice: tasks.EngineChoice | None
+    choice: EngineChoice | None
 
 
 async def _scope(
