@@ -31,6 +31,31 @@ Argus starts **lightweight and single-node**: one process, one SQLite database
 [the single-node spec](specs/single-node.spec.md) first; every other spec and
 every new dependency is judged against it.
 
+## Where to start
+
+The [index](#index) below is the complete catalog. Pick the path that matches
+why you are here.
+
+**Operators** (running and operating a node)
+
+- [Local workers](specs/local-workers.spec.md) and [launcher](specs/launcher.spec.md)
+- [Operations](specs/operations.spec.md)
+- [Runbooks](runbooks/)
+- [Onboarding](specs/onboarding.spec.md)
+
+**Contributors** (changing the code)
+
+- [AGENTS.md](../AGENTS.md): repository rules and commands
+- [Spec template](templates/spec.md), [specs index](specs/README.md) and [drafts index](drafts/README.md)
+- [Single-node spec](specs/single-node.spec.md)
+
+**Architecture and spec readers**
+
+- [Single-node spec](specs/single-node.spec.md)
+- [Worker lifecycle](specs/worker-lifecycle.spec.md)
+- [Task delivery](specs/task-delivery.spec.md)
+- [Specs index](specs/README.md)
+
 ## Index
 
 - [Spec template](templates/spec.md)
