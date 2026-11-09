@@ -91,14 +91,14 @@ export function createGatewayFetch({
 
 /** Credential-free Gitea API client. OneCLI injects Authorization at the HTTPS gateway. */
 export function allowlistedRepository(repositoryUrl, allowedRepositories) {
+  // GitHub owner and repo names are case-insensitive; other hosts compare as written.
+  const key = ({ origin, owner, repo }) =>
+    origin === "https://github.com"
+      ? `${origin}/${owner}/${repo}`.toLowerCase()
+      : `${origin}/${owner}/${repo}`;
   const candidate = repositoryIdentity(repositoryUrl);
-  const normalized = `${candidate.origin}/${candidate.owner}/${candidate.repo}`;
-  const allow = new Set(
-    allowedRepositories.map((raw) => {
-      const url = repositoryIdentity(raw);
-      return `${url.origin}/${url.owner}/${url.repo}`;
-    }),
-  );
+  const normalized = key(candidate);
+  const allow = new Set(allowedRepositories.map((raw) => key(repositoryIdentity(raw))));
   if (!allow.has(normalized))
     throw policy("repository is not configured for this worker", "repository_allowlist");
   return candidate;
