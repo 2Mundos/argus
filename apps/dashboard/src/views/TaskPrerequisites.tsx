@@ -23,7 +23,13 @@ function ItemRow({ item }: { item: Item }) {
         </dd>
         <dt>Checked</dt>
         <dd>
-          {evidence.checked_at ? <DateChip at={evidence.checked_at} /> : "not checked"}
+          {evidence.checked_at ? (
+            <DateChip at={evidence.checked_at} />
+          ) : artifacts.some((a) => a.checked_at) ? (
+            "PR not checked"
+          ) : (
+            "not checked"
+          )}
           {evidence.source ? ` · source: ${evidence.source}` : ""}
         </dd>
         {evidence.pr && (
@@ -45,7 +51,14 @@ function ItemRow({ item }: { item: Item }) {
               <ul>
                 {artifacts.map((a) => (
                   <li key={a.id}>
-                    {a.name} · verified: {String(a.verified)} · {a.size} bytes
+                    {a.name} · verified: {String(a.verified)} · {a.size} bytes ·{" "}
+                    {a.checked_at ? (
+                      <>
+                        checked <DateChip at={a.checked_at} />
+                      </>
+                    ) : (
+                      "checked: unknown"
+                    )}
                   </li>
                 ))}
               </ul>

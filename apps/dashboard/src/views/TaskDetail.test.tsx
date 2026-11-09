@@ -455,6 +455,73 @@ describe("TaskDetail dependency delivery", () => {
     expect(screen.getByText(/out\.tgz · verified: unknown/)).toBeTruthy();
   });
 
+  describe("artifact evidence", () => {
+    const art = (id: string, over: Record<string, unknown> = {}) => ({
+      id,
+      name: `${id}.tgz`,
+      sha256: "x",
+      size: 5,
+      verified: true,
+      checked_at: "2026-11-07T10:00:00Z",
+      ...over,
+    });
+    const artifactDep = (artifacts: unknown[]) =>
+      dep({}, { pr: null, pr_state: null, checked_at: null, source: null, artifacts });
+    const item = (name: string) => screen.getByText(new RegExp(`^${name}\\.tgz`)).closest("li");
+
+    it("shows each artifact's own checked time with per-artifact attribution", async () => {
+      mock.prereq = view([
+        artifactDep([
+          art("a1", { checked_at: "2026-11-07T10:00:00Z" }),
+          art("a2", { checked_at: "2026-11-08T12:30:00Z" }),
+        ]),
+      ]);
+      await open();
+      const first = item("a1");
+      const second = item("a2");
+      expect(first?.textContent).toContain("a1.tgz · verified: true · 5 bytes · checked ");
+      expect(first?.querySelector("time")?.getAttribute("title")).toBe("2026-11-07T10:00:00.000Z");
+      expect(second?.querySelector("time")?.getAttribute("title")).toBe("2026-11-08T12:30:00.000Z");
+      // The row-level line stays a PR-level fact and is not filled from artifacts.
+      const checked = screen.getByText("Checked").nextElementSibling;
+      expect(checked?.querySelector("time")).toBeNull();
+      expect(checked?.textContent).toBe("PR not checked");
+    });
+
+    it("keeps a missing artifact checked_at explicitly unknown", async () => {
+      mock.prereq = view([
+        artifactDep([art("a1"), art("a2", { checked_at: null }), art("a3", { checked_at: "" })]),
+      ]);
+      await open();
+      expect(item("a1")?.querySelector("time")).not.toBeNull();
+      for (const name of ["a2", "a3"]) {
+        expect(item(name)?.querySelector("time")).toBeNull();
+        expect(item(name)?.textContent).toContain("checked: unknown");
+      }
+    });
+
+    it("keeps true, false and unknown verified statuses distinct", async () => {
+      mock.prereq = view([
+        artifactDep([
+          art("a1", { verified: true }),
+          art("a2", { verified: false }),
+          art("a3", { verified: "unknown" }),
+        ]),
+      ]);
+      await open();
+      expect(item("a1")?.textContent).toContain("verified: true");
+      expect(item("a2")?.textContent).toContain("verified: false");
+      expect(item("a3")?.textContent).toContain("verified: unknown");
+    });
+
+    it("keeps the read-only evidence note when not enforced", async () => {
+      mock.prereq = view([artifactDep([art("a1")])], { enforced: false });
+      await open();
+      expect(screen.getByText(/enforced: false/)).toBeTruthy();
+      expect(screen.getByText(/grants no claim, merge or acceptance permission/)).toBeTruthy();
+    });
+  });
+
   it("discloses partial and omitted dependencies", async () => {
     mock.prereq = view([dep({ verdict: "satisfied", why: "merged" })], {
       partial: ["forge:o/r#7"],

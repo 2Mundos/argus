@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-31
-updated: 2026-11-07
+updated: 2026-11-09
 ---
 
 # Task discovery and prerequisite evidence
@@ -150,7 +150,8 @@ Response shape:
   button; the rest of the task detail renders. Per dependency it shows the title
   (linked to that task), the task state with `task_succeeded`, and, labelled
   separately, the delivery `verdict`, `why`, `checked_at` / `source` and the PR
-  and artifact evidence. `unknown` is shown as `unknown`. `partial` and
+  and artifact evidence. Each artifact shows its own `checked_at` (never as the
+  PR-level time; a missing one reads `checked: unknown`). `unknown` is shown as `unknown`. `partial` and
   `omitted` are disclosed in words, and the copy states that the view is
   evidence only (`enforced: false`) and grants no claim, merge or acceptance
   permission.
