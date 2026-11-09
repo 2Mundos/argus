@@ -386,9 +386,9 @@ export function createAttachRelay(opts: {
       for (let i = 0; i < 5 && (await step()) > 0; i++);
     },
     /** Stop serving and withdraw the offer, so a late `attach` fails as unsupported. */
-    stop(): void {
+    stop(): Promise<void> {
       stopped = true;
-      void unlink(statusFile).catch(() => {});
+      return unlink(statusFile).catch(() => {});
     },
   };
 }
