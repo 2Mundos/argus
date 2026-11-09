@@ -31,6 +31,10 @@ TEST_DIRS = ("apps/api/tests", "packages/core/tests", "scripts")
 SHELL_TESTS = {
     "deploy/argus": "scripts/test_launcher.py",
     "deploy/install.sh": "scripts/test_launcher.py",
+    "deploy/browser-helper/smoke.mjs": "scripts/test_browser_helper_smoke.py",
+    "deploy/browser-helper/provenance.json": "scripts/test_browser_helper_smoke.py",
+    "deploy/browser-helper/seccomp/moby-default.json": "scripts/test_browser_helper_smoke.py",
+    "deploy/browser-helper/seccomp/chromium-userns.json": "scripts/test_browser_helper_smoke.py",
 }
 MIGRATIONS = re.compile(r"^apps/api/src/argus_api/db/migrations/.+\.sql$")
 FULL_CHECK = re.compile(

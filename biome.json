@@ -16,7 +16,8 @@
       "!packages/api-client/openapi.json",
       "!packages/api-client/src/schema.d.ts",
       "!apps/api/bench/results/**",
-      "!docs/reports/artifacts/**"
+      "!docs/reports/artifacts/**",
+      "!deploy/browser-helper/seccomp/**"
     ]
   },
   "formatter": {

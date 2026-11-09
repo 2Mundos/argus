@@ -16,6 +16,7 @@ Every spec in this directory with its status, kept in sync by
 | [Account usage](account-usage.spec.md) | `implemented` |
 | [Agent hygiene: lost/gone aggregates, bounded archiving and alerts](agent-hygiene.spec.md) | `implemented` |
 | [Agent container resource hygiene: OOM priority and CPU count](agent-resource-hygiene.spec.md) | `implemented` |
+| [Browser-helper validation assets (isolated Chromium)](browser-helper-validation.spec.md) | `partial` |
 | [Built-in Orchestrator Runtime](builtin-orchestrator.spec.md) | `implemented` |
 | [Changed-only checks](changed-only-checks.spec.md) | `implemented` |
 | [Claude accounts: import, dedicated login, renewal](claude-accounts.spec.md) | `implemented` |

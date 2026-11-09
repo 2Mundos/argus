@@ -1,0 +1,32 @@
+{
+  "baseline": {
+    "file": "seccomp/moby-default.json",
+    "sha256": "6416b47770785a41ac59073cdc77d9fe98517df2799dc83ef207e622de3053f6",
+    "url": "https://raw.githubusercontent.com/moby/profiles/6fe7deb1b9fb7c0397a4593480d7d22b9ee8caef/seccomp/default.json",
+    "note": "Pinned moby/profiles commit. Not proven identical to the profile embedded in any particular Docker engine; Docker 29.5.2 was the engine used for the tested run."
+  },
+  "candidate": {
+    "file": "seccomp/chromium-userns.json",
+    "sha256": "03d006f7f7d4d8757b30cefe442da4a00552b3940a4b042c5f6d2827fba3b4be",
+    "derivation": "baseline plus exactly one appended unconditional SCMP_ACT_ALLOW rule for clone, unshare, chroot (setns is NOT added); reproduced byte for byte by `scripts/browser_helper_smoke.py derive`."
+  },
+  "source_evidence": {
+    "smoke.mjs": {
+      "file": "smoke.mjs",
+      "original_sha256": "bbd95b7b72d3d0edd5c929944de7933aec8392ef1856845ef1e978a2732e35b1",
+      "adapted": "fail-closed error and deadline handling; strict /proc reads (a live process that cannot be inspected fails the run, only a vanished one is skipped); all four Uid/Gid fields must be 1000; launch argv assertion; outer-userns assertion renamed outer_userns_map_recorded because it only records the map; no machine-local paths"
+    },
+    "run_smoke.sh": {
+      "original_sha256": "dcdd2499c3c6918d8fb993937cada65ca3c5992d6ad6438b80dec340d127123b",
+      "adapted": "replaced by scripts/browser_helper_smoke.py (digest-only image, fresh output dir, bounded timeout, hardening assertion, receipt, host-side artefact verification)"
+    },
+    "derive_min.py": {
+      "original_sha256": "fcb99593434a39ed9072f82a848e7e7b9c543d99bf3a5c00c7dbd8017c082c9b",
+      "adapted": "replaced by the derive command of scripts/browser_helper_smoke.py"
+    },
+    "seccomp_diff.py": {
+      "original_sha256": "bca12ea3aadaafd72ffd62aa4efd3d3cc90f6fb59152490bcaf0e7b2df11cfec",
+      "adapted": "not imported; the candidate check asserts the one-rule difference directly"
+    }
+  }
+}
