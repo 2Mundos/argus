@@ -13,7 +13,7 @@ export function Brand({ as: Tag = "span", href }: { as?: ElementType; href?: str
   }, [working]);
   return (
     <Tag className="brand" href={href} aria-label={href ? "Argus, home" : "Argus"}>
-      <img src={logoUrl} alt="" width={31} height={22} />
+      <img src={logoUrl} alt="" width={34} height={22} />
       <span
         className={rolling ? "brand-name roll-text rolling" : "brand-name roll-text"}
         onAnimationIteration={() => {
