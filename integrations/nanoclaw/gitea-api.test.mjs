@@ -174,6 +174,38 @@ describe("credential-free Gitea API helper", () => {
     );
   });
 
+  it("matches GitHub owner/repo case-insensitively with optional .git, Gitea case-sensitively", () => {
+    const allow = ["https://github.com/2mundos/argus"];
+    for (const url of [
+      "https://github.com/2Mundos/Argus.git",
+      "https://github.com/2MUNDOS/argus",
+      "https://github.com/2mundos/argus.git",
+    ])
+      assert.equal(allowlistedRepository(url, allow).origin, "https://github.com");
+    assert.equal(
+      allowlistedRepository("https://github.com/2mundos/argus", [
+        "https://github.com/2Mundos/ARGUS.git",
+      ]).repo,
+      "argus",
+    );
+    for (const [url, list] of [
+      ["https://git.example.test/Team/Project", ["https://git.example.test/team/project"]],
+      ["https://git.example.test/team/project", ["https://git.example.test/team/Project.git"]],
+      ["https://github.com/2mundos/other", allow],
+      ["https://github.com/other/argus", allow],
+      ["https://gitlab.com/2mundos/argus", allow],
+      ["https://github.com/2mundos/argus?x=1", allow],
+      ["https://github.com/2mundos/argus#frag", allow],
+      ["https://user:pw@github.com/2mundos/argus", allow],
+      ["https://github.com/2mundos/argus/", allow],
+      ["http://github.com/2mundos/argus", allow],
+    ])
+      assert.throws(
+        () => allowlistedRepository(url, list),
+        (e) => e.code === "policy_denied",
+      );
+  });
+
   it("normalizes configured and allowlisted .git URL forms to one REST identity", async () => {
     for (const configuredSuffix of ["", ".git"]) {
       for (const allowSuffix of ["", ".git"]) {

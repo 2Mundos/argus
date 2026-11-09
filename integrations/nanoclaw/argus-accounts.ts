@@ -579,11 +579,15 @@ export async function applyRepositoryLease(
     throw new Error(
       `repository lease must use the ${repository.provider} provider and repository role`,
     );
-  const key = `${repository.origin}/${repository.owner}/${repository.repo}`;
+  // GitHub owner and repo names are case-insensitive; other hosts compare as written.
+  const allowKey = (r: NormalizedRepositoryUrl) => {
+    const k = `${r.origin}/${r.owner}/${r.repo}`;
+    return r.provider === "github" ? k.toLowerCase() : k;
+  };
+  const key = allowKey(repository);
   const allowed = allowedRepositories.some((raw) => {
     try {
-      const candidate = normalizeRepositoryUrl(raw);
-      return `${candidate.origin}/${candidate.owner}/${candidate.repo}` === key;
+      return allowKey(normalizeRepositoryUrl(raw)) === key;
     } catch {
       return false;
     }

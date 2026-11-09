@@ -286,4 +286,65 @@ describe("dedicated Gitea repository lease", () => {
     ).rejects.toThrow(/allowlist/);
     expect(calls).toBe(0);
   });
+
+  it("compares the repository allowlist case-insensitively on GitHub only", async () => {
+    const secrets: any[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname.replace(/^\/api/, "");
+      const body = init.body ? JSON.parse(init.body as string) : undefined;
+      if (path === "/agents" && init.method === "GET")
+        return Response.json([{ id: "agent", identifier: "worker" }]);
+      if (path === "/secrets" && init.method === "GET") return Response.json(secrets);
+      if (path === "/secrets" && init.method === "POST") {
+        const secret = { id: `secret-${secrets.length}`, ...body };
+        secrets.push(secret);
+        return Response.json(secret);
+      }
+      return Response.json({ success: true });
+    }) as typeof globalThis.fetch;
+    const onecli = new OneCliClient("http://127.0.0.1:10254", fetchImpl);
+    const target = { identifier: "worker", name: "worker" };
+    const lease = (provider: string) =>
+      ({
+        lease_id: "l",
+        account_id: "a",
+        name: "n",
+        provider,
+        kind: "api_key",
+        role: "repository",
+        credential: { username: "u", token: "dummy-token" },
+      }) as AccountLease;
+    await applyRepositoryLease(
+      onecli,
+      target,
+      lease("github"),
+      "https://github.com/2Mundos/Argus.git",
+      ["https://github.com/2mundos/argus"],
+      [],
+    );
+    // Scope patterns still follow the requested URL, not the allowlist entry.
+    expect(secrets.find((s) => s.name.endsWith("-rest"))?.pathPattern).toBe(
+      "/repos/2Mundos/Argus/*",
+    );
+    await expect(
+      applyRepositoryLease(
+        onecli,
+        target,
+        lease("github"),
+        "https://github.com/2mundos/other",
+        ["https://github.com/2mundos/argus"],
+        [],
+      ),
+    ).rejects.toThrow(/allowlist/);
+    await expect(
+      applyRepositoryLease(
+        onecli,
+        target,
+        lease("gitea"),
+        "https://git.example.test/Team/Repo",
+        ["https://git.example.test/team/repo"],
+        [],
+      ),
+    ).rejects.toThrow(/allowlist/);
+  });
 });
