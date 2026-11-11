@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # Progress milestones
@@ -80,12 +80,37 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   last also naming each failing status context as `gate_failed`; `waiting_input` when
   the executor's final JSON reports permission denials. Each distinct milestone is
   emitted once. A probe that throws is ignored for that poll.
-- Sinks: one JSON line on stderr and in `<out>/milestones.jsonl`; and a `POST
-  /api/tasks/{id}/progress` when `ARGUS_API_URL`, `ARGUS_TASK_ID`,
-  `ARGUS_TASK_ATTEMPT` and `ARGUS_AGENT_TOKEN` are all set. The token is the agent's own
-  bearer token, the one the NanoClaw channel uses; it is never logged or written to
-  `milestones.jsonl`. The channel does not put it into the agent container today, so
-  until the pool environment does, only the file and stderr are written (4).
+- Sinks: one JSON line on stderr and in `<out>/milestones.jsonl`; one JSON line in the
+  **relay file**; and a `POST /api/tasks/{id}/progress` when `ARGUS_API_URL`,
+  `ARGUS_TASK_ID`, `ARGUS_TASK_ATTEMPT` and `ARGUS_AGENT_TOKEN` are all set. The container
+  does not hold the token today, so the relay file is the path that works. The token is
+  never logged or written to any file.
+- **Relay file.** `argus-milestones.jsonl` in the directory of `ARGUS_MODEL_POLICY_FILE`
+  (override: `ARGUS_MILESTONE_RELAY_FILE`), appended by `milestones.mjs`, capped at 256
+  KiB. One line per milestone: `{v: 1, task_id, attempt, run_key, kind, data, message,
+  at}`; no token, no network. `waiting_input` is not written.
+- **Host relay** (`argus-milestone-relay.ts`, in the NanoClaw channel, started after the
+  executor preflight and stopped with the attempt, with a bounded final drain). It reads
+  the file with the shared fenced reader (`argus-fenced-relay.ts`): a symlink or
+  non-regular file stops the relay; at most 256 KiB are read per poll; a partial last
+  line waits for its newline; a line over 8 KiB is dropped; a shrunk or replaced file is
+  read again from the top. Every record is checked against what the host knows: task and
+  attempt equal the claim (other tasks are ignored), `run_key` is `r1:<task id>:...`, the
+  kind is one of `commit_created`, `pr_opened`, `ci_running`, `ci_passed`, `ci_failed`,
+  `gate_failed` (never `waiting` or `waiting_input`), `data` has exactly the keys of 3.1,
+  a SHA is 40 lowercase hex, a pull request belongs to the task's repository, and nothing
+  credential-like is posted. The host builds the message itself. A rejected record is
+  dropped with a reason code in the log. Valid records go to `POST
+  /api/tasks/{id}/progress` with the host's token, once per (task, attempt, kind, data)
+  from a bounded seen set, so a replayed file and the channel's own `pr_opened` do not
+  post twice. A network error, `408`, `425`, `429` and `5xx` back off (2-30 s) and keep
+  the record; `401` or `409` `stale_attempt`, `not_assignee`, `not_claimed` stop the
+  relay; any other `4xx` drops that record. The pending queue holds 200 records.
+- `ci_failed` for a head SHA is followed by one `gate_failed` per failing status
+  context of that same SHA.
+- Where a provider gives no signal (no repository allowlist, no commit status), the
+  emitter writes no `ci_*` milestone; it never invents one. All executors (`claude`,
+  `codex`, `opencode`, `agent`, `copilot`) share this path.
 - Failures of a sink never fail the delegation.
 - In every execution mode the NanoClaw channel also emits `pr_opened` itself.
   A PR URL of the task's repository, named in a reply, is posted once per attempt
@@ -93,8 +118,7 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   owner and repository compare case-insensitively here and in the emitter's
   `ARGUS_REPOSITORY_URL` filter: the claim's URL is Argus's lowercase one, while the
   forge prints the owner's own casing (`2Mundos`).
-  This covers delegated runs whose emitter has no API token as well as the
-  [single-layer experiment](single-layer-experiment.spec.md) 3.3.
+  This covers the [single-layer experiment](single-layer-experiment.spec.md) 3.3.
 
 ## 3.4 Dashboard
 
@@ -118,8 +142,8 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
 
 # 4. Open Questions
 
-- Delivering `ARGUS_AGENT_TOKEN` (or a narrower per-task token) to the agent container
-  needs a pool or channel change; the channel could also tail `milestones.jsonl` itself.
+- Closed: the agent container needs no `ARGUS_AGENT_TOKEN`; the host relays the relay file
+  (3.3).
 - `ci_*` needs the repository to be allowlisted for the worker and a CI that posts
   commit statuses.
 

@@ -20,6 +20,10 @@ export const KINDS = [
 
 const SHA = /^[0-9a-f]{7,40}$/;
 
+/** The host-read relay file in the agent group's directory; keep in step with argus-milestone-relay.ts. */
+export const MILESTONE_RELAY_FILE = "argus-milestones.jsonl";
+const MILESTONE_RELAY_MAX_BYTES = 256 * 1024; // per file; further records stay in milestones.jsonl only
+
 /** An http(s) URL with no userinfo, query or fragment, or null. */
 export function safeUrl(raw) {
   try {
@@ -182,9 +186,17 @@ export function gitHead(cwd, run = spawnSync) {
  * endpoint when ARGUS_API_URL, ARGUS_TASK_ID, ARGUS_TASK_ATTEMPT and
  * ARGUS_AGENT_TOKEN are all set (the agent's own bearer token, as the NanoClaw
  * channel uses it). The token is only ever put in the Authorization header.
- * A sink that fails never fails the delegation.
+ * When `relay` is `{file, taskId, attempt, runKey}` it also appends one line per milestone
+ * to the relay file (no token, no network): the NanoClaw host checks and posts it. The
+ * worker's own `waiting_input` is not relayed. A sink that fails never fails the delegation.
  */
-export function createSink({ e, out, stderr = process.stderr, fetchImpl = globalThis.fetch }) {
+export function createSink({
+  e,
+  out,
+  relay,
+  stderr = process.stderr,
+  fetchImpl = globalThis.fetch,
+}) {
   const base = (e.ARGUS_API_URL ?? "").trim().replace(/\/+$/, "");
   const attempt = Number(e.ARGUS_TASK_ATTEMPT);
   const taskId = (e.ARGUS_TASK_ID ?? "").trim();
@@ -212,6 +224,24 @@ export function createSink({ e, out, stderr = process.stderr, fetchImpl = global
       fs.appendFileSync(path.join(out, "milestones.jsonl"), `${line}\n`);
     } catch {
       /* ignore */
+    }
+    if (relay && m.kind !== "waiting_input") {
+      try {
+        const record = {
+          v: 1,
+          task_id: relay.taskId,
+          attempt: relay.attempt,
+          run_key: relay.runKey,
+          ...JSON.parse(line),
+        };
+        const text = `${JSON.stringify(record)}\n`;
+        fs.mkdirSync(path.dirname(relay.file), { recursive: true });
+        const size = fs.existsSync(relay.file) ? fs.statSync(relay.file).size : 0;
+        if (size + text.length <= MILESTONE_RELAY_MAX_BYTES)
+          fs.appendFileSync(relay.file, text, { mode: 0o660 });
+      } catch {
+        /* ignore */
+      }
     }
     if (!post) return;
     try {

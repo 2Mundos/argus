@@ -36,7 +36,13 @@ import {
 } from "./anthropic-redirect.mjs";
 import { CHANGES_FILE, startChanges } from "./changes.mjs";
 import { createFileRelay, envSecrets, RELAY_FILE, startLiveLog } from "./livelog.mjs";
-import { createSink, createTracker, gitHead, waitingInput } from "./milestones.mjs";
+import {
+  createSink,
+  createTracker,
+  gitHead,
+  MILESTONE_RELAY_FILE,
+  waitingInput,
+} from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
 import {
   appendAuthRejectedRecord,
@@ -1269,7 +1275,21 @@ async function runAttempt(
   }
 
   // Milestones come from real state, polled while the executor runs and once after it.
-  const sink = createSink({ e, out });
+  const milestoneRelay =
+    taskIdEarly && Number.isSafeInteger(attemptEarly) && attemptEarly >= 1
+      ? {
+          file:
+            e.ARGUS_MILESTONE_RELAY_FILE ||
+            path.join(
+              path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+              MILESTONE_RELAY_FILE,
+            ),
+          taskId: taskIdEarly,
+          attempt: attemptEarly,
+          runKey: runKeyEarly,
+        }
+      : undefined;
+  const sink = createSink({ e, out, relay: milestoneRelay });
   const pending = [];
   const tracker = createTracker({
     repository: (e.ARGUS_REPOSITORY_URL ?? "").trim() || undefined,
