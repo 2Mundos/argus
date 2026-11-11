@@ -31,6 +31,13 @@ while read -r from _ to; do
   mkdir -p "$target/$(dirname "$to")"
   cp "$target/.claude/skills/add-codex/$from" "$target/$to"
 done < <(awk '/^```nc:copy$/{f=1;next} /^```/{f=0} f&&/->/' "$skill")
+# The Codex app-server child resolves the image-installed codex CLI (PNPM_HOME)
+# via PATH (worker-lifecycle spec 3.8). This runs here, not install.sh: the
+# patched file arrives with the payload copy above.
+mkdir -p "$target/container/agent-runner/src/providers"
+cp "$here/../overlays/codex-cli-path.ts" "$here/../overlays/codex-cli-path.test.ts" \
+  "$target/container/agent-runner/src/providers/"
+python3 "$here/../patch-codex-cli-path.py" "$target"
 for barrel in src/providers/index.ts src/provider-contracts/index.ts \
     container/agent-runner/src/provider-contracts/index.ts \
     container/agent-runner/src/providers/index.ts setup/providers/index.ts; do
