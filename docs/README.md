@@ -306,6 +306,8 @@ why you are here.
 - [Project review recommendations](drafts/2026-11-06.project-review-recommendations.draft.md) —
   ordered work to restore Python test collection, automate operational evidence,
   validate the Codex sandbox, and strengthen documentation navigation and checks
+- [Premises review](drafts/2026-11-11.premises-review.draft.md) — which premises
+  hold in the preview data, and an ordered list: run the single-layer A/B, then yield before features
 - [Tool description rules](drafts/2026-11-04.tool-description-rules.draft.md) —
   writing rules for MCP tool text and a per-role token difference on every change
 - [DeepSeek Harness as an engine](drafts/2026-11-04.dsh-engine.draft.md) — `dsh`
