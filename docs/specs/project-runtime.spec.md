@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-10-23
+updated: 2026-11-11
 ---
 
 # Project runtime images
@@ -73,6 +73,15 @@ gaps for `pnpm`, `sops-age`, `minio`, and `elasticsearch` until provisioned.
   inputs reuse one `runtime_builds` row; a changed base id, recipe, helper, or
   schema starts a new row. Irrelevant manifest noise outside the declaration
   does not invalidate the key.
+- **Gitleaks.** The `gitleaks` component (single approved version `8.30.1`)
+  installs the official `linux_x64` release binary to `/usr/local/bin/gitleaks`.
+  The download URL and SHA-256 are constants in `argus_core.runtime`, checked
+  against the vendor `checksums.txt`; a separate build stage runs `sha256sum -c`
+  under `set -eu`, so a download, digest, extraction or permission failure fails
+  the build. No build args, env or secrets are involved. The probe runs
+  `gitleaks version` as the task uid and must match the anchored line `8.30.1`,
+  so `8.30.10` or a missing binary fails verification. Recipes without it render
+  unchanged.
 - **Builder loop.** `RuntimeManager.work_once` (started from app lifespan when
   `project_runtime` is on) performs at most one Docker build at a time per
   process, with `working_until` lease for crash recovery. All Docker I/O is

@@ -51,6 +51,7 @@ CATALOG: dict[str, Component] = {
         Component("psql", "provision", ("16",), "PostgreSQL client from the PGDG apt repository"),
         Component("postgres-server", "provision", ("16",), "PostgreSQL server binaries, run unprivileged per task"),
         Component("valkey", "provision", ("8.0",), "valkey-server and valkey-cli built from a sha256-pinned source tarball"),
+        Component("gitleaks", "provision", ("8.30.1",), "gitleaks secret scanner, official release binary, SHA-256 pinned"),
         Component("node", "base", ("22",), "Node.js already in the agent image"),
         Component("git", "base", (), "git already in the agent image"),
         Component("chromium", "base", (), "browser already in the agent image"),
@@ -64,6 +65,10 @@ CATALOG: dict[str, Component] = {
 # Pins an auditor can check against the vendors (verified at build time by the recipe).
 VALKEY_VERSION = "8.0.11"
 VALKEY_SHA256 = "e4ee4ad51c2e9cb75c5fac8865d34792482a597bf3b136b42b296c9933bd31f8"
+# Checked against gitleaks_8.30.1_checksums.txt of the vendor release (linux_x64 archive).
+GITLEAKS_VERSION = "8.30.1"
+GITLEAKS_SHA256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+GITLEAKS_URL = f"https://github.com/gitleaks/gitleaks/releases/download/v{GITLEAKS_VERSION}/gitleaks_{GITLEAKS_VERSION}_linux_x64.tar.gz"
 PGDG_KEY_FPR = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
 # npm SRI hash of the pinned graft package: a public integrity value, not a credential.
 GRAFT_INTEGRITY = "sha512-0CSgoGx+FyzgCkFDhM94pvPnYaTU9jL19BixqMmZ0eyQK618GINPHhQ5Xtto7LcHdNiBGl5RFQcwJob6Mxq4nA=="  # gitleaks:allow
@@ -242,6 +247,18 @@ def render_dockerfile(recipe: Recipe) -> str:
         final.append(
             "COPY --from=graft-build /out/lib/node_modules/@nanonets/graft /usr/local/lib/graft"
         )
+    if recipe.has("gitleaks"):
+        out += [
+            "FROM ${BASE} AS gitleaks-build",
+            "USER root",
+            "RUN set -eu; apt-get update; "
+            "apt-get install -y --no-install-recommends curl ca-certificates; "
+            f"curl -fsSL -o /tmp/gitleaks.tgz {GITLEAKS_URL}; "
+            f'echo "{GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -; '
+            "mkdir /tmp/src; tar -xzf /tmp/gitleaks.tgz -C /tmp/src gitleaks; "
+            "install -D -m0755 /tmp/src/gitleaks /out/gitleaks",
+        ]
+        final.append("COPY --from=gitleaks-build /out/gitleaks /usr/local/bin/gitleaks")
     out += ["FROM ${BASE}", "USER root"]
     apt: list[str] = []
     if recipe.has("pango"):
@@ -381,6 +398,14 @@ def probes(recipe: Recipe) -> list[Probe]:
                         "graft",
                         ("graft", "--version"),
                         rf"{re.escape(c.version or '')}",
+                    )
+                )
+            case "gitleaks":
+                p.append(
+                    Probe(
+                        "gitleaks",
+                        ("gitleaks", "version"),
+                        rf"^{re.escape(GITLEAKS_VERSION)}$",
                     )
                 )
             case "psql":

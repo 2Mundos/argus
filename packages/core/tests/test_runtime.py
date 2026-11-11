@@ -37,6 +37,9 @@ def test_resolve_pins_the_default_versions() -> None:
     assert r.version("valkey") == "8.0"
     assert r.version("python") == "3.13"
     assert r.has("postgres-server") and not r.has("minio")
+    assert resolve("g", spec("gitleaks")).version("gitleaks") == "8.30.1"
+    pinned = RuntimeSpec(components=[ComponentRef(id="gitleaks", version="8.30.1")])
+    assert resolve("g", pinned).version("gitleaks") == "8.30.1"
 
 
 def test_equal_specs_in_any_order_have_one_digest() -> None:
@@ -72,6 +75,8 @@ def test_what_changes_the_image_changes_the_key() -> None:
         build_key(resolve("argus", spec("psql")), BASE, "linux/amd64") != key
     )  # other project
     assert build_key(r, BASE, "linux/amd64") == key  # deterministic
+    with_gitleaks = resolve("radar", spec("psql", "gitleaks"))
+    assert build_key(with_gitleaks, BASE, "linux/amd64") != key
 
 
 def test_projects_never_share_a_reference() -> None:
@@ -90,6 +95,9 @@ def test_projects_never_share_a_reference() -> None:
         (ComponentRef(id="minio"), "required"),
         (ComponentRef(id="python", version="2.7"), "not approved"),
         (ComponentRef(id="pytest", version="8.0"), "not approved"),
+        (ComponentRef(id="gitleaks", version="8.30.0"), "not approved"),
+        (ComponentRef(id="gitleaks", version="latest"), "not approved"),
+        (ComponentRef(id="gitleaks", version="8.30.1 && curl x"), "not approved"),
     ],
 )
 def test_unapproved_components_are_refused_with_an_actionable_message(
@@ -150,6 +158,32 @@ def test_dockerfile_is_built_from_the_catalogue_only() -> None:
         and "openssl dgst -sha512" in text
     )
     assert text.index("USER node") > text.rindex("USER root")  # ends unprivileged
+
+
+def test_gitleaks_is_pinned_verified_and_probed_by_exact_version() -> None:
+    plain = render_dockerfile(resolve("radar", spec("psql")))
+    r = resolve("radar", spec("gitleaks"))
+    text = render_dockerfile(r)
+    assert "gitleaks" not in plain and "gitleaks" not in render_dockerfile(
+        resolve("radar", RADAR)
+    )
+    assert (
+        "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/"
+        "gitleaks_8.30.1_linux_x64.tar.gz" in text
+    )
+    assert (
+        'echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  '
+        '/tmp/gitleaks.tgz" | sha256sum -c -' in text
+    )
+    assert "install -D -m0755 /tmp/src/gitleaks /out/gitleaks" in text
+    assert "COPY --from=gitleaks-build /out/gitleaks /usr/local/bin/gitleaks" in text
+    assert "set -eu" in text and "latest" not in text
+    probe = next(p for p in probes(r) if p.name == "gitleaks")
+    assert probe.argv == ("gitleaks", "version")
+    # the probe runner searches with re.MULTILINE; the real output is "8.30.1\n"
+    assert re.search(probe.pattern, "8.30.1\n", re.M)
+    for bad in ("8.30.10", "8.30.0", "v8.30.1", ""):
+        assert not re.search(probe.pattern, bad, re.M)
 
 
 def test_every_provisioned_tool_has_a_probe_and_services_are_exercised() -> None:
