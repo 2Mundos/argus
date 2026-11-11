@@ -168,6 +168,43 @@ describe("Accounts", () => {
     expect(screen.getByRole("button", { name: "Reload secrets file" })).toBeTruthy();
   });
 
+  it("shows every account type tile with its full hint", () => {
+    render(<Accounts />);
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    const hints: Record<string, string> = {
+      Claude: "Subscription login",
+      Codex: "ChatGPT login or API key",
+      "Google AI Studio": "Gemini API key",
+      "Custom provider": "OpenRouter or any compatible API",
+      "Local model": "Ollama, LM Studio, vLLM…",
+      Other: "Cursor, Copilot, Gitea, GitHub, raw JSON",
+    };
+    for (const [title, hint] of Object.entries(hints)) {
+      const tile = screen.getByRole("button", { name: title });
+      expect(tile.textContent).toBe(`${title}${hint}`);
+    }
+  });
+
+  it("closes the type picker on Escape and on Cancel", () => {
+    render(<Accounts />);
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    expect(screen.getByRole("dialog", { name: "Add account" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Add account" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Add account" })).toBeNull();
+  });
+
+  it("hands a picked tile off to its dialog and closes the picker", async () => {
+    render(<Accounts />);
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    await screen.findByLabelText("Provider");
+    expect(screen.queryByRole("button", { name: "Local model" })).toBeNull();
+  });
+
   it("submits anthropic provider from catalogue", async () => {
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));

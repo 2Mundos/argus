@@ -115,15 +115,59 @@ button.compact {
 }
 .account-type-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.4rem;
-  margin: 0.5rem 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
 }
-.account-type-grid button {
-  display: grid;
-  gap: 0.1rem;
+@media (max-width: 900px) {
+  .account-type-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .account-type-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* Beats the later global button.compact pill rule on specificity. */
+.account-type-grid button.compact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 0.35rem;
+  height: auto;
+  min-width: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
   text-align: left;
-  padding: 0.4rem 0.6rem;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.account-type-grid button.compact strong {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.account-type-grid button.compact .muted {
+  display: block;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+.account-type-picker button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.account-type-picker .actions button.compact {
+  padding: 0.4rem 1rem;
+  font-size: 0.9rem;
+  border-radius: 8px;
 }
 button.primary {
   background: var(--primary-bg);
