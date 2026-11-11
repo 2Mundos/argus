@@ -234,7 +234,7 @@ task. No model session starts and no attempt is spent.
 | The task workspace has a place: the agent group dir is known and the task has a repository URL | `env_workspace_unconfigured` |
 | The task workspace can be created and read (no `EACCES`, `EPERM` or `EROFS`) | `env_workspace_permission` |
 | The task workspace is a real directory under the workspaces root and a git repository | `env_workspace_invalid` |
-| Its `origin` is the task's repository URL, without credentials | `env_workspace_remote_mismatch` |
+| Its `origin` is the task's repository URL, without credentials (a GitHub owner and repository may differ in letter case only) | `env_workspace_remote_mismatch` |
 | A checkpoint is expected but missing, incomplete, or from another node (no proven transport) | `env_checkpoint_unavailable` |
 | A checkpoint's hashes, identity, paths or permissions fail validation | `env_checkpoint_invalid` |
 | The workspace already holds work that differs from the checkpoint | `env_checkpoint_conflict` |
@@ -269,7 +269,9 @@ therefore runs in a bounded, ephemeral, model-free session:
   with the repository's provider; the OneCLI agent of the agent group exists; both
   repository secrets (`argus-<group>-repository-rest` and `-git`) exist and are assigned
   to that agent; and, when OneCLI lists them, their host and path patterns are exactly
-  the repository's REST and Git scopes. The preflight session must then run for that same
+  the repository's REST and Git scopes. When the lease carries a GitHub alias spelling
+  ([GitHub repositories](github-repositories.spec.md) 3.3), both alias secrets are
+  checked the same way; an alias assigned when none is expected is a scope mismatch. The preflight session must then run for that same
   agent group. A failed check is outcome `assignment_missing` (a check that cannot be
   read, `assignment_unverified`) and blocks with `env_repository_unavailable`, not as a
   forge denial. The check writes nothing, so a concurrent worker session's lease and
@@ -355,8 +357,8 @@ therefore runs in a bounded, ephemeral, model-free session:
   | Outcome | When | Block reason |
   | --- | --- | --- |
   | `ok` | Accepted (below) | none |
-  | `assignment_missing` | No task-scoped lease, no OneCLI agent, a repository secret absent, unassigned or scoped to another host or path, or the session's agent group is not the lease's agent | `env_repository_unavailable` |
-  | `assignment_unverified` | OneCLI's admin API could not be read for the check | `env_repository_unavailable` |
+  | `assignment_missing` | No task-scoped lease, no OneCLI agent, a repository secret absent, unassigned or scoped to another host or path, the session's agent group is not the lease's agent, or the re-applied lease for GitHub's verified spelling is not confirmed | `env_repository_unavailable` |
+  | `assignment_unverified` | OneCLI's admin API could not be read for the check, or re-applying the lease for GitHub's verified spelling failed | `env_repository_unavailable` |
   | `forge_denied` | The forge answered 401 or 403, or a 404 or other response that proves a credential was attached (a private repository) lacks the required permission. A 401 does not say whether the credential was absent or invalid | `env_repository_unreachable` |
   | `network_failure` | The request did not get a forge answer: proxy or network error, timeout | `env_repository_unreachable` |
   | `unknown` | The answer cannot prove authentication or token scope: a public (or unlabelled) repository whose response lacks the permissions object or the required permission, a 404 that proves no authentication (a missing repository, or a private one nothing was injected for), or any other forge answer (5xx, rate limit, another repository) | `env_repository_unreachable` |
@@ -370,7 +372,8 @@ therefore runs in a bounded, ephemeral, model-free session:
   and Git hosts and their scoped path patterns, the probe outcome with the forge's HTTP
   status, whether the permissions object was present, the push bit, the repository's
   visibility and whether authentication is proven, whether the lease was re-armed and how
-  many times (`rearm_attempts`), the `injection`, `independent_evidence` and `diagnosis` values above, and the evidence source of each part
+  many times (`rearm_attempts`), the `canonical` spelling decision
+  ([GitHub repositories](github-repositories.spec.md) 3.3), the `injection`, `independent_evidence` and `diagnosis` values above, and the evidence source of each part
   (`onecli_admin_read`, `preflight_session_verdict`, `host`). Every field is a closed value,
   a bounded integer, or a host and path the host derived itself; nothing the container wrote
   is copied as text. No secret value, header, proxy URL or userinfo, or credential-bearing URL

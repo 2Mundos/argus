@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-11-05
+updated: 2026-11-11
 ---
 
 # Task workspace: a stable per-task git workspace, checked before the model
@@ -54,7 +54,10 @@ its call in `runTask`) and the new block reasons in Argus.
 - Branch: `argus/task-<first 8 hex of the task id>`.
 - Origin is the task's normalized repository URL (`task.repository_url`, set by
   the repository preflight). A URL with userinfo is refused before anything is
-  written, so a credential never reaches `.git/config`.
+  written, so a credential never reaches `.git/config`. The preflight may change a
+  GitHub task's URL to GitHub's verified letter-case spelling
+  ([GitHub repositories](github-repositories.spec.md) 3.3); an existing origin is
+  never rewritten to follow it.
 - The workspaces root and every workspace are created with mode `0700`. The
   session container runs as the host's uid, so the worker can use them.
 - Host git is hardened against a `.git` the worker controls: inherited `GIT_*`
@@ -116,7 +119,11 @@ existing workspace, the channel may update `core.hooksPath` when needed (3.2
 step 4). In order: the workspace is a real directory
 (not a symlink) whose real path is directly under the real workspaces root;
 `.git` is a real directory and `git rev-parse --absolute-git-dir` names it;
-origin is set exactly once and equals the expected URL; HEAD is
+origin is set exactly once and equals the expected URL (for a github.com repository,
+a plain credential-free `https://github.com/{owner}/{repo}` with an optional `.git` whose
+owner and repository differ only in letter case also matches; another scheme, port or
+host, a query, fragment, trailing slash or extra segment does not, and Gitea compares
+exactly); HEAD is
 `refs/heads/<branch>` (an unborn branch is fine). The workspaces root itself
 must be a real directory that resolves to `<real group dir>/task-workspaces`.
 
@@ -128,7 +135,7 @@ Every reason is in `ENV_BLOCK_REASONS`: the task is **blocked**, never
 | `env_workspace_unconfigured` | The agent group dir is unknown, or the task has no repository URL |
 | `env_workspace_permission` | Creating or reading the workspace fails with `EACCES`, `EPERM` or `EROFS` |
 | `env_workspace_invalid` | Not a directory, a symlink, resolves outside the root, not a git repository, or a malformed task id |
-| `env_workspace_remote_mismatch` | Origin missing, different or set more than once, or a URL with credentials |
+| `env_workspace_remote_mismatch` | Origin missing, different or set more than once, or a URL with credentials. The error names both URLs (without credentials) and, for GitHub, that letter case alone may differ |
 | `env_workspace_branch_mismatch` | HEAD is not the task branch (another branch, or detached) |
 | `env_workspace_limit` | A new workspace would exceed `ARGUS_TASK_WORKSPACE_MAX` |
 

@@ -30,6 +30,7 @@ import {
   ephemeralSessionRunner,
   type GatewayControl,
   type PreflightEvidenceEvent,
+  type ProbeAnswer,
   type ProbeEvidence,
   prepareResultDir,
   REARM_MAX_ATTEMPTS,
@@ -282,6 +283,27 @@ describe("repository preflight session", () => {
     };
     await probe()(`${GITEA}.git`, [GITEA], "gitea");
     expect(entry).toBe("/usr/local/bin/argus-gitea-api");
+  });
+
+  it("hands GitHub's reported spelling to the host verifier, never as evidence", async () => {
+    const at = (canonical: unknown) => {
+      child = () => ({ code: 0, verdict: verdict("github", GITHUB, { canonical }) });
+      return probe()(`${GITHUB}.git`, [GITHUB], "github");
+    };
+    const CANONICAL = "https://github.com/Acme/Widget.git";
+    expect(await at({ full_name: "Acme/Widget", clone_url: CANONICAL })).toMatchObject({
+      canonical: { state: "verified", url: CANONICAL },
+    });
+    expect(
+      (await at({ full_name: "Acme/Widget", clone_url: "https://evil.test/Acme/Widget.git" }))
+        .canonical,
+    ).toEqual({ state: "rejected" });
+    expect((await at(undefined)).canonical).toEqual({ state: "not_reported" });
+    child = () => ({
+      code: 0,
+      verdict: verdict("gitea", GITEA, { canonical: { full_name: "Acme/Widget" } }),
+    });
+    expect(await probe()(`${GITEA}.git`, [GITEA], "gitea")).not.toHaveProperty("canonical");
   });
 
   it("blocks on an authentication denial and still tears the session down", async () => {
@@ -840,6 +862,9 @@ describe("the helper's verdict satisfies the host's contract (mocked forge: logi
     assertPreflightPositive(gh, { provider: "github", repository: GITHUB });
     const gt = await exec(giteaMain, GITEA, "acme/widget", true);
     assertPreflightPositive(gt, { provider: "gitea", repository: GITEA });
+    // Only GitHub reports a spelling to adopt; the Gitea verdict is unchanged.
+    expect(gh.verdict.canonical).toEqual({ full_name: "acme/widget", clone_url: null });
+    expect(gt.verdict).not.toHaveProperty("canonical");
     expect(() =>
       assertPreflightPositive(
         { exitCode: 0, verdict: gh.verdict },
@@ -1098,6 +1123,125 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       verifyAssignment: async () => assigned({ rest: unlisted, git: unlisted }),
     });
     expect((await done).outcome).toBe("ok");
+  });
+
+  describe("GitHub's canonical spelling (bootstrap through the configured spelling)", () => {
+    const LOWER = "https://github.com/2mundos/argus.git";
+    const CANONICAL = "https://github.com/2Mundos/argus.git";
+    const answer = (
+      canonical: ProbeAnswer["canonical"],
+      over: Partial<ProbeEvidence> = {},
+    ): ProbeAnswer => ({
+      helper_error: null,
+      http_status: 200,
+      permissions: "present",
+      push: true,
+      visibility: "private",
+      authentication: "proven",
+      ...over,
+      canonical,
+    });
+    const run = (probe: () => Promise<ProbeAnswer>, adopt = vi.fn(async () => assigned())) => {
+      const order: string[] = [];
+      const p = preflight({
+        repositoryUrl: LOWER,
+        verifyAssignment: async () => {
+          order.push("verify");
+          return assigned();
+        },
+        probe: async () => {
+          order.push("probe");
+          return probe();
+        },
+        adoptCanonical: async (url: string) => {
+          order.push(`adopt ${url}`);
+          return adopt(url);
+        },
+      });
+      return { ...p, order, adopt };
+    };
+
+    it("adopts a verified spelling only after the injected probe proved authentication", async () => {
+      const { done, events, order, adopt } = run(async () =>
+        answer({ state: "verified", url: CANONICAL }),
+      );
+      const result = await done;
+      expect(result).toMatchObject({ outcome: "ok", reason: null, repositoryUrl: CANONICAL });
+      expect(order).toEqual(["verify", "probe", `adopt ${CANONICAL}`]);
+      expect(adopt).toHaveBeenCalledTimes(1);
+      expect(events[0]).toMatchObject({ outcome: "ok", canonical: "adopted" });
+      // The probe evidence stays closed values: no URL text from the session.
+      expect(Object.keys(events[0].probe ?? {})).not.toContain("canonical");
+      expect(JSON.stringify(events[0])).not.toContain("2Mundos");
+    });
+
+    it.each([
+      [
+        "a public answer (no proof a credential was attached)",
+        answer(
+          { state: "verified", url: CANONICAL },
+          { push: false, visibility: "public", authentication: "unknown" },
+        ),
+        "unproven",
+      ],
+      ["a rejected answer", answer({ state: "rejected" }), "rejected"],
+      ["no reported spelling", answer({ state: "not_reported" }), "not_reported"],
+      ["the configured spelling itself", answer({ state: "verified", url: LOWER }), "same"],
+    ])("keeps the configured spelling for %s", async (_label, probed, state) => {
+      const { done, events, adopt } = run(async () => probed);
+      const result = await done;
+      expect(result).toMatchObject({ outcome: "ok", repositoryUrl: LOWER });
+      expect(adopt).not.toHaveBeenCalled();
+      expect(events[0].canonical).toBe(state);
+    });
+
+    it("adopts after a re-arm once the retried probe proves authentication", async () => {
+      const probeCalls = vi
+        .fn()
+        .mockRejectedValueOnce(new RepositoryPreflightError("unknown", "first", missingInjection))
+        .mockResolvedValueOnce(answer({ state: "verified", url: CANONICAL }));
+      const { done, events } = preflight({
+        repositoryUrl: LOWER,
+        probe: probeCalls,
+        rearm: async () => {},
+        adoptCanonical: async () => assigned(),
+      });
+      expect(await done).toMatchObject({ outcome: "ok", repositoryUrl: CANONICAL });
+      expect(events[0]).toMatchObject({ rearm_attempts: 1, canonical: "adopted" });
+    });
+
+    it.each([
+      [
+        "a re-apply that fails",
+        async () => {
+          throw new Error("OneCLI PATCH failed");
+        },
+        "assignment_unverified",
+      ],
+      [
+        "an alias left unassigned",
+        async () =>
+          assigned({
+            alias: {
+              rest: { state: "assigned", scope: "match" },
+              git: { state: "unassigned", scope: "match" },
+            },
+          }),
+        "assignment_missing",
+      ],
+    ] as const)("fails closed on %s", async (_label, adopt, outcome) => {
+      const { done, events } = run(
+        async () => answer({ state: "verified", url: CANONICAL }),
+        vi.fn(adopt),
+      );
+      const result = await done;
+      expect(result).toMatchObject({
+        outcome,
+        reason: "env_repository_unavailable",
+        repositoryUrl: LOWER,
+      });
+      expect(events[0]).toMatchObject({ outcome, canonical: "adopt_failed" });
+    });
   });
 
   it("an unreadable OneCLI is assignment_unverified", async () => {

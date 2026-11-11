@@ -20,6 +20,7 @@ import {
   normalizeRepositoryUrl,
   type RepositoryAssignmentCheck,
   type RepositorySecretCheck,
+  verifiedCanonicalRepositoryUrl,
 } from "./argus-accounts.js";
 
 export const PREFLIGHT_TIMEOUT_MS = 90_000;
@@ -168,6 +169,17 @@ export interface ProbeEvidence {
   visibility: "private" | "public" | "unknown";
   authentication: "proven" | "unknown";
 }
+
+/**
+ * GitHub's own spelling of the repository, checked on the host against the configured one
+ * (`verifiedCanonicalRepositoryUrl`). Never evidence: only the host may act on it.
+ */
+export type CanonicalSpelling =
+  | { state: "verified"; url: string }
+  | { state: "rejected" | "not_reported" };
+
+/** A successful probe: its evidence and, for GitHub, the spelling GitHub reported. */
+export type ProbeAnswer = ProbeEvidence & { canonical?: CanonicalSpelling };
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback;
@@ -339,7 +351,7 @@ export function sessionRepositoryProbe(
   provider: string,
   access?: "read" | "write",
   agentIdentifier?: string,
-) => Promise<ProbeEvidence> {
+) => Promise<ProbeAnswer> {
   return async (repositoryUrl, allowlist, provider, access = "write", agentIdentifier) => {
     const repository = normalizeRepositoryUrl(repositoryUrl);
     if (repository.provider !== provider)
@@ -364,11 +376,22 @@ export function sessionRepositoryProbe(
       access,
       agentIdentifier,
     });
-    return assertPreflightPositive(
+    const evidence = assertPreflightPositive(
       result,
       { provider: repository.provider, repository: exact },
       access,
     );
+    if (repository.provider !== "github") return evidence;
+    const reported = (result.verdict as Record<string, unknown>).canonical;
+    const url =
+      reported == null ? null : verifiedCanonicalRepositoryUrl(repository.cloneUrl, reported);
+    const canonical: CanonicalSpelling =
+      reported == null
+        ? { state: "not_reported" }
+        : url
+          ? { state: "verified", url }
+          : { state: "rejected" };
+    return { ...evidence, canonical };
   };
 }
 
@@ -491,6 +514,22 @@ export interface PreflightEvidenceEvent {
     | "error";
   /** The closed diagnosis of the last failure; `none` when the preflight passed. */
   diagnosis: PreflightDiagnosis;
+  /**
+   * GitHub's own spelling of the repository, never its text: `not_applicable` (not GitHub),
+   * `not_reported`, `rejected` (not plainly the same repository), `same` (the configured
+   * spelling), `unproven` (verified, but the probe proved no credential, so not adopted),
+   * `verified` (no adoption step), `adopted` (both spellings applied and confirmed) or
+   * `adopt_failed`.
+   */
+  canonical:
+    | "not_applicable"
+    | "not_reported"
+    | "rejected"
+    | "same"
+    | "unproven"
+    | "verified"
+    | "adopted"
+    | "adopt_failed";
   /** Whether the lease was re-applied at least once (`rearm_attempts` > 0). */
   rearmed: boolean;
   /** How many times the lease was re-applied and the probe retried (at most REARM_MAX_ATTEMPTS). */
@@ -529,13 +568,19 @@ export interface RepositoryPreflightInput {
   /** Admin reads only: the lease agent's repository secrets. */
   verifyAssignment(): Promise<RepositoryAssignmentCheck>;
   /** The session probe for the same agent; throws a `RepositoryPreflightError` on failure. */
-  probe(): Promise<ProbeEvidence | void>;
+  probe(): Promise<ProbeAnswer | void>;
   /**
    * Re-applies the repository lease (secrets and assignments) so OneCLI republishes the
    * policy rule the gateway injects by. Called after a probe that proves no credential
    * was attached, then the probe runs again, up to REARM_MAX_ATTEMPTS times.
    */
   rearm?(): Promise<void>;
+  /**
+   * Re-applies the repository lease with GitHub's verified spelling `url` beside the
+   * configured one and returns the admin-read check of every scope. Called only after a
+   * probe through the configured spelling proved an authenticated credential.
+   */
+  adoptCanonical?(url: string): Promise<RepositoryAssignmentCheck>;
   /**
    * The OneCLI agent whose assignments were checked; with `injectionEvidence` it scopes the
    * independent evidence to this exact agent.
@@ -559,6 +604,8 @@ export interface RepositoryPreflightResult {
   /** The block reason, null when the task may start. */
   reason: string | null;
   error: string | null;
+  /** The repository URL the task uses: GitHub's spelling once adopted, else the input's. */
+  repositoryUrl: string;
   event: PreflightEvidenceEvent;
 }
 
@@ -599,9 +646,11 @@ export async function runRepositoryPreflight(
     injection: "unknown",
     independent_evidence: "not_consulted",
     diagnosis: "none",
+    canonical: repository.provider === "github" ? "not_reported" : "not_applicable",
     rearmed: false,
     rearm_attempts: 0,
   };
+  let repositoryUrl = input.repositoryUrl;
   const finish = async (
     outcome: PreflightOutcome,
     detail?: string,
@@ -622,6 +671,7 @@ export async function runRepositoryPreflight(
       reason: preflightReason(outcome),
       error:
         detail === undefined ? null : `repository preflight ${outcome}: ${safeText(detail, 500)}`,
+      repositoryUrl,
       event,
     };
   };
@@ -637,25 +687,21 @@ export async function runRepositoryPreflight(
     event.assignment = { source: "onecli_admin_read", read: false };
     return finish("assignment_unverified", "the OneCLI repository assignment could not be read");
   }
-  const { scopes: _scopes, ...listed } = check;
-  event.assignment = {
-    source: "onecli_admin_read",
-    read: true,
-    agent: oneOf(listed.agent, ["found", "missing"] as const, "missing"),
-    secretMode: oneOf(listed.secretMode, ["selective", "all"] as const, "unknown"),
-    rest: closedSecret(listed.rest),
-    git: closedSecret(listed.git),
-  };
+  event.assignment = closedAssignment(check);
   if (!assignmentConfirmed(check))
     return finish(
       "assignment_missing",
       `the OneCLI agent ${event.assignment.agent === "found" ? "lacks a scoped, assigned repository secret" : "is missing"} (rest ${event.assignment.rest.state}/${event.assignment.rest.scope}, git ${event.assignment.git.state}/${event.assignment.git.scope})`,
     );
   const probeOnce = async () => {
-    const evidence = await input.probe();
-    if (evidence) event.probe = { source: "preflight_session_verdict", ...evidence };
-    event.injection = evidence?.authentication === "proven" ? "observed" : "unknown";
-    return evidence;
+    const answer = await input.probe();
+    if (answer) {
+      // GitHub's spelling stays out of the event: it carries closed values only.
+      const { canonical: _canonical, ...evidence } = answer as ProbeAnswer;
+      event.probe = { source: "preflight_session_verdict", ...evidence };
+    }
+    event.injection = answer?.authentication === "proven" ? "observed" : "unknown";
+    return answer;
   };
   /**
    * Whether this failure authorizes a re-arm. The held lease and the confirmed assignment
@@ -705,9 +751,53 @@ export async function runRepositoryPreflight(
     );
     return { rearm: false, diagnosis: "unknown_evidence" };
   };
-  try {
-    await probeOnce();
+  /**
+   * Bootstrap: the configured spelling's secrets carried the probe. Only once that probe
+   * proved an authenticated credential is GitHub's verified spelling adopted, by re-applying
+   * the lease with both spellings and confirming every scope with admin reads.
+   */
+  const passed = async (answer: ProbeAnswer | void) => {
+    const canonical = answer ? answer.canonical : undefined;
+    if (!canonical) return finish("ok");
+    if (canonical.state !== "verified") {
+      event.canonical = canonical.state;
+      return finish("ok");
+    }
+    if (canonical.url === input.repositoryUrl) {
+      event.canonical = "same";
+      return finish("ok");
+    }
+    if (answer?.authentication !== "proven") {
+      // A public answer proves nothing about the credential: no scope is widened on it.
+      event.canonical = "unproven";
+      return finish("ok");
+    }
+    if (!input.adoptCanonical) {
+      event.canonical = "verified";
+      return finish("ok");
+    }
+    event.canonical = "adopt_failed";
+    let adopted: RepositoryAssignmentCheck;
+    try {
+      adopted = await input.adoptCanonical(canonical.url);
+    } catch {
+      return finish(
+        "assignment_unverified",
+        "re-applying the repository lease with GitHub's spelling could not be confirmed",
+      );
+    }
+    event.assignment = closedAssignment(adopted);
+    if (!assignmentConfirmed(adopted))
+      return finish(
+        "assignment_missing",
+        "the OneCLI agent lacks a scoped, assigned secret for GitHub's spelling of the repository",
+      );
+    event.canonical = "adopted";
+    repositoryUrl = canonical.url;
     return finish("ok");
+  };
+  try {
+    return await passed(await probeOnce());
   } catch (error) {
     if (!(error instanceof RepositoryPreflightError))
       return finish("session_failure", message(error));
@@ -741,7 +831,7 @@ export async function runRepositoryPreflight(
             "the probe after re-applying the repository lease did not prove a credential",
             "rearm_unproven",
           );
-        return finish("ok");
+        return await passed(after);
       } catch (retry) {
         if (!(retry instanceof RepositoryPreflightError))
           return finish("session_failure", message(retry));
@@ -775,6 +865,20 @@ function diagnosisOf(outcome: PreflightOutcome): PreflightDiagnosis {
     default:
       return "unknown_evidence";
   }
+}
+
+function closedAssignment(check: RepositoryAssignmentCheck) {
+  return {
+    source: "onecli_admin_read" as const,
+    read: true as const,
+    agent: oneOf(check.agent, ["found", "missing"] as const, "missing"),
+    secretMode: oneOf(check.secretMode, ["selective", "all"] as const, "unknown"),
+    rest: closedSecret(check.rest),
+    git: closedSecret(check.git),
+    ...(check.alias
+      ? { alias: { rest: closedSecret(check.alias.rest), git: closedSecret(check.alias.git) } }
+      : {}),
+  };
 }
 
 function closedSecret(s: RepositorySecretCheck): RepositorySecretCheck {

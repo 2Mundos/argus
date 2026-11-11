@@ -144,6 +144,58 @@ export function normalizeRepositoryUrl(raw: string): NormalizedRepositoryUrl {
   };
 }
 
+/** `raw` parsed only when it is written exactly as `origin/owner/repo` or its clone URL. */
+function strictRepositoryUrl(raw: string): NormalizedRepositoryUrl | null {
+  try {
+    const n = normalizeRepositoryUrl(raw);
+    return raw === n.cloneUrl || raw === `${n.origin}/${n.owner}/${n.repo}` ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a remote names the expected repository: the same text, or, for github.com only,
+ * the same origin with owner and repository differing in letter case (and an optional
+ * `.git`). Both URLs must be written plainly; nothing is lowercased or rewritten.
+ */
+export function sameRepositoryRemote(actual: string, expected: string): boolean {
+  if (actual === expected) return true;
+  const a = strictRepositoryUrl(actual);
+  const e = strictRepositoryUrl(expected);
+  return (
+    !!a &&
+    !!e &&
+    e.provider === "github" &&
+    a.origin === e.origin &&
+    a.owner.toLowerCase() === e.owner.toLowerCase() &&
+    a.repo.toLowerCase() === e.repo.toLowerCase()
+  );
+}
+
+/**
+ * GitHub's own spelling of the configured repository, from its authenticated repository
+ * answer (`full_name`, `clone_url`), or null. Only a plain `https://github.com/owner/repo.git`
+ * of the same repository, agreeing with `full_name`, is accepted (GitHub repositories spec 3.2).
+ */
+export function verifiedCanonicalRepositoryUrl(
+  configuredUrl: string,
+  reported: unknown,
+): string | null {
+  let configured: NormalizedRepositoryUrl;
+  try {
+    configured = normalizeRepositoryUrl(configuredUrl);
+  } catch {
+    return null;
+  }
+  if (configured.provider !== "github" || !reported || typeof reported !== "object") return null;
+  const { full_name: fullName, clone_url: cloneUrl } = reported as Record<string, unknown>;
+  if (typeof fullName !== "string" || typeof cloneUrl !== "string") return null;
+  const n = strictRepositoryUrl(cloneUrl);
+  if (!n || cloneUrl !== n.cloneUrl || fullName !== `${n.owner}/${n.repo}`) return null;
+  return sameRepositoryRemote(n.cloneUrl, configured.cloneUrl) ? n.cloneUrl : null;
+}
+
 /** Claude Code's own credentials file: `{ claudeAiOauth: { accessToken, expiresAt, … } }`. */
 function claudeAiOauth(
   c: Record<string, unknown>,
@@ -565,7 +617,43 @@ export class OneCliClient {
   }
 }
 
-/** Apply only a repository credential; never return it to the task/agent. */
+/** The scopes of one spelling of a repository: its REST API and its Git remote. */
+function repositoryScopes(repository: NormalizedRepositoryUrl) {
+  return {
+    rest: { host: repository.apiHost, path: `${repository.apiPath}/*` },
+    git: { host: repository.host, path: repository.gitPathPattern },
+  };
+}
+
+/**
+ * The second spelling of a GitHub repository, or null when there is none. It must be the
+ * same github.com repository as `repository`, differing in letter case only.
+ */
+function repositoryAlias(
+  repository: NormalizedRepositoryUrl,
+  aliasUrl: string | undefined,
+): NormalizedRepositoryUrl | null {
+  if (aliasUrl === undefined) return null;
+  const alias = strictRepositoryUrl(aliasUrl);
+  if (!alias || !sameRepositoryRemote(alias.cloneUrl, repository.cloneUrl))
+    throw new Error("repository alias must be the same github.com repository in another case");
+  return alias.cloneUrl === repository.cloneUrl ? null : alias;
+}
+
+const repositorySecretNames = (identifier: string, alias: boolean) => [
+  `argus-${identifier}-repository-rest`,
+  `argus-${identifier}-repository-git`,
+  ...(alias
+    ? [`argus-${identifier}-repository-rest-alias`, `argus-${identifier}-repository-git-alias`]
+    : []),
+];
+
+/**
+ * Apply only a repository credential; never return it to the task/agent. `aliasUrl` is the
+ * configured spelling of a GitHub repository whose verified canonical spelling is
+ * `repositoryUrl`: both get exact REST and Git scopes. Without it, an earlier alias is
+ * unassigned.
+ */
 export async function applyRepositoryLease(
   onecli: OneCliClient,
   target: ApplyTarget,
@@ -573,8 +661,10 @@ export async function applyRepositoryLease(
   repositoryUrl: string,
   allowedRepositories: string[],
   activeLeases: AccountLease[],
+  aliasUrl?: string,
 ): Promise<void> {
   const repository = normalizeRepositoryUrl(repositoryUrl);
+  const alias = repositoryAlias(repository, aliasUrl);
   if (lease.role !== "repository" || lease.provider !== repository.provider)
     throw new Error(
       `repository lease must use the ${repository.provider} provider and repository role`,
@@ -608,27 +698,32 @@ export async function applyRepositoryLease(
       identifier: target.identifier,
     });
     const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
-    const secretBodies = [
-      {
-        name: `argus-${target.identifier}-repository-rest`,
-        value: token,
-        hostPattern: repository.apiHost,
-        pathPattern: `${repository.apiPath}/*`,
-        injectionConfig: {
-          headerName: "Authorization",
-          valueFormat: repository.provider === "github" ? "Bearer {value}" : "token {value}",
+    // Smart-HTTP uses Basic auth on both forges. Build this only in the trusted host;
+    // OneCLI persists it in its encrypted secret store.
+    const basic = Buffer.from(`${username}:${token}`, "utf8").toString("base64");
+    const names = repositorySecretNames(target.identifier, !!alias);
+    const secretBodies = [repository, ...(alias ? [alias] : [])].flatMap((spelling, i) => {
+      const scopes = repositoryScopes(spelling);
+      return [
+        {
+          name: names[2 * i]!,
+          value: token,
+          hostPattern: scopes.rest.host,
+          pathPattern: scopes.rest.path,
+          injectionConfig: {
+            headerName: "Authorization",
+            valueFormat: repository.provider === "github" ? "Bearer {value}" : "token {value}",
+          },
         },
-      },
-      {
-        name: `argus-${target.identifier}-repository-git`,
-        // Smart-HTTP uses Basic auth on both forges. Build this only in the trusted host;
-        // OneCLI persists it in its encrypted secret store.
-        value: Buffer.from(`${username}:${token}`, "utf8").toString("base64"),
-        hostPattern: repository.host,
-        pathPattern: repository.gitPathPattern,
-        injectionConfig: { headerName: "Authorization", valueFormat: "Basic {value}" },
-      },
-    ];
+        {
+          name: names[2 * i + 1]!,
+          value: basic,
+          hostPattern: scopes.git.host,
+          pathPattern: scopes.git.path,
+          injectionConfig: { headerName: "Authorization", valueFormat: "Basic {value}" },
+        },
+      ];
+    });
     for (const secretBody of secretBodies) {
       let secret = secrets.find((s) => s.name === secretBody.name);
       if (secret) {
@@ -637,10 +732,13 @@ export async function applyRepositoryLease(
         secret = await onecli.call("POST", "/secrets", { type: "generic", ...secretBody });
       }
     }
-    await reconcileSecretAssignments(onecli, agent!.id, target.identifier, [
-      ...activeLeases,
-      lease,
-    ]);
+    await reconcileSecretAssignments(
+      onecli,
+      agent!.id,
+      target.identifier,
+      [...activeLeases, lease],
+      names,
+    );
   } catch {
     // OneCLI error responses can contain request details. Never propagate them
     // where a caller might log the repository credential.
@@ -661,31 +759,45 @@ export interface RepositoryAssignmentCheck {
   secretMode: "selective" | "all" | "unknown";
   rest: RepositorySecretCheck;
   git: RepositorySecretCheck;
+  /**
+   * The alias secrets of a second GitHub spelling: present when one is expected, or when
+   * one is assigned that was not (then with scope `mismatch`).
+   */
+  alias?: { rest: RepositorySecretCheck; git: RepositorySecretCheck };
   /** The scopes the secrets must have: hosts and path patterns derived on the host. */
   scopes: {
     rest: { host: string; path: string };
     git: { host: string; path: string };
+    alias?: { rest: { host: string; path: string }; git: { host: string; path: string } };
   };
 }
 
 export function assignmentConfirmed(check: RepositoryAssignmentCheck): boolean {
   const ok = (s: RepositorySecretCheck) => s.state === "assigned" && s.scope !== "mismatch";
-  return check.agent === "found" && ok(check.rest) && ok(check.git);
+  return (
+    check.agent === "found" &&
+    ok(check.rest) &&
+    ok(check.git) &&
+    (!check.alias || (ok(check.alias.rest) && ok(check.alias.git)))
+  );
 }
 
 /**
- * Confirm, with admin reads only, that the agent has both repository secrets assigned
- * and scoped to this repository. Throws a fixed message when OneCLI cannot be read.
+ * Confirm, with admin reads only, that the agent has every repository secret assigned
+ * and scoped to this repository: both spellings when `aliasUrl` is given, and no alias
+ * otherwise. Throws a fixed message when OneCLI cannot be read.
  */
 export async function verifyRepositoryAssignment(
   onecli: OneCliClient,
   target: Pick<ApplyTarget, "identifier">,
   repositoryUrl: string,
+  aliasUrl?: string,
 ): Promise<RepositoryAssignmentCheck> {
   const repository = normalizeRepositoryUrl(repositoryUrl);
+  const alias = repositoryAlias(repository, aliasUrl);
   const scopes = {
-    rest: { host: repository.apiHost, path: `${repository.apiPath}/*` },
-    git: { host: repository.host, path: repository.gitPathPattern },
+    ...repositoryScopes(repository),
+    ...(alias ? { alias: repositoryScopes(alias) } : {}),
   };
   const absent: RepositorySecretCheck = { state: "missing", scope: "unlisted" };
   try {
@@ -719,11 +831,31 @@ export async function verifyRepositoryAssignment(
       };
     };
     const mode = agent.secretMode;
+    const [restName, gitName, aliasRest, aliasGit] = repositorySecretNames(target.identifier, true);
+    let aliasCheck: RepositoryAssignmentCheck["alias"];
+    if (scopes.alias) {
+      aliasCheck = {
+        rest: check(aliasRest!, scopes.alias.rest),
+        git: check(aliasGit!, scopes.alias.git),
+      };
+    } else {
+      // An alias nobody expects still widens the lease while it is assigned.
+      const stale = (name: string): RepositorySecretCheck => {
+        const secret = secrets.find((s) => s.name === name);
+        return secret && ids.has(secret.id)
+          ? { state: "assigned", scope: "mismatch" }
+          : { state: "missing", scope: "unlisted" };
+      };
+      const rest = stale(aliasRest!);
+      const git = stale(aliasGit!);
+      if (rest.state === "assigned" || git.state === "assigned") aliasCheck = { rest, git };
+    }
     return {
       agent: "found",
       secretMode: mode === "selective" || mode === "all" ? mode : "unknown",
-      rest: check(`argus-${target.identifier}-repository-rest`, scopes.rest),
-      git: check(`argus-${target.identifier}-repository-git`, scopes.git),
+      rest: check(restName!, scopes.rest),
+      git: check(gitName!, scopes.git),
+      ...(aliasCheck ? { alias: aliasCheck } : {}),
       scopes,
     };
   } catch {
@@ -749,6 +881,7 @@ async function reconcileSecretAssignments(
   agentId: string,
   identifier: string,
   leases: AccountLease[],
+  repositoryNames: string[] = [],
 ): Promise<void> {
   const secrets: Array<{ id: string; name: string }> = await onecli.call("GET", "/secrets");
   const names = new Set<string>();
@@ -760,12 +893,8 @@ async function reconcileSecretAssignments(
     if (mapping.harnessEnvOnly) continue;
     secretNames(identifier, mapping).forEach((name) => names.add(name));
   }
-  const repositoryNames = [
-    `argus-${identifier}-repository-rest`,
-    `argus-${identifier}-repository-git`,
-  ];
-  if (leases.some((lease) => lease.role === "repository"))
-    repositoryNames.forEach((name) => names.add(name));
+  // Every repository secret not named here, alias included, ends up unassigned.
+  repositoryNames.forEach((name) => names.add(name));
   const secretIds = [...names].map((name) => secrets.find((secret) => secret.name === name)?.id);
   if (secretIds.some((id) => !id)) throw new Error("active lease secret is missing from OneCLI");
   const mcp = secrets.find((secret) => secret.name === argusMcpSecretName(identifier));

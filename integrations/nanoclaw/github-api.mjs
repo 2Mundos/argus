@@ -118,6 +118,15 @@ export class GitHubApi extends GiteaApi {
     return label.name;
   }
 
+  /**
+   * GitHub's own spelling of the repository, as text the host verifies before any use
+   * (GitHub repositories spec 3.2). The helper itself never acts on it.
+   */
+  canonicalRepository(data) {
+    const pick = (value) => (typeof value === "string" && value.length <= 300 ? value : null);
+    return { full_name: pick(data?.full_name), clone_url: pick(data?.clone_url) };
+  }
+
   inlineComment({ path, body, new_position, old_position }) {
     return new_position === undefined
       ? { path, body, line: old_position, side: "LEFT" }

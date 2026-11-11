@@ -65,11 +65,27 @@ describe("repo-preflight (offline logic; production proof is the session child)"
         visibility: "unknown",
         authentication: "proven",
       },
+      canonical: { full_name: "Acme/Widget", clone_url: null },
     });
     assert.deepEqual(
       r.calls.map((c) => c.url),
       [API],
     );
+  });
+
+  it("reports GitHub's own spelling as text only for the host to verify", async () => {
+    const CANONICAL = "https://github.com/Acme/Widget.git";
+    const r = await run(["repo-preflight"], repo({ clone_url: CANONICAL }));
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json().canonical, { full_name: "Acme/Widget", clone_url: CANONICAL });
+    // Unbounded or non-string answers are not passed on.
+    const odd = await run(
+      ["repo-preflight"],
+      repo({ clone_url: `${CANONICAL}${"x".repeat(400)}`, extra: 1 }),
+    );
+    assert.deepEqual(odd.json().canonical, { full_name: "Acme/Widget", clone_url: null });
+    const objects = await run(["repo-preflight"], repo({ clone_url: { href: CANONICAL } }));
+    assert.deepEqual(objects.json().canonical, { full_name: "Acme/Widget", clone_url: null });
   });
 
   it("refuses a response an anonymous caller could get (no push permission)", async () => {
