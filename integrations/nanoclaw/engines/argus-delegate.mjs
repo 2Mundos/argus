@@ -673,10 +673,17 @@ export function authorizedCwd(cwd, roots) {
   return null;
 }
 
-function versionOf(bin, e) {
-  const r = spawnSync(bin, ["--version"], { env: e, encoding: "utf8", timeout: 15000 });
+function versionOf(bin, e, timeout = 15000) {
+  const r = spawnSync(bin, ["--version"], { env: e, encoding: "utf8", timeout });
   if (r.error || r.status !== 0) return null;
   return (r.stdout || r.stderr).trim().split("\n")[0].slice(0, 120);
+}
+
+/** `--version` for the probe: a CLI that hangs is `timeout` (unknown), not `missing`. */
+function cliState(bin, e, timeout) {
+  const r = spawnSync(bin, ["--version"], { env: e, encoding: "utf8", timeout });
+  if (r.error?.code === "ETIMEDOUT") return "timeout";
+  return r.error || r.status !== 0 ? "missing" : "present";
 }
 
 function parseArgs(argv) {
@@ -846,9 +853,14 @@ export function executorJsonFailure(executor, stdoutText) {
 /**
  * The credential and install gates of a run, without running anything: what `main` checks
  * before it reads the prompt. Presence of a credential and an installed CLI only; it never
- * contacts the provider, so a revoked or exhausted credential still passes.
+ * contacts the provider, so a revoked or exhausted credential still passes. A CLI whose
+ * `--version` does not answer in time is inconclusive (124, `inconclusive`), never `ok`.
  */
-export function authProbe(executor, e = process.env, { claudeStub = CLAUDE_GATEWAY_STUB } = {}) {
+export function authProbe(
+  executor,
+  e = process.env,
+  { claudeStub = CLAUDE_GATEWAY_STUB, versionTimeoutMs = 15000 } = {},
+) {
   let identity = { engine: e.ARGUS_ENGINE || "unknown", executor, probe: "auth_present" };
   if (executor === "claude") {
     const restored = restoreClaudeGatewayAuth(e, claudeStub);
@@ -860,8 +872,10 @@ export function authProbe(executor, e = process.env, { claudeStub = CLAUDE_GATEW
   const auth = authStatus(executor, e, os.homedir(), null);
   if (!auth.ok)
     return { code: 78, report: { ...identity, blocked: "auth_missing", need: auth.need } };
-  if (versionOf(executor, e) === null)
-    return { code: 127, report: { ...identity, blocked: "not_installed" } };
+  const cli = cliState(executor, e, versionTimeoutMs);
+  if (cli === "timeout")
+    return { code: 124, report: { ...identity, inconclusive: "version_timeout" } };
+  if (cli === "missing") return { code: 127, report: { ...identity, blocked: "not_installed" } };
   return { code: 0, report: { ...identity, ok: true } };
 }
 

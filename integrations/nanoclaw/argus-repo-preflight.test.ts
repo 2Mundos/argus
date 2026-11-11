@@ -1437,5 +1437,10 @@ describe("runExecutorPreflight: argus-delegate --auth-probe in the same bounded 
     child = () => ({ code: 64, verdict: { error: "usage" } });
     expect(await exec("claude")).toBeNull();
     expect(removed()).toBe(true);
+    // A CLI whose --version hangs exits 124 (inconclusive); any other exit is unknown.
+    for (const code of [124, 1, null]) {
+      child = () => ({ code, verdict: { inconclusive: "version_timeout" } });
+      expect(await exec("claude")).toBeNull();
+    }
   });
 });

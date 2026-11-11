@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-07
+updated: 2026-11-11
 ---
 
 # Failure classes
@@ -466,14 +466,26 @@ with fixed host-written text (at most 1,500 characters, scrubbed): nothing the c
 wrote is copied. No attempt is spent and no model runs. It probes `claude`, `codex` and
 `agent` (Cursor), whose credential the session sees from the gateway alone; `opencode`,
 `copilot` and custom or local accounts depend on policy context or env the worker path
-adds, so they are not probed. A task with no delegated executor is not probed. The probe
-fails open: a session that cannot finish, a failed teardown or an image whose delegate
-lacks `--auth-probe` is inconclusive, is logged, and the task proceeds under the
-delegate's own gate at run time.
+adds, so they are not probed. A task with no delegated executor is not probed.
+
+The probe keeps four states apart, and only the first two can block:
+
+1. **Credential present** in the session (exit 78 when absent). Presence only: the
+   delegate never reads a credential's content, so a revoked, expired or exhausted one
+   passes.
+2. **CLI available** (`--version` answers; exit 127 when the binary is missing).
+3. **Provider acceptance**: not proven by the probe, by any report field or by any
+   code path. Nothing is called "authenticated" on its evidence.
+4. **Unknown / inconclusive**: a session that cannot finish, a failed teardown, a probe
+   that throws, an image whose delegate lacks `--auth-probe` (exit 64), an unknown exit
+   code, or a CLI whose `--version` does not answer in 15 s (exit 124,
+   `inconclusive: "version_timeout"`). The task proceeds under the delegate's own gate
+   at run time; an inconclusive probe is never `ok` and never a block.
 
 | Evidence | Proves | Does not prove |
 | --- | --- | --- |
 | `argus-delegate --auth-probe` exit 0 | In a session of the agent image with the gateway contribution, the delegate's credential gate passes for that executor and its CLI answers `--version`. | That the provider accepts the credential (a revoked, expired or exhausted one passes), that the gateway injects it on the provider's host, the account's quota, or any model. The CLI is never asked to authenticate or run. |
+| Exit 124, 64, other, or a probe error | Nothing. | Whether the credential or the CLI is usable; the task proceeds. |
 | Exit 78 / 127 | No credential was visible to the executor in the session, or its CLI is missing. | Which side is at fault (lease not applied, stub not mounted, image); the text names both. |
 | Offline tests with a fake docker CLI | The host's control flow: argv, exit-code mapping, redaction, teardown on timeout. | Any real executor, gateway or image. |
 
@@ -605,6 +617,15 @@ and whether the model's or the work's own output can forge it.
     on one pool blocks `env_oom` with the accounting above; a non-OOM outcome,
     another pool, a stale fail and the reaper do not promote; unblock and a
     memory change reset, a retry does not; the cap still ends the loop.
+- Executor probe (3.3.1): `runExecutorPreflight` in `argus-repo-preflight.test.ts`
+  (exit 0, 78 and 127 mapping, redaction, an unprobed executor, and a hung session or
+  exit 64, 124, 1 or none as inconclusive); `argus-delegate.test.mjs` (`--auth-probe`
+  exit 0/78/127 with nothing run, and a `--version` that hangs is 124, never ok or 127);
+  the channel tests in `argus-accounts.test.ts` ("executor credential probe in the
+  channel": a 78 or 127 block is `env_executor_auth` with the attempt, no session, no
+  `/fail`; no delegated executor is never probed; a probe that throws proceeds and
+  reports nothing authenticated; a clean probe runs before the session). Not verified:
+  provider acceptance of any credential, and a real image's delegate.
 - Not verified: real Docker sessions dying, a real NanoClaw host lost mid-claim,
   whether Docker sets `OOMKilled` when a non-init process of the session is
   killed (the [OOM smoke](../runbooks/2026-10-31.oom-smoke.ref.md) checks the
