@@ -23,8 +23,10 @@ import {
   checkpointRef,
   checkpointTaskWorkspace,
   GIT_STEP_TIMEOUT_MS,
+  type PublicationProof,
   parseCheckpointRef,
   restoreTaskWorkspace,
+  supersedeCheckpoints,
 } from "./argus-checkpoint.js";
 import {
   defaultGit,
@@ -835,6 +837,320 @@ describe("git config written by the worker never runs on the host", () => {
     expect(existsSync(marker(w))).toBe(false);
     expect(r).toMatchObject({ ok: false, reason: "env_checkpoint_invalid" });
     expect(snapshot(p.path, false)).toEqual(before);
+  });
+});
+
+const REMOTE = (w: World) => path.join(w.store, "..", "remote.git");
+const BRANCH = (w: World) => `argus/task-${w.taskId.slice(0, 8)}`;
+
+/** Commit whatever the workspace holds and push it to a bare remote standing in for origin. */
+function push(w: World): string {
+  git(w.wsA, "add", "-A");
+  git(w.wsA, "commit", "-q", "--allow-empty", "-m", "publish");
+  if (!existsSync(REMOTE(w))) git(path.dirname(REMOTE(w)), "init", "-q", "--bare", REMOTE(w));
+  git(w.wsA, "push", "-q", "-f", REMOTE(w), `HEAD:refs/heads/${BRANCH(w)}`);
+  git(w.wsA, "update-ref", `refs/remotes/origin/${BRANCH(w)}`, "HEAD"); // what a push records
+  return git(REMOTE(w), "rev-parse", `refs/heads/${BRANCH(w)}`); // what the forge reports
+}
+
+/** Attempt 2 publishes all of the world's work (the secret is never committed). */
+function publish(w: World): string {
+  rmSync(path.join(w.wsA, ".env"));
+  return push(w);
+}
+
+const proof = (w: World, sha: string, over: Partial<PublicationProof> = {}): PublicationProof => ({
+  repositoryUrl: REPO,
+  taskId: w.taskId,
+  branch: BRANCH(w),
+  nodeId: NODE,
+  sha,
+  ...over,
+});
+const supersede = (
+  w: World,
+  published: PublicationProof | null,
+  over: Partial<Parameters<typeof supersedeCheckpoints>[0]> = {},
+) =>
+  supersedeCheckpoints({
+    groupDir: w.groupA,
+    storeRoot: w.store,
+    taskId: w.taskId,
+    attempt: 2,
+    repositoryUrl: REPO,
+    published,
+    nodeId: NODE,
+    ...over,
+  });
+const ids = (w: World) =>
+  readdirSync(taskStore(w))
+    .filter((n) => /^\d{14}-/.test(n))
+    .sort();
+const savedId = (c: Awaited<ReturnType<typeof ckpt>>) => {
+  if (!c.ok || c.empty) throw new Error("expected a checkpoint");
+  return c.id;
+};
+
+/** A world whose earlier work is all published, then `change` made and checkpointed. */
+async function single(change: (ws: string) => void): Promise<World> {
+  const w = await world();
+  publish(w);
+  change(w.wsA);
+  savedId(await ckpt(w));
+  return w;
+}
+
+describe("supersession of checkpoints by published work", () => {
+  it("a checkpoint whose work was published no longer blocks a later attempt", async () => {
+    const w = await world();
+    const id = savedId(await ckpt(w, { attempt: 1 }));
+    const sha = publish(w);
+    expect(await ckpt(w, { attempt: 2 })).toEqual({ ok: true, empty: true });
+    expect(ids(w)).toEqual([id]); // a clean save supersedes nothing by itself
+    const before = snapshot(w.wsA, false);
+    expect(await supersede(w, proof(w, sha))).toEqual({ ok: true, superseded: [id], retained: [] });
+    expect(snapshot(w.wsA, false)).toEqual(before); // the workspace is never touched
+    expect(readdirSync(taskStore(w))).toEqual([]); // no tombstone, no lease left behind
+    const r = await restore(w, { groupDir: w.groupA, attempt: 3 });
+    expect(r).toEqual({ ok: true, restored: false, reason: "none" });
+    expect(await restore(w, { attempt: 3 })).toEqual({ ok: true, restored: false, reason: "none" });
+    // Replay finds nothing left to do.
+    expect(await supersede(w, proof(w, sha))).toEqual({ ok: true, superseded: [], retained: [] });
+  });
+
+  it("supersedes nothing without a proof: a clean tree alone is none", async () => {
+    const w = await world();
+    savedId(await ckpt(w));
+    publish(w);
+    expect(await ckpt(w, { attempt: 2 })).toEqual({ ok: true, empty: true });
+    for (const none of [null, undefined])
+      expect(await supersede(w, none as null)).toMatchObject({
+        ok: false,
+        reason: "env_checkpoint_unavailable",
+      });
+    expect(ids(w)).toHaveLength(1);
+    expect(await restore(w, { groupDir: w.groupA, attempt: 3 })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_conflict",
+    });
+  });
+
+  it("refuses a proof for another task, repository, branch or node, or a malformed sha", async () => {
+    const w = await world();
+    savedId(await ckpt(w));
+    const sha = publish(w);
+    const other = randomUUID();
+    const otherRepo = "https://git.example.test/org/other.git";
+    for (const bad of [
+      { taskId: other },
+      { repositoryUrl: otherRepo },
+      { branch: `argus/task-${other.slice(0, 8)}` },
+      { nodeId: "node-b" },
+      { sha: sha.slice(0, 12) },
+      { sha: sha.toUpperCase() },
+    ])
+      expect(await supersede(w, proof(w, sha, bad))).toMatchObject({
+        ok: false,
+        reason: "env_checkpoint_invalid",
+      });
+    // Matching options for another repository: the workspace identity check refuses them.
+    expect(
+      await supersede(w, proof(w, sha, { repositoryUrl: otherRepo }), {
+        repositoryUrl: otherRepo,
+      }),
+    ).toMatchObject({ ok: false, reason: "env_checkpoint_invalid" });
+    expect(ids(w)).toHaveLength(1);
+  });
+
+  it("removes nothing unless the workspace is clean at the proof's commit", async () => {
+    const w = await world();
+    savedId(await ckpt(w));
+    const sha = publish(w);
+    const conflict = { ok: false, reason: "env_checkpoint_conflict" };
+    const base = git(w.wsA, "rev-parse", "refs/remotes/origin/main");
+    expect(await supersede(w, proof(w, base))).toMatchObject(conflict);
+    writeFileSync(path.join(w.wsA, "later.txt"), "later\n"); // untracked
+    expect(await supersede(w, proof(w, sha))).toMatchObject(conflict);
+    rmSync(path.join(w.wsA, "later.txt"));
+    writeFileSync(path.join(w.wsA, "tracked.txt"), "dirty\n"); // unstaged
+    expect(await supersede(w, proof(w, sha))).toMatchObject(conflict);
+    git(w.wsA, "add", "tracked.txt"); // staged
+    expect(await supersede(w, proof(w, sha))).toMatchObject(conflict);
+    git(w.wsA, "commit", "-q", "-m", "local"); // committed, not pushed
+    expect(await supersede(w, proof(w, sha))).toMatchObject(conflict);
+    expect(ids(w)).toHaveLength(1);
+  });
+
+  it("retains a checkpoint whose commits the proof does not contain", async () => {
+    const w = await world();
+    const id = savedId(await ckpt(w));
+    git(w.wsA, "reset", "-q", "--hard", "refs/remotes/origin/main");
+    git(w.wsA, "clean", "-q", "-fdx");
+    writeFileSync(path.join(w.wsA, "other.txt"), "a different line of work\n");
+    const s = await supersede(w, proof(w, push(w)));
+    expect(s).toEqual({
+      ok: true,
+      superseded: [],
+      retained: [{ id, reason: expect.stringMatching(/is not in the published commit/) }],
+    });
+  });
+
+  it.each([
+    [
+      "staged",
+      (ws: string) => {
+        writeFileSync(path.join(ws, "new.txt"), "staged\n");
+        git(ws, "add", "new.txt");
+      },
+      (ws: string) => writeFileSync(path.join(ws, "new.txt"), "published instead\n"),
+    ],
+    [
+      "unstaged",
+      (ws: string) => writeFileSync(path.join(ws, "tracked.txt"), "unstaged\n"),
+      (ws: string) => writeFileSync(path.join(ws, "tracked.txt"), "published instead\n"),
+    ],
+    [
+      "staged then edited again (only the edit published)",
+      (ws: string) => {
+        writeFileSync(path.join(ws, "tracked.txt"), "staged\n");
+        git(ws, "add", "tracked.txt");
+        writeFileSync(path.join(ws, "tracked.txt"), "worktree\n");
+      },
+      (ws: string) => writeFileSync(path.join(ws, "tracked.txt"), "worktree\n"),
+    ],
+    [
+      "untracked",
+      (ws: string) => writeFileSync(path.join(ws, "notes.txt"), "never published\n"),
+      (ws: string) => rmSync(path.join(ws, "notes.txt")),
+    ],
+    [
+      "binary",
+      (ws: string) => {
+        writeFileSync(path.join(ws, "blob.bin"), Buffer.from([0, 9, 9, 255]));
+        git(ws, "add", "blob.bin");
+      },
+      (ws: string) => writeFileSync(path.join(ws, "blob.bin"), Buffer.from([0, 9, 8, 255])),
+    ],
+    [
+      "executable bit",
+      (ws: string) => chmodSync(path.join(ws, "run.sh"), 0o644),
+      (ws: string) => chmodSync(path.join(ws, "run.sh"), 0o755),
+    ],
+    [
+      "symlink target",
+      (ws: string) => {
+        rmSync(path.join(ws, "link.ts"));
+        symlinkSync("run.sh", path.join(ws, "link.ts"));
+      },
+      (ws: string) => {
+        rmSync(path.join(ws, "link.ts"));
+        symlinkSync("base.txt", path.join(ws, "link.ts"));
+      },
+    ],
+  ])("retains %s work the published commit does not hold", async (_name, change, instead) => {
+    const w = await single(change);
+    const [id] = ids(w);
+    instead(w.wsA);
+    expect(await supersede(w, proof(w, push(w)))).toEqual({
+      ok: true,
+      superseded: [],
+      retained: [{ id, reason: expect.stringMatching(/differs from the published commit/) }],
+    });
+    expect(ids(w)).toEqual([id]);
+  });
+
+  it("supersedes staged, unstaged and untracked work, deletions and modes included", async () => {
+    const w = await single((ws) => {
+      git(ws, "rm", "-q", "tracked.txt"); // staged deletion
+      rmSync(path.join(ws, "base.txt")); // unstaged deletion
+      writeFileSync(path.join(ws, "blob.bin"), Buffer.from([7, 0, 7, 255]));
+      git(ws, "add", "blob.bin"); // staged binary
+      writeFileSync(path.join(ws, "staged-new.txt"), "edited later\n"); // unstaged
+      writeFileSync(path.join(ws, "fresh.bin"), Buffer.from([0, 0, 1])); // untracked binary
+      symlinkSync("fresh.bin", path.join(ws, "fresh.link")); // untracked symlink
+      chmodSync(path.join(ws, "run.sh"), 0o644); // mode only
+    });
+    const [id] = ids(w);
+    expect(await supersede(w, proof(w, push(w)))).toEqual({
+      ok: true,
+      superseded: [id],
+      retained: [],
+    });
+    expect(ids(w)).toEqual([]);
+  });
+
+  it("retains a checkpoint holding a stash", async () => {
+    const w = await single((ws) => {
+      writeFileSync(path.join(ws, "tracked.txt"), "stashed\n");
+      git(ws, "stash", "-q");
+    });
+    const [id] = ids(w);
+    git(w.wsA, "stash", "drop", "-q");
+    expect(await supersede(w, proof(w, push(w)))).toEqual({
+      ok: true,
+      superseded: [],
+      retained: [{ id, reason: expect.stringMatching(/refs\/stash/) }],
+    });
+  });
+
+  it("judges each checkpoint on its own: foreign, invalid and newer uncovered ones stay", async () => {
+    const w = await world();
+    const t0 = Date.now();
+    const covered = savedId(await ckpt(w, { now: () => t0 }));
+    const foreign = savedId(await ckpt(w, { nodeId: "node-b", now: () => t0 + 1000 }));
+    const sha = publish(w);
+    // A concurrent writer's newer checkpoint holds work published nowhere.
+    writeFileSync(path.join(w.wsA, "newer.txt"), "newer\n");
+    const newer = savedId(await ckpt(w, { attempt: 3, now: () => t0 + 2000 }));
+    rmSync(path.join(w.wsA, "newer.txt"));
+    expect(await supersede(w, proof(w, sha))).toEqual({
+      ok: true,
+      superseded: [covered],
+      retained: [
+        { id: foreign, reason: expect.stringMatching(/^env_checkpoint_unavailable: /) },
+        { id: newer, reason: expect.stringMatching(/newer\.txt/) },
+      ],
+    });
+    // A tampered manifest is unverifiable, so it stays too.
+    const m = path.join(taskStore(w), newer, "manifest.json");
+    writeFileSync(m, readFileSync(m, "utf8").replace(REPO, "https://git.example.test/x.git"));
+    expect(await supersede(w, proof(w, sha))).toEqual({
+      ok: true,
+      superseded: [],
+      retained: [
+        { id: foreign, reason: expect.stringMatching(/^env_checkpoint_unavailable: /) },
+        { id: newer, reason: expect.stringMatching(/^env_checkpoint_invalid: /) },
+      ],
+    });
+  });
+
+  it("blocks while another holder has the lease, and takes over an expired one", async () => {
+    const w = await world();
+    const id = savedId(await ckpt(w));
+    const sha = publish(w);
+    const lease = path.join(taskStore(w), ".lease");
+    const body = (expires_at: number) => JSON.stringify({ owner: "x", nonce: "n", expires_at });
+    writeFileSync(lease, body(Date.now() + 60_000), { mode: 0o600 });
+    expect(await supersede(w, proof(w, sha))).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_busy",
+    });
+    expect(ids(w)).toEqual([id]);
+    writeFileSync(lease, body(Date.now() - 1));
+    expect(await supersede(w, proof(w, sha))).toEqual({ ok: true, superseded: [id], retained: [] });
+    expect(readdirSync(taskStore(w))).toEqual([]);
+  });
+
+  it("finishes a removal interrupted after its rename", async () => {
+    const w = await world();
+    const id = savedId(await ckpt(w));
+    const sha = publish(w);
+    renameSync(path.join(taskStore(w), id), path.join(taskStore(w), `.superseded-${id}`));
+    expect(await restore(w, { groupDir: w.groupA, attempt: 3 })).toMatchObject({
+      reason: "none",
+    });
+    expect(await supersede(w, proof(w, sha))).toEqual({ ok: true, superseded: [], retained: [] });
+    expect(readdirSync(taskStore(w))).toEqual([]);
   });
 });
 

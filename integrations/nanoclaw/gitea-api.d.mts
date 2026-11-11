@@ -99,6 +99,13 @@ export class GiteaApi {
     query?: Record<string, string>,
     options?: PageOptions & { key?: string },
   ): Promise<Page<Json>>;
+  /** The branch and the commit it points at. */
+  getBranch(name: string): Promise<{
+    branch: string;
+    sha: string | null;
+    protected: boolean | null;
+    commit: unknown;
+  }>;
   getPullRequest(number: number): Promise<{
     number: number;
     state?: string;

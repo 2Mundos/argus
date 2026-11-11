@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-11-11
 ---
 
 # Task checkpoint: keep a task's unpublished work across attempts and workers
@@ -35,7 +35,10 @@ The scope is `integrations/nanoclaw/argus-checkpoint.ts`, its calls in
   resumes. This spec moves files and commits only.
 - No account rotation or credential handling. Account switching stays separate
   from session continuity ([account selection](account-selection.spec.md)).
-- No network, fetch or push, and no use of any git host credential.
+- No fetch or push, and no git host credential in the checkpoint module. The one
+  network read, the published head that supersession needs (3.3), is the
+  channel's forge API call through the gateway, made before the checkpoint
+  module runs.
 - No cleanup of live workspaces, no deploy, no operation on live instances.
 - No encryption at rest beyond file permissions (3.6).
 
@@ -93,6 +96,47 @@ A nested repository, which git lists as an untracked directory, is not copied:
 its directory is recorded in the manifest's `skipped_nested`, and the rest of the
 work is saved.
 
+A clean workspace by itself supersedes nothing: it cannot tell work that was
+published from work that was lost. A checkpoint is superseded only with a
+publication proof, `supersedeCheckpoints` with `published: {repositoryUrl,
+taskId, branch, nodeId?, sha}`, where `sha` is the full commit id of the task
+branch's head on the forge. The channel reads it with the forge API (`GET
+branches/<task branch>`, the scoped client the repository lease already
+authorizes) after the session ends and before the repository lease is released,
+and only when the task has a checkpoint directory. The workspace's own
+`refs/remotes/origin/*` is not a proof: the worker writes it. When the attempt
+then saves nothing because the workspace is clean, the channel passes the proof;
+without one, nothing is removed. Supersession is best effort: its result is
+logged and never changes the attempt's outcome or its checkpoint report.
+
+Under the task's lease (3.5), supersession refuses (`env_checkpoint_invalid`) a
+proof whose task, repository, branch or node differs from the call's, or whose
+sha is not a full lowercase commit id. It then observes the workspace: it must
+pass the same identity and git config checks as a save, be clean (no staged,
+unstaged or untracked path, no commit outside the remote-tracking refs) and sit at the
+proof's sha, else `env_checkpoint_conflict` and nothing is removed. Each complete
+checkpoint is then judged on its own and removed only when the published commit
+provably holds everything it carries:
+
+- it passes the restore verification (3.2) for this task, repository and node;
+  an invalid or foreign-node checkpoint is retained;
+- every ref in its bundle, including `refs/stash` and other branches, is the
+  published commit or its ancestor;
+- the checkpoint, rebuilt in a temporary directory inside the store, has for each
+  staged, unstaged and untracked path the published tree's entry (mode and blob
+  id, or absence for a deletion; binary files and symlinks included) in its
+  working tree, and for each staged path also in its index, so staged content that
+  differs from the published content is retained even when the working tree
+  matches.
+
+Sensitive files and nested repositories the save skipped (3.6) are not in the
+checkpoint, so removing it loses none of them; they do not affect the decision.
+Anything retained is listed with its reason. A removal renames the checkpoint
+directory to a hidden `.superseded-<id>` name, which restore and retention
+ignore, and then deletes it; a later run deletes a leftover tombstone. A replay
+supersedes nothing and succeeds. A newer checkpoint written by another holder
+under the same lease is judged independently and stays unless it is covered too.
+
 ## 3.4 Restore
 
 For attempt 2 or later, before the workspace step, the channel restores the newest
@@ -111,7 +155,9 @@ valid checkpoint of the task into `<group>/task-workspaces/<task id>`:
   repository is built in a temporary directory, verified against the manifest
   (HEAD, staged, unstaged and untracked sets, and their content hashes) and renamed into place.
 - The workspace holds different work, or is on another branch:
-  `env_checkpoint_conflict`. Nothing is replaced, merged or reset.
+  `env_checkpoint_conflict`. Nothing is replaced, merged or reset. This includes
+  a checkpoint whose work a later attempt published but that was not superseded
+  (no proof, or not provably covered, 3.3).
 
 The restore never uses the wrong branch: HEAD is set to the task branch before
 anything is applied, and the final state is compared with the manifest.
@@ -184,7 +230,18 @@ workspace git config that would run a command on the host refused at save and at
 restore, without running it; three racers on an expired lease with one winner,
 and takeover of a token left by a dead taker; a git timeout reported as
 `env_checkpoint_limit` with no partial checkpoint; a nested repository skipped
-and named. `argus-accounts.test.ts` verifies that a `/complete` refused by the
+and named. Supersession: a checkpoint saved, its work then committed and pushed
+to a local bare remote standing in for the forge, and a clean failed attempt no
+longer blocks a later restore once the proof is given, while without a proof
+that restore is `env_checkpoint_conflict`; a proof for another task,
+repository, branch or node, or a short sha, refused; nothing removed when the
+workspace is dirty, ahead or not at the proof's commit; retained when the
+published commit lacks a checkpoint commit, a stash, or staged, unstaged,
+untracked, binary, mode or symlink content, including staged content later
+edited again; superseded when staged, unstaged and untracked work, deletions and
+modes are all published; foreign-node, tampered and newer uncovered checkpoints
+retained; a live lease `env_checkpoint_busy` with nothing removed and an expired
+one taken over; replay and an interrupted removal. `argus-accounts.test.ts` verifies that a `/complete` refused by the
 API (409) still saves a checkpoint, since the attempt is marked complete only
 after the API accepts it.
 
@@ -192,15 +249,16 @@ Not verified and not promised: lease renewal for an operation longer than the
 TTL; transfer between nodes or hosts; a store shared between `nanoclaw` host
 containers (none is mounted); resuming an engine session; restore after the store
 disk is lost. The checkpoint reference is logged but not yet reported to Argus as
-a `wip` observation.
+a `wip` observation. The channel's read of the published head is not covered by
+an adapter test.
 
-Known limit: a checkpoint outlives the work being published. If attempt 1 saves
-a checkpoint and attempt 2 pushes its work and then fails, attempt 2 saves
-nothing (its workspace is clean), and attempt 3 finds attempt 1's checkpoint and
-a workspace that differs from it: `env_checkpoint_conflict`, and the task blocks.
-Removing the task's checkpoint directory in the store unblocks it. Deleting
-checkpoints on a clean save is not done, because with a shared store it could
-delete another instance's unpublished work (see 4).
+Known limit: a checkpoint is superseded only when the forge's branch head was
+read and the published commit provably covers it (3.3). When the forge read
+fails, the workspace is not exactly at that head (for example the worker
+amended after pushing), or the published tree differs from the checkpoint's
+content (later work replaced it), the checkpoint stays, and a later attempt
+whose workspace differs from it is `env_checkpoint_conflict`. Removing the
+task's checkpoint directory in the store unblocks it.
 
 # 4. Open Questions
 
@@ -210,9 +268,8 @@ delete another instance's unpublished work (see 4).
   next attempt pins the exact checkpoint?
 - Should a task that finishes remove its checkpoints at once, instead of waiting
   for retention?
-- How should a checkpoint be superseded once its work is published (3.8)? For
-  example, record the pushed HEAD so that a checkpoint whose commits are all
-  reachable from it is treated as done.
+- Should a checkpoint whose work a later published commit replaced (not merely
+  contains) be superseded too, and on what proof (3.8)?
 - Should the store be a shared mount for `nanoclaw` host containers, with a
   stable `ARGUS_NODE_ID` per node, so a retry on another instance can restore?
 
@@ -220,19 +277,22 @@ delete another instance's unpublished work (see 4).
 
 - Single node ([single-node](single-node.spec.md)): local filesystem only, no new
   service, no schema change.
-- No network call and no credential in any step.
+- No network call and no credential in the checkpoint module; the published head
+  is read by the channel through the gateway (3.3).
 - Never delete or overwrite work in a live workspace.
 - English only, no secrets in the repository.
 
 # 6. Implementation Consequences
 
 - `integrations/nanoclaw/argus-checkpoint.ts`: `checkpointTaskWorkspace`,
-  `restoreTaskWorkspace`, `checkpointRef`, `parseCheckpointRef`, `isSensitive`,
+  `restoreTaskWorkspace`, `supersedeCheckpoints`, `checkpointRef`, `parseCheckpointRef`, `isSensitive`,
   with `argus-checkpoint.test.ts`. `argus-workspace.ts` exports `defaultGit` and
   `hasCredentials`.
 - `integrations/nanoclaw/argus.ts`: `workspacePreflight` restores before preparing
   the workspace; the claim loop calls `checkpointAfterAttempt` after the session
-  closes; new option `checkpointRoot`.
+  closes and, on a clean save with a proof, `supersedeCheckpoints`; the published
+  head is read before the repository lease is released; options `checkpointRoot`
+  and `publishedHead`. `gitea-api.d.mts` declares `getBranch`.
 - `install.sh` copies the module and test; `provision.sh check` runs the test.
 - `packages/core/src/argus_core/tasks.py`: five reasons join `ENV_BLOCK_REASONS`;
   the dashboard inbox labels them; [failure classes](failure-classes.spec.md) 3.3

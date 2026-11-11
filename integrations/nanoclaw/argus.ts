@@ -91,6 +91,7 @@ import {
   maxCheckpointBytesFromEnv,
   parseCheckpointRef,
   restoreTaskWorkspace,
+  supersedeCheckpoints,
 } from "./argus-checkpoint.js";
 import { createCommandBlockedRelay } from "./argus-command-blocked.js";
 import { defaultContinuationObserve } from "./argus-continuation-observe.js";
@@ -185,7 +186,7 @@ import {
   waitingMessage,
 } from "./argus-task-signals.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
-import { prepareTaskWorkspace, type WorkspaceResult } from "./argus-workspace.js";
+import { prepareTaskWorkspace, taskBranch, type WorkspaceResult } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 import {
   loadPolicy,
@@ -415,6 +416,12 @@ export interface ArgusConfig {
    * Default: `ARGUS_CHECKPOINT_DIR`; unset disables checkpoints (nothing is saved or restored).
    */
   checkpointRoot?: string;
+  /**
+   * Override how the task branch's published head is read while the repository lease is
+   * held (the proof that supersedes checkpoints, task checkpoint spec 3.3). Default: the
+   * forge API through the scoped allowlist + OneCLI proxy. null: not published.
+   */
+  publishedHead?: (task: ArgusTask, branch: string) => Promise<string | null>;
   url: string;
   bootstrapToken?: string;
   agentToken?: string;
@@ -3613,8 +3620,45 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
+  // The forge's head of the task branch, read before the repository lease is released.
+  let publishedHead: { taskId: string; attempt: number; sha: string } | null = null;
+
+  /**
+   * Read where the forge says the task branch points, while the repository lease still
+   * holds, so a later clean save can supersede checkpoints whose work it publishes. Only
+   * when the task has checkpoints to supersede. Never throws: no reading, no proof.
+   */
+  async function observePublishedHead(task: ArgusTask): Promise<void> {
+    publishedHead = null;
+    const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
+    const repositoryUrl = task.repository_url;
+    if (!storeRoot || !repositoryUrl || completedAttempt === `${task.id}:${task.attempt}`) return;
+    if (!task.required_capabilities?.includes("repository:write")) return;
+    try {
+      if (!(await lstat(path.join(storeRoot, task.id)).catch(() => null))) return;
+      const branch = taskBranch(task.id);
+      let sha: string | null;
+      if (cfg.publishedHead) sha = await cfg.publishedHead(task, branch);
+      else {
+        if (activeRepositoryUrl !== repositoryUrl) return;
+        const { repositoryClient } = await import("./github-api.mjs");
+        const api = repositoryClient(repositoryUrl, [...activeRepositoryAllowlist]);
+        api.deadline = { at: Date.now() + 15_000, now: Date.now };
+        sha = (await api.getBranch(branch)).sha;
+      }
+      if (sha) publishedHead = { taskId: task.id, attempt: task.attempt, sha };
+    } catch (err) {
+      log.debug("Could not read the task branch's published head", { task: task.id, err });
+    }
+  }
+
   /** Save the task's unpublished work after an attempt that did not complete. Best effort. */
   async function checkpointAfterAttempt(task: ArgusTask): Promise<void> {
+    const proof =
+      publishedHead?.taskId === task.id && publishedHead.attempt === task.attempt
+        ? publishedHead.sha
+        : null;
+    publishedHead = null;
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
     if (!storeRoot || completedAttempt === `${task.id}:${task.attempt}`) return;
     if (!task.required_capabilities?.includes("repository:write")) return;
@@ -3637,6 +3681,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await reportCheckpoint(task, "failed", saved.reason);
       } else if (saved.empty) {
         await reportCheckpoint(task, "nothing_to_save");
+        if (proof) await supersedeAfterAttempt(task, groupDir, storeRoot, proof);
       } else {
         log.info("Checkpointed the task's work", { task: task.id, ref: saved.ref });
         await reportCheckpoint(task, "saved", saved.ref);
@@ -3644,6 +3689,36 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     } catch (err) {
       log.warn("Could not checkpoint the task's work", { task: task.id, err });
       if (started) await reportCheckpoint(task, "failed", "env_checkpoint_invalid");
+    }
+  }
+
+  /**
+   * Drop checkpoints whose work the forge's branch head holds, so a clean retry does not
+   * conflict with work it already published (task checkpoint spec 3.3). Logged only: the
+   * attempt's outcome and its checkpoint report never depend on it.
+   */
+  async function supersedeAfterAttempt(
+    task: ArgusTask,
+    groupDir: string,
+    storeRoot: string,
+    sha: string,
+  ): Promise<void> {
+    const repositoryUrl = task.repository_url as string;
+    try {
+      const done = await supersedeCheckpoints({
+        groupDir,
+        storeRoot,
+        taskId: task.id,
+        attempt: task.attempt,
+        repositoryUrl,
+        published: { repositoryUrl, taskId: task.id, branch: taskBranch(task.id), sha },
+      });
+      if (!done.ok)
+        log.warn("Could not supersede the task's checkpoints", { task: task.id, ...done });
+      else if (done.superseded.length || done.retained.length)
+        log.info("Superseded published checkpoints", { task: task.id, ...done });
+    } catch (err) {
+      log.warn("Could not supersede the task's checkpoints", { task: task.id, err });
     }
   }
 
@@ -3846,6 +3921,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       );
       void verifyRuntimeUsed(task);
       await finished;
+      await observePublishedHead(task);
     } catch (err) {
       await client
         .call("POST", `/tasks/${task.id}/fail`, {
