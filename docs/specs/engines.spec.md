@@ -83,6 +83,27 @@ In scope:
   per arch) and a pinned dsh (npm sha512 integrity) into their own prefixes with
   a `dsh` wrapper, failing closed before extracting on any mismatch or unsupported
   arch. The script is not yet run by the image build (needs `xz-utils`).
+  - **ACP verdict for dsh: drop for now.** Measured with dsh 0.2.2-alpha.3 under
+    Node v24.22.2, run unchanged via `dsh --profile acp`: `initialize` ok (ACP v1,
+    `authMethods []`); `session/new` ok (model and `reasoning_effort` config
+    options); `session/prompt` failed with -32603 "llm-deepseek: no API key for
+    provider route deepseek-official". The custom OpenRouter route is not wired
+    into dsh's ACP config.
+  - Comparison agents: Cursor `agent acp` 2026.10.16: `initialize` ok
+    (`authMethods` `cursor_login`); `authenticate` got no reply within 120 s;
+    `session/new` returned "Authentication required". `copilot --acp` 1.0.105:
+    `initialize` ok, then "Authentication required". The worker image has no
+    Cursor or Copilot login.
+  - No ACP bridge or provider was added. The success criterion (two ACP agents,
+    unchanged, end to end) is unmet.
+  - The failures are environmental (missing credentials and logins), not an
+    architectural limit of the adapter. Do not read this verdict as "the adapter
+    cannot work".
+  - Reopen when both agents answer `session/prompt` with a live assistant reply,
+    which needs a provider key for dsh and a logged-in Cursor or Copilot account
+    in the worker image.
+  - Source: task 04268b71 attempt 4 (`acp-evaluation-report.md`,
+    `acp-run-dsh.txt`, `acp-run-cursor-agent.txt`, `acp-run-copilot.txt`).
 - **Readiness is three separate facts, never one.** `installed` (the binary
   exists in the image and reports the pinned version), `authenticated` (a
   credential for *that container's* use exists), `validated` (a real
