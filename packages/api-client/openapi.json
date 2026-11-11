@@ -1921,7 +1921,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },
@@ -8910,7 +8911,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },
@@ -9181,7 +9183,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },
@@ -11899,7 +11902,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },
@@ -19530,7 +19534,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },
@@ -19651,7 +19656,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },
@@ -26266,7 +26272,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },
@@ -26411,7 +26418,8 @@
                   "claude",
                   "codex",
                   "opencode",
-                  "agent"
+                  "agent",
+                  "copilot"
                 ],
                 "type": "string"
               },

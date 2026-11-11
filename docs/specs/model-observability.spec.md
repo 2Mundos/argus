@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-04
+updated: 2026-11-07
 ---
 
 # Model observability
@@ -13,7 +13,7 @@ layers that are never merged:
 
 - **harness**: the NanoClaw agent runtime (`runtime`, `engine`);
 - **delegate**: the CLI implementer run by `argus-delegate`
-  (`executor`: `claude | codex | opencode | agent`).
+  (`executor`: `claude | codex | opencode | agent | copilot`).
 
 Per execution Argus stores the layer, runtime, engine or executor, provider,
 requested model, configured model, observed model with its **evidence**,
@@ -174,7 +174,9 @@ best effort (a refused or failed report never fails the task).
 - **Observed model.** Only from what the CLI printed: Claude's
   `stream-json` `system/init` event `model` (else the dominant `modelUsage`
   entry of the result), evidence `cli_output`. Codex, Cursor `agent` and
-  OpenCode outputs carry no verified model field: `not_reported`.
+  OpenCode outputs carry no verified model field, and Copilot's output has none
+  verified either (its model is passed explicitly with `--model`): `not_reported`
+  with `executor_not_verified`.
 - **Relay.** The delegate appends one JSON line `{v, task_id, attempt, at,
   models: {executions, selections}, usage?}` to the live log relay file
   ([task live log](task-live-log.spec.md) 3.7) next to its log records; a

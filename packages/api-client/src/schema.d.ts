@@ -4141,7 +4141,7 @@ export interface components {
          */
         Alternative: {
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** Model */
             model?: string | null;
             /** Provider */
@@ -6502,7 +6502,7 @@ export interface components {
             /** Evidence Reason */
             evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** Id */
             id: string;
             /** Key */
@@ -6577,7 +6577,7 @@ export interface components {
             /** Evidence Reason */
             evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** Key */
             key: string;
             /**
@@ -7457,7 +7457,7 @@ export interface components {
             /** Executions */
             executions: number;
             /** Executor */
-            executor: ("claude" | "codex" | "opencode" | "agent") | null;
+            executor: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** Observed Model */
             observed_model: string | null;
             /** Provider */
@@ -10214,7 +10214,7 @@ export interface components {
             /** From Account Id */
             from_account_id?: string | null;
             /** From Executor */
-            from_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** From Model */
             from_model?: string | null;
             /** From Provider */
@@ -10249,7 +10249,7 @@ export interface components {
             /** To Account Id */
             to_account_id?: string | null;
             /** To Executor */
-            to_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** To Model */
             to_model?: string | null;
             /** To Provider */
@@ -12378,7 +12378,7 @@ export interface components {
             /** From Account Name */
             from_account_name?: string | null;
             /** From Executor */
-            from_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** From Model */
             from_model?: string | null;
             /** From Provider */
@@ -12424,7 +12424,7 @@ export interface components {
             /** To Account Name */
             to_account_name?: string | null;
             /** To Executor */
-            to_executor?: ("claude" | "codex" | "opencode" | "agent") | null;
+            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
             /** To Model */
             to_model?: string | null;
             /** To Provider */

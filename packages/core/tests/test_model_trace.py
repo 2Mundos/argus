@@ -28,6 +28,13 @@ def test_missing_metadata_is_explicitly_not_reported() -> None:
     assert run.observed_model is None and run.evidence == "not_reported"
 
 
+def test_delegate_executor_set_matches_the_supported_executors() -> None:
+    for executor in ("claude", "codex", "opencode", "agent", "copilot"):
+        assert ExecutionReport(**RUN, executor=executor).executor == executor
+    with pytest.raises(ValidationError):
+        ExecutionReport(**RUN, executor="unknown-cli")
+
+
 @pytest.mark.parametrize(
     "extra",
     [

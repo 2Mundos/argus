@@ -384,6 +384,100 @@ def test_resend_completes_but_never_overwrites(client, agent) -> None:
     assert post(client, agent, task_id, attempt, [other]).status_code == 409
 
 
+def copilot(key: str = "c1", **kw) -> dict:
+    return delegate(
+        key,
+        executor="copilot",
+        provider="github",
+        requested_model="gpt-5-mini",
+        configured_model="gpt-5-mini",
+        delegation_id="run-c",
+        **kw,
+    )
+
+
+def selection(key: str, execution_key: str, model: str, layer: str = "delegate"):
+    return {
+        "key": key,
+        "layer": layer,
+        "kind": "initial",
+        "reason_code": "policy",
+        "explanation": "first model of the chain",
+        "to_model": model,
+        "execution_key": execution_key,
+        "policy_revision": REV,
+    }
+
+
+def test_copilot_run_is_ingested_idempotently(client, agent) -> None:
+    task_id, attempt = claimed(client, agent)
+    sel = selection("cs1", "c1", "gpt-5-mini")
+    first = post(client, agent, task_id, attempt, [copilot()], [sel])
+    assert first.status_code == 200, first.text
+    again = post(client, agent, task_id, attempt, [copilot()], [sel])
+    assert again.status_code == 200, again.text
+    assert again.json() == first.json()  # replay returns the same records
+    trace = client.get(f"/api/tasks/{task_id}/models").json()
+    (run,) = trace["executions"]
+    assert (run["executor"], run["key"]) == ("copilot", "c1")
+    # The requested model is configuration, never copied into observed_model.
+    assert run["requested_model"] == "gpt-5-mini"
+    assert (run["observed_model"], run["evidence"]) == (None, "not_reported")
+    (entry,) = trace["timeline"]
+    assert (entry["key"], entry["to_model"]) == ("cs1", "gpt-5-mini")
+    summary = trace["summary"]["delegate"]
+    assert summary["executor"] == "copilot" and summary["executions"] == 1
+    assert summary["observed_model"] is None
+    models = client.get(f"/api/tasks/{task_id}").json()["models"]
+    assert models["used"] == [
+        {
+            "layer": "delegate",
+            "tool": "copilot",
+            "model": "gpt-5-mini",
+            "observed": False,
+        }
+    ]
+
+
+def test_mixed_executor_batch(client, agent) -> None:
+    task_id, attempt = claimed(client, agent)
+    res = post(
+        client,
+        agent,
+        task_id,
+        attempt,
+        [delegate("d1"), copilot("c1")],
+        [
+            selection("s-d", "d1", "claude-sonnet-5-5"),
+            selection("s-c", "c1", "gpt-5-mini"),
+        ],
+    )
+    assert res.status_code == 200, res.text
+    trace = client.get(f"/api/tasks/{task_id}/models").json()
+    assert {r["key"]: r["executor"] for r in trace["executions"]} == {
+        "d1": "claude",
+        "c1": "copilot",
+    }
+    assert {e["key"] for e in trace["timeline"]} == {"s-d", "s-c"}
+    assert trace["summary"]["delegate"]["executions"] == 2
+
+
+def test_copilot_authorization(client, agent) -> None:
+    task_id, attempt = claimed(client, agent)
+    url = f"/api/tasks/{task_id}/models"
+    body = {
+        "attempt": attempt,
+        "executions": [copilot()],
+        "selections": [selection("cs1", "c1", "gpt-5-mini")],
+    }
+    stranger = register(client)
+    assert client.post(url, json=body, headers=stranger).status_code == 409
+    stale = {**body, "attempt": attempt + 1}
+    assert client.post(url, json=stale, headers=agent).status_code == 409
+    assert client.post(url, json=body).status_code == 403
+    assert client.get(url, headers=agent).json()["executions"] == []
+
+
 def test_authorization(client, agent) -> None:
     task_id, attempt = claimed(client, agent)
     url = f"/api/tasks/{task_id}/models"
