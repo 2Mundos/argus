@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-25
-updated: 2026-11-01
+updated: 2026-11-11
 ---
 
 # Gitea helper for workers (`argus-gitea-api`)
@@ -22,7 +22,8 @@ only dependency is the pinned `undici`.
 
 # 2. Non-Goals
 
-- No merge command. Authorized delivery merges keep using the Gitea merge endpoint
+- No merge command: `argus-gitea-api merge` fails `policy_denied`; `argus-github-api` has
+  a gated one ([GitHub repositories](github-repositories.spec.md) 3.4). Authorized delivery merges keep using the Gitea merge endpoint
   through `GiteaApi.request`, under the rules the task prompt gives. No command approves
   a review: `pr-review-create` refuses `APPROVED`.
 - No users, organizations, tokens, secrets, webhooks, repository settings, admin, or

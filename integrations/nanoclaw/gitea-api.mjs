@@ -1563,6 +1563,24 @@ const COMMANDS = {
     required: ["number"],
     run: (api, o) => api.getPullRequest(o.number),
   },
+  merge: {
+    summary: "merge a pull request at the expected head SHA (authorized tasks only)",
+    options: { number: "string", sha: "string", "merge-method": "string" },
+    required: ["number", "sha"],
+    run: (api, o, ctx) => {
+      const merge_method = token(
+        o["merge-method"] ?? "merge",
+        "merge-method",
+        /^(merge|squash|rebase)$/,
+      );
+      const sha = commitSha(o.sha);
+      if (ctx.env.ARGUS_MERGE_AUTHORIZED !== "1")
+        throw policy(
+          "merge is not authorized for this task (needs deliverable pr_merged with auto_merge or allow_merge)",
+        );
+      return api.mergePullRequest(o.number, { sha, merge_method });
+    },
+  },
   "issue-get": {
     summary: "issue tracker item by number",
     options: { number: "string" },
@@ -1965,16 +1983,15 @@ const ERROR_LINES = Object.entries(EXIT_CODES)
   .map(([code, exit]) => `  ${String(exit).padStart(2)}  ${code}`)
   .join("\n");
 
-function usageText({ name, product, notes }) {
-  const width = Math.max(...Object.keys(COMMANDS).map((c) => c.length));
-  const lines = Object.entries(COMMANDS).map(
-    ([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`,
-  );
+function usageText({ name, product, notes, unsupported = {} }) {
+  const commands = Object.entries(COMMANDS).filter(([command]) => !(command in unsupported));
+  const width = Math.max(...commands.map(([command]) => command.length));
+  const lines = commands.map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
   return `usage: ${name} <command> [--repository URL] [options]
 
 Credential-free ${product} client for the allowlisted repository (ARGUS_REPOSITORY_URL or
 --repository, checked against ARGUS_REPOSITORIES_JSON). The OneCLI HTTPS proxy injects
-credentials; this helper never takes a token. There is no merge, approve, admin, user,
+credentials; this helper never takes a token. There is no ${"merge" in unsupported ? "merge, " : ""}approve, admin, user,
 token, secret or repository-delete command, and no arbitrary-HTTP command.
 
 Commands:
@@ -2077,7 +2094,14 @@ function allowlistFrom(env) {
   return values.filter((v) => typeof v === "string");
 }
 
-const GITEA_CLI = { Api: GiteaApi, name: "argus-gitea-api", product: "Gitea" };
+const GITEA_CLI = {
+  Api: GiteaApi,
+  name: "argus-gitea-api",
+  product: "Gitea",
+  unsupported: {
+    merge: "merge is not supported on Gitea repositories; argus-gitea-api has no merge command",
+  },
+};
 
 /** CLI entry point; injectable for tests. Returns the exit code. `cli` picks the forge client (argus-github-api). */
 export async function main(argv, env = process.env, io = {}, cli = GITEA_CLI) {
@@ -2089,6 +2113,8 @@ export async function main(argv, env = process.env, io = {}, cli = GITEA_CLI) {
       stdout.write(usageText(cli));
       return 0;
     }
+    if (cli.unsupported && Object.hasOwn(cli.unsupported, command))
+      throw policy(cli.unsupported[command]);
     const definition = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : null;
     if (!definition) throw usage(`unknown command; run ${cli.name} --help`);
     const options = parseArgs(rest, { ...GLOBAL_OPTIONS, ...definition.options });
@@ -2121,6 +2147,7 @@ export async function main(argv, env = process.env, io = {}, cli = GITEA_CLI) {
       options,
       timeoutMs,
       cwd: io.cwd ?? process.cwd(),
+      env,
       body: () => bodyFromOptions(options, io.readStdin),
     };
     const result = await definition.run(api, options, ctx);

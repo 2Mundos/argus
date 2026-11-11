@@ -33,8 +33,8 @@ delivery PR-state reads ([task delivery](task-delivery.spec.md)).
   endpoint.
 - No change to the Gitea path: `argus-gitea-api` keeps its commands, output and exit
   codes; Gitea accounts, leases and injection are unchanged.
-- No merge, approve, admin, token, secret, webhook or repository-settings command, as for
-  Gitea.
+- No approve, admin, token, secret, webhook or repository-settings command, as for
+  Gitea. `merge` exists only on `argus-github-api` (3.4).
 
 # 3. Decisions Made
 
@@ -128,8 +128,17 @@ Where GitHub differs, the helper adapts and the difference is visible in `--help
 | Review gate | `review-findings` also considers check runs whose name mentions the agentic review. |
 | Rate limits | A 403 with `x-ratelimit-remaining: 0` is `rate_limited` (exit 8). |
 
-Authorized merges use `PUT /pulls/{n}/merge` with the head `sha` through
-`GitHubApi.request`, under the same task rules as Gitea.
+`argus-github-api merge --number N --sha SHA [--merge-method merge|squash|rebase]`
+(default `merge`) merges through `GitHubApi.mergePullRequest`. It runs only when the
+environment variable `ARGUS_MERGE_AUTHORIZED` is exactly `1`, which the Argus channel
+sets from the trusted task claim (deliverable `pr_merged` and `auto_merge` or
+`allow_merge`); otherwise it fails `policy_denied` without a request. It reads the PR
+first and fails `conflict` if the PR is not open, is already merged, or its head SHA
+differs from `--sha` (re-run the gates on the new head). Then it sends
+`PUT /pulls/{n}/merge` with `{sha, merge_method}` through `GitHubApi.mutate`; after an
+ambiguous failure it reconciles by reading the PR. The output is the PR read back, which
+must be merged with a non-empty `merge_commit_sha`, else `bad_response`. `argus-gitea-api`
+has no `merge` command and fails `policy_denied` for it.
 
 ## 3.5 Callers pick the client by host
 
