@@ -1,14 +1,22 @@
 """What a task has spent, and its optional budget (task cost spec).
 
 The figures are the cost view's (accounts/figures.py) over the task's usage rows,
-priced on read and inside the usage insert; nothing is stored but the budget.
+priced on read and inside the usage insert; nothing is stored but the budget. A
+running executor's provisional record (3.8) counts apart until its final row
+replaces it.
 """
 
 import logging
 from typing import NamedTuple
 
 import aiosqlite
-from argus_core.cost import AttemptCost, BudgetState, PricingInfo, TaskCost
+from argus_core.cost import (
+    AttemptCost,
+    BudgetState,
+    PricingInfo,
+    ProvisionalCost,
+    TaskCost,
+)
 
 from argus_api.accounts import pricing
 from argus_api.accounts.figures import FIGURES, NO_MODEL, Acc
@@ -25,14 +33,58 @@ BUDGET_EXHAUSTED = "budget_exhausted"
 WARNING_AT = 0.8
 
 
+class Provisional(Acc):
+    """Provisional runs of one group (3.8); `in_flight` of them still running."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_flight = 0
+
+    def merge(self, other: "Acc") -> None:
+        super().merge(other)
+        if isinstance(other, Provisional):
+            self.in_flight += other.in_flight
+
+    def cost(self) -> ProvisionalCost | None:
+        if not self.runs:
+            return None
+        i, o, c = self.tokens
+        return ProvisionalCost(
+            runs=self.runs,
+            in_flight_runs=self.in_flight,
+            interrupted_runs=self.runs - self.in_flight,
+            input_tokens=i or 0,
+            output_tokens=o or 0,
+            cached_input_tokens=c or 0,
+            estimated_cost_usd=self.estimated,
+            unpriced_runs=self.unpriced,
+        )
+
+
 class Spend(NamedTuple):
     totals: Acc
     by_attempt: dict[int, Acc]
     models: dict[int, set[str]]
+    provisional: Provisional
+    provisional_by_attempt: dict[int, Provisional]
 
     @property
     def partial(self) -> bool:
-        return self.totals.unpriced > 0 or self.totals.not_reported > 0
+        p = self.provisional
+        return (
+            self.totals.unpriced > 0
+            or self.totals.not_reported > 0
+            or p.unpriced > 0
+            or p.runs > p.in_flight
+        )
+
+    @property
+    def known(self) -> float | None:
+        """Final estimate plus provisional estimate; None when nothing is priced."""
+        final, provisional = self.totals.estimated, self.provisional.estimated
+        if final is None and provisional is None:
+            return None
+        return (final or 0.0) + (provisional or 0.0)
 
 
 async def spend(conn: aiosqlite.Connection, task_id: str, table: PriceTable) -> Spend:
@@ -61,13 +113,30 @@ async def spend(conn: aiosqlite.Connection, task_id: str, table: PriceTable) -> 
         sum(a.measured_attempts for a in by_attempt.values()),
         sum(a.not_reported_attempts for a in by_attempt.values()),
     )
-    return Spend(totals, by_attempt, models)
+    provisional = Provisional()
+    provisional_by_attempt: dict[int, Provisional] = {}
+    async with conn.execute(
+        "SELECT p.attempt, p.model, count(*), sum(p.input_tokens),"
+        " sum(p.output_tokens), sum(p.cached_input_tokens),"
+        " sum(p.interrupted = 0 AND t.state = 'claimed' AND t.attempt = p.attempt)"
+        " FROM usage_provisional p JOIN tasks t ON t.id = p.task_id"
+        " WHERE p.task_id = ? GROUP BY p.attempt, p.model",
+        (task_id,),
+    ) as cur:
+        async for attempt, model, n, i, o, c, live in cur:
+            acc = Provisional()
+            acc.add(table, (model, n, n, 0, i, o, c, None, n))
+            acc.in_flight = live
+            provisional.merge(acc)
+            provisional_by_attempt.setdefault(attempt, Provisional()).merge(acc)
+            models.setdefault(attempt, set()).add(model or NO_MODEL)
+    return Spend(totals, by_attempt, models, provisional, provisional_by_attempt)
 
 
 def budget_state(
     estimated: float | None, budget: float | None, partial: bool
 ) -> BudgetState:
-    """3.2: on the estimate; exhausted on the known figure even when partial."""
+    """3.2: on the known estimate (3.8); exhausted on it even when partial."""
     if budget is None:
         return "none"
     used = estimated or 0.0
@@ -84,6 +153,7 @@ async def task_cost(
     budget = await _budget(conn, task_id)
     s = await spend(conn, task_id, table)
     totals = s.totals.figures()
+    empty = Acc()
     return TaskCost(
         task_id=task_id,
         pricing=PricingInfo(
@@ -94,17 +164,22 @@ async def task_cost(
             unpriced_models=sorted(s.totals.unpriced_models),
         ),
         totals=totals,
+        provisional=s.provisional.cost(),
+        known_cost_usd=s.known,
         partial=s.partial,
         by_attempt=[
             AttemptCost(
                 attempt=n,
                 models=sorted(s.models[n]),
-                **acc.figures().model_dump(),
+                provisional=(
+                    p.cost() if (p := s.provisional_by_attempt.get(n)) else None
+                ),
+                **s.by_attempt.get(n, empty).figures().model_dump(),
             )
-            for n, acc in sorted(s.by_attempt.items())
+            for n in sorted(s.models)
         ],
         budget_usd=budget,
-        budget_state=budget_state(totals.estimated_cost_usd, budget, s.partial),
+        budget_state=budget_state(s.known, budget, s.partial),
     )
 
 
@@ -122,7 +197,7 @@ async def exhausted_reason(
         log.warning("budget check skipped for task %s: %s", row["id"], exc)
         return None
     s = await spend(conn, row["id"], table)
-    estimated = s.totals.estimated
+    estimated = s.known
     if budget_state(estimated, budget, s.partial) != "exhausted":
         return None
     figure = "partial estimate" if s.partial else "estimate"
@@ -153,7 +228,7 @@ async def after_usage(tx: Tx, task_id: str | None) -> None:
         return
     s = await spend(tx.conn, task_id, table)
     budget = row["budget_usd"]
-    state = budget_state(s.totals.estimated, budget, s.partial)
+    state = budget_state(s.known, budget, s.partial)
     transient(
         tx,
         "system",
@@ -164,6 +239,8 @@ async def after_usage(tx: Tx, task_id: str | None) -> None:
             "task_id": task_id,
             "attempt": row["attempt"],
             "estimated_cost_usd": s.totals.estimated,
+            "provisional_cost_usd": s.provisional.estimated,
+            "known_cost_usd": s.known,
             "partial": s.partial,
             "budget_usd": budget,
             "budget_state": state,
@@ -177,7 +254,7 @@ async def after_usage(tx: Tx, task_id: str | None) -> None:
         return
     message = (
         f"The task's budget of ${budget:.2f} is spent (estimate"
-        f" ${s.totals.estimated or 0.0:.2f}). Stop starting new work: commit and push"
+        f" ${s.known or 0.0:.2f}). Stop starting new work: commit and push"
         " what you have, then finish with ASK: describing what is left."
     )
     try:

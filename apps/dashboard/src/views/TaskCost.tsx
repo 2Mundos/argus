@@ -6,13 +6,15 @@ import {
   costLabel,
   money,
   notReportedLabel,
+  provisionalLabel,
   tokensOrDash,
 } from "../cost";
 import { useLiveData } from "../live";
 
 /**
  * What one task spent and its budget (task cost spec 3.7). The figures are estimates
- * and say so; any event about the task (`task.cost` after each usage row) reloads them.
+ * and say so; in-flight executor usage shows apart as provisional until its run's final
+ * row replaces it. Any event about the task (`task.cost` after each usage row) reloads them.
  */
 export function TaskCostTile({ taskId }: { taskId: string }) {
   const { data: cost } = useLiveData(
@@ -26,6 +28,7 @@ export function TaskCostTile({ taskId }: { taskId: string }) {
   const currency = cost.pricing.currency;
   const level = budgetLevel(cost.budget_state);
   const budget = budgetLabel(cost);
+  const provisional = provisionalLabel(cost.provisional, currency);
   return (
     <section className="task-cost" aria-label="Cost">
       <header className="task-section-label">Cost</header>
@@ -33,6 +36,7 @@ export function TaskCostTile({ taskId }: { taskId: string }) {
         <span>
           {costLabel(totals, currency)} <span className="muted small">estimate</span>
         </span>
+        {provisional && <span className="badge"> {provisional}</span>}
         {totals.reported_cost_usd != null && (
           <span>
             {" · "}

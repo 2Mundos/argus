@@ -47,10 +47,12 @@ import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs
 import {
   appendAuthRejectedRecord,
   appendUsageRecord,
+  PROVISIONAL_RELAY_FILE,
   parseClaudeInitModel,
   parseUsage,
   runKey,
   runKeyHash,
+  startProvisionalUsage,
   USAGE_RELAY_FILE,
 } from "./usage.mjs";
 
@@ -1301,9 +1303,31 @@ async function runAttempt(
     emit: (m) => pending.push(sink(m)),
   });
   await tracker.start();
+  // Running usage of a claude run for the host to post; other executors stay unmeasured
+  // until they end (task cost spec 3.8).
+  const provisional =
+    executor === "claude" && milestoneRelay && accountIdEarly
+      ? startProvisionalUsage({
+          file:
+            e.ARGUS_USAGE_PROVISIONAL_RELAY_FILE ||
+            path.join(
+              path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+              PROVISIONAL_RELAY_FILE,
+            ),
+          stdoutFile,
+          identity: {
+            task_id: taskIdEarly,
+            attempt: attemptEarly,
+            account_id: accountIdEarly,
+            run_key: runKeyEarly,
+            engine: executor,
+          },
+        })
+      : null;
   const pollSeconds = Number(e.ARGUS_MILESTONE_POLL_S) > 0 ? Number(e.ARGUS_MILESTONE_POLL_S) : 15;
   let polling = Promise.resolve();
   const poller = setInterval(() => {
+    provisional?.poll();
     polling = polling.then(() => tracker.poll());
   }, pollSeconds * 1000);
 
@@ -1347,6 +1371,7 @@ async function runAttempt(
   live?.stop();
   changes?.stop();
   clearInterval(poller);
+  provisional?.poll(); // before the final row, which replaces it
   await polling;
   await tracker.poll();
   if (waitingInput(fs.readFileSync(stdoutFile, "utf8"))) tracker.once("waiting_input", {});

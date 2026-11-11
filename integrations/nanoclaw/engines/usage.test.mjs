@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
-import { parseClaudeInitModel, parseUsage, runKey, runKeyHash } from "./usage.mjs";
+import {
+  createClaudeUsageMeter,
+  parseClaudeInitModel,
+  parseUsage,
+  runKey,
+  runKeyHash,
+  startProvisionalUsage,
+} from "./usage.mjs";
 
 const claudeReal = fs.readFileSync(
   new URL("./fixtures/claude-result.json", import.meta.url),
@@ -162,4 +171,78 @@ test("parseClaudeInitModel never throws on malformed output", () => {
   assert.equal(parseClaudeInitModel("not json {"), null);
   assert.equal(parseClaudeInitModel('{"type":"system","subtype":"init","model":'), null);
   assert.equal(parseClaudeInitModel('{"type":"system","subtype":"init","model":42}'), null);
+});
+
+// Real claude `stream-json` from a delegated run, trimmed to six assistant messages; content
+// reduced to block types, usage verbatim. Each message repeats per content block.
+const STREAM = fs.readFileSync(
+  new URL("./fixtures/claude-stream-inflight.jsonl", import.meta.url),
+  "utf8",
+);
+const STREAM_TOTALS = {
+  model: "claude-opus-5-5",
+  input_tokens: 47026,
+  output_tokens: 90,
+  cached_input_tokens: 216541,
+};
+
+test("provisional: each assistant message counts once, whatever the chunking", () => {
+  const whole = createClaudeUsageMeter();
+  whole.push(STREAM);
+  assert.deepEqual(whole.totals(), STREAM_TOTALS);
+  const bytes = createClaudeUsageMeter();
+  for (let i = 0; i < STREAM.length; i += 97) bytes.push(STREAM.slice(i, i + 97));
+  assert.deepEqual(bytes.totals(), STREAM_TOTALS);
+  const twice = createClaudeUsageMeter();
+  twice.push(STREAM + STREAM); // a replayed message adds nothing
+  assert.deepEqual(twice.totals(), STREAM_TOTALS);
+});
+
+test("provisional: no assistant usage, no figure", () => {
+  const meter = createClaudeUsageMeter();
+  meter.push(
+    '{"type":"system","subtype":"init"}\nnot json\n{"type":"assistant","message":{"id":"m"}}\n',
+  );
+  assert.equal(meter.totals(), null);
+});
+
+test("provisional: cumulative records with a rising revision, only when the figure moved", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "provisional-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const stdoutFile = path.join(dir, "run.out");
+  const file = path.join(dir, "argus-usage-provisional.jsonl");
+  const identity = {
+    task_id: "t1",
+    attempt: 2,
+    account_id: "acc-9",
+    run_key: "r1:t1:x",
+    engine: "claude",
+  };
+  const lines = STREAM.split("\n");
+  fs.writeFileSync(stdoutFile, `${lines[0]}\n`);
+  const meter = startProvisionalUsage({ file, stdoutFile, identity });
+  meter.poll();
+  assert.equal(fs.existsSync(file), false); // nothing counted yet: nothing written
+  fs.appendFileSync(stdoutFile, `${lines.slice(1, 6).join("\n")}\n${lines[6].slice(0, 40)}`);
+  meter.poll();
+  meter.poll();
+  fs.appendFileSync(stdoutFile, `${lines[6].slice(40)}\n${lines.slice(7).join("\n")}`);
+  meter.poll();
+  const records = fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    records.map((r) => r.revision),
+    [1, 2],
+  );
+  assert.ok(records[0].input_tokens < records[1].input_tokens);
+  assert.deepEqual(records[1], {
+    v: 1,
+    kind: "usage_provisional",
+    ...identity,
+    revision: 2,
+    ...STREAM_TOTALS,
+  });
 });

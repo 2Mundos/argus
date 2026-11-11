@@ -58,6 +58,7 @@ ACCOUNT_TABLES = (
     "account_quota",
     "account_quota_probe",
     "account_usage",
+    "usage_provisional",
     "accounts",
 )
 # Rows kept as they are, apart from the task scoping done for every table that

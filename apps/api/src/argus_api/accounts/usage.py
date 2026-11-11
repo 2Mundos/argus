@@ -17,6 +17,7 @@ from argus_core.accounts import (
     PLACEHOLDER_PREFIX,
     AccountCredit,
     AccountUsage,
+    ProvisionalUsageReport,
     QuotaCollector,
     QuotaProbe,
     QuotaReport,
@@ -32,7 +33,7 @@ from argus_core.custom_accounts import OPENROUTER
 from argus_core.custom_accounts import PROVIDER as CUSTOM_PROVIDER
 
 from argus_api.db import Tx, ts
-from argus_api.errors import ValidationFailedError
+from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.events import record
 
 MAX_BUCKETS = 1000
@@ -103,9 +104,12 @@ async def insert_usage(
     A measured report for an attempt whose only row is an `a1:` placeholder upgrades
     that row in place (account usage 3.10). A not_reported report never downgrades
     a placeholder or a measured row: if the attempt already has either, it is a no-op.
+    Either settles the run's provisional row (task cost 3.8) in this transaction.
     """
     unmeasured = reason if measurement == "not_reported" else None
     at = ts(tx.now)
+    if task_id is not None and run_key is not None:
+        await _settle_provisional(tx, task_id, run_key, measurement)
     if (
         measurement == "measured"
         and task_id is not None
@@ -162,6 +166,80 @@ async def insert_usage(
             unmeasured,
         ),
     )
+
+
+async def _settle_provisional(
+    tx: Tx, task_id: str, run_key: str, measurement: str
+) -> None:
+    """The run's final row replaces its provisional one (measured), or leaves it as
+    the known lower bound of an interrupted run (not_reported)."""
+    if measurement == "measured":
+        await tx.conn.execute(
+            "DELETE FROM usage_provisional WHERE task_id = ? AND run_key = ?",
+            (task_id, run_key),
+        )
+    else:
+        await tx.conn.execute(
+            "UPDATE usage_provisional SET interrupted = 1"
+            " WHERE task_id = ? AND run_key = ?",
+            (task_id, run_key),
+        )
+
+
+async def upsert_provisional(
+    tx: Tx, account_id: str, agent_id: str, report: ProvisionalUsageReport
+) -> bool:
+    """Keep the run's newest cumulative figures (task cost 3.8). Returns whether the
+    stored row changed: a revision at or below the stored one, or a run whose final
+    measured row exists, is a no-op."""
+    async with tx.conn.execute(
+        "SELECT measurement FROM account_usage WHERE task_id = ? AND run_key = ?",
+        (report.task_id, report.run_key),
+    ) as cur:
+        finals = {r[0] for r in await cur.fetchall()}
+    if "measured" in finals:
+        return False
+    async with tx.conn.execute(
+        "SELECT attempt, account_id, revision FROM usage_provisional"
+        " WHERE task_id = ? AND run_key = ?",
+        (report.task_id, report.run_key),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is not None:
+        if (row["attempt"], row["account_id"]) != (report.attempt, account_id):
+            raise ConflictError(
+                f"run {report.run_key} belongs to another attempt or account",
+                code="run_mismatch",
+            )
+        if report.revision <= row["revision"]:
+            return False
+    await tx.conn.execute(
+        "INSERT INTO usage_provisional (task_id, run_key, attempt, account_id,"
+        " agent_id, revision, model, engine, input_tokens, output_tokens,"
+        " cached_input_tokens, interrupted, at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT (task_id, run_key) DO UPDATE SET agent_id = excluded.agent_id,"
+        " revision = excluded.revision, model = excluded.model,"
+        " engine = excluded.engine, input_tokens = excluded.input_tokens,"
+        " output_tokens = excluded.output_tokens,"
+        " cached_input_tokens = excluded.cached_input_tokens, at = excluded.at",
+        (
+            report.task_id,
+            report.run_key,
+            report.attempt,
+            account_id,
+            agent_id,
+            report.revision,
+            report.model,
+            report.engine,
+            report.input_tokens,
+            report.output_tokens,
+            report.cached_input_tokens,
+            int(bool(finals)),
+            ts(tx.now),
+        ),
+    )
+    return True
 
 
 async def _attempt_has_placeholder(

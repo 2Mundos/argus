@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-29
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # Task cost and budget
@@ -34,7 +34,8 @@ This spec adds two things:
 - **No project, account or fleet budgets.** Per task only. A default for new tasks
   is a setting (3.4), not a pooled budget.
 - **No token budget.** Dollars only, so one figure is compared across models.
-- **No provider billing calls**, and no change to how usage is reported.
+- **No provider billing calls**, and no change to the final usage report; the
+  provisional record (3.8) sits beside it.
 
 # 3. Decisions Made
 
@@ -58,7 +59,7 @@ This spec adds two things:
   budget_usd, budget_state}`. `pricing` is the cost view's block. Read scope is the
   task's (managers all, workers only tasks they have leased).
 - `budget_state`: `none` (no budget), `ok`, `warning` (≥ 80% of the budget),
-  `exhausted` (≥ 100%). It is computed on `estimated_cost_usd` and is `partial_ok` /
+  `exhausted` (≥ 100%). It is computed on `known_cost_usd` (3.8) and is `partial_ok` /
   `partial_warning` when the task is partial, because the true figure may be higher.
 - MCP `get_task_cost(task_id)`, same permissions, added to [MCP
   operations](mcp-operations.spec.md).
@@ -68,11 +69,13 @@ This spec adds two things:
 ## 3.3 Live: SSE `task.cost`
 
 - After a usage insert that names a task, a **transient** event (task live log 3.4)
-  `task.cost` with `{task_id, attempt, estimated_cost_usd, partial, budget_usd,
-  budget_state}`, computed in the same write transaction by the query of 3.1. Usage
-  rows still emit no stored event (account usage 3.2).
+  `task.cost` with `{task_id, attempt, estimated_cost_usd, provisional_cost_usd,
+  known_cost_usd, partial, budget_usd, budget_state}`, computed in the same write
+  transaction by the query of 3.1. Usage rows still emit no stored event (account
+  usage 3.2).
 - Engine rows arrive per harness turn, so the figure moves during an attempt. A
-  delegated executor run is counted when it ends.
+  delegated executor run is counted by its provisional record while it runs (3.8)
+  and by its final row when it ends.
 
 ## 3.4 Setting a budget
 
@@ -130,19 +133,67 @@ This spec adds two things:
 - Task view and agent drawer: a **Cost** tile with the estimate (labelled), the
   reported figure beside it when present, tokens, "partial" when it applies, and,
   with a budget, a bar against it (amber at warning, red at exhausted). A table
-  per attempt with model and runs. Refreshed by `task.cost`.
+  per attempt with model and runs. Provisional spend (3.8) shows apart, labelled
+  "provisional" while in flight and "interrupted" when its run ended with no
+  final figure. Refreshed by `task.cost`.
 - Task create and edit forms: a `Budget (USD)` field. The create form prefills it
   from the project's effective task defaults ([task defaults](task-defaults.spec.md)
   3.6); emptying it sends "no budget".
 - The Cost tab is unchanged.
 
+## 3.8 Provisional executor usage
+
+A delegated Claude run spends for minutes before its final usage row exists. Its
+`stream-json` carries usage per assistant message, so the run reports a running
+figure, which its final row replaces.
+
+- **Record.** `usage_provisional` (migration `0079_usage_provisional.sql`), one row
+  per run, keyed `(task_id, run_key)` (`run_key` of account usage 3.8): `attempt`,
+  `account_id`, `agent_id`, `revision`, `model`, `engine`, the three token fields,
+  `interrupted` and `at`. The figures are **cumulative** for the run, never deltas.
+- **Report.** `POST /api/accounts/{id}/usage/provisional` with `{task_id, attempt,
+  run_key, revision, model, engine, input_tokens, output_tokens,
+  cached_input_tokens}`, `204`. The caller holds a lease on the account (`403`
+  otherwise) and the task's claim at that attempt (`409 not_claimed`,
+  `not_assignee`, `stale_attempt`, `lease_expired`). `run_key` is `r1:`. Only the
+  NanoClaw host posts it (account usage 3.9); the container holds no token.
+- **Idempotent upsert.** A revision at or below the stored one is a no-op, so a
+  duplicate, a replay and a late, out-of-order record add nothing. A run whose
+  final `measured` row exists ignores any provisional record. The same `run_key`
+  under another attempt or account is `409 run_mismatch`.
+- **Reset.** A restarted executor (a retry, a model switch) is a new run with a new
+  start time, so a new `run_key` starting at revision 1. A run that restarts its
+  revision under the same key is ignored until it passes the stored revision; the
+  figure never goes back.
+- **Reconcile.** The run's final `measured` row (account usage 3.8, 3.10, also the
+  late upgrade of a placeholder) deletes its provisional row in the same write
+  transaction, so the run counts once, by its final figures. A final
+  `not_reported` row keeps the provisional row and marks it interrupted.
+- **In flight or interrupted.** A provisional row is **in flight** while its
+  attempt is the task's claimed attempt and no final row has marked it; otherwise
+  it is **interrupted**: the run ended with no measured final row (a crash, a
+  killed container, an unparseable result). An interrupted row stays, as the known
+  lower bound of what the run spent; the attempt also gets its `not_reported`
+  outcome (account usage 3.10), and the task is **partial**. A late measured final
+  still replaces it.
+- **Several runs per attempt** (model fallbacks, re-delegations) are one row each,
+  summed.
+- **Lower bound.** `stream-json` assistant messages carry the full input and cache
+  figures but only part of the output tokens, so a provisional figure is a known
+  lower bound, priced at its model like a final row.
+- **Figures.** `GET /api/tasks/{id}/cost` and MCP `get_task_cost` keep `totals`
+  and `by_attempt` for final rows only and add `provisional: {runs,
+  in_flight_runs, interrupted_runs, input_tokens, output_tokens,
+  cached_input_tokens, estimated_cost_usd, unpriced_runs}` (null when there is
+  none, also per attempt) and `known_cost_usd`, the final estimate plus the
+  provisional one. `budget_state`, the steer (3.5) and the no-new-attempt check
+  (3.6) use `known_cost_usd`; the steer stays once per attempt.
+- **Other executors** (`codex`, `agent`, `opencode`, `copilot`, custom and local)
+  report no provisional figure: their output carries none that is verified. Their
+  runs count when they end, as before; nothing is estimated in between.
+
 # 4. Open Questions
 
-- **In-flight executor spend.** A long delegated run is counted only when it ends, so
-  the steer of 3.5 may come late. `argus-delegate` parses `stream-json`, which
-  carries usage per assistant message. A provisional running figure (relayed, then
-  replaced by the final row) would close the gap, at the price of a second kind of
-  usage record.
 - **Hard ceiling.** Should a second threshold (say 150% of the budget) stop renewing
   the lease, ending the attempt? That spends what the attempt did on nothing, which
   is why v1 does not do it.
@@ -153,7 +204,8 @@ This spec adds two things:
 
 - Single node, SQLite, no new service. The figure of 3.1 is one indexed aggregate
   per task, run on read and inside the usage insert. That is one extra query per
-  usage row, which is per harness turn, not per token.
+  usage row, which is per harness turn, not per token, and per provisional record,
+  at most one per run every 15 s.
 - Writes use `tx.now`; no network call in the insert transaction. The steer is a
   row, delivered by the next heartbeat as usual.
 - Estimates stay labelled everywhere (cost view 3.1).
@@ -167,7 +219,11 @@ This spec adds two things:
   settings; MCP `get_task_cost`; regenerated `openapi.json` and `schema.d.ts`;
   tests for partial figures, the once-per-attempt steer, the block and its unblock.
 - Worker: the delegate passes `attempt` in a direct usage POST (the relay already
-  does, account usage 3.10).
+  does, account usage 3.10), and writes provisional Claude usage to its relay file
+  for the host to post (3.8, account usage 3.9).
+- Provisional usage: migration `0079`, the route, the reconcile in the usage insert,
+  `provisional` and `known_cost_usd` in the read models; tests for idempotency,
+  reconcile, no final row, several runs and the steer.
 - Dashboard: the Cost tile, the per-attempt table, the budget field, the inbox
   actions.
 - [Cost view](cost-view.spec.md) 2 ("No … budget enforcement") is narrowed to the

@@ -128,6 +128,10 @@ import {
 } from "./argus-local-harness.js";
 import { createMilestoneRelay, MILESTONE_RELAY_FILE } from "./argus-milestone-relay.js";
 import {
+  createProvisionalUsageRelay,
+  PROVISIONAL_RELAY_FILE,
+} from "./argus-provisional-usage-relay.js";
+import {
   claudeSessionReadable,
   decideQuotaResume,
   type FallbackReason,
@@ -2123,6 +2127,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let attachTimer: ReturnType<typeof setInterval> | null = null;
   let milestoneRelay: ReturnType<typeof createMilestoneRelay> | null = null;
   let milestoneTimer: ReturnType<typeof setInterval> | null = null;
+  let provisionalRelay: ReturnType<typeof createProvisionalUsageRelay> | null = null;
+  let provisionalTimer: ReturnType<typeof setInterval> | null = null;
   let blockedRelay: ReturnType<typeof createCommandBlockedRelay> | null = null;
   let blockedTimer: ReturnType<typeof setInterval> | null = null;
   // Stall visibility: remember a session once seen; fail if it vanishes without a reply.
@@ -2681,6 +2687,33 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
+   * Post the in-flight usage of a Claude executor run (task cost spec 3.8): the delegate
+   * holds no Argus token, so this host checks each record against the claimed task, attempt
+   * and the executor account it leased and posts the newest revision. Best effort.
+   */
+  async function startProvisionalUsageRelay(task: { id: string; attempt: number }): Promise<void> {
+    try {
+      const logFile = await cfg.delegateLogFile?.();
+      if (!logFile) return;
+      const file = path.join(path.dirname(logFile), PROVISIONAL_RELAY_FILE);
+      await resetRelayFile(file); // only this attempt's runs are relayed
+      const relay = createProvisionalUsageRelay({
+        file,
+        task,
+        now: nowMs,
+        held: () => ({ engine: account?.id ?? null, executor: executor?.id ?? null }),
+        post: (accountId, body) =>
+          client.call("POST", `/accounts/${encodeURIComponent(accountId)}/usage/provisional`, body),
+      });
+      provisionalRelay = relay;
+      provisionalTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
+      provisionalTimer.unref?.();
+    } catch (err) {
+      log.warn("Could not start the provisional usage relay", { err: String(err).slice(0, 200) });
+    }
+  }
+
+  /**
    * Serve `argus-task attach` (task helpers spec 3.10): the worker has no Argus credential, so
    * it spools the file and asks here; this host uploads it for the attempt it holds and writes
    * the receipt. Best effort: without it `attach` reports the missing capability.
@@ -2849,6 +2882,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     milestoneRelay = null;
     if (milestoneTimer) clearInterval(milestoneTimer);
     milestoneTimer = null;
+    provisionalRelay?.stop();
+    provisionalRelay = null;
+    if (provisionalTimer) clearInterval(provisionalTimer);
+    provisionalTimer = null;
     blockedRelay?.stop();
     blockedRelay = null;
     if (blockedTimer) clearInterval(blockedTimer);
@@ -3967,6 +4004,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!usageRelay) await startUsageRelay(task);
       if (!changesRelay) await startChangesRelay(task);
       if (!milestoneRelay) await startMilestoneRelay(task);
+      if (!provisionalRelay) await startProvisionalUsageRelay(task);
       if (!attachRelay) await startAttachRelay(task);
       if (!blockedRelay) startCommandBlockedRelay(task);
       resends = 0;
@@ -5042,6 +5080,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           harnessLogRelay?.drain(),
           changesRelay?.drain(),
           milestoneRelay?.drain(),
+          provisionalRelay?.drain(),
           attachRelay?.drain(),
           blockedRelay?.poll(),
         ]);

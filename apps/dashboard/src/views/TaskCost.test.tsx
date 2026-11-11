@@ -54,6 +54,7 @@ const cost = (o: Partial<TaskCost> = {}): TaskCost => ({
     unpriced_models: [],
   },
   totals: figures(),
+  known_cost_usd: 1.2,
   by_attempt: [
     { attempt: 1, models: ["claude-opus-5-5"], ...figures({ runs: 1, estimated_cost_usd: 0.4 }) },
     { attempt: 2, models: [], ...figures({ runs: 1, estimated_cost_usd: null, unpriced_runs: 1 }) },
@@ -93,6 +94,23 @@ describe("TaskCostTile", () => {
     expect(spent.parentElement?.className).toBe("task-budget budget-exhausted");
     expect(spent.getAttribute("aria-valuenow")).toBe("1");
     expect(screen.getByText(/· exhausted/)).toBeTruthy();
+  });
+
+  it("shows in-flight spend apart as provisional and counts it against the budget", async () => {
+    const provisional = {
+      runs: 1,
+      in_flight_runs: 1,
+      interrupted_runs: 0,
+      input_tokens: 900,
+      output_tokens: 20,
+      cached_input_tokens: 0,
+      estimated_cost_usd: 0.3,
+      unpriced_runs: 0,
+    };
+    await show(cost({ provisional, known_cost_usd: 1.5, budget_usd: 3, budget_state: "ok" }));
+    expect(screen.getByText("+0.30 USD provisional")).toBeTruthy();
+    const meter = screen.getByRole("meter", { name: "Budget used" });
+    expect(meter.getAttribute("aria-valuetext")).toBe("1.50 USD of 3.00 USD budget");
   });
 
   it("reloads on the task's own events, task.cost included", async () => {

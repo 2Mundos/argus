@@ -27,6 +27,7 @@ from argus_core.accounts import (
     FallbackResult,
     LeaseRole,
     NativeSessionReport,
+    ProvisionalUsageReport,
     QuotaWindow,
     Usage,
     UsageReport,
@@ -1186,6 +1187,18 @@ async def record_usage(
         await usage.upsert_quota(
             tx, account_id, report.rate_limits, "reported", f"agent:{agent_id}"
         )
+
+
+async def record_provisional_usage(
+    tx: Tx, account_id: str, agent_id: str, report: ProvisionalUsageReport
+) -> None:
+    """A running executor's usage so far (task cost 3.8), from the claim's holder."""
+    await _row(tx.conn, account_id)
+    if await _lease_on(tx.conn, agent_id, account_id) is None:
+        raise ForbiddenError("only an agent holding a lease may report its usage")
+    await tasks.check_lease(tx, report.task_id, report.attempt, agent_id)
+    if await usage.upsert_provisional(tx, account_id, agent_id, report):
+        await task_cost.after_usage(tx, report.task_id)
 
 
 async def secret_name_for_update(

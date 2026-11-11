@@ -489,6 +489,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/usage/provisional": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report Provisional Usage */
+        post: operations["report_provisional_usage_api_accounts__account_id__usage_provisional_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/secrets/reload": {
         parameters: {
             query?: never;
@@ -4462,6 +4479,7 @@ export interface components {
             not_reported_runs: number;
             /** Output Tokens */
             output_tokens: number | null;
+            provisional?: components["schemas"]["ProvisionalCost"] | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
             /** Runs */
@@ -9363,6 +9381,55 @@ export interface components {
          * @enum {string}
          */
         ProposalState: "open" | "accepted" | "rejected" | "withdrawn";
+        /**
+         * ProvisionalCost
+         * @description Running executor spend not yet replaced by its run's final row (task cost
+         *     spec 3.8): a known lower bound. In flight while its attempt is the claimed one;
+         *     interrupted when the run ended with no measured final row.
+         */
+        ProvisionalCost: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number | null;
+            /** In Flight Runs */
+            in_flight_runs: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Interrupted Runs */
+            interrupted_runs: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Runs */
+            runs: number;
+            /** Unpriced Runs */
+            unpriced_runs: number;
+        };
+        /**
+         * ProvisionalUsageReport
+         * @description A running executor's cumulative usage so far (task cost spec 3.8). Replaced
+         *     by the run's final usage row; a revision at or below the stored one adds nothing.
+         */
+        ProvisionalUsageReport: {
+            /** Attempt */
+            attempt: number;
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            /** Engine */
+            engine?: string | null;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Model */
+            model?: string | null;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Revision */
+            revision: number;
+            /** Run Key */
+            run_key: string;
+            /** Task Id */
+            task_id: string;
+        };
         /** PublishItem */
         PublishItem: {
             /** Draft Id */
@@ -10834,7 +10901,8 @@ export interface components {
         /**
          * TaskCost
          * @description What one task spent, in total and per attempt (task cost spec 3.2). Rows
-         *     with no attempt count only in `totals`.
+         *     with no attempt count only in `totals`. `partial` also covers interrupted
+         *     provisional runs.
          */
         TaskCost: {
             /**
@@ -10846,9 +10914,12 @@ export interface components {
             budget_usd: number | null;
             /** By Attempt */
             by_attempt: components["schemas"]["AttemptCost"][];
+            /** Known Cost Usd */
+            known_cost_usd?: number | null;
             /** Partial */
             partial: boolean;
             pricing: components["schemas"]["PricingInfo"];
+            provisional?: components["schemas"]["ProvisionalCost"] | null;
             /** Task Id */
             task_id: string;
             totals: components["schemas"]["CostFigures"];
@@ -13386,6 +13457,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UsageReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_provisional_usage_api_accounts__account_id__usage_provisional_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProvisionalUsageReport"];
             };
         };
         responses: {

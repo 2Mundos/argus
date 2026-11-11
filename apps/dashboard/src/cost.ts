@@ -77,17 +77,27 @@ export function budgetLevel(state: TaskCost["budget_state"]): BudgetLevel | null
   return state === "warning" || state === "partial_warning" ? "warning" : "ok";
 }
 
-/** How much of the budget the estimate fills, 0..1; 0 without a budget or a figure. */
-export function budgetShare(cost: Pick<TaskCost, "budget_usd" | "totals">): number {
-  const spent = cost.totals.estimated_cost_usd ?? 0;
+/** How much of the budget the known spend (final and provisional) fills, 0..1; 0 without
+ * a budget or a figure. */
+export function budgetShare(cost: Pick<TaskCost, "budget_usd" | "known_cost_usd">): number {
+  const spent = cost.known_cost_usd ?? 0;
   if (!cost.budget_usd || spent <= 0) return 0;
   return Math.min(spent / cost.budget_usd, 1);
 }
 
-/** "<estimate> of <budget> budget", or null without a budget. */
+/** "<known spend> of <budget> budget", or null without a budget. */
 export function budgetLabel(cost: TaskCost): string | null {
   if (cost.budget_usd == null) return null;
   const currency = cost.pricing.currency;
-  const spent = money(cost.totals.estimated_cost_usd ?? 0, currency);
+  const spent = money(cost.known_cost_usd ?? 0, currency);
   return `${spent} of ${money(cost.budget_usd, currency)} budget`;
+}
+
+/** Executor usage not yet final (task cost 3.8): "+<estimate> provisional" while a run is
+ * in flight, "interrupted" when its run ended with no final figure; null when there is none. */
+export function provisionalLabel(p: TaskCost["provisional"], currency: string): string | null {
+  if (!p || p.runs === 0) return null;
+  const figure =
+    p.estimated_cost_usd == null ? "unpriced" : `+${money(p.estimated_cost_usd, currency)}`;
+  return `${figure} ${p.in_flight_runs > 0 ? "provisional" : "interrupted"}`;
 }

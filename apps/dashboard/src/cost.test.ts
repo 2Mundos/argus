@@ -6,6 +6,7 @@ import {
   money,
   notReportedLabel,
   pricingNote,
+  provisionalLabel,
   share,
   tokensOrDash,
   topFive,
@@ -88,9 +89,31 @@ describe("cost helpers", () => {
     expect(budgetLevel("warning")).toBe("warning");
     expect(budgetLevel("partial_warning")).toBe("warning");
     expect(budgetLevel("exhausted")).toBe("exhausted");
-    expect(budgetShare({ budget_usd: 4, totals: f({ estimated_cost_usd: 1 }) })).toBe(0.25);
-    expect(budgetShare({ budget_usd: 1, totals: f({ estimated_cost_usd: 3 }) })).toBe(1);
-    expect(budgetShare({ budget_usd: null, totals: f() })).toBe(0);
-    expect(budgetShare({ budget_usd: 1, totals: f({ estimated_cost_usd: null }) })).toBe(0);
+    expect(budgetShare({ budget_usd: 4, known_cost_usd: 1 })).toBe(0.25);
+    expect(budgetShare({ budget_usd: 1, known_cost_usd: 3 })).toBe(1);
+    expect(budgetShare({ budget_usd: null, known_cost_usd: 1 })).toBe(0);
+    expect(budgetShare({ budget_usd: 1, known_cost_usd: null })).toBe(0);
+  });
+
+  it("labels in-flight spend provisional, a run with no final figure interrupted", () => {
+    const p = {
+      runs: 1,
+      in_flight_runs: 1,
+      interrupted_runs: 0,
+      input_tokens: 10,
+      output_tokens: 1,
+      cached_input_tokens: 0,
+      estimated_cost_usd: 0.5,
+      unpriced_runs: 0,
+    };
+    expect(provisionalLabel(null, "USD")).toBeNull();
+    expect(provisionalLabel(p, "USD")).toBe(`+${money(0.5, "USD")} provisional`);
+    expect(provisionalLabel({ ...p, in_flight_runs: 0, interrupted_runs: 1 }, "USD")).toBe(
+      `+${money(0.5, "USD")} interrupted`,
+    );
+    // Unpriced in-flight spend is never shown as $0.
+    expect(provisionalLabel({ ...p, estimated_cost_usd: null, unpriced_runs: 1 }, "USD")).toBe(
+      "unpriced provisional",
+    );
   });
 });

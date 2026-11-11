@@ -22,6 +22,8 @@ has gone quiet.
 - No new endpoint, table, or task state; no change to state semantics or to the lease
   rule (a progress post still renews the lease).
 - No transcript or tool-call stream.
+- No usage in milestones. A running executor's usage has its own relay file and
+  endpoint ([task cost](task-cost.spec.md) 3.8), read with the same fenced reader.
 - No milestone history table: the latest milestone is on the task row, the history is
   the `task.progress` events.
 - No change to `argus-delegate`'s JSON report (the last stdout line).

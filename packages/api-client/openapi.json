@@ -2865,6 +2865,16 @@
             ],
             "title": "Output Tokens"
           },
+          "provisional": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvisionalCost"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reported_cost_usd": {
             "anyOf": [
               {
@@ -17034,6 +17044,138 @@
         "title": "ProposalState",
         "type": "string"
       },
+      "ProvisionalCost": {
+        "description": "Running executor spend not yet replaced by its run's final row (task cost\nspec 3.8): a known lower bound. In flight while its attempt is the claimed one;\ninterrupted when the run ended with no measured final row.",
+        "properties": {
+          "cached_input_tokens": {
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "in_flight_runs": {
+            "title": "In Flight Runs",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "interrupted_runs": {
+            "title": "Interrupted Runs",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "unpriced_runs": {
+            "title": "Unpriced Runs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "in_flight_runs",
+          "interrupted_runs",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens",
+          "estimated_cost_usd",
+          "unpriced_runs"
+        ],
+        "title": "ProvisionalCost",
+        "type": "object"
+      },
+      "ProvisionalUsageReport": {
+        "description": "A running executor's cumulative usage so far (task cost spec 3.8). Replaced\nby the run's final usage row; a revision at or below the stored one adds nothing.",
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "cached_input_tokens": {
+            "minimum": 0.0,
+            "title": "Cached Input Tokens",
+            "type": "integer"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "input_tokens": {
+            "minimum": 0.0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "output_tokens": {
+            "minimum": 0.0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "revision": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "run_key": {
+            "pattern": "^r1:[A-Za-z0-9._:-]{1,196}$",
+            "title": "Run Key",
+            "type": "string"
+          },
+          "task_id": {
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "run_key",
+          "revision",
+          "input_tokens",
+          "output_tokens",
+          "cached_input_tokens"
+        ],
+        "title": "ProvisionalUsageReport",
+        "type": "object"
+      },
       "PublishItem": {
         "properties": {
           "draft_id": {
@@ -21389,7 +21531,7 @@
         "type": "object"
       },
       "TaskCost": {
-        "description": "What one task spent, in total and per attempt (task cost spec 3.2). Rows\nwith no attempt count only in `totals`.",
+        "description": "What one task spent, in total and per attempt (task cost spec 3.2). Rows\nwith no attempt count only in `totals`. `partial` also covers interrupted\nprovisional runs.",
         "properties": {
           "budget_state": {
             "enum": [
@@ -21421,12 +21563,33 @@
             "title": "By Attempt",
             "type": "array"
           },
+          "known_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Known Cost Usd"
+          },
           "partial": {
             "title": "Partial",
             "type": "boolean"
           },
           "pricing": {
             "$ref": "#/components/schemas/PricingInfo"
+          },
+          "provisional": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProvisionalCost"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "task_id": {
             "title": "Task Id",
@@ -28148,6 +28311,56 @@
           }
         ],
         "summary": "Report Usage",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/usage/provisional": {
+      "post": {
+        "operationId": "report_provisional_usage_api_accounts__account_id__usage_provisional_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionalUsageReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Provisional Usage",
         "tags": [
           "accounts"
         ]

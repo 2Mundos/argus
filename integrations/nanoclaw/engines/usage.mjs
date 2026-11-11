@@ -251,14 +251,138 @@ export function appendAuthRejectedRecord(file, record) {
 }
 
 function appendRecord(file, record) {
+  return appendCapped(file, record, USAGE_RELAY_MAX_BYTES);
+}
+
+function appendCapped(file, record, maxBytes) {
   try {
     const line = `${JSON.stringify(record)}\n`;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    if (fs.existsSync(file) && fs.statSync(file).size + line.length > USAGE_RELAY_MAX_BYTES)
-      return false;
+    if (fs.existsSync(file) && fs.statSync(file).size + line.length > maxBytes) return false;
     fs.appendFileSync(file, line, { mode: 0o660 });
     return true;
   } catch {
     return false;
   }
+}
+
+/** Where a running claude executor's provisional usage waits for the host (task cost spec 3.8). */
+export const PROVISIONAL_RELAY_FILE = "argus-usage-provisional.jsonl";
+const PROVISIONAL_MAX_BYTES = 256 * 1024; // per file; further records are dropped
+const MAX_STREAM_LINE = 8 * 1024 * 1024; // a longer stdout line is skipped, not buffered
+
+/**
+ * Usage so far of a claude `stream-json` run, fed in chunks. Each assistant message
+ * repeats its usage once per content block, so it counts once per `message.id`, taking
+ * the largest figure seen. The stream's `output_tokens` is partial: totals are a lower
+ * bound, which the run's final row replaces. `totals()` is null until a message counted.
+ */
+export function createClaudeUsageMeter() {
+  const messages = new Map(); // id -> {model, input, output, cached}
+  let rest = "";
+  let skipping = false;
+  const line = (l) => {
+    if (!l.includes('"assistant"')) return;
+    let o;
+    try {
+      o = JSON.parse(l);
+    } catch {
+      return;
+    }
+    const m = o?.type === "assistant" ? o.message : null;
+    const u = m?.usage;
+    const input = first(u, "input_tokens");
+    const output = first(u, "output_tokens");
+    if (typeof m?.id !== "string" || input === null || output === null) return;
+    const next = {
+      model: typeof m.model === "string" && m.model ? m.model.slice(0, 100) : null,
+      input: input + (first(u, "cache_creation_input_tokens") ?? 0),
+      output,
+      cached: first(u, "cache_read_input_tokens") ?? 0,
+    };
+    const seen = messages.get(m.id);
+    messages.set(
+      m.id,
+      seen
+        ? {
+            model: seen.model ?? next.model,
+            input: Math.max(seen.input, next.input),
+            output: Math.max(seen.output, next.output),
+            cached: Math.max(seen.cached, next.cached),
+          }
+        : next,
+    );
+  };
+  return {
+    push(chunk) {
+      const parts = (rest + chunk).split("\n");
+      rest = parts.pop() ?? "";
+      for (const l of parts) {
+        if (skipping) skipping = false;
+        else line(l);
+      }
+      if (rest.length > MAX_STREAM_LINE) {
+        rest = "";
+        skipping = true;
+      }
+    },
+    totals() {
+      if (!messages.size) return null;
+      const byModel = new Map();
+      const sum = { input: 0, output: 0, cached: 0 };
+      for (const m of messages.values()) {
+        for (const k of ["input", "output", "cached"]) sum[k] += m[k];
+        byModel.set(m.model, (byModel.get(m.model) ?? 0) + m.input + m.output + m.cached);
+      }
+      // Priced at the dominant model, as the final row is.
+      const model = [...byModel].reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+      return {
+        model,
+        input_tokens: Math.round(sum.input),
+        output_tokens: Math.round(sum.output),
+        cached_input_tokens: Math.round(sum.cached),
+      };
+    },
+  };
+}
+
+/**
+ * Tail a claude executor's stdout file and append its cumulative usage to the provisional
+ * relay file when it moved, with a revision counting up from 1. `identity` is `{task_id,
+ * attempt, account_id, run_key, engine}`. `poll()` never throws.
+ */
+export function startProvisionalUsage({ file, stdoutFile, identity }) {
+  const meter = createClaudeUsageMeter();
+  const decoder = new TextDecoder();
+  let offset = 0;
+  let revision = 0;
+  let last = "";
+  return {
+    poll() {
+      try {
+        const fd = fs.openSync(stdoutFile, "r");
+        try {
+          const buf = Buffer.alloc(64 * 1024);
+          for (;;) {
+            const n = fs.readSync(fd, buf, 0, buf.length, offset);
+            if (n <= 0) break;
+            offset += n;
+            meter.push(decoder.decode(buf.subarray(0, n), { stream: true }));
+          }
+        } finally {
+          fs.closeSync(fd);
+        }
+        const totals = meter.totals();
+        const now = JSON.stringify(totals);
+        if (!totals || now === last) return;
+        const record = { v: 1, kind: "usage_provisional", ...identity, revision: revision + 1 };
+        if (appendCapped(file, { ...record, ...totals }, PROVISIONAL_MAX_BYTES)) {
+          revision += 1;
+          last = now;
+        }
+      } catch {
+        /* a measurement never breaks a delivery */
+      }
+    },
+  };
 }
