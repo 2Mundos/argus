@@ -1,0 +1,61 @@
+name: Operational assurance
+# Scheduled evidence that Docker, Kubernetes and dependency audits still pass.
+# This is NOT a merge gate: it never runs on pull requests or pushes, and
+# quality.yaml keeps its changed-only checks.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: operational-assurance-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Real Docker: Argus starts echo-worker containers that must reach it back via
+  # host.docker.internal.
+  docker-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --all-packages --group dev --frozen
+      - run: make test-docker
+
+  # Real Kubernetes: a throwaway kind cluster, so the test never touches a shared
+  # cluster. Pods reach the test's Argus through the kind network's gateway.
+  kubernetes-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --all-packages --group dev --frozen
+      - name: Install kind (checksum pinned)
+        run: |
+          curl -sSfL -o /tmp/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind" | sha256sum -c -
+          sudo install -m 755 /tmp/kind /usr/local/bin/
+      - run: kind create cluster --name argus-it --wait 180s
+      - name: Run the Kubernetes integration test
+        run: |
+          gateway="$(docker network inspect kind --format '{{range .IPAM.Config}}{{println .Gateway}}{{end}}' | grep -E '^[0-9.]+$' | head -1)"
+          ARGUS_IT_HOST="$gateway" ARGUS_K8S_CONTEXT=kind-argus-it ARGUS_KIND_CLUSTER=argus-it make test-k8s
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name argus-it
+
+  # Advisories appear without code changes.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --all-packages --group dev --frozen
+      - run: pnpm install --frozen-lockfile
+      - run: make audit
