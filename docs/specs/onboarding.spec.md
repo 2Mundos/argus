@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-30
-updated: 2026-11-04
+updated: 2026-11-11
 ---
 
 # Onboarding
@@ -38,8 +38,10 @@ In scope:
 1. **Add an account.** Offers the harness-capable providers, Claude and Codex,
    with their existing import/generate forms, and **Local model**, which detects a
    model server on the node ([built-in orchestrator](builtin-orchestrator.spec.md)
-   3.11). A link opens the Accounts tab for the others (Cursor, Copilot, custom).
-   Cursor and Copilot cannot carry a worker alone.
+   3.11). **Copilot** opens the same add-account form as Accounts, preselected
+   on Copilot. Copilot is executor-only: it cannot carry a worker, so a Copilot
+   account does not complete this step. A link opens the Accounts tab for the
+   others (Cursor, custom). Cursor and Copilot cannot carry a worker alone.
 2. **Create a first worker.** The guided template form from the Agents view,
    unchanged (`GET /api/fleet/templates`, `POST /api/fleet/workers`).
 3. **Start the internal orchestrator** (optional, skippable). Shows what it does

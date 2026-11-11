@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { ActionButton } from "../ActionButton";
+import { COPILOT_PROVIDER } from "../accountProviders";
 import { api, call, type OnboardingStatus, type TemplateCatalog } from "../api";
 import { useLiveData } from "../live";
 import { onboardingEvent } from "../liveEvents";
+import { AddAccountForm } from "./AccountDialogs";
 import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 import { NewWorker } from "./GuidedWorker";
@@ -65,6 +67,7 @@ export function OnboardingWizard({
   const [addingClaude, setAddingClaude] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
   const [addingLocal, setAddingLocal] = useState(false);
+  const [addingCopilot, setAddingCopilot] = useState(false);
   const [error, setError] = useState<string>();
   const [budget, setBudget] = useState("5");
   const [enabling, setEnabling] = useState(false);
@@ -190,6 +193,7 @@ export function OnboardingWizard({
               onClaude={() => setAddingClaude(true)}
               onCodex={() => setAddingCodex(true)}
               onLocal={() => setAddingLocal(true)}
+              onCopilot={() => setAddingCopilot(true)}
               onSkip={() => setStep(2)}
             />
           )}
@@ -240,6 +244,16 @@ export function OnboardingWizard({
           }}
         />
       )}
+      {addingCopilot && (
+        <AddAccountForm
+          initialProvider={COPILOT_PROVIDER}
+          onClose={() => setAddingCopilot(false)}
+          onDone={() => {
+            setAddingCopilot(false);
+            void reload();
+          }}
+        />
+      )}
     </>
   );
 }
@@ -271,6 +285,7 @@ function AccountStep(props: {
   onClaude: () => void;
   onCodex: () => void;
   onLocal: () => void;
+  onCopilot: () => void;
   onSkip: () => void;
 }) {
   return (
@@ -278,8 +293,9 @@ function AccountStep(props: {
       <h3>Add an account</h3>
       <p>
         Workers need a harness-capable account. Claude and Codex can carry a worker on their own; a
-        local model runs on this node. Other providers (Cursor, Copilot, custom) are available from{" "}
-        <a href="#setup/accounts">Accounts</a>.
+        local model runs on this node. A Copilot account is executor-only: it can run delegated CLI
+        work but does not carry a worker, so it does not complete this step. Other providers
+        (Cursor, custom) are available from <a href="#setup/accounts">Accounts</a>.
       </p>
       {props.done ? (
         <p className="small">An account is ready. Continue to create a worker, or skip ahead.</p>
@@ -293,6 +309,9 @@ function AccountStep(props: {
           </button>
           <button type="button" onClick={props.onLocal}>
             Add local model
+          </button>
+          <button type="button" onClick={props.onCopilot}>
+            Add Copilot account
           </button>
         </div>
       )}
