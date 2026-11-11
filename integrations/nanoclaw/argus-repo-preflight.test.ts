@@ -33,7 +33,9 @@ import {
   type ProbeAnswer,
   type ProbeEvidence,
   prepareResultDir,
+  REARM_BACKOFF_CAP_MS,
   REARM_MAX_ATTEMPTS,
+  REARM_WINDOW_MS,
   RepositoryPreflightError,
   readVerdictFile,
   rearmBackoffMs,
@@ -1370,8 +1372,130 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
     });
     await done;
     expect(rounds).toEqual(Array.from({ length: REARM_MAX_ATTEMPTS }, (_, i) => i + 1));
-    expect(rounds.map(rearmBackoffMs)).toEqual([1000, 2000, 4000, 8000]);
-    expect(rearmBackoffMs(50)).toBe(8000);
+    expect(rounds.map((r) => rearmBackoffMs(r, () => 0))).toEqual([250, 500, 1000, 2000]);
+    expect(rounds.map((r) => rearmBackoffMs(r, () => 0.999999))).toEqual([499, 999, 1999, 3999]);
+    expect(rearmBackoffMs(50, () => 0.999999)).toBeLessThan(REARM_BACKOFF_CAP_MS);
+  });
+
+  it("waits with jitter on the default path and stays inside the window", async () => {
+    const waits: number[] = [];
+    let clock = 0;
+    const rand = [0, 0.5, 0.999, 0];
+    const { done, events } = preflight({
+      probe: vi.fn().mockRejectedValue(missing("x")),
+      rearm: async () => {},
+      backoff: undefined,
+      sleep: async (ms) => {
+        waits.push(ms);
+        clock += ms;
+      },
+      now: () => clock,
+      random: () => rand.shift() ?? 0,
+    });
+    await done;
+    expect(waits).toEqual([250, 750, 1999, 2000]);
+    expect(events[0]).toMatchObject({ rearm_attempts: 4, rearm_window_ms: 4999 });
+  });
+
+  it("stops with rearm_exhausted before a wait would pass REARM_WINDOW_MS", async () => {
+    const waits: number[] = [];
+    let clock = 0;
+    const rearm = vi.fn(async () => {
+      clock += REARM_WINDOW_MS - 1000; // a slow re-apply and probe eats the budget
+    });
+    const { done, events } = preflight({
+      probe: vi.fn().mockRejectedValue(missing("x")),
+      rearm,
+      backoff: undefined,
+      sleep: async (ms) => {
+        waits.push(ms);
+        clock += ms;
+      },
+      now: () => clock,
+      random: () => 0.999,
+    });
+    const result = await done;
+    expect(rearm).toHaveBeenCalledTimes(1);
+    expect(waits).toEqual([499]);
+    expect(events[0].diagnosis).toBe("rearm_exhausted");
+    expect(events[0].rearm_window_ms).toBeLessThanOrEqual(REARM_WINDOW_MS);
+    expect(result.outcome).toBe("unknown");
+  });
+
+  it("shares one in-flight re-arm between preflights of the same agent and repository", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let armed: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      armed = resolve;
+    });
+    const rearm = vi.fn(async () => {
+      armed();
+      await gate;
+    });
+    const probeCalls = vi
+      .fn()
+      .mockRejectedValueOnce(missing("first"))
+      .mockResolvedValue(proven);
+    const first = preflight({ probe: probeCalls, rearm, agentIdentifier: "agent-1" });
+    await started;
+    const second = preflight({
+      probe: vi.fn().mockRejectedValue(missing("second")),
+      rearm,
+      agentIdentifier: "agent-1",
+    });
+    release();
+    const [a, b] = await Promise.all([first.done, second.done]);
+    expect(rearm).toHaveBeenCalledTimes(1);
+    expect(a).toMatchObject({ outcome: "ok" });
+    expect(b).toMatchObject({ outcome: "ok" });
+    expect(second.events[0]).toMatchObject({ rearm_attempts: 1, probe: { push: true } });
+    // The entry is gone once the round settled: a later preflight re-arms again.
+    await preflight({
+      probe: vi.fn().mockRejectedValueOnce(missing("later")).mockResolvedValue(proven),
+      rearm,
+      agentIdentifier: "agent-1",
+    }).done;
+    expect(rearm).toHaveBeenCalledTimes(2);
+  });
+
+  it("records the gateway policy-publish fault when the re-arms are exhausted", async () => {
+    let clock = 0;
+    const { done, events } = preflight({
+      probe: vi.fn().mockRejectedValue(missing("x")),
+      rearm: async () => {
+        clock += 1000;
+      },
+      backoff: undefined,
+      sleep: async () => {},
+      now: () => clock,
+      random: () => 0,
+    });
+    const result = await done;
+    expect(events[0]).toMatchObject({
+      diagnosis: "rearm_exhausted",
+      injection: "absent",
+      fault: "gateway_policy_publish",
+      rearm_attempts: REARM_MAX_ATTEMPTS,
+      rearm_window_ms: 4000,
+      probe: { permissions: "absent", authentication: "unknown", http_status: 200 },
+    });
+    expect(result.error).toMatch(/^repository preflight unknown: /);
+    expect(result.error).toContain("the OneCLI policy rule stayed unpublished after 4");
+    expect(result.error).toMatch(
+      /the gateway attached no credential; the lease was re-applied 4 times within 4 seconds; this is a OneCLI policy-publish fault, not a permission or network problem\]$/,
+    );
+  });
+
+  it("probes once, never re-arms and records no fault when the credential is proven", async () => {
+    const rearm = vi.fn(async () => {});
+    const { done, events, probeCalls } = preflight({ rearm, agentIdentifier: "agent-2" });
+    expect(await done).toMatchObject({ outcome: "ok", error: null });
+    expect(probeCalls).toHaveBeenCalledTimes(1);
+    expect(rearm).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({ rearm_window_ms: 0, fault: "none", rearmed: false });
   });
 
   it("keeps the first failure when a later re-arm throws", async () => {

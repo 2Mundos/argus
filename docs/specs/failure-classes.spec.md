@@ -324,7 +324,13 @@ therefore runs in a bounded, ephemeral, model-free session:
   policy rule OneCLI publishes for the assignment, and that publication can lag the admin read
   or fail. The host re-applies the repository lease (the same secrets and assignments, the
   same host- and path-exact scopes; no new lease; idempotent PATCH/PUT) and probes again, up
-  to 4 rounds, waiting 1 s, 2 s, 4 s and 8 s before each (the wait is injectable). Only two
+  to 4 rounds, strictly serial, waiting 0.5 s, 1 s, 2 s and 4 s before each with equal jitter
+  (a random wait between half the step and the step, never above 4 s; the clock, the random
+  source and the sleep are injectable). The whole window has a 20 s wall-clock budget
+  (`REARM_WINDOW_MS`): a round whose wait would pass it is not started and the preflight ends
+  `rearm_exhausted`. Preflights for the same OneCLI agent and repository share one in-flight
+  re-arm and probe round (the later caller awaits the first one's answer or failure instead of
+  re-applying the lease again); the entry is dropped when the round settles. Only two
   shapes authorize a re-arm, and only with the lease held and the assignment confirmed for
   this exact repository:
   1. a probe that fails with the forge's 200 and no permissions object (the helper's
@@ -372,7 +378,11 @@ therefore runs in a bounded, ephemeral, model-free session:
   and Git hosts and their scoped path patterns, the probe outcome with the forge's HTTP
   status, whether the permissions object was present, the push bit, the repository's
   visibility and whether authentication is proven, whether the lease was re-armed and how
-  many times (`rearm_attempts`), the `canonical` spelling decision
+  many times (`rearm_attempts`) and over how many wall-clock ms (`rearm_window_ms`, 0 when not
+  re-armed), the `fault` (`gateway_policy_publish` when a re-arm ended `rearm_exhausted` or
+  `rearm_unproven` with no credential attached, else `none`: a OneCLI policy-publish fault, not
+  a permission or network problem; a final `rearm_exhausted` error also says so, with the
+  attempt count and window from the event), the `canonical` spelling decision
   ([GitHub repositories](github-repositories.spec.md) 3.3), the `injection`, `independent_evidence` and `diagnosis` values above, and the evidence source of each part
   (`onecli_admin_read`, `preflight_session_verdict`, `host`). Every field is a closed value,
   a bounded integer, or a host and path the host derived itself; nothing the container wrote
