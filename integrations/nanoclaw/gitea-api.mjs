@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Credential-free Gitea helper for workers (argus-gitea-api). Spec: docs/specs/gitea-helper.spec.md.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   closeSync,
   fsyncSync,
@@ -1543,6 +1543,32 @@ function prOutput(pr) {
   return pr;
 }
 
+/**
+ * The channel issues ARGUS_MERGE_AUTH_KEY/TASK/ATTEMPT and ARGUS_MERGE_AUTHORIZED per attempt
+ * (argus-merge-auth.ts); the token is HMAC-SHA256(key, `merge:${task}:${attempt}`) in hex.
+ * Keep the formula in step with `mergeAuthorizationToken` there.
+ */
+function requireMergeAuthorization(env) {
+  const given = env.ARGUS_MERGE_AUTHORIZED;
+  if (!given)
+    throw policy(
+      "merge is not authorized for this task (needs deliverable pr_merged with auto_merge or allow_merge)",
+    );
+  const key = env.ARGUS_MERGE_AUTH_KEY;
+  const task = env.ARGUS_MERGE_AUTH_TASK;
+  const attempt = env.ARGUS_MERGE_AUTH_ATTEMPT;
+  if (!key || !task || !attempt)
+    throw policy(
+      "merge authorization was not issued by the Argus channel for this attempt (a worker-set ARGUS_MERGE_AUTHORIZED is not an authorization)",
+    );
+  const expected = Buffer.from(
+    createHmac("sha256", key).update(`merge:${task}:${attempt}`).digest("hex"),
+  );
+  const actual = Buffer.from(given);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
+    throw policy("merge authorization is stale or was not issued for this attempt");
+}
+
 const COMMANDS = {
   create: {
     summary: "open a pull request (idempotent per head/base); prints the PR",
@@ -1574,10 +1600,7 @@ const COMMANDS = {
         /^(merge|squash|rebase)$/,
       );
       const sha = commitSha(o.sha);
-      if (ctx.env.ARGUS_MERGE_AUTHORIZED !== "1")
-        throw policy(
-          "merge is not authorized for this task (needs deliverable pr_merged with auto_merge or allow_merge)",
-        );
+      requireMergeAuthorization(ctx.env);
       return api.mergePullRequest(o.number, { sha, merge_method });
     },
   },

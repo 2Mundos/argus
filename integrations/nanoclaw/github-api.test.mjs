@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
 import { GiteaApi, preflightEvidence } from "./gitea-api.mjs";
 import { GitHubApi, main, repositoryClient, repositoryProvider } from "./github-api.mjs";
@@ -583,11 +584,20 @@ describe("merge", () => {
   const SHA = "a".repeat(40);
   const MERGED = { number: 4, state: "closed", merged: true, merge_commit_sha: "m".repeat(40) };
   const open = { number: 4, state: "open", merged: false, head: { sha: SHA } };
-  const merge = (args, routes, authorized = "1") =>
-    runWithEnv(["merge", "--number", "4", "--sha", SHA, ...args], routes, {
-      ...ENV,
-      ARGUS_MERGE_AUTHORIZED: authorized,
-    });
+  const hmac = (key, task, attempt) =>
+    createHmac("sha256", key).update(`merge:${task}:${attempt}`).digest("hex");
+  const issued = { key: "k".repeat(64), task: "t1", attempt: "2" };
+  const mergeEnv = (token, over = {}) => ({
+    ...ENV,
+    ARGUS_MERGE_AUTH_KEY: issued.key,
+    ARGUS_MERGE_AUTH_TASK: issued.task,
+    ARGUS_MERGE_AUTH_ATTEMPT: issued.attempt,
+    ARGUS_MERGE_AUTHORIZED: token,
+    ...over,
+  });
+  const valid = hmac(issued.key, issued.task, issued.attempt);
+  const merge = (args, routes, env = mergeEnv(valid)) =>
+    runWithEnv(["merge", "--number", "4", "--sha", SHA, ...args], routes, env);
   const puts = (r) => r.calls.filter((c) => c.method === "PUT");
 
   it("merges at the expected head and returns the PR read back, for each method", async () => {
@@ -618,18 +628,37 @@ describe("merge", () => {
 
   it("refuses without sending a PUT unless authorized and the PR is open at the SHA", async () => {
     const routes = (pr) => ({ "GET /pulls/4": pr, "PUT /pulls/4/merge": { merged: true } });
+    const bare = { ...ENV, ARGUS_MERGE_AUTHORIZED: "1" };
     const cases = [
-      [["--merge-method", "bogus"], open, "1", 2],
-      [[], open, "", 13],
-      [[], open, "0", 13],
-      [[], open, "true", 13],
-      [[], { ...open, head: { sha: "b".repeat(40) } }, "1", 6],
-      [[], { ...open, state: "closed" }, "1", 6],
-      [[], { ...open, merged: true }, "1", 6],
+      [["--merge-method", "bogus"], open, mergeEnv(valid), 2, /merge-method/],
+      [[], open, mergeEnv(""), 13, /merge is not authorized for this task/],
+      [[], open, ENV, 13, /merge is not authorized for this task/],
+      [[], open, bare, 13, /was not issued by the Argus channel/],
+      [
+        [],
+        open,
+        mergeEnv("1", { ARGUS_MERGE_AUTH_KEY: "" }),
+        13,
+        /was not issued by the Argus channel/,
+      ],
+      [[], open, mergeEnv(hmac(issued.key, issued.task, "1")), 13, /stale or was not issued/],
+      [[], open, mergeEnv(valid, { ARGUS_MERGE_AUTH_TASK: "t2" }), 13, /stale or was not issued/],
+      [
+        [],
+        open,
+        mergeEnv(`${valid.slice(0, -1)}${valid.endsWith("0") ? "1" : "0"}`),
+        13,
+        /stale or was not issued/,
+      ],
+      [[], open, mergeEnv(valid.slice(0, 32)), 13, /stale or was not issued/],
+      [[], { ...open, head: { sha: "b".repeat(40) } }, mergeEnv(valid), 6, /./],
+      [[], { ...open, state: "closed" }, mergeEnv(valid), 6, /./],
+      [[], { ...open, merged: true }, mergeEnv(valid), 6, /./],
     ];
-    for (const [args, pr, authorized, code] of cases) {
-      const r = await merge(args, routes(pr), authorized);
+    for (const [args, pr, env, code, message] of cases) {
+      const r = await merge(args, routes(pr), env);
       assert.equal(r.code, code, r.out);
+      assert.match(r.err + r.out, message);
       assert.equal(puts(r).length, 0);
     }
   });

@@ -130,9 +130,20 @@ Where GitHub differs, the helper adapts and the difference is visible in `--help
 
 `argus-github-api merge --number N --sha SHA [--merge-method merge|squash|rebase]`
 (default `merge`) merges through `GitHubApi.mergePullRequest`. It runs only when the
-environment variable `ARGUS_MERGE_AUTHORIZED` is exactly `1`, which the Argus channel
-sets from the trusted task claim (deliverable `pr_merged` and `auto_merge` or
-`allow_merge`); otherwise it fails `policy_denied` without a request. It reads the PR
+Argus channel issued an authorization for the running attempt. When the claim
+authorizes a merge (deliverable `pr_merged` with `auto_merge`, or `allow_merge` from an
+orchestrator-origin task) and the task has `repository:write`, the channel sets four
+variables in its environment at the start of the attempt: `ARGUS_MERGE_AUTH_KEY` (a random
+per-attempt key), `ARGUS_MERGE_AUTH_TASK`, `ARGUS_MERGE_AUTH_ATTEMPT`, and
+`ARGUS_MERGE_AUTHORIZED`, the lowercase hex HMAC-SHA256 of `merge:<task>:<attempt>` under the
+key. It clears all four (and any preset values) for every other task and when the attempt
+ends. The command recomputes the token and compares it in constant time. Without
+`ARGUS_MERGE_AUTHORIZED` it fails `policy_denied` with "merge is not authorized for this
+task"; with it but without the key, task or attempt, with "merge authorization was not issued
+by the Argus channel for this attempt"; with a token that does not match, with "merge
+authorization is stale or was not issued for this attempt". No request is sent. The variables
+live in the same session environment the worker shell can read, so this gate refuses bare or
+stale values and makes self-authorization a deliberate act; it is not a secrecy boundary. It reads the PR
 first and fails `conflict` if the PR is not open, is already merged, or its head SHA
 differs from `--sha` (re-run the gates on the new head). Then it sends
 `PUT /pulls/{n}/merge` with `{sha, merge_method}` through `GitHubApi.mutate`; after an
