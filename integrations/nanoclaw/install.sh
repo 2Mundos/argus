@@ -570,6 +570,9 @@ python3 "$here/patch-claude-rate-limit.py" "$target"
 # The harness's own token usage (claude.ts, codex.ts) for the host to post (account usage spec 3.10).
 cp "$here/overlays/harness-usage.ts" "$here/overlays/harness-usage.test.ts" "$providers_dir/"
 python3 "$here/patch-harness-usage.py" "$target"
+# The Codex app-server child resolves the image-installed codex CLI (PNPM_HOME) via PATH (spec 3.8).
+cp "$here/overlays/codex-cli-path.ts" "$here/overlays/codex-cli-path.test.ts" "$providers_dir/"
+python3 "$here/patch-codex-cli-path.py" "$target"
 
 codex_provider="$providers_dir/codex.ts"
 if [ -f "$codex_provider" ]; then

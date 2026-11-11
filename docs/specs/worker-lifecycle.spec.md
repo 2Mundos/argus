@@ -682,7 +682,11 @@ earlier tasks neither inflate its cost nor contaminate its replies
     skipped when the base `PATH` already lists it), then the base `PATH`, so
     the engine CLIs the image installs resolve. Verify with
     `docker exec <session> sh -c 'command -v codex'` (also `claude`,
-    `opencode`). Because the wrapper is first, `git commit`, `git push`,
+    `opencode`). The Codex harness app-server child
+    (`buildCodexProcessEnv`, patched by `patch-codex-cli-path.py`) gets the same
+    engine directory prepended to its forwarded `PATH` when that directory
+    exists and is not already listed; no `PATH` is fabricated otherwise.
+    Because the wrapper is first, `git commit`, `git push`,
     `argus-task deliver`, and delegated executors that inherit `PATH` hit the
     same wrapper. It refuses new commit messages that carry prohibited trailer
     lines, and refuses a push when any **outgoing** commit (relative to the
