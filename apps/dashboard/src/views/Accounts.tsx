@@ -55,9 +55,18 @@ const ACCOUNT_TYPES: { id: AccountType; title: string; hint: string }[] = [
 
 /** Wizard step 1: choose the kind of account, then hand off to its own dialog. */
 function AddAccountTypePicker(props: { onPick: (type: AccountType) => void; onClose: () => void }) {
+  const { onClose } = props;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="overlay">
-      <div className="dialog" role="dialog" aria-label="Add account">
+      <div className="dialog account-type-picker" role="dialog" aria-label="Add account">
         <h2>Add account</h2>
         <p className="muted small">What kind of account?</p>
         <div className="account-type-grid">
