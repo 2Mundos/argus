@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 Layer = Literal["harness", "delegate"]
-Executor = Literal["claude", "codex", "opencode", "agent"]
+Executor = Literal["claude", "codex", "opencode", "agent", "copilot"]
 Evidence = Literal[
     "reported_by_runtime", "cli_output", "provider_response", "not_reported"
 ]
