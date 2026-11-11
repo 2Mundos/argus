@@ -777,6 +777,21 @@ class UsageReport(BaseModel):
         return self
 
 
+class ProvisionalUsageReport(BaseModel):
+    """A running executor's cumulative usage so far (task cost spec 3.8). Replaced
+    by the run's final usage row; a revision at or below the stored one adds nothing."""
+
+    task_id: str = Field(min_length=1)
+    attempt: int = Field(ge=1)
+    run_key: str = Field(pattern=r"^r1:[A-Za-z0-9._:-]{1,196}$")
+    revision: int = Field(ge=1, le=2**53 - 1)
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    cached_input_tokens: int = Field(ge=0)
+    model: str | None = Field(default=None, max_length=100)
+    engine: str | None = Field(default=None, max_length=50)
+
+
 class UsageBucket(BaseModel):
     start: datetime  # in the requested timezone
     input_tokens: int

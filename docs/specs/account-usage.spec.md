@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-03
+updated: 2026-11-11
 ---
 
 # Account usage
@@ -369,6 +369,19 @@ account lease and must preserve the document structure and JSON value types.
   spool file, report or logs. A direct POST has a 5 s timeout; on failure the
   delegate writes one line to stderr and goes on. It never throws and never
   changes its exit code.
+- **Provisional usage (Claude only).** While a `claude` executor runs,
+  `argus-delegate` reads its `stream-json` output every 15 s and, when the
+  figures moved, appends one line to `argus-usage-provisional.jsonl` next to
+  the usage relay file (override `ARGUS_USAGE_PROVISIONAL_RELAY_FILE`; 256 KiB
+  cap, further lines dropped): `{v:1, kind:"usage_provisional", task_id,
+  attempt, account_id, run_key, revision, model, engine, input_tokens,
+  output_tokens, cached_input_tokens}`, cumulative for the run, `revision`
+  counting up from 1. Assistant messages are counted once per `message.id`
+  with the field rule above, priced at the run's dominant model; one more
+  line is written when the process exits, before the final usage. Nothing is
+  written without a task, attempt and account, and no other executor writes
+  any: their figures are unknown until the run ends, never 0 ([task
+  cost](task-cost.spec.md) 3.8).
 - **Report fields.** The JSON report (and each entry of `attempts`) gains
   `usage`, `run_key`, `usage_spool` and `usage_report: {status:
   sent|skipped|failed, reason}`. `skipped` reasons: `no_account_id`,
@@ -412,6 +425,16 @@ the file for the claimed task:
   failures with backoff and drains pending lines for up to 10 s after the task
   ends.
 - Posts `POST /api/accounts/{id}/usage` with the host's agent token.
+- Provisional records (§3.8) have their own relay,
+  `argus-provisional-usage-relay.ts`, read with the shared fenced reader of
+  [progress milestones](progress-milestones.spec.md) 3.3. It checks the task
+  and attempt against the claim (other tasks are ignored), the account
+  against the executor account the host holds, the `run_key` (`r1:<task
+  id>:...` or the hashed form), a positive revision and whole token counts,
+  keeps only the newest revision per run, and posts `POST
+  /api/accounts/{id}/usage/provisional` ([task cost](task-cost.spec.md) 3.8).
+  Its errors are handled as the milestone relay's. It drains before the usage
+  relay, so a run's final row lands after its last provisional one.
 
 - Passes the record's `attempt` in the body. An attempt that ends with no usage
   posted gets its `not_reported` row from the API itself (§3.10), not from the

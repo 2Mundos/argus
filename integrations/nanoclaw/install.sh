@@ -33,6 +33,8 @@ cp "$here/argus-fenced-relay.ts" "$target/src/channels/argus-fenced-relay.ts"
 cp "$here/argus-fenced-relay.test.ts" "$target/src/channels/argus-fenced-relay.test.ts"
 cp "$here/argus-milestone-relay.ts" "$target/src/channels/argus-milestone-relay.ts"
 cp "$here/argus-milestone-relay.test.ts" "$target/src/channels/argus-milestone-relay.test.ts"
+cp "$here/argus-provisional-usage-relay.ts" "$target/src/channels/argus-provisional-usage-relay.ts"
+cp "$here/argus-provisional-usage-relay.test.ts" "$target/src/channels/argus-provisional-usage-relay.test.ts"
 cp "$here/argus-changes-relay.ts" "$target/src/channels/argus-changes-relay.ts"
 # argus-task attach bridge (task-helpers spec 3.10): the host side of the worker's artifact upload.
 cp "$here/argus-attach-relay.ts" "$target/src/channels/argus-attach-relay.ts"

@@ -441,9 +441,11 @@ async def get_task_log(
 
 @tool(ANYONE)
 async def get_task_cost(ctx: Context, task_id: str) -> dict:
-    """What a task has spent: {pricing, totals, partial, by_attempt, budget_usd,
-    budget_state}. Costs are estimates at API rates; `partial` means unpriced or
-    unreported runs, so the true figure may be higher. Workers read leased tasks only."""
+    """What a task has spent: {pricing, totals, partial, provisional, known_cost_usd,
+    by_attempt, budget_usd, budget_state}. Costs are estimates at API rates; `partial`
+    means unpriced or unreported runs, so the true figure may be higher. `provisional`
+    is in-flight executor usage not yet final (a lower bound). Workers read leased
+    tasks only."""
     return await _call(ctx, "GET", f"/tasks/{task_id}/cost")
 
 

@@ -6,12 +6,12 @@ from api_support import DONE, insert_agent
 from argus_api.accounts import pricing, usage
 from argus_api.accounts import service as accounts
 from argus_api.db import Database
-from argus_api.errors import ConflictError
+from argus_api.errors import ConflictError, ForbiddenError
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import cost as task_cost
 from argus_api.tasks import service as tasks
 from argus_api.tasks import steers
-from argus_core.accounts import AccountCreate, UsageReport
+from argus_core.accounts import AccountCreate, ProvisionalUsageReport, UsageReport
 from argus_core.task_edit import TaskChanges
 from argus_core.tasks import TaskCreate
 from fastapi.testclient import TestClient
@@ -194,6 +194,8 @@ async def test_usage_publishes_task_cost_in_its_transaction(db: Database) -> Non
         "task_id": task.id,
         "attempt": task.attempt,
         "estimated_cost_usd": pytest.approx(1.7),
+        "provisional_cost_usd": None,
+        "known_cost_usd": pytest.approx(1.7),
         "partial": False,
         "budget_usd": 2.0,
         "budget_state": "warning",
@@ -244,6 +246,230 @@ async def test_a_refused_steer_is_logged_and_changes_nothing(db: Database) -> No
             )
         ).fetchone()
     assert row["budget_steered_attempt"] is None
+
+
+# -- provisional executor usage (3.8) -----------------------------------------------
+
+
+STORE = MemorySecretStore()
+
+
+async def held_account(db: Database, task) -> str:
+    """An account the agent leases for the claimed task; returns its id."""
+    await STORE.put("acc", {"api_key": "x"})
+    async with db.write() as tx:
+        acc = await accounts.create_account(
+            tx,
+            "acc",
+            AccountCreate(
+                name="acc", provider="openai", kind="api_key", secret_ref="sops:acc"
+            ),
+            "sops:acc",
+            "admin:test",
+            STORE,
+        )
+    await lease(db, task)
+    return acc.id
+
+
+async def lease(db: Database, task) -> None:
+    async with db.write() as tx:
+        await accounts.lease(
+            tx, A, ["openai"], STORE, "engine", task_id=task.id, attempt=task.attempt
+        )
+
+
+async def provisional(
+    db: Database,
+    acc: str,
+    task_id: str,
+    revision: int,
+    dollars: float,
+    *,
+    attempt: int = 1,
+    run: str = "r1:t:run-a",
+    agent: str = A,
+):
+    async with db.write() as tx:
+        await accounts.record_provisional_usage(
+            tx,
+            acc,
+            agent,
+            ProvisionalUsageReport(
+                task_id=task_id,
+                attempt=attempt,
+                run_key=run,
+                revision=revision,
+                input_tokens=int(dollars * DOLLAR),
+                output_tokens=0,
+                cached_input_tokens=0,
+                model=OPUS,
+                engine="claude",
+            ),
+        )
+    return tx
+
+
+async def final(
+    db: Database, acc: str, task_id: str, dollars: float, run: str = "r1:t:run-a"
+) -> None:
+    async with db.write() as tx:
+        await accounts.record_usage(
+            tx,
+            acc,
+            A,
+            UsageReport(
+                task_id=task_id,
+                attempt=1,
+                input_tokens=int(dollars * DOLLAR),
+                model=OPUS,
+                role="executor",
+                run_key=run,
+            ),
+        )
+
+
+async def test_provisional_revisions_are_monotonic_and_idempotent(
+    db: Database,
+) -> None:
+    task = await create(db, budget_usd=10)
+    acc = await held_account(db, await claim(db))
+    tx = await provisional(db, acc, task.id, 1, 0.5)
+    [event] = [e for e in tx.transient if e.kind == "task.cost"]
+    assert event.data["provisional_cost_usd"] == pytest.approx(0.5)
+    await provisional(db, acc, task.id, 3, 0.8)
+    for stale in (2, 3):  # out of order, then a replay: no write, no event
+        tx = await provisional(db, acc, task.id, stale, 2.0)
+        assert not [e for e in tx.transient if e.kind == "task.cost"]
+    cost = await figures(db, task.id)
+    assert cost.totals.runs == 0 and cost.totals.estimated_cost_usd is None
+    assert cost.provisional is not None
+    assert (cost.provisional.runs, cost.provisional.in_flight_runs) == (1, 1)
+    assert cost.provisional.input_tokens == int(0.8 * DOLLAR)
+    assert cost.known_cost_usd == pytest.approx(0.8)
+    assert (cost.partial, cost.budget_state) == (False, "ok")
+    [attempt] = cost.by_attempt
+    assert (attempt.attempt, attempt.runs, attempt.models) == (1, 0, [OPUS])
+    assert attempt.provisional == cost.provisional
+
+
+async def test_the_final_row_replaces_the_provisional_one(db: Database) -> None:
+    task = await create(db)
+    acc = await held_account(db, await claim(db))
+    await provisional(db, acc, task.id, 4, 0.8)
+    await provisional(db, acc, task.id, 1, 0.3, run="r1:t:run-b")
+    await final(db, acc, task.id, 1.0)
+    await provisional(db, acc, task.id, 9, 5.0)  # late: the final row stands
+    cost = await figures(db, task.id)
+    assert cost.totals.estimated_cost_usd == pytest.approx(1.0)
+    assert cost.provisional is not None and cost.provisional.runs == 1  # run-b only
+    assert cost.known_cost_usd == pytest.approx(1.3)
+    await final(db, acc, task.id, 0.4, run="r1:t:run-b")
+    cost = await figures(db, task.id)
+    assert cost.provisional is None and cost.totals.runs == 2
+    assert cost.known_cost_usd == pytest.approx(1.4)
+
+
+async def test_a_run_with_no_final_row_stays_as_an_interrupted_lower_bound(
+    db: Database,
+) -> None:
+    task = await create(db, max_attempts=3)
+    acc = await held_account(db, await claim(db))
+    await provisional(db, acc, task.id, 2, 0.6)
+    await _release(db, task.id)
+    cost = await figures(db, task.id)
+    assert cost.provisional is not None
+    assert (cost.provisional.in_flight_runs, cost.provisional.interrupted_runs) == (
+        0,
+        1,
+    )
+    assert cost.totals.not_reported_runs == 1  # the attempt's placeholder
+    assert cost.partial and cost.known_cost_usd == pytest.approx(0.6)
+    # A late measured final still replaces it, and upgrades the placeholder.
+    async with db.write() as tx:
+        await usage.insert_usage(
+            tx,
+            acc,
+            A,
+            task.id,
+            attempt=1,
+            input_tokens=DOLLAR,
+            model=OPUS,
+            run_key="r1:t:run-a",
+        )
+    cost = await figures(db, task.id)
+    assert cost.provisional is None and cost.totals.measured_runs == 1
+    assert (cost.partial, cost.known_cost_usd) == (False, pytest.approx(1.0))
+
+
+async def test_a_not_reported_final_marks_the_run_interrupted(db: Database) -> None:
+    task = await create(db)
+    acc = await held_account(db, await claim(db))
+    await provisional(db, acc, task.id, 1, 0.6)
+    async with db.write() as tx:
+        await accounts.record_usage(
+            tx,
+            acc,
+            A,
+            UsageReport(
+                task_id=task.id,
+                attempt=1,
+                run_key="r1:t:run-a",
+                measurement="not_reported",
+                reason="no_usage_in_output",
+            ),
+        )
+    await provisional(db, acc, task.id, 2, 0.7)  # still counted, still interrupted
+    cost = await figures(db, task.id)
+    assert cost.provisional is not None and cost.provisional.interrupted_runs == 1
+    assert cost.partial and cost.known_cost_usd == pytest.approx(0.7)
+
+
+async def test_provisional_reports_are_fenced_to_the_claim(db: Database) -> None:
+    task = await create(db, max_attempts=3)
+    acc = await held_account(db, await claim(db))
+    await insert_agent(db, "agent-b")
+    with pytest.raises(ForbiddenError):  # holds no lease on the account
+        await provisional(db, acc, task.id, 1, 0.1, agent="agent-b")
+    with pytest.raises(ConflictError) as stale:
+        await provisional(db, acc, task.id, 1, 0.1, attempt=2)
+    assert stale.value.code == "stale_attempt"
+    other = await create(db)
+    with pytest.raises(ConflictError) as foreign:
+        await provisional(db, acc, other.id, 1, 0.1)
+    assert foreign.value.code == "not_claimed"
+    async with db.write() as tx:
+        await tasks.cancel(tx, other.id, "admin:test")
+    await provisional(db, acc, task.id, 1, 0.1)
+    await _release(db, task.id)
+    retry = await claim(db)
+    await lease(db, retry)
+    with pytest.raises(ConflictError) as mismatch:  # a reused key, another attempt
+        await provisional(db, acc, task.id, 5, 0.1, attempt=retry.attempt)
+    assert mismatch.value.code == "run_mismatch"
+
+
+async def test_provisional_spend_steers_once_and_blocks_a_new_attempt(
+    db: Database,
+) -> None:
+    task = await create(db, budget_usd=1, max_attempts=3)
+    acc = await held_account(db, await claim(db))
+    await allow_steers(db)
+    await provisional(db, acc, task.id, 1, 0.9)
+    assert await budget_steers(db, task.id) == []
+    await provisional(db, acc, task.id, 2, 1.1)
+    await provisional(db, acc, task.id, 3, 1.2)
+    await final(db, acc, task.id, 1.3)
+    assert await budget_steers(db, task.id) == [(1, "system:budget")]
+    assert (await figures(db, task.id)).known_cost_usd == pytest.approx(1.3)
+    other = await create(db, budget_usd=1, max_attempts=3)
+    await _release(db, task.id)
+    await lease(db, await claim(db))
+    await provisional(db, acc, other.id, 1, 1.5, run="r1:o:run-a")
+    await _release(db, other.id)
+    async with db.read() as conn:
+        got = await tasks.get_task(conn, other.id)
+    assert (got.state, got.block_reason) == ("blocked", "budget_exhausted")
 
 
 # -- no new attempt over budget (3.6) ------------------------------------------------
@@ -441,6 +667,8 @@ def test_rest_and_mcp_read_with_the_task_scope(client: TestClient) -> None:
         "task_id",
         "pricing",
         "totals",
+        "provisional",
+        "known_cost_usd",
         "partial",
         "by_attempt",
         "budget_usd",
@@ -498,6 +726,24 @@ def test_over_budget_over_rest_blocks_and_the_inbox_offers_a_raise(
         headers=worker,
     )
     assert lease.status_code == 200, lease.text
+    running = client.post(
+        f"/api/accounts/{acc}/usage/provisional",
+        json={
+            "task_id": task["id"],
+            "attempt": claimed["attempt"],
+            "run_key": "r1:t:run",
+            "revision": 1,
+            "input_tokens": DOLLAR // 2,
+            "output_tokens": 0,
+            "cached_input_tokens": 0,
+            "model": OPUS,
+        },
+        headers=worker,
+    )
+    assert running.status_code == 204, running.text
+    cost = client.get(f"/api/tasks/{task['id']}/cost", headers=worker).json()
+    assert cost["provisional"]["in_flight_runs"] == 1
+    assert cost["known_cost_usd"] == pytest.approx(0.5)
     usage_report = client.post(
         f"/api/accounts/{acc}/usage",
         json={

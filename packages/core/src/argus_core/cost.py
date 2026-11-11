@@ -77,18 +77,40 @@ BudgetState = Literal[
 ]
 
 
+class ProvisionalCost(BaseModel):
+    """Running executor spend not yet replaced by its run's final row (task cost
+    spec 3.8): a known lower bound. In flight while its attempt is the claimed one;
+    interrupted when the run ended with no measured final row."""
+
+    runs: int
+    in_flight_runs: int
+    interrupted_runs: int
+    input_tokens: int
+    output_tokens: int
+    cached_input_tokens: int
+    estimated_cost_usd: float | None  # null: no run's model is priced
+    unpriced_runs: int
+
+
 class AttemptCost(CostFigures):
     attempt: int
-    models: list[str]  # distinct models of the attempt's rows, "(no model)" if unnamed
+    # Distinct models of the attempt's rows, provisional ones included; "(no model)"
+    # if unnamed.
+    models: list[str]
+    provisional: ProvisionalCost | None = None
 
 
 class TaskCost(BaseModel):
     """What one task spent, in total and per attempt (task cost spec 3.2). Rows
-    with no attempt count only in `totals`."""
+    with no attempt count only in `totals`. `partial` also covers interrupted
+    provisional runs."""
 
     task_id: str
     pricing: PricingInfo
-    totals: CostFigures
+    totals: CostFigures  # final usage rows only
+    provisional: ProvisionalCost | None = None
+    # The budget's figure: the final estimate plus the provisional one (3.8).
+    known_cost_usd: float | None = None
     partial: bool
     by_attempt: list[AttemptCost]
     budget_usd: float | None

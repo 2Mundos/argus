@@ -30,6 +30,7 @@ from argus_core.accounts import (
     LocalDetection,
     LocalTestRequest,
     LocalTestResult,
+    ProvisionalUsageReport,
     QuotaRefresh,
     UsageReport,
     UsageSeries,
@@ -687,6 +688,14 @@ async def report_usage(
 ) -> None:
     async with db.write() as tx:
         await service.record_usage(tx, account_id, agent_id, body)
+
+
+@router.post("/{account_id}/usage/provisional", status_code=status.HTTP_204_NO_CONTENT)
+async def report_provisional_usage(
+    account_id: str, body: ProvisionalUsageReport, db: DbDep, agent_id: AgentDep
+) -> None:
+    async with db.write() as tx:
+        await service.record_provisional_usage(tx, account_id, agent_id, body)
 
 
 @router.put("/{account_id}/credential", status_code=status.HTTP_204_NO_CONTENT)

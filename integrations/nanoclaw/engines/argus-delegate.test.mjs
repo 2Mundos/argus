@@ -1065,6 +1065,49 @@ test("usage: the report carries parsed usage and a run_key, and a spool file is 
   assert.deepEqual(JSON.parse(fs.readFileSync(report.report_file, "utf8")).usage, report.usage);
 });
 
+test("usage: a claude stream writes a provisional record under the final row's run_key", async (t) => {
+  const s = usageSandbox(t);
+  const result = JSON.parse(fs.readFileSync(path.join(s.dir, "claude-result.json"), "utf8"));
+  fs.writeFileSync(
+    path.join(s.dir, "claude-result.json"),
+    fs.readFileSync(new URL("./fixtures/claude-stream-inflight.jsonl", import.meta.url), "utf8") +
+      `${JSON.stringify(result)}\n`,
+  );
+  const { code, report } = await run(["claude", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 0);
+  const [record, ...rest] = fs
+    .readFileSync(path.join(s.dir, "argus-usage-provisional.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.equal(rest.length, 0); // the run ended before the first poll: one record at exit
+  assert.deepEqual(record, {
+    v: 1,
+    kind: "usage_provisional",
+    task_id: "t1",
+    attempt: 1,
+    account_id: "acc-9",
+    run_key: report.run_key,
+    engine: "claude",
+    revision: 1,
+    model: "claude-opus-5-5",
+    input_tokens: 47026,
+    output_tokens: 90,
+    cached_input_tokens: 216541,
+  });
+  assert.equal(report.usage.measurement, "measured"); // the final row that replaces it
+});
+
+test("usage: no executor account, no provisional record", async (t) => {
+  const s = usageSandbox(t, { task_id: "t1", attempt: 1 });
+  fs.writeFileSync(
+    path.join(s.dir, "claude-result.json"),
+    fs.readFileSync(new URL("./fixtures/claude-stream-inflight.jsonl", import.meta.url)),
+  );
+  await run(["claude", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(fs.existsSync(path.join(s.dir, "argus-usage-provisional.jsonl")), false);
+});
+
 test("usage: POSTs to the executor account with the bearer token only in the header", async (t) => {
   const s = usageSandbox(t);
   const api = await usageServer(t);

@@ -29,6 +29,7 @@ const mock = vi.hoisted(() => ({
       reported_cost_usd: null,
       unpriced_runs: 0,
     },
+    known_cost_usd: 1.7,
     by_attempt: [],
   },
 }));

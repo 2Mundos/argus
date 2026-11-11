@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-05
+updated: 2026-11-11
 ---
 
 # Cost view
@@ -50,6 +50,9 @@ task that produced the run) and a cross-account **window** with a daily series.
   is computed from tokens and the price table (3.2). They are separate
   fields and the UI shows the estimate, labelled, with the reported figure
   beside it when present.
+- Only usage rows count. A running executor's provisional record ([task
+  cost](task-cost.spec.md) 3.8) is shown per task, never in these groups: the
+  run's final row replaces it.
 
 ## 3.2 Price table
 
