@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -13,6 +21,7 @@ const ENV = {
 };
 const API = "/api/v1/repos/team/project";
 const HEAD = "a".repeat(40);
+const NEW = "b".repeat(40);
 const T0 = Date.parse("2026-11-02T10:00:00Z");
 const iso = (s) => new Date(T0 + s * 1000).toISOString();
 
@@ -225,7 +234,7 @@ describe("wait ci", () => {
     assert.equal(r.out.state, "failure");
     assert.deepEqual(r.out.failed, ["test"]);
     assert.equal(r.elapsed, 60); // checks at 0, 30 and 60 s
-    assert.deepEqual(during, { on: "ci", ref: "#7", since: iso(0) });
+    assert.deepEqual(during, { on: "ci", ref: "#7", since: iso(0), sha: HEAD });
     assert.equal(existsSync(join(signals(r.cwd), "waiting.json")), false);
   });
 
@@ -249,6 +258,28 @@ describe("wait ci", () => {
     assert.equal(JSON.parse(readFileSync(file, "utf8")).since, iso(-300));
   });
 
+  it("keeps a stored sha while the PR head is still it, and says so when it rebinds", async () => {
+    const routes = {
+      "GET /pulls/7": pr(),
+      [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "pending" }],
+      [`GET /statuses/${NEW}`]: [{ id: 1, context: "test", status: "pending" }],
+    };
+    const cwd = repo();
+    mkdirSync(signals(cwd), { recursive: true });
+    const file = join(signals(cwd), "waiting.json");
+    const stored = (sha) =>
+      writeFileSync(file, JSON.stringify({ on: "ci", ref: "#7", since: iso(-60), sha }));
+    stored(HEAD);
+    const same = await run(["wait", "ci", "--pr", "7", "--max", "10"], { routes, cwd });
+    assert.equal(same.out.watched_sha, HEAD);
+    assert.equal(same.out.rebound_from, undefined);
+    stored(NEW);
+    const moved = await run(["wait", "ci", "--pr", "7", "--max", "10"], { routes, cwd });
+    assert.deepEqual([moved.out.watched_sha, moved.out.rebound_from], [HEAD, NEW]);
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    assert.deepEqual([saved.sha, saved.since], [HEAD, iso(-60)]);
+  });
+
   it("ends at once on a steer written after it started, not on an older one", async () => {
     const routes = {
       "GET /pulls/7": pr(),
@@ -270,6 +301,112 @@ describe("wait ci", () => {
     assert.equal(r.elapsed, 5);
     assert.equal(existsSync(join(signals(cwd), "waiting.json")), false);
     assert.equal(existsSync(marker), true); // the host owns the marker
+  });
+});
+
+describe("wait ci pins one commit", () => {
+  const X = HEAD;
+  const failedX = [{ id: 1, context: "lint", status: "failure" }];
+  const pendingY = [{ id: 2, context: "test", status: "pending" }];
+  const prAt = (sha) => pr({ head: { sha, ref: "feature" } });
+
+  // The first check sees head X with a failure and a running check; then Y is pushed and pending.
+  it("does not finish on the checks of a previous head", async () => {
+    let heads = 0;
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "100"], {
+      routes: {
+        "GET /pulls/7": () => prAt(++heads === 1 ? X : NEW),
+        [`GET /statuses/${X}`]: () => [...failedX, ...(heads < 3 ? pendingY : [])],
+        [`GET /statuses/${NEW}`]: pendingY,
+      },
+    });
+    // X finishes at the third check, but by then the PR head is Y: never done.
+    assert.equal(r.code, EXIT.pending);
+    assert.deepEqual([r.out.watched_sha, r.out.pr_head_sha, r.out.head_matches], [X, NEW, false]);
+    assert.deepEqual(r.out.failed, ["lint"]);
+  });
+
+  it("never returns done while the PR head is not the watched commit", async () => {
+    const routes = {
+      "GET /pulls/7": prAt(X),
+      [`GET /statuses/${NEW}`]: [{ id: 1, context: "test", status: "success" }],
+      [`GET /statuses/${X}`]: failedX,
+    };
+    const explicit = await run(["wait", "ci", "--pr", "7", "--sha", NEW, "--max", "100"], {
+      routes,
+    });
+    assert.equal(explicit.code, EXIT.pending);
+    assert.equal(explicit.elapsed, 100);
+    assert.equal(explicit.out.head_matches, false);
+    assert.equal(
+      explicit.out.status,
+      `PR head ${X.slice(0, 7)} is not the watched ${NEW.slice(0, 7)}`,
+    );
+    assert.equal(explicit.out.watched_sha, NEW);
+    assert.equal(explicit.out.pr_head_sha, X);
+  });
+
+  it("binds an omitted sha once, at the first observation", async () => {
+    let heads = 0;
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "100"], {
+      routes: {
+        "GET /pulls/7": () => prAt(++heads === 1 ? X : NEW),
+        [`GET /statuses/${X}`]: pendingY,
+        [`GET /statuses/${NEW}`]: [{ id: 3, context: "test", status: "success" }],
+      },
+    });
+    assert.equal(r.code, EXIT.pending); // X stays pending and Y is never adopted
+    assert.deepEqual(
+      [r.out.watched_sha, r.out.pr_head_sha, r.out.head_matches, r.out.state],
+      [X, NEW, false, "pending"],
+    );
+    assert.equal(r.calls.filter((c) => c === `GET /statuses/${NEW}`).length, 0);
+  });
+
+  it("compares an explicit sha with the current head and keeps it", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--sha", X.toUpperCase()], {
+      routes: { "GET /pulls/7": prAt(X), [`GET /statuses/${X}`]: failedX },
+    });
+    assert.equal(r.code, EXIT.ok);
+    assert.deepEqual([r.out.watched_sha, r.out.pr_head_sha, r.out.head_matches], [X, X, true]);
+    assert.equal((await run(["wait", "ci", "--pr", "7", "--sha", "zz"])).code, EXIT.usage);
+  });
+
+  for (const [state, statuses, extra] of [
+    ["pending", pendingY, { code: EXIT.pending }],
+    ["failure", [...failedX, { id: 4, context: "agentic-review", status: "failure" }], {}],
+    ["success", [{ id: 5, context: "test", status: "success" }], {}],
+  ])
+    it(`reports state ${state} for the watched commit only`, async () => {
+      const r = await run(["wait", "ci", "--pr", "7", "--max", "10"], {
+        routes: {
+          "GET /pulls/7": prAt(X),
+          [`GET /statuses/${X}`]: statuses,
+          [`GET /statuses/${NEW}`]: [{ id: 9, context: "other", status: "failure" }],
+        },
+      });
+      assert.equal(r.code, extra.code ?? EXIT.ok);
+      assert.equal(r.out.state, state);
+      assert.deepEqual(r.out.failed, state === "failure" ? ["lint"] : []);
+    });
+
+  it("survives a waiting file it cannot write, and never writes through a symlink", async () => {
+    const routes = { "GET /pulls/7": prAt(X), [`GET /statuses/${X}`]: failedX };
+    const blocked = repo();
+    mkdirSync(join(signals(blocked), "waiting.json"), { recursive: true }); // rename onto a directory fails
+    const a = await run(["wait", "ci", "--pr", "7"], { routes, cwd: blocked });
+    assert.equal(a.code, EXIT.ok, a.err);
+    const linked = repo();
+    mkdirSync(signals(linked), { recursive: true });
+    const outside = join(scratch, "outside.json");
+    writeFileSync(outside, "untouched");
+    symlinkSync(outside, join(signals(linked), "waiting.json"));
+    const b = await run(["wait", "ci", "--pr", "7", "--max", "10"], {
+      routes: { ...routes, [`GET /statuses/${X}`]: pendingY },
+      cwd: linked,
+    });
+    assert.equal(b.code, EXIT.pending, b.err);
+    assert.equal(readFileSync(outside, "utf8"), "untouched");
   });
 });
 

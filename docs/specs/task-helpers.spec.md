@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-02
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # Task helpers (`argus-task`)
@@ -85,10 +85,19 @@ argus-task wait review --pr N [--since CURSOR]
     [--interval SECONDS] [--max SECONDS]
 ```
 
-- `ci` returns when no check on the head SHA (or `--sha`) is pending, including
-  after one has already failed, so one result covers the whole run. The JSON carries the
-  overall `state` and the failed checks' names; a pending result says how many failed so
-  far. Each check's state is normalized and anything unrecognized, missing or malformed
+- `ci` watches one commit for the whole call: `--sha` as given, else the PR head read once
+  at the first observation, never re-read to retarget. A re-call for the same `on` and
+  `ref` without `--sha` reuses the sha stored in `waiting.json` (3.4) while it still is
+  the PR head; if the head moved on, the new first observation is bound and the result
+  says `rebound_from: <old sha>`. Every check reads the PR head afresh and returns
+  `watched_sha`, `pr_head_sha` and `head_matches` (the head equals the watched sha; an
+  abbreviated `--sha` matches by prefix). It returns when no check on the watched commit is
+  pending, including after one has already failed, so one result covers the whole run,
+  and only while `head_matches` is true. If the head is another commit the wait keeps
+  going, bounded like any wait, with the status "PR head abc1234 is not the watched
+  def5678"; it is never done on a commit the PR no longer points at. The JSON carries the
+  overall `state` and the names of the failed checks of the watched commit only (not other
+  commits' contexts); a pending result says how many failed so far. Each check's state is normalized and anything unrecognized, missing or malformed
   (a Gitea `warning`, a status without a state) is `unknown`, never success. The overall
   `state` is the first that applies: `failure` (failure, error, cancelled, timed_out),
   `pending` (pending, queued, in_progress, waiting, requested, running), `unknown`,
@@ -128,9 +137,13 @@ with `git rev-parse --absolute-git-dir`, and outside a repository it runs withou
   marker's `at` is later than the moment that wait started. The marker is never deleted:
   a later steer overwrites it, and an older one does not interrupt a new wait.
 - **`waiting.json`** (helper → host). `wait` writes `{on: "ci"|"review", ref, since}` when
-  it starts and removes it when it returns, except on exit 10, where it stays for the
-  re-call. A re-call for the same `on` and `ref` keeps `since`, so the dashboard timer and
-  the review cursor survive the cap. On each heartbeat the host posts a present record as
+  it starts, adding `sha` (the watched commit, 7-64 hex) once a `ci` wait has one. It
+  removes the file on every terminal result (done, steer, error), so no stale wait
+  remains; on exit 10 (the cap) it stays for the re-call. A re-call for the same `on` and
+  `ref` keeps `since` and `sha` (3.3), so the dashboard timer and the review cursor
+  survive the cap. The helper never reads or writes through a symlink there, and the file
+  is best effort: a failed write is skipped, the wait carries on and returns the same
+  result, only the milestone is lost. On each heartbeat the host posts a present record as
   a `waiting` milestone (3.7) when it changed, and again every 5 minutes while it lasts, so
   a long wait never reaches the 20-minute quiet flag. A file not modified for 15 minutes is
   stale and ignored.
@@ -215,9 +228,10 @@ aborted; if the abort fails, that is the error.
 
 | `kind` | `data` |
 | --- | --- |
-| `waiting` | `on` (`ci` or `review`), `ref` (string, at most 200 characters), `since` (ISO time) |
+| `waiting` | `on` (`ci` or `review`), `ref` (string, at most 200 characters), `since` (ISO time), `sha` (optional, the watched commit of a `ci` wait) |
 
-The dashboard renders it as "Waiting on CI for #412 · 6 min" from `since`. The next
+The message names the watched commit: "Waiting on CI for #412 at abc1234" (a review wait has
+no commit). The dashboard renders it as "Waiting on CI for #412 · 6 min" from `since`. The next
 milestone or note with a kind replaces it, as for every other kind. A posted `waiting`
 milestone renews the quiet clock like any progress post.
 

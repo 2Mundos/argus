@@ -125,6 +125,8 @@ describe("readWaiting", () => {
     [{ ...record, ref: "x".repeat(201) }],
     [{ ...record, ref: "line\nbreak" }],
     [{ ...record, since: "soon" }],
+    [{ ...record, sha: "not-a-sha" }],
+    [{ ...record, sha: 42 }],
     [{ ...record, since: "2026-11-02T11:00:00Z" }],
     [[record]],
   ])("refuses %j", (raw) => {
@@ -135,6 +137,10 @@ describe("readWaiting", () => {
     expect(waitingMessage({ on: "review", ref: "#7", since: record.since })).toBe(
       "Waiting on review for #7",
     );
+    const sha = "ABCDEF1234567890".repeat(2) + "abcdef12";
+    const w = parseWaiting({ ...record, sha }, NOW)!;
+    expect(w.sha).toBe(sha.toLowerCase());
+    expect(waitingMessage(w)).toBe("Waiting on CI for #412 at abcdef1");
   });
 });
 
@@ -147,6 +153,7 @@ describe("createWaitingRelay", () => {
     expect(relay.due(w, NOW + 60_000)).toBe(false);
     expect(relay.due(w, NOW + 5 * 60_000)).toBe(true);
     expect(relay.due({ ...w, on: "review" }, NOW + 60_000)).toBe(true);
+    expect(relay.due({ ...w, sha: "abcdef1" }, NOW + 60_000)).toBe(true); // rebound to a new commit
     expect(relay.due(null, NOW + 60_000)).toBe(false);
     expect(relay.due(w, NOW + 61_000)).toBe(true); // a wait that ended and started again
   });
