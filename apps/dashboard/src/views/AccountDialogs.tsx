@@ -1,14 +1,21 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import {
   COPILOT_PROVIDER,
+  CUSTOM_PROVIDER_PATTERN,
   copilotTokenNotice,
   GITEA_PROVIDER,
   GITHUB_PROVIDER,
+  localBrokerNotice,
+  nativeAuthNotice,
+  PROVIDER_PICK_CUSTOM,
+  providerOptionsFromCatalog,
   validateCopilotToken,
+  validateProviderId,
   withoutSecret,
 } from "../accountProviders";
 import { type Account, api, call } from "../api";
+import { useLiveData } from "../live";
 import { parseTokenLimits, TOKEN_LIMIT_PERIODS } from "../usage";
 
 /** Edits registry fields only. The credential is never loaded, shown, or sent
@@ -388,6 +395,261 @@ export function ReplaceCredential({
           </button>
           <ActionButton type="submit" className="primary" pending={action.busy}>
             Replace credential
+          </ActionButton>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** Add-account form for any provider. `initialProvider` preselects one once the catalogue loads. */
+export function AddAccountForm({
+  initialProvider,
+  onClose,
+  onDone = onClose,
+}: {
+  initialProvider?: string;
+  onClose: () => void;
+  onDone?: () => void;
+}) {
+  const {
+    data: catalog,
+    error: catalogError,
+    reload: reloadCatalog,
+  } = useLiveData((signal) => call(api.GET("/api/engines", { signal })), []);
+  const providerOptions = catalog ? providerOptionsFromCatalog(catalog) : [];
+  const [providerPick, setProviderPick] = useState("");
+  const [customProvider, setCustomProvider] = useState("");
+  const [form, setForm] = useState({
+    name: "",
+    kind: "api_key" as "api_key" | "subscription",
+    priority: 0,
+    maxLeases: "",
+    credential: '{\n  "api_key": ""\n}',
+    repoUsername: "",
+    repoToken: "",
+  });
+  const [error, setError] = useState<string>();
+  const action = useAction();
+  const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
+
+  useEffect(() => {
+    if (providerPick || providerOptions.length === 0) return;
+    const wanted = providerOptions.find((o) => o.id === initialProvider) ?? providerOptions[0];
+    if (wanted) setProviderPick(wanted.id);
+  }, [providerOptions, providerPick, initialProvider]);
+
+  const resolvedProvider =
+    providerPick === PROVIDER_PICK_CUSTOM ? customProvider.trim() : providerPick;
+  const authNotice = nativeAuthNotice(resolvedProvider);
+  const isGitea = resolvedProvider === GITEA_PROVIDER;
+  const isGithub = resolvedProvider === GITHUB_PROVIDER;
+  const isCopilot = resolvedProvider === COPILOT_PROVIDER;
+  const kind = isCopilot ? "subscription" : form.kind;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(undefined);
+    if (catalogError) {
+      setError("Provider catalogue is unavailable. Retry loading or use a custom id.");
+      return;
+    }
+    const providerErr = validateProviderId(resolvedProvider);
+    if (providerErr) {
+      setError(providerErr);
+      return;
+    }
+    let credential: Record<string, unknown>;
+    if (isCopilot) {
+      const hint = validateCopilotToken(form.repoToken);
+      if (hint) {
+        setError(hint);
+        return;
+      }
+      credential = { token: form.repoToken.trim() };
+    } else if (isGitea) {
+      credential = { username: form.repoUsername.trim(), token: form.repoToken };
+    } else if (isGithub) {
+      credential = { token: form.repoToken };
+    } else {
+      try {
+        credential = JSON.parse(form.credential);
+      } catch {
+        setError("The credential must be a JSON object.");
+        return;
+      }
+    }
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/accounts", {
+            body: {
+              name: form.name,
+              provider: resolvedProvider,
+              kind,
+              priority: form.priority,
+              max_leases: form.maxLeases ? Number(form.maxLeases) : null,
+              credential,
+            },
+          }),
+        );
+        set("repoToken", "");
+        onDone();
+      } catch (err) {
+        setError(withoutSecret((err as Error).message, form.repoToken));
+        set("repoToken", "");
+      }
+    });
+  }
+
+  return (
+    <div className="overlay">
+      <form className={`dialog${isCopilot ? " copilot-import" : ""}`} onSubmit={submit}>
+        <h2>Add account</h2>
+        <p className="muted small">{localBrokerNotice()}</p>
+        {catalogError && (
+          <p className="error">
+            Could not load provider catalogue: {catalogError.message}
+            <button type="button" className="link" onClick={() => reloadCatalog()}>
+              Retry
+            </button>
+          </p>
+        )}
+        <div className="row">
+          <label>
+            Name
+            <input value={form.name} onChange={(e) => set("name", e.target.value)} required />
+          </label>
+          <label>
+            Provider
+            <select
+              aria-label="Provider"
+              value={providerPick}
+              onChange={(e) => setProviderPick(e.target.value)}
+              disabled={providerOptions.length === 0 && !catalogError}
+            >
+              {providerOptions.length === 0 && !catalogError && (
+                <option value="">Loading catalogue…</option>
+              )}
+              {providerOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+              <option value={PROVIDER_PICK_CUSTOM}>Other (custom id)…</option>
+            </select>
+          </label>
+          {providerPick === PROVIDER_PICK_CUSTOM && (
+            <label>
+              Custom provider id
+              <input
+                aria-label="Custom provider id"
+                value={customProvider}
+                onChange={(e) => setCustomProvider(e.target.value)}
+                pattern={CUSTOM_PROVIDER_PATTERN}
+                maxLength={50}
+                required
+              />
+            </label>
+          )}
+          <label>
+            Kind
+            <select
+              value={kind}
+              disabled={isCopilot}
+              onChange={(e) => set("kind", e.target.value as typeof form.kind)}
+            >
+              <option value="api_key">API key</option>
+              <option value="subscription">subscription</option>
+            </select>
+          </label>
+        </div>
+        <div className="row">
+          <label>
+            Priority (higher first)
+            <input
+              type="number"
+              value={form.priority}
+              onChange={(e) => set("priority", Number(e.target.value))}
+            />
+          </label>
+          <label>
+            Max concurrent leases (empty: unlimited)
+            <input
+              type="number"
+              min={1}
+              value={form.maxLeases}
+              onChange={(e) => set("maxLeases", e.target.value)}
+            />
+          </label>
+        </div>
+        {authNotice && <p className="small muted">{authNotice}</p>}
+        {resolvedProvider === "cursor" && (
+          <p className="small muted">
+            Argus sees a Cursor pool as exhausted only when Cursor refuses work. With on-demand
+            spending enabled, Cursor bills instead, so set a spend limit of $0 in Cursor if Argus
+            should see exhaustion.
+          </p>
+        )}
+        {isCopilot ? (
+          <label>
+            Copilot token (stored encrypted, never shown again)
+            <input
+              type="password"
+              aria-label="Copilot token"
+              value={form.repoToken}
+              onChange={(e) => set("repoToken", e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              required
+            />
+          </label>
+        ) : isGitea || isGithub ? (
+          <div className="row">
+            {isGitea && (
+              <label>
+                Gitea username
+                <input
+                  aria-label="Gitea username"
+                  value={form.repoUsername}
+                  onChange={(e) => set("repoUsername", e.target.value)}
+                  autoComplete="off"
+                  required
+                />
+              </label>
+            )}
+            <label>
+              {isGitea ? "Gitea" : "GitHub"} token (stored encrypted, never shown again)
+              <input
+                type="password"
+                aria-label={isGitea ? "Gitea token" : "GitHub token"}
+                value={form.repoToken}
+                onChange={(e) => set("repoToken", e.target.value)}
+                autoComplete="off"
+                required
+              />
+            </label>
+          </div>
+        ) : (
+          <label>
+            Credential (JSON; stored encrypted, never shown again)
+            <textarea
+              rows={5}
+              value={form.credential}
+              onChange={(e) => set("credential", e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </label>
+        )}
+        {error && <p className="error">{error}</p>}
+        <div className="actions">
+          <button type="button" disabled={action.busy} onClick={onClose}>
+            Cancel
+          </button>
+          <ActionButton type="submit" className="primary" pending={action.busy}>
+            Add
           </ActionButton>
         </div>
       </form>

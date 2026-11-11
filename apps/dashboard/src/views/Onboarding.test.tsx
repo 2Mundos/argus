@@ -29,6 +29,7 @@ const mock = vi.hoisted(() => ({
   } as OnboardingStatus,
   catalog: undefined as unknown as TemplateCatalog,
   reads: [] as string[],
+  posts: [] as Record<string, unknown>[],
   put: vi.fn(async () => ({ key: "onboarding.dismissed", value: true, source: "global" })),
 }));
 
@@ -36,9 +37,15 @@ vi.mock("../api", () => ({
   api: {
     GET: (path: string) => path,
     PUT: () => "/api/settings/{key}",
+    POST: (_: string, init: { body: Record<string, unknown> }) => ({ post: init.body }),
   },
-  call: async (path: string) => {
+  call: async (path: string | { post: Record<string, unknown> }) => {
+    if (typeof path !== "string") {
+      mock.posts.push(path.post);
+      return {};
+    }
     mock.reads.push(path);
+    if (path === "/api/engines") return { engines: [], local: null };
     if (path === "/api/onboarding") return { ...mock.status };
     if (path === "/api/settings/{key}") return mock.put();
     if (path === "/api/fleet/templates") {
@@ -89,6 +96,7 @@ vi.mock("./GuidedWorker", () => ({
 afterEach(() => {
   cleanup();
   mock.put.mockClear();
+  mock.posts = [];
 });
 
 beforeEach(() => {
@@ -239,5 +247,39 @@ describe("OnboardingWizard", () => {
     expect(screen.getByText(NO_BUILTIN_ACCOUNT)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /step 1/ }));
     expect(await screen.findByRole("button", { name: "Add local model" })).toBeTruthy();
+  });
+
+  it("offers Copilot as executor-only: it imports as a subscription and never completes step 1", async () => {
+    render(<OnboardingWizard open onClose={() => {}} />);
+    await screen.findByRole("dialog", { name: "Set up Argus" });
+    expect(screen.getByText(/Copilot account is executor-only/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add Copilot account" }));
+    const provider = (await screen.findByLabelText("Provider")) as HTMLSelectElement;
+    await waitFor(() => expect(provider.value).toBe("copilot"));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "seat" } });
+    const token = screen.getByLabelText("Copilot token");
+    fireEvent.change(token, { target: { value: "ghp_classicsecret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText(/are not accepted/)).toBeTruthy();
+    expect(mock.posts).toEqual([]);
+    fireEvent.change(token, { target: { value: "github_pat_abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.queryByLabelText("Provider")).toBeNull());
+    expect(mock.posts).toMatchObject([
+      { provider: "copilot", kind: "subscription", credential: { token: "github_pat_abc" } },
+    ]);
+    // The server still reports account=false: step 1 stays current and not done.
+    const tab = screen.getByRole("button", { name: /Add an account/ });
+    expect(tab.getAttribute("aria-current")).toBe("step");
+    expect(tab.textContent).not.toContain("✓");
+    expect(screen.getByRole("button", { name: "Add Copilot account" })).toBeTruthy();
+  });
+
+  it("hides the Copilot button once the account step is done", async () => {
+    mock.status = { account: true, worker: false, orchestrator: false, dismissed: false };
+    render(<OnboardingWizard open initialStep={1} onClose={() => {}} />);
+    await screen.findByText("guided worker form");
+    fireEvent.click(screen.getByRole("button", { name: /Add an account/ }));
+    expect(screen.queryByRole("button", { name: "Add Copilot account" })).toBeNull();
   });
 });
