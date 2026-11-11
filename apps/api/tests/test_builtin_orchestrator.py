@@ -46,7 +46,7 @@ OFFERED = frozenset(
         "get_decision", "get_fleet_capabilities", "get_fleet_yield", "get_inbox",
         "get_instance", "get_instance_logs", "get_knowledge_page",
         "get_model_policy", "get_project_repository", "get_project_runtime",
-        "get_routine", "get_settings", "get_task", "get_task_changes", "get_task_cost",
+        "get_routine", "get_settings", "get_task", "get_task_changes", "get_task_cost", "get_task_graph",
         "get_task_continuation", "get_task_delivery", "get_task_draft", "get_task_route",
         "get_task_log", "get_task_models", "get_task_prerequisites", "get_tasks",
         "get_workspace_cleanup", "inspect_pool", "list_accounts", "list_agents",

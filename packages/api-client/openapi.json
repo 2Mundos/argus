@@ -10171,6 +10171,81 @@
         "title": "GapView",
         "type": "object"
       },
+      "GraphEdge": {
+        "properties": {
+          "from": {
+            "title": "From",
+            "type": "string"
+          },
+          "to": {
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "GraphEdge",
+        "type": "object"
+      },
+      "GraphNode": {
+        "properties": {
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "failed_dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Dependencies",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state",
+          "kind",
+          "priority",
+          "block_reason",
+          "failed_dependencies",
+          "project"
+        ],
+        "title": "GraphNode",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -22730,6 +22805,35 @@
         "title": "TaskEdit",
         "type": "object"
       },
+      "TaskGraph": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges",
+          "truncated"
+        ],
+        "title": "TaskGraph",
+        "type": "object"
+      },
       "TaskInput": {
         "description": "A shared attachment as an input: the artifact's authoritative metadata.",
         "properties": {
@@ -32644,6 +32748,64 @@
         "summary": "Project Stats",
         "tags": [
           "knowledge"
+        ]
+      }
+    },
+    "/api/projects/{name}/task-graph": {
+      "get": {
+        "description": "The project's tasks as nodes and dependencies as edges (`from` is the\ndependency, `to` the task waiting for it), read in one snapshot, at most 500\nnodes, newest first with their dependencies; `truncated` says some were left\nout. Archived tasks and tasks `succeeded` over 7 days ago with no unfinished\ndependent are left out unless `include_done=true`. A dependency in another\nproject is a stub node. Workers only see tasks they have leased.",
+        "operationId": "get_task_graph_api_projects__name__task_graph_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_done",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Done",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskGraph"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Task Graph",
+        "tags": [
+          "tasks"
         ]
       }
     },

@@ -473,6 +473,23 @@ async def get_tasks(
     )
 
 
+@tool(MANAGERS)
+async def get_task_graph(
+    ctx: Context, project: str, include_done: bool = False
+) -> dict:
+    """A project's task graph in one snapshot: `nodes` (id, title, state, kind,
+    priority, block_reason, failed_dependencies) and `edges` ({from, to}: `to`
+    waits for `from`), at most 500 nodes newest first with their dependencies;
+    `truncated` says some were left out. Archived and long-succeeded tasks are
+    left out unless include_done=true."""
+    return await _call(
+        ctx,
+        "GET",
+        f"/projects/{project}/task-graph",
+        params={"include_done": include_done or None},
+    )
+
+
 @tool(ANYONE)
 async def list_artifacts(
     ctx: Context,

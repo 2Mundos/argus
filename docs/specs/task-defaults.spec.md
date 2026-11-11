@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-06
-updated: 2026-11-07
+updated: 2026-11-11
 ---
 
 # Task defaults
@@ -173,6 +173,7 @@ two writes. The per-key `source` of the stored values stays in `GET
 - **Projects** is a project workspace. `#projects` lists the projects, each name
   linking to `#projects/<slug>`; a project page has a project selector and the tabs
   **Overview** (repository, its editing and remediation, task counts, Git author)
+  **Graph** (`#projects/<slug>/graph`, the read-only [task graph](task-graph.spec.md))
   and **Task defaults** (`#projects/<slug>/task-defaults`), plus a link to the
   project's other settings. The selection lives in the URL, so reload and shared
   links keep it. Runtime images have no dashboard page

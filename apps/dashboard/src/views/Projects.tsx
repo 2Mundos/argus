@@ -6,6 +6,7 @@ import { PageHeader } from "../PageHeader";
 import { fetchSettings } from "../settings";
 import { useHash } from "../unsaved";
 import { GitIdentityEditor } from "./GitIdentityEditor";
+import { ProjectGraph } from "./ProjectGraph";
 import { ProjectRepositoryDialog } from "./ProjectRepositoryDialog";
 import { settingsHash } from "./Settings";
 import { TaskDefaultsEditor } from "./TaskDefaultsEditor";
@@ -40,7 +41,11 @@ export function taskCounts(tasks: Record<string, number>): [string, number][] {
   return [...known, ...extra];
 }
 
-const SECTIONS = { overview: "Overview", "task-defaults": "Task defaults" } as const;
+const SECTIONS = {
+  overview: "Overview",
+  graph: "Graph",
+  "task-defaults": "Task defaults",
+} as const;
 type Section = keyof typeof SECTIONS;
 
 /** `#projects` lists every project; `#projects/<slug>[/<section>]` opens one. */
@@ -182,6 +187,10 @@ export function Projects() {
             {route.section === "task-defaults" ? (
               <div className="card">
                 <TaskDefaultsEditor key={selected.slug} project={selected.slug} />
+              </div>
+            ) : route.section === "graph" ? (
+              <div className="card">
+                <ProjectGraph key={selected.slug} project={selected.slug} />
               </div>
             ) : (
               cardFor(selected)
