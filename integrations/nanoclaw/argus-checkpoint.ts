@@ -3,8 +3,9 @@
  * the unpublished work of its task workspace (local commits, staged, unstaged and
  * untracked files) is written to a node-local store, hash-verified; the next attempt
  * restores it into its own instance before any model starts, or the task is blocked
- * with a typed reason. Nothing here deletes or overwrites existing work, touches the
- * network or handles a credential. The store is on one node: a checkpoint carries its
+ * with a typed reason; a checkpoint a published commit provably covers is superseded.
+ * Nothing here deletes or overwrites unpublished work, touches the network or handles
+ * a credential. The store is on one node: a checkpoint carries its
  * node id and is refused anywhere else.
  */
 import { execFile } from "node:child_process";
@@ -902,20 +903,7 @@ export async function restoreTaskWorkspace(opts: RestoreOpts): Promise<RestoreRe
 
     tmp = path.join(realRoot, `.tmp-restore-${taskId}-${randomBytes(4).toString("hex")}`);
     await mkdir(tmp, { mode: 0o700 });
-    const g = (args: string[]) => git(args, tmp as string, realRoot);
-    await git(["init", "-q", "--template=", tmp], realRoot, realRoot);
-    await g(["symbolic-ref", "HEAD", `refs/heads/${m.branch}`]);
-    await g(["remote", "add", "origin", repositoryUrl]);
-    if (m.head) {
-      await g(["fetch", "-q", "--update-head-ok", path.join(cdir, "work.bundle"), "refs/*:refs/*"]);
-      await g(["reset", "-q", "--hard", m.head]);
-      const got = await g(["rev-parse", "--verify", "HEAD"]);
-      if (got !== m.head)
-        throw new Failure("env_checkpoint_invalid", "the restored head differs from the manifest");
-    }
-    if (m.staged.length) await g(["apply", "--index", "--binary", path.join(cdir, "staged.patch")]);
-    if (m.unstaged.length) await g(["apply", "--binary", path.join(cdir, "unstaged.patch")]);
-    for (const u of m.untracked) await restoreUntracked(tmp, cdir, u);
+    await rebuild(tmp, realRoot, cdir, m, repositoryUrl, git);
     const after = await observe({ ws: tmp, ceiling: realRoot }, git);
     if (
       !matchesManifest(after, m, true) ||
@@ -950,6 +938,233 @@ export async function restoreTaskWorkspace(opts: RestoreOpts): Promise<RestoreRe
     if (tmp) await rm(tmp, { recursive: true, force: true });
     if (release) await release();
   }
+}
+
+/** Rebuild a checkpoint's repository in the empty directory `tmp`: its refs, index and tree. */
+async function rebuild(
+  tmp: string,
+  ceiling: string,
+  cdir: string,
+  m: CheckpointManifest,
+  repositoryUrl: string,
+  git: GitRunner,
+): Promise<void> {
+  const g = (args: string[]) => git(args, tmp, ceiling);
+  await git(["init", "-q", "--template=", tmp], ceiling, ceiling);
+  await g(["symbolic-ref", "HEAD", `refs/heads/${m.branch}`]);
+  await g(["remote", "add", "origin", repositoryUrl]);
+  if (m.head) {
+    await g(["fetch", "-q", "--update-head-ok", path.join(cdir, "work.bundle"), "refs/*:refs/*"]);
+    await g(["reset", "-q", "--hard", m.head]);
+    const got = await g(["rev-parse", "--verify", "HEAD"]);
+    if (got !== m.head)
+      throw new Failure("env_checkpoint_invalid", "the restored head differs from the manifest");
+  }
+  if (m.staged.length) await g(["apply", "--index", "--binary", path.join(cdir, "staged.patch")]);
+  if (m.unstaged.length) await g(["apply", "--binary", path.join(cdir, "unstaged.patch")]);
+  for (const u of m.untracked) await restoreUntracked(tmp, cdir, u);
+}
+
+/** The task's work as a host-side forge read reported it published: branch head `sha`. */
+export interface PublicationProof {
+  repositoryUrl: string;
+  taskId: string;
+  branch: string;
+  nodeId?: string;
+  sha: string;
+}
+
+export interface SupersedeOpts {
+  groupDir: string | null;
+  storeRoot: string | null;
+  taskId: string;
+  attempt: number;
+  repositoryUrl: string | null | undefined;
+  published: PublicationProof | null | undefined;
+  nodeId?: string;
+  git?: GitRunner;
+  now?: () => number;
+  leaseTtlMs?: number;
+}
+
+export type SupersedeResult =
+  | { ok: true; superseded: string[]; retained: Array<{ id: string; reason: string }> }
+  | CheckpointFailure;
+
+const OID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const TOMBSTONE = ".superseded-";
+
+/**
+ * Remove the task's checkpoints whose work the published commit provably holds, so a
+ * stale one no longer conflicts with the workspace after the work was pushed. Under the
+ * task's lease, the workspace must be clean, hold nothing unpublished and sit at the
+ * proof's commit; each checkpoint is then judged on its own: every ref in its bundle is
+ * an ancestor of that commit, and every staged, unstaged and untracked path has, in both
+ * its rebuilt index and tree, the published entry (mode and blob, or absence). Anything
+ * unverifiable or not covered is retained. Never touches the workspace or the network.
+ */
+export async function supersedeCheckpoints(opts: SupersedeOpts): Promise<SupersedeResult> {
+  const { groupDir, storeRoot, taskId, repositoryUrl, published } = opts;
+  const git = opts.git ?? defaultGit;
+  const now = opts.now ?? Date.now;
+  const nodeId = opts.nodeId ?? defaultNodeId();
+  if (!groupDir || !storeRoot || !repositoryUrl)
+    return fail(
+      "env_checkpoint_unavailable",
+      "the group directory, store or repository is not configured",
+    );
+  if (hasCredentials(repositoryUrl))
+    return fail("env_checkpoint_invalid", "the repository URL carries credentials");
+  if (!published) return fail("env_checkpoint_unavailable", "no publication proof");
+  let release: (() => Promise<void>) | null = null;
+  try {
+    if (
+      published.taskId !== taskId ||
+      published.repositoryUrl !== repositoryUrl ||
+      published.branch !== taskBranch(taskId) ||
+      (published.nodeId !== undefined && published.nodeId !== nodeId) ||
+      !OID.test(published.sha)
+    )
+      throw new Failure("env_checkpoint_invalid", "the publication proof is for another task");
+    const dir = await taskDir(storeRoot, taskId, false);
+    if (!dir) return { ok: true, superseded: [], retained: [] };
+    release = await acquireLease(
+      dir,
+      `supersede:${opts.attempt}`,
+      now,
+      opts.leaseTtlMs ?? LEASE_TTL_MS,
+    );
+    for (const e of await readdir(dir))
+      if (e.startsWith(TOMBSTONE)) await rm(path.join(dir, e), { recursive: true, force: true });
+    const ctx = await openWorkspace(groupDir, taskId, repositoryUrl, git);
+    if (!ctx) throw new Failure("env_checkpoint_unavailable", "the task has no workspace");
+    await assertInertGit(ctx, git);
+    const here = await observe(ctx, git);
+    if (
+      here.head !== published.sha ||
+      here.localCommits ||
+      here.staged.length ||
+      here.unstaged.length ||
+      here.untracked.length
+    )
+      throw new Failure(
+        "env_checkpoint_conflict",
+        "the workspace is not clean at the published commit; nothing was superseded",
+      );
+    const superseded: string[] = [];
+    const retained: Array<{ id: string; reason: string }> = [];
+    for (const id of (await completeIds(dir)).sort()) {
+      let why: string | null;
+      try {
+        const { manifest } = await loadVerified(dir, id, { taskId, repositoryUrl, nodeId });
+        why = await uncovered(ctx, dir, path.join(dir, id), manifest, published.sha, git);
+      } catch (err) {
+        const f = toFailure(err, "env_checkpoint_invalid");
+        why = `${f.reason}: ${f.error}`;
+      }
+      if (why) {
+        retained.push({ id, reason: why });
+        continue;
+      }
+      // Hidden by an atomic rename first: a crash before the removal leaves no checkpoint.
+      const tomb = path.join(dir, `${TOMBSTONE}${id}`);
+      await rename(path.join(dir, id), tomb);
+      await rm(tomb, { recursive: true, force: true });
+      superseded.push(id);
+    }
+    return { ok: true, superseded, retained };
+  } catch (err) {
+    return toFailure(err, "env_checkpoint_invalid");
+  } finally {
+    if (release) await release();
+  }
+}
+
+/** Null when the published commit holds all of the checkpoint's work, else why not. */
+async function uncovered(
+  ctx: WorkspaceCtx,
+  dir: string,
+  cdir: string,
+  m: CheckpointManifest,
+  sha: string,
+  git: GitRunner,
+): Promise<string | null> {
+  // Skipped sensitive files and nested repositories were never saved, so removing the
+  // checkpoint loses none of them: only what it holds is judged.
+  const w = (args: string[]) => git(args, ctx.ws, ctx.ceiling);
+  if (m.head) {
+    const heads = (await w(["bundle", "list-heads", path.join(cdir, "work.bundle")]))
+      .split("\n")
+      .filter(Boolean);
+    for (const line of heads) {
+      const [oid, ref] = line.split(" ", 2);
+      // Stash, other branches, anything not in the published history.
+      const ok = await w(["merge-base", "--is-ancestor", oid, sha]).then(
+        () => true,
+        () => false,
+      );
+      if (!ok) return `${ref ?? oid} is not in the published commit`;
+    }
+  }
+  const paths = [...new Set([...m.staged, ...m.unstaged, ...m.untracked.map((u) => u.path)])];
+  if (!paths.length) return null;
+  if (!paths.every(safeRel)) return "the manifest names an unsafe path";
+  const entries = (out: string, field: (rec: string) => [string, string] | null) =>
+    new Map(
+      z(out)
+        .map(field)
+        .filter((e): e is [string, string] => e !== null),
+    );
+  const literal = ["--literal-pathspecs"];
+  // `<mode> <type> <oid>\t<path>`
+  const published = entries(
+    await w([...literal, "ls-tree", "-r", "-z", "--full-tree", sha, "--", ...paths]),
+    (rec) => {
+      const tab = rec.indexOf("\t");
+      const [mode, , oid] = rec.slice(0, tab).split(" ");
+      return [rec.slice(tab + 1), `${mode} ${oid}`];
+    },
+  );
+  const scratch = await mkdtemp(path.join(dir, ".tmp-supersede-"));
+  try {
+    const repo = path.join(scratch, "repo");
+    await mkdir(repo, { mode: 0o700 });
+    await rebuild(repo, dir, cdir, m, m.repository_url, git);
+    // `<mode> <oid> <stage>\t<path>`
+    const index = entries(
+      m.staged.length
+        ? await git([...literal, "ls-files", "-s", "-z", "--", ...m.staged], repo, dir)
+        : "",
+      (rec) => {
+        const tab = rec.indexOf("\t");
+        const [mode, oid] = rec.slice(0, tab).split(" ");
+        return [rec.slice(tab + 1), `${mode} ${oid}`];
+      },
+    );
+    const algo = sha.length === 64 ? "sha256" : "sha1";
+    for (const p of paths) {
+      const want = published.get(p);
+      // A staged path's index is work too; an unstaged-only one indexes the bundled head.
+      if (m.staged.includes(p) && index.get(p) !== want)
+        return `the staged ${p} differs from the published commit`;
+      if ((await treeEntry(path.join(repo, p), algo)) !== want)
+        return `${p} differs from the published commit`;
+    }
+    return null;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+/** A path as git would record it, `<mode> <blob id>`; undefined when absent. */
+async function treeEntry(file: string, algo: "sha1" | "sha256"): Promise<string | undefined> {
+  const st = await lstat(file).catch(() => null);
+  if (!st) return undefined;
+  const blob = (body: Buffer) =>
+    createHash(algo).update(`blob ${body.length}\0`).update(body).digest("hex");
+  if (st.isSymbolicLink()) return `120000 ${blob(Buffer.from(await readlink(file)))}`;
+  if (!st.isFile()) return "other";
+  return `${st.mode & 0o100 ? "100755" : "100644"} ${blob(await readFile(file))}`; // as git does
 }
 
 async function localHeadsMatch(
