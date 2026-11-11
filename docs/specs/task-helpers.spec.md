@@ -233,7 +233,8 @@ aborted; if the abort fails, that is the error.
 The message names the watched commit: "Waiting on CI for #412 at abc1234" (a review wait has
 no commit). The dashboard renders it as "Waiting on CI for #412 · 6 min" from `since`. The next
 milestone or note with a kind replaces it, as for every other kind. A posted `waiting`
-milestone renews the quiet clock like any progress post.
+milestone renews the quiet clock like any progress post. The delegate's milestone relay
+file ([progress milestones](progress-milestones.spec.md) 3.3) never carries `waiting`.
 
 ## 3.8 Engines
 

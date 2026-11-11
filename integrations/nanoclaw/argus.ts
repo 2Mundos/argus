@@ -126,6 +126,7 @@ import {
   removeLocalHarnessFile,
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
+import { createMilestoneRelay, MILESTONE_RELAY_FILE } from "./argus-milestone-relay.js";
 import {
   claudeSessionReadable,
   decideQuotaResume,
@@ -2120,6 +2121,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let changesTimer: ReturnType<typeof setInterval> | null = null;
   let attachRelay: ReturnType<typeof createAttachRelay> | null = null;
   let attachTimer: ReturnType<typeof setInterval> | null = null;
+  let milestoneRelay: ReturnType<typeof createMilestoneRelay> | null = null;
+  let milestoneTimer: ReturnType<typeof setInterval> | null = null;
   let blockedRelay: ReturnType<typeof createCommandBlockedRelay> | null = null;
   let blockedTimer: ReturnType<typeof setInterval> | null = null;
   // Stall visibility: remember a session once seen; fail if it vanishes without a reply.
@@ -2648,6 +2651,36 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
+   * Post the structured milestones the delegate writes in the container (progress
+   * milestones spec 3.3): it holds no Argus token, so this host checks each record against
+   * the claimed task, attempt and repository and posts it. A pull request the channel
+   * already relayed from a reply is not posted twice. Best effort: never fails the task.
+   */
+  async function startMilestoneRelay(task: { id: string; attempt: number }): Promise<void> {
+    try {
+      const logFile = await cfg.delegateLogFile?.();
+      if (!logFile) return;
+      const file = path.join(path.dirname(logFile), MILESTONE_RELAY_FILE);
+      await resetRelayFile(file); // only this attempt's milestones are relayed
+      const relay = createMilestoneRelay({
+        file,
+        task,
+        repository: currentClaim?.id === task.id ? currentClaim.repository_url : undefined,
+        post: (body) => client.call("POST", `/tasks/${task.id}/progress`, body),
+        alreadyPosted: (b) => b.kind === "pr_opened" && prRelayed.has(String(b.data.url)),
+        onPosted: (b) => {
+          if (b.kind === "pr_opened") prRelayed.add(String(b.data.url));
+        },
+      });
+      milestoneRelay = relay;
+      milestoneTimer = setInterval(() => void relay.poll(), cfg.logPollMs ?? LOG_POLL_MS);
+      milestoneTimer.unref?.();
+    } catch (err) {
+      log.warn("Could not start the milestone relay", { err: String(err).slice(0, 200) });
+    }
+  }
+
+  /**
    * Serve `argus-task attach` (task helpers spec 3.10): the worker has no Argus credential, so
    * it spools the file and asks here; this host uploads it for the attempt it holds and writes
    * the receipt. Best effort: without it `attach` reports the missing capability.
@@ -2812,6 +2845,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     attachTimer = null;
     if (changesTimer) clearInterval(changesTimer);
     changesTimer = null;
+    milestoneRelay?.stop();
+    milestoneRelay = null;
+    if (milestoneTimer) clearInterval(milestoneTimer);
+    milestoneTimer = null;
     blockedRelay?.stop();
     blockedRelay = null;
     if (blockedTimer) clearInterval(blockedTimer);
@@ -3929,6 +3966,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!harnessLogRelay) await startHarnessLogRelay(task);
       if (!usageRelay) await startUsageRelay(task);
       if (!changesRelay) await startChangesRelay(task);
+      if (!milestoneRelay) await startMilestoneRelay(task);
       if (!attachRelay) await startAttachRelay(task);
       if (!blockedRelay) startCommandBlockedRelay(task);
       resends = 0;
@@ -5003,6 +5041,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           logRelay?.drain(),
           harnessLogRelay?.drain(),
           changesRelay?.drain(),
+          milestoneRelay?.drain(),
           attachRelay?.drain(),
           blockedRelay?.poll(),
         ]);
