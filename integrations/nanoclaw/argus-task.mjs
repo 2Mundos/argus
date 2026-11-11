@@ -2,7 +2,7 @@
 // Deterministic task helpers for workers (argus-task). Spec: docs/specs/task-helpers.spec.md.
 // Built on the forge clients (argus-gitea-api / argus-github-api): no token, no HTTP
 // client of its own. Each command prints one JSON line and exits with a code from EXIT.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -597,6 +597,73 @@ function operationInProgress(git, cwd, only) {
   return null;
 }
 
+// ---- pre-push checks ----
+// Before deliver publishes a branch it runs the checks .githooks/pre-push runs on a developer
+// push (`make check-changed`, then the secret scan) on the exact commit it is about to push.
+// Worker checkouts do not enable that hook (their core.hooksPath is the Argus commit hook), so
+// the gate lives here. Unlike the hook it never skips the scan: a scanner that is not installed
+// means a required check cannot run, and deliver fails closed.
+const PRE_PUSH_CHECKS = [
+  { name: "make check-changed", argv: ["make", "check-changed"] },
+  { name: "gitleaks", argv: ["gitleaks", "version"], probe: true },
+  { name: "make secret-scan", argv: ["make", "secret-scan"] },
+];
+const PRE_PUSH_TIMEOUT_MS = 40 * 60_000;
+const PRE_PUSH_OUTPUT_BYTES = 2048;
+
+/** Run one check in the worktree. A missing program is `missing`; a timeout or signal is a failure. */
+function defaultRunCheck(argv, cwd, env) {
+  // The hook unsets the git variables a hook inherits; a check's own git must act on this worktree.
+  const childEnv = Object.fromEntries(
+    Object.entries(env).filter(([key]) => !key.startsWith("GIT_")),
+  );
+  const r = spawnSync(argv[0], argv.slice(1), {
+    cwd,
+    env: childEnv,
+    encoding: "utf8",
+    timeout: PRE_PUSH_TIMEOUT_MS,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.error?.code === "ENOENT") return { missing: true, status: null, output: "" };
+  return { missing: false, status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+/**
+ * Run the pre-push checks on HEAD, the commit deliver is about to push. Returns null when every
+ * check passed, or the failed check. Throws when the tree is not clean at HEAD, a check cannot run,
+ * or HEAD or the tree changed while the checks ran (the checks would not describe the pushed commit).
+ */
+function prePushChecks(git, cwd, ctx) {
+  const clean = () => gitStep(git, ["status", "--porcelain"], cwd) === "";
+  const head = gitStep(git, ["rev-parse", "HEAD"], cwd);
+  if (!clean())
+    throw new GiteaError(
+      "dirty_worktree",
+      "the worktree has changes or untracked files; the pre-push checks need the exact commit: commit or remove them, then run deliver again",
+    );
+  for (const check of PRE_PUSH_CHECKS) {
+    const r = ctx.runCheck(check.argv, cwd, ctx.env);
+    if (r.missing)
+      throw new GiteaError(
+        "pre_push_unavailable",
+        `${check.argv[0]} is not installed, so ${check.name} cannot run; nothing was pushed`,
+      );
+    if (check.probe) continue;
+    if (r.status !== 0)
+      return {
+        check: check.name,
+        exit: r.status,
+        output_tail: r.output.slice(-PRE_PUSH_OUTPUT_BYTES),
+      };
+  }
+  if (gitStep(git, ["rev-parse", "HEAD"], cwd) !== head || !clean())
+    throw new GiteaError(
+      "dirty_worktree",
+      "HEAD or the worktree changed during the pre-push checks; nothing was pushed, run deliver again",
+    );
+  return null;
+}
+
 async function deliver(api, o, ctx) {
   const { git, cwd } = ctx;
   // Before the branch check: a rebase in progress detaches HEAD, and we must not touch it.
@@ -662,6 +729,19 @@ async function deliver(api, o, ctx) {
     }
     rebased = true;
   }
+  // After any rebase, so the checks run on the commit that is pushed.
+  const failed = prePushChecks(git, cwd, ctx);
+  if (failed)
+    return {
+      code: EXIT.not_ready,
+      result: {
+        branch,
+        base,
+        reasons: ["pre_push_failed"],
+        ...failed,
+        action: "fix the failing check, commit the fix, then run deliver again",
+      },
+    };
   const refspec = `HEAD:refs/heads/${branch}`;
   gitStep(
     git,
@@ -1226,6 +1306,7 @@ export async function main(argv, env = process.env, io = {}) {
       env,
       git,
       cwd,
+      runCheck: defaultRunCheck,
       dir: definition.local ? null : signalDir(git, cwd),
       now: io.now ?? Date.now,
       sleep: io.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms))),
