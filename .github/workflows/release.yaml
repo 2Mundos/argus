@@ -1,6 +1,8 @@
 name: Release
 # Builds and publishes a tagged release (docs/specs/releases.spec.md). Tags are
-# cut by `make release`; dispatch rebuilds an existing tag.
+# cut by `make release`; dispatch rebuilds an existing tag. The GitHub release
+# and `latest` come last, only once the API image and both worker manifests
+# are verified (publish -> worker-images -> worker-manifests -> finalize).
 on:
   push:
     tags: ["v*"]
@@ -23,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      notes: ${{ steps.meta.outputs.notes }}
+      image: ${{ steps.meta.outputs.image }}
       owner: ${{ steps.meta.outputs.owner }}
     steps:
       - uses: actions/checkout@v7
@@ -65,46 +69,20 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
-          # latest follows the newest release only: rebuilding an older tag leaves it.
-          tags=(-t "$IMAGE:$TAG")
-          newest=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-          if [ "$TAG" = "$newest" ]; then
-            tags+=(-t "$IMAGE:latest")
-          else
-            echo "Not tagging latest: $TAG is older than $newest"
-          fi
+          # Only the versioned tag: `latest` moves in `finalize`, with the complete set.
           # Multi-arch (amd64 for servers, arm64 for Apple silicon Docker and ARM hosts).
           docker buildx build --platform linux/amd64,linux/arm64 --push -f deploy/Dockerfile.api \
             --build-arg ARGUS_VERSION="$TAG" \
             --label org.opencontainers.image.version="$TAG" \
             --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
             --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            "${tags[@]}" .
-
-      - name: Create the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.meta.outputs.tag }}
-          NOTES: ${{ steps.meta.outputs.notes }}
-          IMAGE: ${{ steps.meta.outputs.image }}
-        run: |
-          set -euo pipefail
-          # install.sh is an asset so the README can fetch releases/latest/download/install.sh;
-          # tags before v0.8.0 have none.
-          assets=()
-          [ -f deploy/install.sh ] && assets=(deploy/install.sh)
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            [ ${#assets[@]} -eq 0 ] || gh release upload "$TAG" "${assets[@]}" --clobber
-            echo "Release $TAG already exists"; exit 0
-          fi
-          { printf 'Image: `%s:%s`\n\n' "$IMAGE" "$TAG"; tail -n +2 "$NOTES" | sed '/./,$!d'; } > /tmp/release-notes.md
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md "${assets[@]}"
-          echo "Created release $TAG"
+            -t "$IMAGE:$TAG" .
 
   # Worker images for `argus worker setup` (docs/specs/local-workers.spec.md 3.1):
   # the NanoClaw host with its built checkout, and the ~6 GB agent image. Each
   # architecture builds natively (QEMU would take hours for the agent image) and
-  # pushes `<tag>-<arch>`; `worker-manifests` joins them under the release tag.
+  # pushes `<tag>-<arch>`; `worker-manifests` joins and verifies them under the
+  # release tag, and `finalize` publishes the release.
   worker-images:
     needs: publish
     strategy:
@@ -160,15 +138,77 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Join the per-architecture images
+      - name: Join and verify the per-architecture images
         env:
           TAG: ${{ needs.publish.outputs.tag }}
           OWNER: ${{ needs.publish.outputs.owner }}
+          IMAGE: ${{ needs.publish.outputs.image }}
         run: |
           set -euo pipefail
-          newest=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          # Re-running creates the same manifests again. `latest` is not touched here.
           for image in "$OWNER/argus-nanoclaw-host" "$OWNER/argus-nanoclaw-agent"; do
-            tags=(-t "$image:$TAG")
-            [ "$TAG" = "$newest" ] && tags+=(-t "$image:latest")
-            docker buildx imagetools create "${tags[@]}" "$image:$TAG-amd64" "$image:$TAG-arm64"
+            docker buildx imagetools create -t "$image:$TAG" "$image:$TAG-amd64" "$image:$TAG-arm64"
           done
+          # The release is ready only with all three images, each in both architectures
+          # and labelled with this version (docs/specs/releases.spec.md 3.9).
+          for ref in "$IMAGE:$TAG" "$OWNER/argus-nanoclaw-host:$TAG" "$OWNER/argus-nanoclaw-agent:$TAG"; do
+            docker buildx imagetools inspect "$ref" --raw |
+              jq -e '[.manifests[].platform | "\(.os)/\(.architecture)"] | contains(["linux/amd64", "linux/arm64"])' >/dev/null ||
+              { echo "$ref lacks linux/amd64 or linux/arm64" >&2; exit 1; }
+            docker buildx imagetools inspect "$ref" --format '{{json .Image}}' |
+              jq -e --arg tag "$TAG" 'all(."linux/amd64", ."linux/arm64"; .config.Labels["org.opencontainers.image.version"] == $tag)' >/dev/null ||
+              { echo "$ref is not labelled $TAG in both architectures" >&2; exit 1; }
+          done
+
+  # The only job that makes the release public: it needs the API image and both
+  # verified worker manifests, so install.sh's latest release always has them.
+  finalize:
+    needs: [publish, worker-manifests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Promote latest
+        env:
+          TAG: ${{ needs.publish.outputs.tag }}
+          OWNER: ${{ needs.publish.outputs.owner }}
+          IMAGE: ${{ needs.publish.outputs.image }}
+        run: |
+          set -euo pipefail
+          # latest follows the newest release only: rebuilding an older tag leaves it.
+          newest=$(git tag -l 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ "$TAG" != "$newest" ]; then
+            echo "Not tagging latest: $TAG is older than $newest"; exit 0
+          fi
+          for image in "$IMAGE" "$OWNER/argus-nanoclaw-host" "$OWNER/argus-nanoclaw-agent"; do
+            docker buildx imagetools create -t "$image:latest" "$image:$TAG"
+          done
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.publish.outputs.tag }}
+          NOTES: ${{ needs.publish.outputs.notes }}
+          IMAGE: ${{ needs.publish.outputs.image }}
+        run: |
+          set -euo pipefail
+          # install.sh is an asset so the README can fetch releases/latest/download/install.sh;
+          # tags before v0.8.0 have none.
+          assets=()
+          [ -f deploy/install.sh ] && assets=(deploy/install.sh)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            [ ${#assets[@]} -eq 0 ] || gh release upload "$TAG" "${assets[@]}" --clobber
+            echo "Release $TAG already exists"; exit 0
+          fi
+          { printf 'Image: `%s:%s`\n\n' "$IMAGE" "$TAG"; tail -n +2 "$NOTES" | sed '/./,$!d'; } > /tmp/release-notes.md
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md "${assets[@]}"
+          echo "Created release $TAG"

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-03
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # Local workers
@@ -49,7 +49,8 @@ at the same version as Argus.
 
 ## 3.1 Two images per release
 
-The release workflow also publishes, from the pinned NanoClaw commit
+The release workflow also publishes (and makes the GitHub release public only after
+both are verified for both architectures, [releases](releases.spec.md) 3.9), from the pinned NanoClaw commit
 (`provision.sh`'s `NANOCLAW_COMMIT`) with the engines overlay applied, so every
 engine the fleet supports is present:
 
@@ -124,6 +125,10 @@ starts the gateway if it is missing (after an `uninstall --keep-data`, say).
 
 ## 3.5 Updates and the way back
 
+- A GitHub release that `install.sh` or `up` selects as the newest has both worker
+  images, because the release workflow publishes it only after verifying them
+  ([releases](releases.spec.md) 3.9). A missing image therefore means an older
+  release or an interrupted release run, not a normal state.
 - `argus update` and `argus restore` with workers set up pull the worker images
   of the version they move to and copy its checkout **before** stopping Argus;
   a release without worker images stops the command there, with nothing
@@ -163,7 +168,8 @@ Set up workers? [Y/n]
 ```
 
 - Yes runs the `setup` steps (3.2 to 3.4) and then starts Argus once, with the
-  worker settings. No sets `ARGUS_WORKERS=0` and starts Argus as `up` did
+  worker settings. The newest release is complete (3.5), so its worker images
+  exist; if they do not, `up` stops at the pull as in the failure case below. No sets `ARGUS_WORKERS=0` and starts Argus as `up` did
   before this spec.
 - `--workers` answers yes and `--no-workers` answers no without asking.
   Without a terminal and without either flag, `up` answers no and prints
