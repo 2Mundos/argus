@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -887,7 +887,8 @@ only while the `repository` lease is held; release removes OneCLI assignments (a
 probe must not be mistaken for a live-task failure). Workers clone at runtime over HTTPS
 via the injected proxy; project toolchain images do not bake source repositories.
 It reconciles the complete currently-held engine/executor/repository lease set (including both
-repository secrets)
+repository secrets, and both alias secrets when a GitHub lease also covers GitHub's verified
+letter-case spelling, [GitHub repositories](github-repositories.spec.md) 3.3)
 because OneCLI's set-secrets endpoint replaces assignments, and the
 agent-list endpoint does not report assignments.
 Repository-write pools must also have managed engine accounts (an OneCLI URL)

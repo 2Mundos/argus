@@ -74,6 +74,15 @@ equal the destination's; every path is relative, free of `..` and `.git`, and
 every symlink target stays inside the workspace; when an expected reference is
 given, its manifest digest matches. Any failure blocks.
 
+Save, restore and supersession also require an existing workspace to have exactly
+one origin, matching the task's repository URL. Both the origin and the recorded
+repository URL match as the task workspace's origin does
+([task workspace](task-workspace.spec.md) 3.4): for a github.com repository, the
+same credential-free `https://github.com/{owner}/{repo}` in another letter case or
+without `.git` matches, so a checkpoint saved before the preflight adopted GitHub's
+spelling still restores; Gitea compares exactly. Neither the origin nor the manifest
+is rewritten.
+
 ## 3.3 Save
 
 After an attempt that did not complete, and after its session closed, the channel
@@ -224,7 +233,9 @@ group directories sharing only the store: commits, staged, unstaged (including
 binary) and untracked work restore with identical hashes and task identity;
 unborn branches; idempotent and concurrent restores; refusal of tampered,
 truncated, incomplete, foreign-task, foreign-repository and foreign-node
-checkpoints; unsafe paths; open permissions and symlinks; conflicts; every listed
+checkpoints; a GitHub origin or recorded URL in another letter case accepted
+without rewriting origin, while another repository, a Gitea case mismatch or a
+second origin is refused; unsafe paths; open permissions and symlinks; conflicts; every listed
 sensitive name excluded whether staged, unstaged or untracked, at any depth;
 workspace git config that would run a command on the host refused at save and at
 restore, without running it; three racers on an expired lease with one winner,

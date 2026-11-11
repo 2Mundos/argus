@@ -10,6 +10,7 @@ import { constants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, readdir, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { normalizeRepositoryUrl, sameRepositoryRemote } from "./argus-accounts.js";
 
 const run = promisify(execFile);
 
@@ -138,12 +139,14 @@ async function validate(
     .split("\n")
     .filter(Boolean);
   if (urls.length === 0) return fail("env_workspace_remote_mismatch", "origin is not set");
-  if (urls.length > 1 || urls[0] !== repositoryUrl)
+  // GitHub owner and repository names are case-insensitive: an origin cloned under another
+  // spelling of the same github.com repository is the task's work, kept as written.
+  if (urls.length > 1 || !sameRepositoryRemote(urls[0]!, repositoryUrl))
     return fail(
       "env_workspace_remote_mismatch",
       urls.some(hasCredentials)
         ? "origin carries credentials"
-        : `origin is ${urls.join(", ")}, expected ${repositoryUrl}`,
+        : `origin is ${urls.join(", ")}, expected ${repositoryUrl}${caseHint(repositoryUrl)}`,
     );
   const head = await git(["symbolic-ref", "-q", "HEAD"], real, realRoot).catch(() => "");
   if (head !== `refs/heads/${branch}`)
@@ -152,6 +155,16 @@ async function validate(
       `HEAD is ${head || "detached"}, expected refs/heads/${branch}`,
     );
   return null;
+}
+
+function caseHint(repositoryUrl: string): string {
+  try {
+    return normalizeRepositoryUrl(repositoryUrl).provider === "github"
+      ? " (GitHub owner and repository may differ only in letter case)"
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 /** After validation succeeds, ensure worker hooksPath (idempotent). */

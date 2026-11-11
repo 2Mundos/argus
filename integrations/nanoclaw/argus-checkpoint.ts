@@ -33,6 +33,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { sameRepositoryRemote } from "./argus-accounts.js";
 import {
   defaultGit,
   type GitRunner,
@@ -367,7 +368,7 @@ async function openWorkspace(
   )
     .split("\n")
     .filter(Boolean);
-  if (origin.length !== 1 || origin[0] !== repositoryUrl)
+  if (origin.length !== 1 || !sameRepositoryRemote(origin[0]!, repositoryUrl))
     throw new Failure(
       "env_checkpoint_invalid",
       "the workspace origin does not match the task repository",
@@ -726,7 +727,10 @@ async function loadVerified(
     m.branch !== taskBranch(expect.taskId)
   )
     throw new Failure("env_checkpoint_invalid", "the checkpoint belongs to another task or branch");
-  if (m.repository_url !== expect.repositoryUrl)
+  if (
+    typeof m.repository_url !== "string" ||
+    !sameRepositoryRemote(m.repository_url, expect.repositoryUrl)
+  )
     throw new Failure("env_checkpoint_invalid", "the checkpoint belongs to another repository");
   if (m.node_id !== expect.nodeId)
     throw new Failure(

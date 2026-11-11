@@ -240,6 +240,131 @@ describe("prepareTaskWorkspace", () => {
     expect(snapshot(group)).toEqual(before);
   });
 
+  describe("a GitHub origin spelled in another letter case", () => {
+    const LOWER = "https://github.com/2mundos/argus.git";
+    const CANONICAL = "https://github.com/2Mundos/argus.git";
+
+    /** A workspace created for `created`, its origin then set to `origin` (if given). */
+    const workspaceWith = async (created: string, origin?: string) => {
+      const group = tmp("argus-ws-group-");
+      const id = randomUUID();
+      const r = await prepare(group, id, { repositoryUrl: created });
+      if (!r.ok) throw new Error(r.error);
+      if (origin !== undefined) git(r.path, "remote", "set-url", "origin", origin);
+      return { group, id, path: r.path };
+    };
+
+    it.each([
+      ["lowercase origin, canonical task URL", LOWER, CANONICAL],
+      ["canonical origin, lowercase task URL", CANONICAL, LOWER],
+      ["origin without .git", "https://github.com/2Mundos/argus", LOWER],
+      ["task URL without .git", LOWER, "https://github.com/2Mundos/Argus"],
+    ])("accepts %s and never rewrites origin", async (_label, origin, expected) => {
+      const ws = await workspaceWith(LOWER, origin);
+      const before = snapshot(ws.group);
+      const r = await prepare(ws.group, ws.id, { repositoryUrl: expected });
+      expect(r).toMatchObject({ ok: true, created: false });
+      expect(git(ws.path, "config", "--get-all", "remote.origin.url")).toBe(origin);
+      expect(snapshot(ws.group)).toEqual(before);
+    });
+
+    it("leaves HEAD, branch, origin, status and every file of work in progress identical", async () => {
+      const ws = await workspaceWith(LOWER);
+      writeFileSync(path.join(ws.path, "tracked.txt"), "committed\n");
+      git(ws.path, "add", "tracked.txt");
+      git(ws.path, "commit", "-q", "-m", "wip");
+      writeFileSync(path.join(ws.path, "tracked.txt"), "dirty\n");
+      writeFileSync(path.join(ws.path, "staged.txt"), "staged\n");
+      git(ws.path, "add", "staged.txt");
+      writeFileSync(path.join(ws.path, "untracked.txt"), "untracked\n");
+      const state = () => ({
+        head: git(ws.path, "rev-parse", "HEAD"),
+        branch: git(ws.path, "symbolic-ref", "HEAD"),
+        origin: readFileSync(path.join(ws.path, ".git", "config"), "utf8").match(/url = (.*)/)?.[1],
+        status: git(ws.path, "status", "--porcelain"),
+        files: Object.fromEntries(
+          ["tracked.txt", "staged.txt", "untracked.txt"].map((f) => [
+            f,
+            readFileSync(path.join(ws.path, f), "utf8"),
+          ]),
+        ),
+        tree: snapshot(ws.path),
+      });
+      const before = state();
+      expect(before.origin).toBe(LOWER);
+      expect(before.status.split("\n").sort()).toEqual([
+        " M tracked.txt",
+        "?? untracked.txt",
+        "A  staged.txt",
+      ]);
+      const r = await prepare(ws.group, ws.id, { repositoryUrl: CANONICAL });
+      expect(r).toMatchObject({ ok: true, created: false });
+      expect(state()).toEqual(before);
+    });
+
+    it.each([
+      ["another scheme", "http://github.com/2Mundos/argus.git"],
+      ["another port", "https://github.com:8443/2Mundos/argus.git"],
+      ["an explicit default port", "https://github.com:443/2Mundos/argus.git"],
+      ["another host", "https://gitlab.com/2Mundos/argus.git"],
+      ["the host in another case", "https://GitHub.com/2Mundos/argus.git"],
+      ["another owner", "https://github.com/2Mundos-fork/argus.git"],
+      ["another repository", "https://github.com/2Mundos/argus-fork.git"],
+      ["a query", "https://github.com/2Mundos/argus.git?ref=x"],
+      ["an empty query", "https://github.com/2Mundos/argus.git?"],
+      ["a fragment", "https://github.com/2Mundos/argus.git#x"],
+      ["a trailing slash", "https://github.com/2Mundos/argus/"],
+      ["an extra path segment", "https://github.com/2Mundos/argus/extra.git"],
+      ["a dot segment", "https://github.com/x/../2Mundos/argus.git"],
+      ["a doubled .git", "https://github.com/2Mundos/argus.git.git"],
+      ["scp-like syntax", "git@github.com:2Mundos/argus.git"],
+      ["no URL at all", "argus"],
+    ])("refuses %s, naming both URLs", async (_label, origin) => {
+      const ws = await workspaceWith(LOWER, origin);
+      const before = snapshot(ws.group);
+      const r = await prepare(ws.group, ws.id, { repositoryUrl: CANONICAL });
+      expect(r).toEqual({
+        ok: false,
+        reason: "env_workspace_remote_mismatch",
+        error: `origin is ${origin}, expected ${CANONICAL} (GitHub owner and repository may differ only in letter case)`,
+      });
+      expect(snapshot(ws.group)).toEqual(before);
+    });
+
+    it("refuses userinfo without echoing it", async () => {
+      const secret = "tok3n-not-a-real-secret";
+      const ws = await workspaceWith(LOWER, `https://x:${secret}@github.com/2Mundos/argus.git`);
+      const r = await prepare(ws.group, ws.id, { repositoryUrl: CANONICAL });
+      expect(r).toEqual({
+        ok: false,
+        reason: "env_workspace_remote_mismatch",
+        error: "origin carries credentials",
+      });
+    });
+
+    it("refuses two origin URLs even when both name the repository", async () => {
+      const ws = await workspaceWith(LOWER);
+      git(ws.path, "config", "--add", "remote.origin.url", CANONICAL);
+      const r = await prepare(ws.group, ws.id, { repositoryUrl: CANONICAL });
+      expect(r).toMatchObject({ ok: false, reason: "env_workspace_remote_mismatch" });
+    });
+
+    it("keeps other forges byte for byte", async () => {
+      for (const origin of [
+        "https://git.example.test/Org/repo.git",
+        "https://git.example.test/org/repo",
+      ]) {
+        const ws = await workspaceWith(REPO, origin);
+        const r = await prepare(ws.group, ws.id, { repositoryUrl: REPO });
+        expect(r).toEqual({
+          ok: false,
+          reason: "env_workspace_remote_mismatch",
+          error: `origin is ${origin}, expected ${REPO}`,
+        });
+      }
+    });
+  });
+
   describe("fails closed with a typed reason and touches nothing", () => {
     const failsWith = async (
       group: string | null,

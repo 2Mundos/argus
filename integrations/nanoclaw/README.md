@@ -49,7 +49,9 @@ The install hook also patches the OneCLI gateway contribution so agent container
 latter), and extends the Codex env allowlist so spawned shells keep `GIT_HTTP_PROXY_AUTHMETHOD=basic`
 and `GIT_TERMINAL_PROMPT=0` with the proxy/CA (provider secrets stay blocked). Repository
 leases (Gitea, or GitHub for github.com) use OneCLI path `/{owner}/{repo}.git/*` for smart-HTTP
-injection while the lease is held.
+injection while the lease is held; a GitHub lease also covers GitHub's verified letter-case
+spelling of the same repository with exact alias secrets, never a wildcard
+([GitHub repositories](../../docs/specs/github-repositories.spec.md) 3.3).
 Operator `docker exec` Git probes do not substitute for a full native worker checkout under
 Codex; see [worker lifecycle spec 3.8](../../docs/specs/worker-lifecycle.spec.md).
 

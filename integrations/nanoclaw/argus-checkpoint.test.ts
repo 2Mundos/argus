@@ -148,7 +148,7 @@ interface World {
 }
 
 /** Instance A holds: published base, 2 unpublished commits, staged, unstaged, untracked work. */
-async function world(): Promise<World> {
+async function world(repositoryUrl = REPO): Promise<World> {
   const taskId = randomUUID();
   const root = tmp("argus-ckpt-");
   const store = path.join(root, "store");
@@ -156,7 +156,7 @@ async function world(): Promise<World> {
   const groupB = path.join(root, "instance-b", "groups", "argus");
   mkdirSync(groupA, { recursive: true });
   mkdirSync(groupB, { recursive: true });
-  const prepared = await prepareTaskWorkspace({ groupDir: groupA, taskId, repositoryUrl: REPO });
+  const prepared = await prepareTaskWorkspace({ groupDir: groupA, taskId, repositoryUrl });
   if (!prepared.ok) throw new Error(prepared.error);
   const ws = prepared.path;
   writeFileSync(path.join(ws, "base.txt"), "base\n");
@@ -318,6 +318,103 @@ describe("checkpoint and restore across two isolated instances", () => {
     expect(await restore(w)).toMatchObject({ ok: true, restored: true });
     expect(existsSync(path.join(wsB(w), "vendor"))).toBe(false);
     expect(readFileSync(path.join(wsB(w), "staged-new.txt"), "utf8")).toBe("staged\n");
+  });
+});
+
+describe("a GitHub repository spelled in another letter case", () => {
+  const CONFIGURED = "https://github.com/org/repo.git";
+  const CANONICAL = "https://github.com/Org/Repo.git";
+  const origins = (ws: string) => git(ws, "config", "--get-all", "remote.origin.url");
+
+  it.each([
+    ["the canonical task URL", CONFIGURED, CANONICAL],
+    ["the configured task URL", CANONICAL, CONFIGURED],
+    ["an origin without .git", "https://github.com/ORG/REPO", CANONICAL],
+  ])("saves under %s and never rewrites origin", async (_, origin, taskUrl) => {
+    const w = await world(CONFIGURED);
+    git(w.wsA, "remote", "set-url", "origin", origin);
+    const c = await ckpt(w, { repositoryUrl: taskUrl });
+    expect(c).toMatchObject({ ok: true, empty: false });
+    expect(origins(w.wsA)).toBe(origin);
+  });
+
+  it("restores a checkpoint stored under the configured spelling once the task URL is canonical", async () => {
+    const w = await world(CONFIGURED);
+    const c = await ckpt(w, { repositoryUrl: CONFIGURED });
+    if (!c.ok || c.empty) throw new Error("no checkpoint");
+    const manifest = path.join(checkpointDir(w), "manifest.json");
+    expect(JSON.parse(readFileSync(manifest, "utf8")).repository_url).toBe(CONFIGURED);
+    expect(await restore(w, { repositoryUrl: CANONICAL })).toMatchObject({
+      ok: true,
+      restored: true,
+    });
+    expect(origins(wsB(w))).toBe(CANONICAL);
+    // the restored workspace, read under the other spelling: a no-op, origin untouched
+    expect(await restore(w, { repositoryUrl: CONFIGURED })).toMatchObject({
+      ok: true,
+      reason: "already_present",
+    });
+    expect(origins(wsB(w))).toBe(CANONICAL);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).repository_url).toBe(CONFIGURED);
+  });
+
+  it("restores into a pristine workspace whose origin has the other spelling", async () => {
+    const w = await world(CONFIGURED);
+    const c = await ckpt(w, { repositoryUrl: CONFIGURED });
+    if (!c.ok || c.empty) throw new Error("no checkpoint");
+    const p = await prepareTaskWorkspace({
+      groupDir: w.groupB,
+      taskId: w.taskId,
+      repositoryUrl: CONFIGURED,
+    });
+    if (!p.ok) throw new Error(p.error);
+    expect(await restore(w, { repositoryUrl: CANONICAL })).toMatchObject({
+      ok: true,
+      restored: true,
+    });
+  });
+
+  it("still refuses another repository, a Gitea case mismatch and two origins", async () => {
+    const w = await world(CONFIGURED);
+    git(w.wsA, "remote", "set-url", "origin", "https://github.com/Org/Other.git");
+    expect(await ckpt(w, { repositoryUrl: CONFIGURED })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_invalid",
+    });
+    git(w.wsA, "remote", "set-url", "origin", CANONICAL);
+    git(w.wsA, "config", "--add", "remote.origin.url", CONFIGURED);
+    expect(await ckpt(w, { repositoryUrl: CONFIGURED })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_invalid",
+    });
+    git(w.wsA, "config", "--unset", "remote.origin.url", "^https://github.com/org/repo.git$");
+    const c = await ckpt(w, { repositoryUrl: CANONICAL });
+    if (!c.ok || c.empty) throw new Error("no checkpoint");
+    for (const repositoryUrl of [
+      "https://github.com/org/other.git",
+      "https://github.com/org/repo.git/",
+      "http://github.com/org/repo.git",
+    ])
+      expect(await restore(w, { repositoryUrl })).toMatchObject({
+        ok: false,
+        reason: "env_checkpoint_invalid",
+      });
+    expect(existsSync(wsB(w))).toBe(false);
+
+    const g = await world();
+    const gitea = "https://git.example.test/Org/Repo.git";
+    expect(await ckpt(g, { repositoryUrl: gitea })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_invalid",
+    });
+    expect(origins(g.wsA)).toBe(REPO);
+    const gc = await ckpt(g);
+    if (!gc.ok || gc.empty) throw new Error("no checkpoint");
+    expect(await restore(g, { repositoryUrl: gitea })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_invalid",
+    });
+    expect(existsSync(wsB(g))).toBe(false);
   });
 });
 

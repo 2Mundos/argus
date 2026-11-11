@@ -141,7 +141,7 @@ import {
   nanoclawPreflightRunner,
   nanoclawStartupReady,
   PREFLIGHT_TOTAL_MS,
-  type ProbeEvidence,
+  type ProbeAnswer,
   runExecutorPreflight,
   runRepositoryPreflight,
   safeText,
@@ -374,7 +374,7 @@ export interface ArgusConfig {
     provider: string,
     access?: "read" | "write",
     agentIdentifier?: string,
-  ) => Promise<ProbeEvidence | void>;
+  ) => Promise<ProbeAnswer | void>;
   /**
    * The executor credential probe (failure classes 3.3.1), run after the repository
    * preflight and before any model session: `argus-delegate --auth-probe` for the leased
@@ -2068,6 +2068,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   let repositoryLeaseHeld = false;
   let activeRepositoryLease: AccountLease | null = null;
   let activeRepositoryUrl: string | null = null;
+  /** The configured spelling while GitHub's verified spelling is `activeRepositoryUrl`. */
+  let activeRepositoryAlias: string | null = null;
   let activeRepositoryAllowlist: string[] = [];
   /**
    * The forge helpers in the agent containers read ARGUS_REPOSITORIES_JSON from the host's
@@ -3450,6 +3452,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       repositoryLeaseHeld = true;
       activeRepositoryLease = lease;
       activeRepositoryUrl = normalizedRepository.cloneUrl;
+      activeRepositoryAlias = null;
       // A claimed repository is the whole allowlist: no other pool or project repository
       // becomes injectable because this task named one.
       activeRepositoryAllowlist = claimedRepository
@@ -3523,6 +3526,22 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           activeAccountLeases,
         );
       },
+      // Bootstrap: the configured spelling's secrets carried the probe, which proved an
+      // authenticated credential; now GitHub's verified spelling gets exact scopes beside it.
+      adoptCanonical: async (canonical) => {
+        const active = activeRepositoryLease;
+        if (!active) throw new Error("no repository lease is held");
+        await applyRepositoryLease(
+          acc.onecli,
+          target,
+          active,
+          canonical,
+          activeRepositoryAllowlist,
+          activeAccountLeases,
+          url,
+        );
+        return verifyRepositoryAssignment(acc.onecli, target, canonical, url);
+      },
       // Closed values and host-derived hosts and paths only (failure classes 3.3.1).
       emit: async (event) => {
         log.info("Repository preflight evidence", { evidence: event });
@@ -3533,7 +3552,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         });
       },
     });
-    return result.reason ? { reason: result.reason, error: result.error ?? result.outcome } : null;
+    if (result.reason) return { reason: result.reason, error: result.error ?? result.outcome };
+    if (result.repositoryUrl !== url) {
+      activeRepositoryUrl = result.repositoryUrl;
+      activeRepositoryAlias = url;
+      task.repository_url = result.repositoryUrl;
+    }
+    return null;
   }
 
   /**
@@ -4009,6 +4034,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         repositoryLeaseHeld = false;
         activeRepositoryLease = null;
         activeRepositoryUrl = null;
+        activeRepositoryAlias = null;
         activeRepositoryAllowlist = [];
         scopeHelperRepositories(cfg.accounts.repositories ?? {}, {});
         if (repositoryTarget) {
@@ -4300,6 +4326,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         activeRepositoryUrl,
         activeRepositoryAllowlist,
         activeAccountLeases,
+        activeRepositoryAlias ?? undefined,
       );
     }
     repositoryAssignmentReconciled = true;

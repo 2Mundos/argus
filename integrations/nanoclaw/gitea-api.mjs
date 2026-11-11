@@ -595,6 +595,11 @@ export class GiteaApi {
     return label.id;
   }
 
+  /** The forge's own spelling of the repository for the host; Gitea reports none. */
+  canonicalRepository(_data) {
+    return undefined;
+  }
+
   inlineComment(comment) {
     return comment;
   }
@@ -1479,6 +1484,8 @@ async function repoPreflight(api, resultFile, access = "write") {
       allowlist_refuses_sibling: true,
       evidence,
     };
+    const canonical = api.canonicalRepository(data);
+    if (canonical) verdict.canonical = canonical;
   } catch (error) {
     evidence ??= preflightEvidence(null, error instanceof GiteaError ? error.status : null);
     if (resultFile)

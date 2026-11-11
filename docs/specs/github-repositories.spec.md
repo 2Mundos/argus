@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # GitHub repositories
@@ -70,7 +70,35 @@ hosts and formats:
 | `…-repository-git` | `github.com` | `/{owner}/{repo}.git/*` | `Authorization: Basic base64(x-access-token:<token>)` |
 
 The REST host differs from the clone host, so the REST rule cannot match a Git path and
-the reverse. Everything else (allowlist check before applying, reconcile of the full
+the reverse.
+
+GitHub owner and repository names are case-insensitive, but OneCLI path patterns are
+not: a repository configured as `2mundos/argus` that GitHub spells `2Mundos/argus`
+would get no credential on a remote or API call written the other way. So a lease covers
+at most two exact spellings of the one repository, never a wildcard or a case fold:
+
+1. **Bootstrap.** The host applies the two secrets for the configured spelling and runs
+   the preflight through them ([failure classes](failure-classes.spec.md) 3.3.1). The
+   helper's verdict carries GitHub's own `full_name` and `clone_url` as text only.
+2. **Verify.** The host accepts that spelling only when `clone_url` is exactly
+   `https://github.com/{owner}/{repo}.git` (no userinfo, port, query, fragment or extra
+   path; the host as written), `full_name` is exactly its `{owner}/{repo}`, and both
+   differ from the configured repository in letter case only. Anything else is
+   `rejected` and the configured spelling stays the only one.
+3. **Adopt.** Only after the probe proved an authenticated credential (write access or a
+   private repository; a public answer proves nothing) does the host re-apply the lease
+   with the verified spelling as primary (`…-repository-rest`, `…-repository-git`) and
+   the configured one as alias (`…-repository-rest-alias`, `…-repository-git-alias`),
+   the same values and formats, then confirm all four are assigned with exact scopes.
+   A failed re-apply or an unconfirmed scope fails the preflight closed. The task's
+   `repository_url` becomes the verified spelling. The evidence event records the
+   decision in closed values (`canonical`: `not_reported`, `rejected`, `same`,
+   `unproven`, `verified`, `adopted`, `adopt_failed`), never the URL text.
+
+The alias secrets are assigned, reconciled and revoked with the primary ones: a lease
+applied without an alias unassigns any earlier alias, release unassigns all four, and
+the assignment check reports an assigned alias nobody expects as a scope mismatch. Gitea
+repositories have no alias. Everything else (allowlist check before applying, reconcile of the full
 lease set, unassign on release, no token in the task, env, prompt or logs) is the Gitea
 behaviour of [worker lifecycle](worker-lifecycle.spec.md).
 
@@ -138,8 +166,8 @@ holds.
   path that places `argus-gitea-api` also places `gitea-api.mjs`, `github-api.mjs` and
   `argus-github-api` in `/usr/local/bin`.
 - `gitea-api.mjs` changes are hooks only (product name, header and paging hooks, a
-  redirect policy method, the `main` options); its output for Gitea is unchanged and its
-  tests stay green unmodified.
+  redirect policy method, the reported-spelling hook of 3.3, the `main` options); its
+  output for Gitea is unchanged and its tests stay green unmodified.
 - Tests are offline: `github-api.test.mjs` with a mocked fetch, the installer pytest
   for both binaries, API tests for validation, leasing and delivery reads.
 
@@ -150,7 +178,8 @@ holds.
   cost report excludes both repository providers.
 - `apps/dashboard`: `github` provider option and token-only form in Add and Replace.
 - `integrations/nanoclaw`: `github-api.mjs` (+ `.d.mts`, tests),
-  `normalizeRepositoryUrl` (provider, REST host and path), `applyRepositoryLease`,
+  `normalizeRepositoryUrl` (provider, REST host and path), `applyRepositoryLease`
+  (with the alias of 3.3), `verifiedCanonicalRepositoryUrl`,
   repository lease request, preflight, observer, prompt, `argus-delegate` probe, install
   script, tools layer, engines patcher, Radar layer, CI tools-layer smoke.
 - Rollout is the Gitea helper's: rebuild the agent image or tools layer, canary
