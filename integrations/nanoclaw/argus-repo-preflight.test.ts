@@ -1393,7 +1393,8 @@ describe("runExecutorPreflight: argus-delegate --auth-probe in the same bounded 
       "--result-file",
       "/preflight/result.json",
     ]);
-    expect(seen.join(" ")).not.toContain("ARGUS_REPOSITORIES_JSON");
+    // The host's repository map is inherited by every session; the probe adds none of its own.
+    expect(seen.join(" ")).not.toContain('{"repository":');
     expect(removed()).toBe(true);
     expect([ensured, released]).toEqual([1, 1]);
   });
