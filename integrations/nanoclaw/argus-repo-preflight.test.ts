@@ -1141,7 +1141,7 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       ...over,
       canonical,
     });
-    const run = (probe: () => Promise<ProbeAnswer>, adopt = vi.fn(async () => assigned())) => {
+    const run = (probe: () => Promise<ProbeAnswer>, adopt = vi.fn(async (_url: string) => assigned())) => {
       const order: string[] = [];
       const p = preflight({
         repositoryUrl: LOWER,
