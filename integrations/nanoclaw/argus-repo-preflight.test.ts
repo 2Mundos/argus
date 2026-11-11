@@ -36,6 +36,7 @@ import {
   RepositoryPreflightError,
   readVerdictFile,
   rearmBackoffMs,
+  runExecutorPreflight,
   runRepositoryPreflight,
   safeText,
   sessionRepositoryProbe,
@@ -1366,5 +1367,81 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
     });
     check((await unreadable.done).error ?? "");
     check(JSON.stringify(unreadable.events));
+  });
+});
+
+describe("runExecutorPreflight: argus-delegate --auth-probe in the same bounded session", () => {
+  const exec = (executor = "claude", timeoutMs = 400) => {
+    freshCli();
+    released = 0;
+    ensured = 0;
+    return runExecutorPreflight(runner(), executor, "group-1", timeoutMs);
+  };
+
+  it("exit 0 proceeds; the delegate is PID 1 with no credential, repository or model", async () => {
+    let seen: string[] = [];
+    child = (_dir, args) => {
+      seen = args;
+      return { code: 0, verdict: { ok: true, probe: "auth_present" } };
+    };
+    expect(await exec("codex")).toBeNull();
+    expect(seen[seen.indexOf("--entrypoint") + 1]).toBe("/usr/local/bin/argus-delegate");
+    expect(seen.slice(seen.indexOf("argus-agent:test"))).toEqual([
+      "argus-agent:test",
+      "codex",
+      "--auth-probe",
+      "--result-file",
+      "/preflight/result.json",
+    ]);
+    // The host's repository map is inherited by every session; the probe adds none of its own.
+    expect(seen.join(" ")).not.toContain('{"repository":');
+    expect(removed()).toBe(true);
+    expect([ensured, released]).toEqual([1, 1]);
+  });
+
+  it.each([
+    [78, /no credential reached the session.*auth_missing/],
+    [127, /CLI is not installed.*not_installed/],
+  ])(
+    "exit %i blocks env_executor_auth with fixed, bounded text from the host only",
+    async (code, text) => {
+      child = () => ({
+        code,
+        verdict: {
+          blocked: "auth_missing",
+          need: "sk-ant-oat01-SECRETSECRETSECRET http://u:tok@p.test",
+        },
+      });
+      const block = await exec("claude");
+      expect(block?.reason).toBe("env_executor_auth");
+      expect(block?.error).toMatch(text);
+      expect(block?.error.startsWith("executor claude: ")).toBe(true);
+      expect(block?.error.length).toBeLessThanOrEqual(1_500);
+      expect(block?.error).not.toMatch(/SECRET|tok@/);
+      expect(removed()).toBe(true);
+      expect([ensured, released]).toEqual([1, 1]);
+    },
+  );
+
+  it("an executor the session cannot see is not probed: no container, no lease", async () => {
+    for (const executor of ["opencode", "copilot"]) expect(await exec(executor)).toBeNull();
+    expect([ensured, released]).toEqual([0, 0]);
+    expect(cli.started).toHaveLength(0);
+  });
+
+  it("is inconclusive, not an auth failure, for a hung session or an unknown exit; torn down either way", async () => {
+    child = () => "hang";
+    expect(await exec("claude", 200)).toBeNull();
+    expect(removed()).toBe(true);
+    expect([ensured, released]).toEqual([1, 1]);
+    // An image whose delegate predates --auth-probe exits 64 (usage).
+    child = () => ({ code: 64, verdict: { error: "usage" } });
+    expect(await exec("claude")).toBeNull();
+    expect(removed()).toBe(true);
+    // A CLI whose --version hangs exits 124 (inconclusive); any other exit is unknown.
+    for (const code of [124, 1, null]) {
+      child = () => ({ code, verdict: { inconclusive: "version_timeout" } });
+      expect(await exec("claude")).toBeNull();
+    }
   });
 });

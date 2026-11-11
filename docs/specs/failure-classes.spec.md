@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # Failure classes
@@ -230,6 +230,7 @@ task. No model session starts and no attempt is spent.
 | The task's project has no repository URL in the pool map but the task needs write or a configured project checkout | `env_repository_unconfigured` |
 | The repository lease is taken and applied, and its OneCLI assignments are confirmed for the preflight's agent (3.3.1) | `env_repository_unavailable` |
 | A preflight session (3.3.1) proves read or write access for exactly this repository (see [project code availability](project-code-availability.spec.md)), within its deadline, and is torn down | `env_repository_unreachable` |
+| The leased executor has a credential and an installed CLI in a preflight session (3.3.1, "Executor probe"), for a task that delegates to a probed executor | `env_executor_auth` |
 | The task workspace has a place: the agent group dir is known and the task has a repository URL | `env_workspace_unconfigured` |
 | The task workspace can be created and read (no `EACCES`, `EPERM` or `EROFS`) | `env_workspace_permission` |
 | The task workspace is a real directory under the workspaces root and a git repository | `env_workspace_invalid` |
@@ -246,6 +247,8 @@ task. No model session starts and no attempt is spent.
 | The task inputs stay within the per-input, per-task and file-count limits | `env_input_limit` |
 | A guarded engine's managed settings register the command guard hook, when the guard is enabled ([command guard](command-guard.spec.md) 3) | `env_guard_missing` |
 
+- The executor probe runs after the repository checks and before the inputs and the
+  workspace, for every task that delegates to a probed executor.
 - The workspace checks run for every task whose project has a configured
   repository, after the repository checks; [task workspace](task-workspace.spec.md)
   3.4 defines them.
@@ -441,10 +444,9 @@ therefore runs in a bounded, ephemeral, model-free session:
 - `env_workspace_missing` is not a preflight check: the channel blocks with it
   when the agent group directory stays missing on the host for 90 s while the
   task is claimed ([stall visibility](stall-visibility.spec.md) 3.7).
-- `env_executor_auth` is reserved for an executor credential check. It is not run
-  yet: `argus-delegate` only runs inside the session container, which does not
-  exist at preflight time (4). Until then a worker whose executor cannot log in
-  reports it with `FAIL (environment):` (3.4).
+- `env_executor_auth` is the executor probe's reason (below). A worker whose
+  executor passes the probe but is rejected by its provider later reports it with
+  `FAIL (environment):` (3.4).
 - `BlockRequest` gains an optional `error` (at most 1,500 characters, redacted by
   the channel like the live log), stored as the task's `error`. A worker may block
   only with an `env_*` reason from `ENV_BLOCK_REASONS` or the reasons it sends
@@ -454,6 +456,38 @@ therefore runs in a bounded, ephemeral, model-free session:
   "repository credential unavailable" message goes away.
 - A blocked `env_*` task shows in the inbox under its project, as blocked tasks
   already do ([MCP operations](mcp-operations.spec.md) 3.2).
+
+**Executor probe.** The same session machinery runs `argus-delegate EXECUTOR
+--auth-probe` as PID 1 for the leased (or pinned) executor, before any model session,
+with the same deadline, teardown and gateway lease. It runs the delegate's own pre-run
+gates (credential present for that executor, CLI installed: `--version`) and nothing else.
+Exit 0 proceeds; 78 (no credentials) and 127 (not installed) block `env_executor_auth`
+with fixed host-written text (at most 1,500 characters, scrubbed): nothing the container
+wrote is copied. No attempt is spent and no model runs. It probes `claude`, `codex` and
+`agent` (Cursor), whose credential the session sees from the gateway alone; `opencode`,
+`copilot` and custom or local accounts depend on policy context or env the worker path
+adds, so they are not probed. A task with no delegated executor is not probed.
+
+The probe keeps four states apart, and only the first two can block:
+
+1. **Credential present** in the session (exit 78 when absent). Presence only: the
+   delegate never reads a credential's content, so a revoked, expired or exhausted one
+   passes.
+2. **CLI available** (`--version` answers; exit 127 when the binary is missing).
+3. **Provider acceptance**: not proven by the probe, by any report field or by any
+   code path. Nothing is called "authenticated" on its evidence.
+4. **Unknown / inconclusive**: a session that cannot finish, a failed teardown, a probe
+   that throws, an image whose delegate lacks `--auth-probe` (exit 64), an unknown exit
+   code, or a CLI whose `--version` does not answer in 15 s (exit 124,
+   `inconclusive: "version_timeout"`). The task proceeds under the delegate's own gate
+   at run time; an inconclusive probe is never `ok` and never a block.
+
+| Evidence | Proves | Does not prove |
+| --- | --- | --- |
+| `argus-delegate --auth-probe` exit 0 | In a session of the agent image with the gateway contribution, the delegate's credential gate passes for that executor and its CLI answers `--version`. | That the provider accepts the credential (a revoked, expired or exhausted one passes), that the gateway injects it on the provider's host, the account's quota, or any model. The CLI is never asked to authenticate or run. |
+| Exit 124, 64, other, or a probe error | Nothing. | Whether the credential or the CLI is usable; the task proceeds. |
+| Exit 78 / 127 | No credential was visible to the executor in the session, or its CLI is missing. | Which side is at fault (lease not applied, stub not mounted, image); the text names both. |
+| Offline tests with a fake docker CLI | The host's control flow: argv, exit-code mapping, redaction, teardown on timeout. | Any real executor, gateway or image. |
 
 ## 3.4 The worker can say "environment"
 
@@ -497,9 +531,6 @@ and whether the model's or the work's own output can forge it.
 
 - Should one `env_repository_*` block hold the project's other ready tasks until
   it is unblocked, or is one cheap preflight per task fine?
-- How should the executor credential be probed before the session starts: a
-  throwaway container on the session image, or a check NanoClaw runs at session
-  start?
 - Is blocking on the first `worker_fail` too strict for tasks that would pass on a
   plain retry? Re-check after two weeks against the baseline.
 - Is 2 consecutive OOM-killed sessions the right threshold for `env_oom`? It is
@@ -586,6 +617,15 @@ and whether the model's or the work's own output can forge it.
     on one pool blocks `env_oom` with the accounting above; a non-OOM outcome,
     another pool, a stale fail and the reaper do not promote; unblock and a
     memory change reset, a retry does not; the cap still ends the loop.
+- Executor probe (3.3.1): `runExecutorPreflight` in `argus-repo-preflight.test.ts`
+  (exit 0, 78 and 127 mapping, redaction, an unprobed executor, and a hung session or
+  exit 64, 124, 1 or none as inconclusive); `argus-delegate.test.mjs` (`--auth-probe`
+  exit 0/78/127 with nothing run, and a `--version` that hangs is 124, never ok or 127);
+  the channel tests in `argus-accounts.test.ts` ("executor credential probe in the
+  channel": a 78 or 127 block is `env_executor_auth` with the attempt, no session, no
+  `/fail`; no delegated executor is never probed; a probe that throws proceeds and
+  reports nothing authenticated; a clean probe runs before the session). Not verified:
+  provider acceptance of any credential, and a real image's delegate.
 - Not verified: real Docker sessions dying, a real NanoClaw host lost mid-claim,
   whether Docker sets `OOMKilled` when a non-init process of the session is
   killed (the [OOM smoke](../runbooks/2026-10-31.oom-smoke.ref.md) checks the

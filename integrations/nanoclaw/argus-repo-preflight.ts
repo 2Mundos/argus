@@ -39,9 +39,11 @@ export interface PreflightChildResult {
 }
 
 export interface PreflightChildRequest {
-  helper: "argus-github-api" | "argus-gitea-api";
-  /** The one repository the child may touch (its whole allowlist). */
+  helper: "argus-github-api" | "argus-gitea-api" | "argus-delegate";
+  /** The one repository the child may touch (its whole allowlist); unused by `argus-delegate`. */
   repositoryUrl: string;
+  /** The executor CLI `argus-delegate --auth-probe` checks; set only for that helper. */
+  executor?: string;
   timeoutMs: number;
   access?: "read" | "write";
   /** The OneCLI agent (agent group id) whose assignments were checked; the session must be its. */
@@ -373,6 +375,56 @@ export function sessionRepositoryProbe(
 // ---------------------------------------------------------------------------
 // The service: lease check, assignment check, probe, one evidence event.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The executor probe: `argus-delegate --auth-probe` in the same bounded session.
+// ---------------------------------------------------------------------------
+
+/**
+ * Executors whose credential the preflight session can see: the gateway contribution
+ * alone supplies it. Opencode, Copilot and custom or local accounts depend on policy
+ * context or an env the worker path adds, so a probe there would block falsely: not probed.
+ */
+export const PROBED_EXECUTORS: ReadonlySet<string> = new Set(["claude", "codex", "agent"]);
+
+/** Exit codes of `argus-delegate` (engines spec) and the fixed text each blocks with. */
+const EXECUTOR_PROBE_FAILURES: Readonly<Record<number, string>> = {
+  78: "no credential reached the session (argus-delegate exit 78, auth_missing): check the executor account lease and its gateway stub",
+  127: "the executor CLI is not installed in the session image (argus-delegate exit 127, not_installed)",
+};
+
+/**
+ * Checks, before any model session, that the leased executor has a credential and an
+ * installed CLI. Returns the `env_executor_auth` block, or null to proceed. It proves only
+ * what `argus-delegate` gates a run on (see failure classes 3.3.1), and it fails open: a
+ * probe session that cannot finish, or an image whose delegate lacks `--auth-probe`, is
+ * inconclusive, not an authentication failure, and the delegate's own gate still applies.
+ * The text is fixed and host-derived: nothing the container wrote is copied.
+ */
+export async function runExecutorPreflight(
+  run: PreflightRunner,
+  executor: string,
+  agentIdentifier?: string,
+  timeoutMs = PREFLIGHT_TIMEOUT_MS,
+): Promise<{ reason: "env_executor_auth"; error: string } | null> {
+  if (!PROBED_EXECUTORS.has(executor)) return null;
+  let result: PreflightChildResult;
+  try {
+    result = await run({
+      helper: "argus-delegate",
+      repositoryUrl: "",
+      executor,
+      timeoutMs,
+      agentIdentifier,
+    });
+  } catch {
+    return null;
+  }
+  const why = EXECUTOR_PROBE_FAILURES[result.exitCode];
+  return why
+    ? { reason: "env_executor_auth", error: safeText(`executor ${executor}: ${why}`, 1_500) }
+    : null;
+}
 
 /** The block reason the channel reports for an outcome; null for `ok`. */
 export function preflightReason(outcome: PreflightOutcome): string | null {
@@ -1025,21 +1077,27 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
       // The composed security profile, user mapping, limits, network and gateway mounts stay
       // as the worker path composed them; the driver realizes them or refuses the spec.
       agent.command = [`/usr/local/bin/${request.helper}`];
-      agent.args = [
-        "repo-preflight",
-        "--repository",
-        request.repositoryUrl,
-        "--access",
-        request.access === "read" ? "read" : "write",
-        "--result-file",
-        `${PREFLIGHT_CONTAINER_DIR}/${PREFLIGHT_RESULT_FILE}`,
-        "--timeout-ms",
-        String(Math.min(30_000, request.timeoutMs)),
-      ];
-      agent.contributedEnv = {
-        ...agent.contributedEnv,
-        ARGUS_REPOSITORIES_JSON: JSON.stringify({ repository: request.repositoryUrl }),
-      };
+      const resultFile = `${PREFLIGHT_CONTAINER_DIR}/${PREFLIGHT_RESULT_FILE}`;
+      if (request.helper === "argus-delegate") {
+        if (!request.executor) throw new Error("the executor probe names no executor");
+        agent.args = [request.executor, "--auth-probe", "--result-file", resultFile];
+      } else {
+        agent.args = [
+          "repo-preflight",
+          "--repository",
+          request.repositoryUrl,
+          "--access",
+          request.access === "read" ? "read" : "write",
+          "--result-file",
+          resultFile,
+          "--timeout-ms",
+          String(Math.min(30_000, request.timeoutMs)),
+        ];
+        agent.contributedEnv = {
+          ...agent.contributedEnv,
+          ARGUS_REPOSITORIES_JSON: JSON.stringify({ repository: request.repositoryUrl }),
+        };
+      }
       agent.labels = { ...agent.labels, "argus-preflight": "1" };
       if (agent.mounts.some((m) => m.containerPath === PREFLIGHT_CONTAINER_DIR))
         throw new Error(`the composed session already mounts ${PREFLIGHT_CONTAINER_DIR}`);

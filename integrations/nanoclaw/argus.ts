@@ -141,6 +141,7 @@ import {
   nanoclawStartupReady,
   PREFLIGHT_TOTAL_MS,
   type ProbeEvidence,
+  runExecutorPreflight,
   runRepositoryPreflight,
   safeText,
   sessionRepositoryProbe,
@@ -373,6 +374,13 @@ export interface ArgusConfig {
     access?: "read" | "write",
     agentIdentifier?: string,
   ) => Promise<ProbeEvidence | void>;
+  /**
+   * The executor credential probe (failure classes 3.3.1), run after the repository
+   * preflight and before any model session: `argus-delegate --auth-probe` for the leased
+   * executor in an ephemeral session. Returns the `env_executor_auth` block, or null to
+   * proceed. Absent: not probed. `fromEnv` wires the ephemeral-session probe.
+   */
+  probeExecutor?: (executor: string) => Promise<{ reason: string; error: string } | null>;
   /**
    * Independent exact-agent evidence on whether the gateway injects the repository credential,
    * consulted only for a 404 that proves no authentication. `fromEnv` leaves it absent: the
@@ -3492,6 +3500,28 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   }
 
   /**
+   * The leased executor's credential and CLI, checked before the model starts. The pinned
+   * executor wins over the leased one, as in the prompt; a task with no delegated executor
+   * is not probed. Inconclusive probes proceed (the probe fails open, never the task).
+   */
+  async function executorPreflight(
+    task: ArgusTask,
+  ): Promise<{ reason: string; error: string } | null> {
+    if (!cfg.probeExecutor || noDelegatedExecutor(task)) return null;
+    const cli = task.executor_model?.executor ?? preferredExecutorForLease(account, executor);
+    if (!cli) return null;
+    try {
+      return await cfg.probeExecutor(cli);
+    } catch (err) {
+      log.warn("The executor probe was inconclusive; continuing", {
+        task: task.id,
+        err: redactSessionTail(String(err)).slice(0, 200),
+      });
+      return null;
+    }
+  }
+
+  /**
    * The task's stable workspace, prepared after repository preflight when the project
    * has a configured repository. Null when skipped or on checkpoint failure payload.
    */
@@ -3848,6 +3878,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         : workerCommandGuardBlock(engine, cfg.managedSettingsPath);
       step = "repository preflight";
       if (!envBlock) envBlock = await repositoryPreflight(task);
+      step = "executor probe";
+      if (!envBlock) envBlock = await executorPreflight(task);
       let workspace: TaskWorkspace | null = null;
       let inputs: MaterializedInput[] = [];
       if (!envBlock) {
@@ -5726,6 +5758,7 @@ export function fromEnv(): ChannelAdapter | null {
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
     probeRepository: sessionRepositoryProbe(nanoclawPreflightRunner(argusGroup)),
+    probeExecutor: (cli) => runExecutorPreflight(nanoclawPreflightRunner(argusGroup), cli),
     sessionImage: nanoclawSessionImage,
     startupReady: nanoclawStartupReady,
     runtime,

@@ -94,6 +94,46 @@ test("a successful run reports engine and executor identity and keeps artifacts"
   assert.ok(report.artifacts[0].startsWith(fs.realpathSync(s.work)));
 });
 
+test("--auth-probe: 0 with a credential and the CLI, 78 without a credential, 127 without the CLI; nothing runs", async (t) => {
+  const s = sandbox(t);
+  const ran = path.join(s.dir, "ran");
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\ntouch ${ran}`,
+  );
+  const resultFile = path.join(s.dir, "result.json");
+  const args = ["claude", "--auth-probe", "--result-file", resultFile];
+  const ok = await run(args, { env: { ...s.env, ANTHROPIC_API_KEY: "placeholder" } });
+  assert.equal(ok.code, 0);
+  assert.deepEqual([ok.report.ok, ok.report.probe], [true, "auth_present"]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(resultFile, "utf8")), ok.report);
+  assert.equal(JSON.stringify(ok.report).includes("placeholder"), false);
+
+  const noAuth = await run(args, { env: s.env });
+  assert.equal(noAuth.code, 78);
+  assert.equal(noAuth.report.blocked, "auth_missing");
+  assert.equal(JSON.parse(fs.readFileSync(resultFile, "utf8")).blocked, "auth_missing");
+
+  fs.rmSync(path.join(s.bin, "claude"));
+  const noCli = await run(args, {
+    env: { ...s.env, PATH: "/nonexistent", ANTHROPIC_API_KEY: "placeholder" },
+  });
+  assert.equal(noCli.code, 127);
+  assert.equal(noCli.report.blocked, "not_installed");
+  assert.equal(fs.existsSync(ran), false, "the CLI was never run beyond --version");
+});
+
+test("--auth-probe: a CLI whose --version hangs is inconclusive (124), never ok and never not_installed", async (t) => {
+  const s = sandbox(t);
+  s.fake("claude", "exec sleep 30");
+  const env = { ...s.env, ANTHROPIC_API_KEY: "placeholder" };
+  const probed = authProbe("claude", env, { versionTimeoutMs: 200 });
+  assert.equal(probed.code, 124);
+  assert.equal(probed.report.inconclusive, "version_timeout");
+  assert.equal(probed.report.ok, undefined);
+  assert.equal(probed.report.blocked, undefined);
+});
+
 test("the pinned task context names the leased engine and account provider (global priority)", async (t) => {
   const s = sandbox(t);
   s.fake(
@@ -690,7 +730,7 @@ test("invalid policies and invalid retry requests fail before CLI execution", as
 // -- Claude gateway sentinel across Claude Code's tool-subprocess boundary ----------------
 
 import { createServer } from "node:http";
-import { isGatewaySentinel, restoreClaudeGatewayAuth } from "./argus-delegate.mjs";
+import { authProbe, isGatewaySentinel, restoreClaudeGatewayAuth } from "./argus-delegate.mjs";
 
 const SENTINEL = "onecli-managed-claude-sentinel";
 const REAL = "sk-ant-" + "oat01-" + "Z".repeat(96); // synthetic: shaped like a real token

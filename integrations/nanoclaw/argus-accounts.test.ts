@@ -2788,6 +2788,102 @@ describe("task-scoped repository auth", () => {
   }
 });
 
+describe("executor credential probe in the channel (failure-classes 3.3.1)", () => {
+  const live: Array<ReturnType<typeof createArgusAdapter>> = [];
+  afterEach(async () => {
+    for (const a of live.splice(0)) await a.teardown();
+  });
+  const pinned = () => ({
+    ...task(),
+    executor_model: { executor: "claude", model: "claude-opus-5-5" },
+  });
+  const start = async (
+    claimed: object,
+    probeExecutor: NonNullable<Parameters<typeof createArgusAdapter>[0]["probeExecutor"]>,
+  ) => {
+    const w = world({ leases: [lease("engine", "dummy-engine-key")], tasks: [claimed] });
+    const h = harness(w, true, {}, { probeExecutor });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    return { w, h };
+  };
+  const paths = (w: ReturnType<typeof world>) => w.calls.map((c) => c.path);
+
+  it.each([
+    [78, "no credential reached the session"],
+    [127, "the executor CLI is not installed"],
+  ])(
+    "a probe block (exit %i) blocks as env_executor_auth: no session, no fail",
+    async (_c, why) => {
+      const probeExecutor = vi.fn(async () => ({
+        reason: "env_executor_auth",
+        error: `executor claude: ${why}`,
+      }));
+      const { w, h } = await start(pinned(), probeExecutor);
+      await until(() => paths(w).includes("/tasks/t1/block"));
+      expect(w.calls.find((c) => c.path === "/tasks/t1/block")!.body).toMatchObject({
+        reason: "env_executor_auth",
+        attempt: 1,
+        error: expect.stringContaining(why),
+      });
+      expect(probeExecutor).toHaveBeenCalledWith("claude");
+      expect(paths(w)).not.toContain("/tasks/t1/fail");
+      expect(h.inbound).toHaveLength(0);
+    },
+  );
+
+  it("a task with no delegated executor is never probed and is not blocked", async () => {
+    const probeExecutor = vi.fn(async () => ({ reason: "env_executor_auth", error: "x" }));
+    const { w, h } = await start({ ...task(), difficulty_executors: [] }, probeExecutor);
+    await until(() => h.inbound.length > 0);
+    expect(probeExecutor).not.toHaveBeenCalled();
+    expect(paths(w)).not.toContain("/tasks/t1/block");
+  });
+
+  it.each([
+    ["throws", () => Promise.reject(new Error("preflight session crashed"))],
+    [
+      "throws synchronously",
+      () => {
+        throw new Error("boom");
+      },
+    ],
+  ])(
+    "a probe that %s is inconclusive: the task proceeds, nothing is called authenticated",
+    async (_n, fn) => {
+      const { w, h } = await start(pinned(), vi.fn(fn as never));
+      await until(() => h.inbound.length > 0);
+      expect(paths(w)).not.toContain("/tasks/t1/block");
+      expect(paths(w)).not.toContain("/tasks/t1/fail");
+      expect(JSON.stringify(w.calls)).not.toMatch(/authenticated/);
+    },
+  );
+
+  it("a clean probe proceeds, and runs before the model session starts", async () => {
+    const order: string[] = [];
+    const w = world({ leases: [lease("engine", "dummy-engine-key")], tasks: [pinned()] });
+    const h = harness(
+      w,
+      true,
+      {},
+      {
+        probeExecutor: async () => {
+          order.push("probe");
+          return null;
+        },
+      },
+    );
+    live.push(h.adapter);
+    vi.mocked(h.setup.onInbound).mockImplementation(async () => {
+      order.push("session");
+    });
+    await h.adapter.setup(h.setup);
+    await until(() => order.includes("session"));
+    expect(order).toEqual(["probe", "session"]);
+    expect(paths(w)).not.toContain("/tasks/t1/block");
+  });
+});
+
 describe("runtime recycling on an account rotation", () => {
   const expired = {
     kind: "chat",
