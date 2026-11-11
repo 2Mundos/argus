@@ -1223,3 +1223,22 @@ def test_owned_argus_tree_is_removed_on_release(isolated_tmpdir: Path) -> None:
         probe.write_text("x", encoding="utf-8")
         _release_data_home(argus, tag, owned)
         assert not argus.exists()
+
+
+def test_first_install_with_workers_uses_one_complete_version(env: Env) -> None:
+    """install.sh and `up --workers` both follow the latest release; its three images share its version."""
+    env.run("up", "--workers")
+    pulled = {c[1] for c in env.state["calls"] if c[0] == "pull"}
+    assert {f"{IMAGE}:v0.8.0", f"{HOST}:v0.8.0", f"{AGENT}:v0.8.0"} <= pulled
+    assert not any(p.endswith((":v0.7.0", ":latest")) for p in pulled)
+    assert env.config()["ARGUS_VERSION"] == "v0.8.0"
+
+
+@pytest.mark.parametrize("missing", [HOST, AGENT])
+def test_first_install_refuses_a_latest_release_without_worker_images(
+    env: Env, missing: str
+) -> None:
+    env.state["missing_images"] = [f"{missing}:v0.8.0"]
+    r = env.run("up", "--workers", ok=False)
+    assert f"no worker image {missing}:v0.8.0" in r.stderr
+    assert not any(c[0] == "stop" for c in env.state["calls"])

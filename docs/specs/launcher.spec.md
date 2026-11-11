@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-11
 ---
 
 # Launcher
@@ -182,7 +182,10 @@ removed by `argus unlock`, never silently. `update` keeps the lock across its
 
 A **first install** is when neither the configured container nor the volume
 exists. Then `up` takes `--version` (default: the newest release) and may
-create an age key.
+create an age key. The newest release is always complete: the workflow makes it
+public only after the API image and both worker images exist for both
+architectures ([releases](releases.spec.md) 3.9), so `install.sh` and `up` never
+select a release whose worker images are missing.
 
 On an **existing install**, the version changes only through `update` or
 `restore`; `up --version` is refused and names `argus update`. When there is
