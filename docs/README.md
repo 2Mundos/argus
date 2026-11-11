@@ -330,6 +330,9 @@ why you are here.
 - [Single-layer experiment](runbooks/2026-11-04.single-layer-experiment.ref.md) —
   operator-run P7 A/B: budget cap, 20 tasks, first-claim checks, stop conditions,
   rollback by flag off and restart; not yet run
+- [OneCLI policy bridge failure](runbooks/2026-11-11.onecli-policy-bridge.ref.md) —
+  tasks blocked `env_repository_unreachable` with `rearm_exhausted`: detect P2028 on the host,
+  restart `onecli`, unblock the tasks
 
 ### Reports
 

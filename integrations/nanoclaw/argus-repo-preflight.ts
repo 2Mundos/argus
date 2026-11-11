@@ -534,10 +534,28 @@ export interface PreflightEvidenceEvent {
   rearmed: boolean;
   /** How many times the lease was re-applied and the probe retried (at most REARM_MAX_ATTEMPTS). */
   rearm_attempts: number;
+  /** Wall-clock ms from the first re-arm round to the end of the last (0 when not re-armed). */
+  rearm_window_ms: number;
+  /**
+   * `gateway_policy_publish` when a re-arm ended exhausted or unproven with no credential
+   * attached: the OneCLI gateway did not publish the policy rule. Otherwise `none`.
+   */
+  fault: "gateway_policy_publish" | "none";
 }
 
 /** Re-arm and probe rounds after a probe that proves no credential was attached. */
 export const REARM_MAX_ATTEMPTS = 4;
+/** Backoff before round 1 is the base; it doubles per round up to the cap (0.5, 1, 2, 4 s). */
+export const REARM_BACKOFF_BASE_MS = 500;
+export const REARM_BACKOFF_CAP_MS = 4_000;
+/**
+ * Hard wall-clock budget for the whole re-arm window. The four waits total at most 7.5 s, so
+ * 20 s leaves room for the re-applications and probes between them while still bounding a
+ * storm of failing publishes (each re-apply makes OneCLI rematerialize its policy rules).
+ * Checked before each wait: a round whose wait would pass the budget is not started.
+ */
+export const REARM_WINDOW_MS = 20_000;
+const FAULT_WINDOW_MAX_MS = 3_600_000;
 const DIAGNOSIS_HINTS: Readonly<Partial<Record<PreflightDiagnosis, string>>> = {
   injection_unverifiable:
     "a 404 with no proof of authentication may be a private repository the OneCLI gateway attached no credential to; no supported OneCLI evidence source can tell (independent injection evidence is unavailable), so the preflight stays fail-closed",
@@ -550,12 +568,32 @@ const DIAGNOSIS_HINTS: Readonly<Partial<Record<PreflightDiagnosis, string>>> = {
     "the probe after re-applying the repository lease did not prove an authenticated credential",
 };
 
-const REARM_BACKOFF_BASE_MS = 1_000;
-const REARM_BACKOFF_MAX_MS = 8_000;
+/**
+ * The wait before re-arm round `round`: exponential (0.5, 1, 2, 4 s, never above the cap) with
+ * equal jitter, so it lands in [ceiling / 2, ceiling) for a `random` in [0, 1).
+ */
+export function rearmBackoffMs(round: number, random: () => number = Math.random): number {
+  const ceiling = Math.min(
+    REARM_BACKOFF_CAP_MS,
+    REARM_BACKOFF_BASE_MS * 2 ** Math.max(0, round - 1),
+  );
+  return Math.floor(ceiling / 2 + random() * (ceiling / 2));
+}
 
-/** 1s, 2s, 4s, 8s for rounds 1..4, never above the cap. */
-export function rearmBackoffMs(round: number): number {
-  return Math.min(REARM_BACKOFF_MAX_MS, REARM_BACKOFF_BASE_MS * 2 ** Math.max(0, round - 1));
+type RearmRound =
+  | { kind: "answer"; answer: ProbeAnswer | void }
+  | { kind: "probe_failed"; error: unknown }
+  | { kind: "rearm_failed" };
+
+/** In-flight re-arm rounds by agent and repository; an entry lives until its round settles. */
+const rearmFlights = new Map<string, Promise<RearmRound>>();
+
+function singleFlight(key: string, run: () => Promise<RearmRound>): Promise<RearmRound> {
+  const flying = rearmFlights.get(key);
+  if (flying) return flying;
+  const round = run().finally(() => rearmFlights.delete(key));
+  rearmFlights.set(key, round);
+  return round;
 }
 
 export interface RepositoryPreflightInput {
@@ -592,8 +630,14 @@ export interface RepositoryPreflightInput {
    * and repository, with the lease held and the assignment confirmed, authorizes a re-arm.
    */
   injectionEvidence?: InjectionEvidenceSource;
-  /** Waits before re-arm round `round` (1-based); defaults to a bounded exponential delay. */
+  /** Waits before re-arm round `round` (1-based); defaults to a jittered, bounded delay. */
   backoff?(round: number): Promise<void>;
+  /** The sleep behind the default backoff; defaults to a timer. */
+  sleep?(ms: number): Promise<void>;
+  /** The wall clock behind the re-arm budget; defaults to `Date.now`. */
+  now?(): number;
+  /** The jitter source, in [0, 1); defaults to `Math.random`. */
+  random?(): number;
   /** Receives the event; a throw or rejection is ignored. */
   emit?(event: PreflightEvidenceEvent): unknown;
   preflightId?: string;
@@ -649,6 +693,8 @@ export async function runRepositoryPreflight(
     canonical: repository.provider === "github" ? "not_reported" : "not_applicable",
     rearmed: false,
     rearm_attempts: 0,
+    rearm_window_ms: 0,
+    fault: "none",
   };
   let repositoryUrl = input.repositoryUrl;
   const finish = async (
@@ -661,6 +707,16 @@ export async function runRepositoryPreflight(
     else if (outcome !== "ok") event.diagnosis = diagnosisOf(outcome);
     const hint = DIAGNOSIS_HINTS[event.diagnosis];
     if (detail !== undefined && hint && outcome !== "ok") detail = `${detail} [${hint}]`;
+    if (
+      (event.diagnosis === "rearm_exhausted" || event.diagnosis === "rearm_unproven") &&
+      event.injection !== "observed"
+    )
+      event.fault = "gateway_policy_publish";
+    // Fixed text and the event's own integers; appended after the bounded detail.
+    const suffix =
+      detail !== undefined && event.diagnosis === "rearm_exhausted"
+        ? ` [the gateway attached no credential; the lease was re-applied ${event.rearm_attempts} times within ${Math.ceil(event.rearm_window_ms / 1000)} seconds; this is a OneCLI policy-publish fault, not a permission or network problem]`
+        : "";
     try {
       await input.emit?.(event);
     } catch {
@@ -670,7 +726,9 @@ export async function runRepositoryPreflight(
       outcome,
       reason: preflightReason(outcome),
       error:
-        detail === undefined ? null : `repository preflight ${outcome}: ${safeText(detail, 500)}`,
+        detail === undefined
+          ? null
+          : `repository preflight ${outcome}: ${safeText(detail, 500)}${suffix}`,
       repositoryUrl,
       event,
     };
@@ -693,8 +751,7 @@ export async function runRepositoryPreflight(
       "assignment_missing",
       `the OneCLI agent ${event.assignment.agent === "found" ? "lacks a scoped, assigned repository secret" : "is missing"} (rest ${event.assignment.rest.state}/${event.assignment.rest.scope}, git ${event.assignment.git.state}/${event.assignment.git.scope})`,
     );
-  const probeOnce = async () => {
-    const answer = await input.probe();
+  const record = (answer: ProbeAnswer | void) => {
     if (answer) {
       // GitHub's spelling stays out of the event: it carries closed values only.
       const { canonical: _canonical, ...evidence } = answer as ProbeAnswer;
@@ -703,6 +760,7 @@ export async function runRepositoryPreflight(
     event.injection = answer?.authentication === "proven" ? "observed" : "unknown";
     return answer;
   };
+  const probeOnce = async () => record(await input.probe());
   /**
    * Whether this failure authorizes a re-arm. The held lease and the confirmed assignment
    * (both checked above) authorize this exact repository; the failure must also show the
@@ -810,35 +868,65 @@ export async function runRepositoryPreflight(
     // A 404 is re-armed only on independent evidence of a missing injection (see
     // `rearmAuthorized`); the cap, the backoff and the attempt counters are the same, nothing
     // is requeued and no failure limit is touched.
+    const now = input.now ?? Date.now;
+    const random = input.random ?? Math.random;
+    const sleep = input.sleep ?? defaultSleep;
+    const windowStart = now();
+    const closeWindow = () => {
+      event.rearm_window_ms = Math.min(
+        FAULT_WINDOW_MAX_MS,
+        Math.max(0, Math.round(now() - windowStart)),
+      );
+    };
     for (let round = 1; round <= REARM_MAX_ATTEMPTS; round++) {
       if (!input.rearm) return finish(failure.outcome, failure.message);
       const decision = await rearmAuthorized(failure);
       if (!decision.rearm) return finish(failure.outcome, failure.message, decision.diagnosis);
-      try {
-        await (input.backoff ?? defaultBackoff)(round);
-        await input.rearm();
-      } catch {
+      const wait = rearmBackoffMs(round, random);
+      // A wait that would pass the budget ends the window: exhausted, not a longer storm.
+      if (now() - windowStart + wait > REARM_WINDOW_MS) break;
+      // Rounds are strictly serial here; concurrent preflights for the same agent and
+      // repository share one round, so a lease is not re-applied while its probe is in flight.
+      const attempt = async (): Promise<RearmRound> => {
+        try {
+          await (input.backoff ? input.backoff(round) : sleep(wait));
+          await input.rearm?.();
+        } catch {
+          return { kind: "rearm_failed" };
+        }
+        try {
+          return { kind: "answer", answer: await input.probe() };
+        } catch (error) {
+          return { kind: "probe_failed", error };
+        }
+      };
+      const shared = input.agentIdentifier
+        ? await singleFlight(
+            `${input.agentIdentifier}|${repository.origin}/${repository.owner}/${repository.repo}`,
+            attempt,
+          )
+        : await attempt();
+      closeWindow();
+      if (shared.kind === "rearm_failed")
         return finish(failure.outcome, failure.message, "rearm_failed");
-      }
       event.rearmed = true;
       event.rearm_attempts = round;
-      try {
-        const after = await probeOnce();
+      if (shared.kind === "answer") {
+        record(shared.answer);
         // Only a probe that proves an authenticated credential ends the recovery.
-        if (after?.authentication !== "proven")
+        if (shared.answer?.authentication !== "proven")
           return finish(
             "unknown",
             "the probe after re-applying the repository lease did not prove a credential",
             "rearm_unproven",
           );
-        return await passed(after);
-      } catch (retry) {
-        if (!(retry instanceof RepositoryPreflightError))
-          return finish("session_failure", message(retry));
-        if (retry.evidence)
-          event.probe = { source: "preflight_session_verdict", ...retry.evidence };
-        failure = retry;
+        return await passed(shared.answer);
       }
+      const retry = shared.error;
+      if (!(retry instanceof RepositoryPreflightError))
+        return finish("session_failure", message(retry));
+      if (retry.evidence) event.probe = { source: "preflight_session_verdict", ...retry.evidence };
+      failure = retry;
     }
     const last = await rearmAuthorized(failure);
     return finish(
@@ -981,7 +1069,6 @@ export interface EphemeralSessionDeps {
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-const defaultBackoff = (round: number) => defaultSleep(rearmBackoffMs(round));
 const message = (error: unknown) =>
   safeText(error instanceof Error ? error.message : String(error));
 
