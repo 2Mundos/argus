@@ -88,7 +88,7 @@ export function parseWaiting(raw: unknown, nowMs: number): Waiting | null {
   if (typeof since !== "string" || since.length > 40) return null;
   const at = Date.parse(since);
   if (!Number.isFinite(at) || at > nowMs + 60_000) return null;
-  const base = { on, ref, since: new Date(at).toISOString() };
+  const base: Waiting = { on, ref, since: new Date(at).toISOString() };
   if (sha === undefined) return base;
   if (typeof sha !== "string" || !/^[0-9a-f]{7,64}$/i.test(sha)) return null;
   return { ...base, sha: sha.toLowerCase() };
