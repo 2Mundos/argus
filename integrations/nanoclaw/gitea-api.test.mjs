@@ -1269,7 +1269,13 @@ describe("argus-gitea-api command matrix", () => {
     const help = await cli(["--help"], gitea);
     assert.match(help.out, /review-findings/);
     assert.match(help.out, /14 {2}ambiguous/);
-    for (const command of ["merge", "pr-merge", "approve", "repo-delete", "request"])
+    assert.doesNotMatch(help.out, /^ {2}merge /m);
+    const before = gitea.calls.length;
+    const merge = await cli(["merge", "--number", "1", "--sha", "a".repeat(40)], gitea);
+    assert.equal(merge.code, EXIT_CODES.policy_denied);
+    assert.match(merge.err, /merge is not supported on Gitea repositories/);
+    assert.equal(gitea.calls.length, before);
+    for (const command of ["pr-merge", "approve", "repo-delete", "request"])
       assert.equal((await cli([command, "--number", "1"], gitea)).code, EXIT_CODES.usage);
     assert.equal(new Set(Object.values(EXIT_CODES)).size, Object.keys(EXIT_CODES).length);
   });

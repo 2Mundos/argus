@@ -262,6 +262,32 @@ export class GitHubApi extends GiteaApi {
     return super.listComments(number, { since, ...page });
   }
 
+  /** Merge at the expected head SHA; returns the PR read back, merged with a merge commit. */
+  async mergePullRequest(number, { sha, merge_method = "merge" }) {
+    const n = positiveNumber(number);
+    const expected = commitSha(sha);
+    const method = token(merge_method, "merge-method", /^(merge|squash|rebase)$/);
+    const pr = await this.getPullRequest(n);
+    if (pr.state !== "open" || pr.merged === true)
+      throw new GiteaError("conflict", "pull request is not open or is already merged");
+    if (pr.head?.sha !== expected)
+      throw new GiteaError(
+        "conflict",
+        "pull request head moved since the expected SHA; re-run the gates on the new head",
+      );
+    const merged = (current) =>
+      current?.merged === true && current.merge_commit_sha ? current : undefined;
+    await this.mutate(
+      `/pulls/${n}/merge`,
+      { method: "PUT", body: { sha: expected, merge_method: method } },
+      async () => merged(await this.getPullRequest(n)),
+    );
+    const readback = await this.getPullRequest(n);
+    if (!merged(readback))
+      throw new GiteaError("bad_response", "merge readback shows no merged PR with a merge commit");
+    return readback;
+  }
+
   pullDiff(number, options) {
     return this.download(`/pulls/${positiveNumber(number)}`, {
       ...options,
@@ -273,7 +299,9 @@ export class GitHubApi extends GiteaApi {
 const NOTES = `GitHub differences: status and statuses add the head SHA's check runs (GitHub
 Actions) and combine them into combined_state; issue-list --type filters client-side
 (pages can come back short); --q, --before, and statuses --state/--sort are refused.
-Authorized merges: PUT /pulls/N/merge with {sha, merge_method} through GitHubApi.request.`;
+merge: refused unless ARGUS_MERGE_AUTHORIZED=1 (set by the Argus channel for pr_merged
+tasks with auto_merge or allow_merge); needs --sha (the expected head SHA), --merge-method
+merge|squash|rebase (default merge); sends PUT /pulls/N/merge and prints the PR read back.`;
 
 /** CLI entry point; injectable for tests. Returns the exit code. */
 export function main(argv, env = process.env, io = {}) {

@@ -24,10 +24,14 @@ function forge(routes) {
 }
 
 async function run(argv, routes) {
+  return runWithEnv(argv, routes, ENV);
+}
+
+async function runWithEnv(argv, routes, env) {
   const { fetch, calls } = forge(routes);
   let out = "";
   let err = "";
-  const code = await main([...argv, "--repository", REPO], ENV, {
+  const code = await main([...argv, "--repository", REPO], env, {
     fetch,
     sleep: async () => {},
     stdout: { write: (c) => (out += c) },
@@ -572,6 +576,74 @@ describe("credential-free GitHub API helper", () => {
     out = "";
     await main(["create", "--help"], ENV, { stdout: { write: (c) => (out += c) } });
     assert.match(out, /^usage: argus-github-api create /);
+  });
+});
+
+describe("merge", () => {
+  const SHA = "a".repeat(40);
+  const MERGED = { number: 4, state: "closed", merged: true, merge_commit_sha: "m".repeat(40) };
+  const open = { number: 4, state: "open", merged: false, head: { sha: SHA } };
+  const merge = (args, routes, authorized = "1") =>
+    runWithEnv(["merge", "--number", "4", "--sha", SHA, ...args], routes, {
+      ...ENV,
+      ARGUS_MERGE_AUTHORIZED: authorized,
+    });
+  const puts = (r) => r.calls.filter((c) => c.method === "PUT");
+
+  it("merges at the expected head and returns the PR read back, for each method", async () => {
+    for (const method of [undefined, "merge", "squash", "rebase"]) {
+      let reads = 0;
+      const r = await merge(method ? ["--merge-method", method] : [], {
+        "GET /pulls/4": () => (reads++ ? MERGED : open),
+        "PUT /pulls/4/merge": { merged: true },
+      });
+      assert.equal(r.code, 0, r.err);
+      assert.deepEqual(r.json(), MERGED);
+      assert.deepEqual(JSON.parse(puts(r)[0].body), {
+        sha: SHA,
+        merge_method: method ?? "merge",
+      });
+    }
+  });
+
+  it("reconciles an ambiguous PUT by reading the PR", async () => {
+    let reads = 0;
+    const r = await merge([], {
+      "GET /pulls/4": () => (reads++ ? MERGED : open),
+      "PUT /pulls/4/merge": new Response("{}", { status: 502 }),
+    });
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.json().merge_commit_sha, MERGED.merge_commit_sha);
+  });
+
+  it("refuses without sending a PUT unless authorized and the PR is open at the SHA", async () => {
+    const routes = (pr) => ({ "GET /pulls/4": pr, "PUT /pulls/4/merge": { merged: true } });
+    const cases = [
+      [["--merge-method", "bogus"], open, "1", 2],
+      [[], open, "", 13],
+      [[], open, "0", 13],
+      [[], open, "true", 13],
+      [[], { ...open, head: { sha: "b".repeat(40) } }, "1", 6],
+      [[], { ...open, state: "closed" }, "1", 6],
+      [[], { ...open, merged: true }, "1", 6],
+    ];
+    for (const [args, pr, authorized, code] of cases) {
+      const r = await merge(args, routes(pr), authorized);
+      assert.equal(r.code, code, r.out);
+      assert.equal(puts(r).length, 0);
+    }
+  });
+
+  it("fails bad_response when the readback shows no merge commit", async () => {
+    const r = await merge([], { "GET /pulls/4": open, "PUT /pulls/4/merge": { merged: true } });
+    assert.equal(r.code, 15);
+  });
+
+  it("is listed in help", async () => {
+    let out = "";
+    await main(["--help"], ENV, { stdout: { write: (c) => (out += c) } });
+    assert.match(out, /^ {2}merge +merge a pull request at the expected head SHA/m);
+    assert.doesNotMatch(out, /no merge, approve/);
   });
 });
 
