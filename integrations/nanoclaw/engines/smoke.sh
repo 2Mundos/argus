@@ -20,7 +20,9 @@ auth() { # id executor
   local id="$1" ex="$2" out code=0
   out="$(docker run --rm --network none -e ARGUS_ENGINE=smoke \
     --entrypoint argus-delegate "$image" "$ex" --cwd /workspace/group --timeout 5 </dev/null 2>/dev/null | tail -1)" || code=$?
-  if [[ "$out" == *'"blocked":"auth_missing"'* ]]; then
+  if [[ "$out" == *'"code":"dsh_provider_credential_missing"'* ]]; then
+    echo "$id|false|fresh container has no provider credential: $(sed -E 's/.*"need":"([^"]*)".*/\1/' <<<"$out") (argus-delegate exit $code, code=dsh_provider_credential_missing)"
+  elif [[ "$out" == *'"blocked":"auth_missing"'* ]]; then
     echo "$id|false|fresh container has no credential (argus-delegate exit $code, blocked=auth_missing)"
   else
     echo "$id|null|unexpected delegate result: ${out:0:160}"
@@ -33,6 +35,8 @@ rows=(
   "$(expect cursor-agent agent '2026.10.16-e3cb207')"
   "$(expect copilot copilot '1.0.105')"
 )
+# dsh is opt-in (ARGUS_DSH_ENABLED=true, like the API): not probed otherwise.
+if [[ "${ARGUS_DSH_ENABLED:-}" == true ]]; then rows+=("$(expect dsh dsh '0.2.2-alpha.3')"); fi
 arows=(
   "$(auth claude claude)"
   "$(auth codex codex)"
@@ -40,6 +44,7 @@ arows=(
   "$(auth cursor-agent agent)"
   "$(auth copilot copilot)"
 )
+if [[ "${ARGUS_DSH_ENABLED:-}" == true ]]; then arows+=("$(auth dsh dsh)"); fi
 mkdir -p "$(dirname "$ledger")"
 node - "$ledger" "$image" "${rows[@]}" -- "${arows[@]}" <<'JS'
 const fs = require("fs");
@@ -57,7 +62,7 @@ for (const id of Object.keys(installed)) {
   e.installed = { ...installed[id], at };
   e.authenticated = { ...authed[id], at };
   e.image = image;
-  const m = installed[id].detail.match(/(\d+\.\d+\.\d+|\d{4}\.\d+\.\d+-[0-9a-f]+)/);
+  const m = installed[id].detail.match(/(\d+\.\d+\.\d+(?:-alpha\.\d+)?|\d{4}\.\d+\.\d+-[0-9a-f]+)/);
   if (installed[id].ok && m) e.version = m[1];
 }
 fs.writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);

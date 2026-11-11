@@ -18,7 +18,7 @@ Four axes are kept apart because one string ("anthropic", "codex") hides them:
 |---|---|---|
 | model provider / model | whose model answers? | `openai/gpt-*`, `anthropic/claude-*`, `local/qwen3.8-flash-next-iq3_xxs` |
 | **engine** (harness/runtime) | what runs the agent loop of the worker? | NanoClaw provider `codex` or `claude`, whichever the best-priority leased account runs |
-| **executor** (CLI) | what a worker delegates non-interactive jobs to | `claude`, `codex`, `opencode`, `agent` (Cursor) |
+| **executor** (CLI) | what a worker delegates non-interactive jobs to | `claude`, `codex`, `opencode`, `agent` (Cursor), `dsh` (opt-in) |
 | account / auth | which credential or login makes it work? | Argus account (`provider` string), a native CLI login in a private volume |
 
 In scope:
@@ -62,6 +62,27 @@ In scope:
   the key only in `ARGUS_ACCOUNT_API_KEY`; `claude` and `agent` are refused there.
   The harness uses Claude Code against a host bridge, not the provider URL directly.
 
+- **`dsh` (DeepSeek Harness) is an opt-in executor** ([draft](../drafts/2026-11-04.dsh-engine.draft.md)),
+  off unless `ARGUS_DSH_ENABLED=true`: disabled, the catalogue does not list it and
+  `smoke.sh` does not probe it; no other engine's default changes. It is an executor
+  only, on the custom-account contract: `argus-delegate dsh` takes `base_url` and
+  `model` from the lease `settings` and the key from `ARGUS_ACCOUNT_API_KEY` (never
+  in a file or argv). dsh reads its provider from a profile overlay, so the delegate
+  writes a per-run overlay (no key) and runs
+  `dsh --profile headless --patch OVERLAY --json -` in the task workspace, prompt on
+  stdin, `DSH_HOME` a private per-run dir. Its ndjson `final` event is the summary;
+  an `error` event, a non-`completed` final or no final is a failure; unknown events
+  are ignored; the dsh version is reported. Blocked reports keep the usual
+  `blocked` value and add a `code`: `dsh_not_installed` (127),
+  `dsh_provider_credential_missing` or `dsh_provider_unconfigured` (78), or the
+  `<CODE>` of a stderr `dsh: <CODE>: <message>` line when it is `MISSING_CREDENTIAL`
+  or `INVALID_CREDENTIAL` (78). `installed` is the `dsh --version` result and never
+  sets `authenticated`: with the key unset, `authenticated` is `false` with the
+  `ARGUS_ACCOUNT_API_KEY` reason. dsh needs **Node >= 24.9**; the agent image keeps
+  Node 22, so `integrations/nanoclaw/install-dsh.sh` unpacks a pinned Node 24 (sha256
+  per arch) and a pinned dsh (npm sha512 integrity) into their own prefixes with
+  a `dsh` wrapper, failing closed before extracting on any mismatch or unsupported
+  arch. The script is not yet run by the image build (needs `xz-utils`).
 - **Readiness is three separate facts, never one.** `installed` (the binary
   exists in the image and reports the pinned version), `authenticated` (a
   credential for *that container's* use exists), `validated` (a real
@@ -75,7 +96,7 @@ In scope:
   login proves nothing about a container.
 - **Two layers per engine.** An engine is a *harness* (the NanoClaw provider that
   runs the agent loop) and/or an *executor* (the CLI `argus-delegate` runs for
-  the code). Matrix: Claude and Codex are both; opencode and Cursor (`agent`) are
+  the code). Matrix: Claude and Codex are both; opencode, Cursor (`agent`) and `dsh` are
   executors only; `local` is an executor only. Each layer has its own
   `readiness`, `accounts` and `usable` in `layers[]`: validating Claude as a
   harness proves nothing about Claude as an executor. The top-level `readiness`,
@@ -238,7 +259,7 @@ In scope:
   MCP tools, settings
   `ARGUS_LOCAL_MODEL_URL`, `ARGUS_LOCAL_MODEL`, `ARGUS_LOCAL_MAX_INPUT_FRACTION`,
   `ARGUS_LOCAL_OUTPUT_RESERVE`, `ARGUS_LOCAL_CHAT_TEMPLATE_OVERHEAD`,
-  `ARGUS_ENGINES_LEDGER`, `ARGUS_DIFFICULTY_EXECUTORS`.
+  `ARGUS_ENGINES_LEDGER`, `ARGUS_DIFFICULTY_EXECUTORS`, `ARGUS_DSH_ENABLED`.
 - Local acceptance criteria: `must_contain`, literal `equals`, `max_chars`, and a
   **restricted** `json_schema` subset (no `$ref`, `pattern`, or remote resolution).
   Legacy `must_match` (regex) is rejected with 422. Empty criteria are rejected
@@ -248,7 +269,7 @@ In scope:
   includes a fake-API end-to-end run of both arms and the fallbacks.
 - `integrations/nanoclaw/engines/`: installer for the Codex payload and the
   CLI manifest, the image steps for opencode and the Cursor agent (checksum
-  pinned), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
+  pinned), `install-dsh.sh` (and its test), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
   (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client and rsync on
   top of NanoClaw's image, applied by `provision.sh`; its build context is a
   staged copy of `engines/` plus `../gitea-api.mjs`, and CI's `tools-layer` job

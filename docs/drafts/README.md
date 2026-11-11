@@ -16,7 +16,7 @@ Every draft in this directory with its status, kept in sync by
 | [Task operations and reliability](2026-10-29.task-operations.draft.md) | `partial` |
 | [Verification boundary in specs](2026-10-29.verification-boundary.draft.md) | `implemented` |
 | [Replay engine](2026-10-31.replay-engine.draft.md) | `implemented` |
-| [DeepSeek Harness as an engine](2026-11-04.dsh-engine.draft.md) | `draft` |
+| [DeepSeek Harness as an engine](2026-11-04.dsh-engine.draft.md) | `partial` |
 | [Engine transcript replay](2026-11-04.engine-transcript-replay.draft.md) | `partial` |
 | [Failure evidence audit](2026-11-04.failure-evidence-audit.draft.md) | `implemented` |
 | [Postmortems](2026-11-04.postmortems.draft.md) | `implemented` |

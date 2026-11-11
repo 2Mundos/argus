@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 //                  [--model-attempt N --fallback-reason REASON]
 //   argus-delegate EXECUTOR --auth-probe [--result-file F]
 //
-// EXECUTOR is claude | codex | opencode | agent | copilot. The prompt comes from stdin or
+// EXECUTOR is claude | codex | opencode | agent | copilot | dsh. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
 // engine that delegated and the executor that did the work, how it ended, and
 // the artifacts, and the run's token usage (`usage`, `run_key`, `usage_report`; see
@@ -56,7 +56,7 @@ import {
   USAGE_RELAY_FILE,
 } from "./usage.mjs";
 
-export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot"];
+export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot", "dsh"];
 
 /**
  * Not a credential: the value the NanoClaw host gives the worker when every Copilot
@@ -179,12 +179,16 @@ export function pinnedModel(snapshot, executor) {
   return pin?.executor === executor ? pin.model : undefined;
 }
 
+const DSH_NEED_KEY = `${CUSTOM_KEY_ENV} (the provider key for dsh, from the lease)`;
+
 /** Is a credential present for this executor? Presence only, never content. */
 export function authStatus(executor, e = process.env, home = os.homedir(), settings = null) {
   if (settings && settingsSupport(executor).length) {
     return env(e, CUSTOM_KEY_ENV)
       ? { ok: true }
-      : { ok: false, need: `${CUSTOM_KEY_ENV} (the custom account's key, from the lease)` };
+      : executor === "dsh"
+        ? { ok: false, need: DSH_NEED_KEY, code: "dsh_provider_credential_missing" }
+        : { ok: false, need: `${CUSTOM_KEY_ENV} (the custom account's key, from the lease)` };
   }
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
   const data = e.XDG_DATA_HOME || path.join(home, ".local/share");
@@ -226,6 +230,10 @@ export function authStatus(executor, e = process.env, home = os.homedir(), setti
             ok: false,
             need: "the gateway's COPILOT_GITHUB_TOKEN sentinel (an Argus copilot executor lease)",
           };
+    case "dsh":
+      return env(e, CUSTOM_KEY_ENV)
+        ? { ok: true }
+        : { ok: false, need: DSH_NEED_KEY, code: "dsh_provider_credential_missing" };
     default:
       return { ok: false, need: "unknown executor" };
   }
@@ -395,6 +403,67 @@ export function applySettingsEnv(executor, e, settings, model) {
 }
 
 /**
+ * dsh reads its provider from a profile overlay, not from env: the custom account's
+ * base URL and model, with the key named by env var only (it never enters the file).
+ */
+export function dshOverlay(settings, model) {
+  const yaml = (v) => JSON.stringify(v);
+  return [
+    "- id: llm-pi-ai",
+    "  config:",
+    "    providers:",
+    `      ${CUSTOM_PROVIDER_ID}:`,
+    "        displayName: custom",
+    `        apiKeyEnv: ${CUSTOM_KEY_ENV}`,
+    "        api: openai-completions",
+    `        baseURL: ${yaml(settings.base_url)}`,
+    "        models:",
+    `          - id: ${yaml(model)}`,
+    "- id: agent-default-model",
+    "  config:",
+    `    provider: ${CUSTOM_PROVIDER_ID}`,
+    `    model: ${yaml(model)}`,
+    "",
+  ].join("\n");
+}
+
+const DSH_AUTH_CODES = new Set(["MISSING_CREDENTIAL", "INVALID_CREDENTIAL"]);
+
+/**
+ * What a dsh `--json` run says: its `final` event is the answer, a failed `final` or an
+ * `error` event is a failure, unknown events are ignored. The structured stderr line
+ * `dsh: <CODE>: <message>` carries the error code; an auth code keeps it (`auth`).
+ */
+export function dshOutcome(stdoutText, stderrText = "") {
+  let final = null;
+  let error = null;
+  for (const row of stdoutText.split("\n")) {
+    let ev;
+    try {
+      ev = JSON.parse(row);
+    } catch {
+      continue;
+    }
+    if (ev?.type === "final") final = ev;
+    else if (ev?.type === "error") error = ev;
+  }
+  const line = /^dsh: ([A-Z][A-Z_]*): (.*)$/m.exec(stderrText);
+  const code = line?.[1] ?? final?.reason?.error?.code ?? null;
+  const summary = typeof final?.text === "string" ? final.text : "";
+  let failure = null;
+  if (final && final.reason?.kind !== "completed")
+    failure = {
+      kind: "dsh_error",
+      detail: String(final.reason?.error?.message ?? line?.[2] ?? "dsh run failed"),
+    };
+  else if (error) failure = { kind: "dsh_error", detail: String(error.message ?? "dsh error") };
+  else if (!final)
+    failure = { kind: "no_final", detail: line?.[2] ?? "dsh emitted no final event" };
+  if (failure && code) failure.code = code;
+  return { summary, failure, auth: Boolean(code && DSH_AUTH_CODES.has(code)), code };
+}
+
+/**
  * The argus-task wait cap the executor's shell can hold (task-helpers spec 3.8). Claude's
  * comes from its managed settings (480 s); every other executor gets the helper's default
  * (110 s), not the harness's value it would otherwise inherit.
@@ -416,7 +485,7 @@ function backgroundShellTimeoutS(e) {
 /** The exact argv for one non-interactive run. `prompt` is passed on stdin or as an argument. */
 export function buildCommand(
   executor,
-  { cwd, model, readOnly, lastMessageFile, settings = null },
+  { cwd, model, readOnly, lastMessageFile, settings = null, overlayFile = null },
   e = process.env,
 ) {
   switch (executor) {
@@ -516,6 +585,14 @@ export function buildCommand(
         promptVia: "argv",
         readOnlyEnforcement: readOnly ? "copilot_deny_write_and_shell" : "copilot_allow_write_only",
       };
+    case "dsh":
+      // --patch is a launcher flag: it goes before the profile's own arguments.
+      return {
+        bin: "dsh",
+        args: ["--profile", "headless", "--patch", overlayFile, "--json", "-"],
+        promptVia: "stdin",
+        readOnlyEnforcement: "prompt_only",
+      };
     default:
       throw new Error(`unknown executor ${executor}`);
   }
@@ -611,6 +688,14 @@ export function prepareCopilotEnv(e, runtimeRoot) {
   };
 }
 
+/** dsh writes sessions under DSH_HOME: a fresh private tree, removed when the delegate exits. */
+export function prepareDshEnv(e, runtimeRoot) {
+  const home = path.join(runtimeRoot, "dsh-home", randomUUID());
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  process.once("exit", () => fs.rmSync(home, { recursive: true, force: true }));
+  return { ...e, DSH_HOME: home };
+}
+
 /**
  * Cursor CLI runtime: gateway stubs stay read-only mounts; the native CLI needs a
  * writable CURSOR_CONFIG_DIR for atomic cli-config updates even when HTTP/1.1 is preset.
@@ -621,6 +706,7 @@ export function prepareExecutorEnv(
   runtimeRoot = "/tmp/argus-cursor-runtime",
 ) {
   if (executor === "copilot") return prepareCopilotEnv(e, runtimeRoot);
+  if (executor === "dsh") return prepareDshEnv(e, runtimeRoot);
   if (executor !== "agent") return e;
   const home = e.HOME || os.homedir();
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
@@ -879,11 +965,27 @@ export function authProbe(
   e = withCliToolsPath(e);
   const auth = authStatus(executor, e, os.homedir(), null);
   if (!auth.ok)
-    return { code: 78, report: { ...identity, blocked: "auth_missing", need: auth.need } };
+    return {
+      code: 78,
+      report: {
+        ...identity,
+        blocked: "auth_missing",
+        need: auth.need,
+        ...(auth.code ? { code: auth.code } : {}),
+      },
+    };
   const cli = cliState(executor, e, versionTimeoutMs);
   if (cli === "timeout")
     return { code: 124, report: { ...identity, inconclusive: "version_timeout" } };
-  if (cli === "missing") return { code: 127, report: { ...identity, blocked: "not_installed" } };
+  if (cli === "missing")
+    return {
+      code: 127,
+      report: {
+        ...identity,
+        blocked: "not_installed",
+        ...(executor === "dsh" ? { code: "dsh_not_installed" } : {}),
+      },
+    };
   return { code: 0, report: { ...identity, ok: true } };
 }
 
@@ -1013,14 +1115,33 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   // Auth first: a missing credential blocks, it never reroutes.
   const auth = authStatus(executor, e, os.homedir(), settings);
   if (!auth.ok) {
-    reportBlocked(e, snapshot, selection, executor, "auth_missing");
-    finish(78, { ...identity, blocked: "auth_missing", need: auth.need });
+    reportBlocked(e, snapshot, selection, executor, auth.code ?? "auth_missing");
+    finish(78, {
+      ...identity,
+      blocked: "auth_missing",
+      need: auth.need,
+      ...(auth.code ? { code: auth.code } : {}),
+    });
+  }
+  // dsh has no provider of its own: the account's base URL and a model are required.
+  if (executor === "dsh" && (!settings || !selection.configured_model)) {
+    reportBlocked(e, snapshot, selection, executor, "dsh_provider_unconfigured");
+    finish(78, {
+      ...identity,
+      blocked: "auth_missing",
+      code: "dsh_provider_unconfigured",
+      need: "custom account settings with base_url and model (ARGUS_ACCOUNT_SETTINGS)",
+    });
   }
 
   const version = versionOf(executor === "agent" ? "agent" : executor, e);
   if (version === null) {
     reportBlocked(e, snapshot, selection, executor, "not_installed");
-    finish(127, { ...identity, blocked: "not_installed" });
+    finish(127, {
+      ...identity,
+      blocked: "not_installed",
+      ...(executor === "dsh" ? { code: "dsh_not_installed" } : {}),
+    });
   }
 
   let prompt = opts.promptFile ? fs.readFileSync(opts.promptFile, "utf8") : await readStdin();
@@ -1052,6 +1173,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       outcome.report.signal ||
       outcome.report.interrupted ||
       outcome.report.exit_code === 127 ||
+      outcome.report.blocked ||
       /quota|rate.?limit|out of credits|unauthori[sz]ed|authentication|invalid.?api.?key|insufficient.*(credit|balance)/i.test(
         outcome.report.tail + " " + outcome.report.stderr_tail,
       )
@@ -1146,9 +1268,19 @@ async function runAttempt(
   const evidence = { ...selection, task: snapshot.context, policy: snapshot.policy };
   fs.writeFileSync(reportFile, JSON.stringify({ ...evidence, status: "started" }) + "\n");
   const lastMessageFile = `${base}.last-message.txt`;
+  const overlayFile = `${base}.dsh-overlay.yml`;
+  if (executor === "dsh")
+    fs.writeFileSync(overlayFile, dshOverlay(settings, selection.configured_model));
   const cmd = buildCommand(
     executor,
-    { cwd, model: selection.configured_model, readOnly: opts.readOnly, lastMessageFile, settings },
+    {
+      cwd,
+      model: selection.configured_model,
+      readOnly: opts.readOnly,
+      lastMessageFile,
+      settings,
+      overlayFile,
+    },
     e,
   );
   e = applySettingsEnv(executor, e, settings, selection.configured_model);
@@ -1380,6 +1512,10 @@ async function runAttempt(
   const artifacts = [stdoutFile, stderrFile];
   if (fs.existsSync(lastMessageFile)) artifacts.push(lastMessageFile);
   const stdoutText = fs.readFileSync(stdoutFile, "utf8");
+  // dsh's answer is its final event: it becomes the last message, like Codex's -o file.
+  const dsh =
+    executor === "dsh" ? dshOutcome(stdoutText, fs.readFileSync(stderrFile, "utf8")) : null;
+  if (dsh?.summary) fs.writeFileSync(lastMessageFile, dsh.summary);
   const tailSource = fs.existsSync(lastMessageFile) ? lastMessageFile : stdoutFile;
   const secrets = [e[CUSTOM_KEY_ENV], e.COPILOT_GITHUB_TOKEN]
     .map((v) => (v ?? "").trim())
@@ -1388,15 +1524,20 @@ async function runAttempt(
   const tail = redact(fs.readFileSync(tailSource, "utf8")).slice(-TAIL_CHARS);
   const stderrText = fs.readFileSync(stderrFile, "utf8");
   const jsonFail =
-    !timedOut && code === 0
-      ? executorJsonFailure(executor, stdoutText)
-      : executor === "copilot" &&
-          !timedOut &&
-          !interrupted &&
-          copilotAuthRejected(`${stdoutText}\n${stderrText}`)
-        ? { kind: "auth_rejected", detail: "GitHub Copilot rejected the credential" }
-        : null;
-  const exit = timedOut ? 124 : interrupted || jsonFail || code !== 0 ? 1 : 0;
+    dsh && !timedOut && !interrupted
+      ? code === 0 || dsh.failure
+        ? dsh.failure
+        : { kind: "dsh_error", detail: `dsh exited ${code}` }
+      : !timedOut && code === 0
+        ? executorJsonFailure(executor, stdoutText)
+        : executor === "copilot" &&
+            !timedOut &&
+            !interrupted &&
+            copilotAuthRejected(`${stdoutText}\n${stderrText}`)
+          ? { kind: "auth_rejected", detail: "GitHub Copilot rejected the credential" }
+          : null;
+  const dshBlocked = dsh?.auth && !timedOut && !interrupted;
+  const exit = timedOut ? 124 : dshBlocked ? 78 : interrupted || jsonFail || code !== 0 ? 1 : 0;
   const taskId = taskIdEarly;
   const usage = parseUsage(executor, stdoutText);
   // Only what the CLI printed: Claude's init model, else the dominant modelUsage entry.
@@ -1476,6 +1617,10 @@ async function runAttempt(
     tail,
     stderr_tail: redact(stderrText).slice(-TAIL_CHARS),
     ...(jsonFail ? { executor_error: { ...jsonFail, detail: redact(jsonFail.detail) } } : {}),
+    ...(dshBlocked
+      ? { blocked: "auth_missing", code: dsh.code, need: redact(jsonFail?.detail ?? "") }
+      : {}),
+    ...(dsh ? { dsh_version: version } : {}),
   };
   fs.writeFileSync(reportFile, JSON.stringify(report, null, 2) + "\n");
   // Terminal update for the same execution key (fills gaps / advances state).
