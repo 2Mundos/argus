@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import { copilotAuthRejected } from "./engines/argus-delegate.mjs";
 import { parseUsage } from "./engines/usage.mjs";
 import {
   claudeAuthExpiredError,
@@ -95,7 +96,27 @@ export function deriveCursor(events: CursorEvent[]) {
   };
 }
 
-export const DERIVE = { claude: deriveClaude, codex: deriveCodex, cursor: deriveCursor } as const;
+/**
+ * Copilot CLI (`copilot -s`) prints plain text, so its recordings are text, not JSON lines.
+ * Uses the production auth-rejection and usage functions (engines/argus-delegate.mjs, usage.mjs).
+ */
+export function deriveCopilot(run: string | { stdout?: string; stderr?: string }) {
+  const { stdout = "", stderr = "" } = typeof run === "string" ? { stdout: run } : run;
+  return {
+    authRejected: copilotAuthRejected(`${stdout}\n${stderr}`),
+    usage: parseUsage("copilot", stdout),
+  };
+}
+
+export const DERIVE = {
+  claude: deriveClaude,
+  codex: deriveCodex,
+  cursor: deriveCursor,
+  copilot: deriveCopilot,
+} as const;
+
+/** Engines whose recordings are plain text rather than JSON lines. */
+const TEXT_ENGINES = new Set(["copilot"]);
 
 export function readEvents(path: string): unknown[] {
   return readFileSync(path, "utf8")
@@ -113,5 +134,6 @@ if (import.meta.main) {
     console.error(`usage: transcripts-derive.ts <${Object.keys(DERIVE).join("|")}> <events.jsonl>`);
     process.exit(2);
   }
-  console.log(JSON.stringify(derive(readEvents(path) as never), null, 2));
+  const input = TEXT_ENGINES.has(engine) ? readFileSync(path, "utf8") : readEvents(path);
+  console.log(JSON.stringify(derive(input as never), null, 2));
 }
