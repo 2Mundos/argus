@@ -299,9 +299,11 @@ export class GitHubApi extends GiteaApi {
 const NOTES = `GitHub differences: status and statuses add the head SHA's check runs (GitHub
 Actions) and combine them into combined_state; issue-list --type filters client-side
 (pages can come back short); --q, --before, and statuses --state/--sort are refused.
-merge: refused unless ARGUS_MERGE_AUTHORIZED=1 (set by the Argus channel for pr_merged
-tasks with auto_merge or allow_merge); needs --sha (the expected head SHA), --merge-method
-merge|squash|rebase (default merge); sends PUT /pulls/N/merge and prints the PR read back.`;
+merge: refused unless the Argus channel issued an authorization for this attempt (pr_merged
+tasks with auto_merge or allow_merge, with repository:write): ARGUS_MERGE_AUTH_KEY, _TASK and
+_ATTEMPT plus ARGUS_MERGE_AUTHORIZED, the HMAC-SHA256 of the key over merge:TASK:ATTEMPT. A
+missing token, a bare or worker-set one, and a stale or altered one are refused; needs --sha
+(the expected head SHA), --merge-method merge|squash|rebase (default merge); sends PUT /pulls/N/merge and prints the PR read back.`;
 
 /** CLI entry point; injectable for tests. Returns the exit code. */
 export function main(argv, env = process.env, io = {}) {

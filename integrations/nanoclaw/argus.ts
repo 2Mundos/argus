@@ -126,6 +126,7 @@ import {
   removeLocalHarnessFile,
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
+import { scopeMergeAuthorization, taskAuthorizesMerge, taskMayMerge } from "./argus-merge-auth.js";
 import { createMilestoneRelay, MILESTONE_RELAY_FILE } from "./argus-milestone-relay.js";
 import {
   createProvisionalUsageRelay,
@@ -194,6 +195,9 @@ import {
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import { prepareTaskWorkspace, taskBranch, type WorkspaceResult } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
+
+export { taskAuthorizesMerge } from "./argus-merge-auth.js";
+
 import {
   loadPolicy,
   type ModelSelection,
@@ -690,17 +694,6 @@ export function heldAccountFits(
     return false;
   const pinned = task.harness_model && PIN_PROVIDERS[task.harness_model.engine];
   return !pinned || pinned === held.provider;
-}
-
-/** True only when an orchestrator-origin task's input explicitly sets delivery.allow_merge to boolean true. */
-export function taskAuthorizesMerge(task: ArgusTask): boolean {
-  // The operator's setting, delivered with the claim, is authenticated metadata.
-  if (task.auto_merge === true && task.deliverable === "pr_merged") return true;
-  // `input` of a worker-created task is worker-authored: it can never grant authority.
-  if (task.prompt_trust === "worker") return false;
-  const delivery = task.input?.delivery;
-  if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return false;
-  return (delivery as Record<string, unknown>).allow_merge === true;
 }
 
 /** The prepared task workspace the prompt points the model at (task workspace spec). */
@@ -2097,6 +2090,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   /** The claim's forge-review policy in the host env for this task (settings 3.12). */
   function scopeTaskForgeReview(task: ArgusTask | undefined) {
     scopeForgeReview(process.env, task);
+  }
+  /** The channel-issued merge authorization of this attempt in the host env; none between tasks. */
+  function scopeTaskMerge(task: ArgusTask | undefined) {
+    scopeMergeAuthorization(process.env, task, task ? taskMayMerge(task) : false);
   }
   let repositoryAssignmentReconciled = false;
   let abortClaim: AbortController | null = null;
@@ -3972,6 +3969,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       scopeTaskGitIdentity(claimedGitIdentity(task.git_identity));
       scopeTaskCommandGuard(task.command_guard_enabled);
       scopeTaskForgeReview(task);
+      scopeTaskMerge(task);
       let envBlock: { reason: string; error: string } | null = cfg.sessionImage
         ? await sessionImageCommandGuardBlock(engine, cfg.sessionImage, cfg.readImageFile)
         : workerCommandGuardBlock(engine, cfg.managedSettingsPath);
@@ -4068,6 +4066,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       scopeTaskGitIdentity(null);
       scopeTaskCommandGuard(undefined);
       scopeTaskForgeReview(undefined);
+      scopeTaskMerge(undefined);
       if (repositoryLeaseHeld && cfg.accounts) {
         repositoryLeaseHeld = false;
         activeRepositoryLease = null;
