@@ -49,6 +49,10 @@ export function parseAccountSettings(raw) {
 /** What the executor can take from the settings; Codex cannot add body fields (`provider`). */
 export function settingsSupport(executor) {
   return (
-    { opencode: ["base_url", "model", "provider"], codex: ["base_url", "model"] }[executor] ?? []
+    {
+      opencode: ["base_url", "model", "provider"],
+      codex: ["base_url", "model"],
+      dsh: ["base_url", "model"],
+    }[executor] ?? []
   );
 }

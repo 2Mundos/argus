@@ -97,6 +97,7 @@ async def _catalog(
         local_identity=identity,
         local_validated_event=event_validated,
         accounts=await _account_summaries(db, secrets),
+        dsh_enabled=settings.dsh_enabled,
     )
 
 

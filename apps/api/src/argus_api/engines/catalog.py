@@ -89,6 +89,24 @@ _DECLARED: list[tuple[str, str, tuple[EngineLayer, ...], Axes, list[str], str]] 
     ),
 ]
 
+# Opt-in executor: build() lists it only when the operator enables it (engines spec).
+_DSH = (
+    "dsh",
+    "dsh",
+    (X,),
+    Axes(
+        model_provider="per-config",
+        model=None,
+        harness="dsh --profile headless",
+        executor="dsh",
+        account_provider=None,
+    ),
+    ["custom-account-key"],
+    "Code executor only, off unless the operator enables it. Runs on the custom "
+    "account's base URL, model and key (ARGUS_ACCOUNT_API_KEY); `installed` is "
+    "the `dsh --version` result and never implies `authenticated`.",
+)
+
 LOCAL_ID = "local"
 _FACTS = ("installed", "authenticated", "validated")
 
@@ -175,11 +193,15 @@ def build(
     local_identity: dict | None = None,
     local_validated_event: Fact | None = None,
     accounts: dict[str, AccountsSummary] | None = None,
+    dsh_enabled: bool = False,
 ) -> EngineCatalog:
     """`accounts` maps an account provider to its registry counts; None means the
     registry was not consulted and the ledger alone decides."""
     entries: list[EngineEntry] = []
-    for eid, label, layer_ids, axes, auth, notes in _DECLARED:
+    for eid, label, layer_ids, axes, auth, notes in (
+        *_DECLARED,
+        *((_DSH,) if dsh_enabled else ()),
+    ):
         rec = ledger.get(eid, {})
         summary: AccountsSummary | None = None
         if accounts is not None and axes.account_provider:

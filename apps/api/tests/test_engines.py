@@ -997,3 +997,35 @@ def test_loopback_mcp_orchestrator_envelope(loopback_client: TestClient) -> None
     assert decision["target"] == "local"
     assert run["model"] == _real_local_model()
     assert "pong" in (run.get("text") or "").lower()
+
+
+def test_dsh_is_opt_in_and_a_version_never_authenticates_it() -> None:
+    ledger = {
+        "dsh": {
+            "installed": ok_fact("0.2.2-alpha.3"),
+            "authenticated": {
+                "ok": False,
+                "detail": "ARGUS_ACCOUNT_API_KEY (the provider key for dsh, from the lease)",
+                "at": NOW,
+            },
+            "version": "0.2.2-alpha.3",
+        }
+    }
+    assert "dsh" not in {e.id for e in catalog.build(ledger, None, None).engines}
+    entry = next(
+        e
+        for e in catalog.build(ledger, None, None, dsh_enabled=True).engines
+        if e.id == "dsh"
+    )
+    assert entry.version == "0.2.2-alpha.3"
+    assert entry.readiness.installed.ok is True
+    assert entry.readiness.authenticated.ok is False
+    assert "ARGUS_ACCOUNT_API_KEY" in entry.readiness.authenticated.detail
+    assert entry.usable is False
+    bare = catalog.build(
+        {"dsh": {"installed": ok_fact()}}, None, None, dsh_enabled=True
+    )
+    assert (
+        next(e for e in bare.engines if e.id == "dsh").readiness.authenticated.ok
+        is None
+    )

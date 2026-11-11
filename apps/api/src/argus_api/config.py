@@ -78,6 +78,8 @@ class Settings:
     # harness spec, "Health per account").
     local_health_interval_s: float = 30.0
     engines_ledger: Path | None = None  # default: <data_dir>/engines-ledger.json
+    # The dsh executor is listed only when the operator opts in (ARGUS_DSH_ENABLED=true).
+    dsh_enabled: bool = False
     # Executor order per difficulty level, over the defaults in engines/router.py
     # (ARGUS_DIFFICULTY_EXECUTORS, JSON: {"standard": ["codex", "claude"]}).
     difficulty_executors: dict[str, tuple[str, ...]] = field(default_factory=dict)
@@ -244,6 +246,7 @@ class Settings:
             engines_ledger=(
                 Path(f) if (f := os.environ.get("ARGUS_ENGINES_LEDGER")) else None
             ),
+            dsh_enabled=os.environ.get("ARGUS_DSH_ENABLED") == "true",
             difficulty_executors=_difficulty_executors(),
             codex_login_image=os.environ.get("ARGUS_CODEX_LOGIN_IMAGE") or None,
             codex_bin=os.environ.get("ARGUS_CODEX_BIN") or None,

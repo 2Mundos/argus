@@ -16,6 +16,7 @@ import {
   CUSTOM_KEY_ENV,
   copilotAuthRejected,
   cursorConfigDirAllowsCliWrites,
+  dshOutcome,
   executorJsonFailure,
   localHarnessRefusal,
   materializePrivateCursorConfig,
@@ -2193,4 +2194,130 @@ test("only a Claude executor keeps the harness's argus-task wait cap", () => {
   assert.equal(waitCapEnv("claude", e).ARGUS_TASK_WAIT_MAX_S, "480");
   for (const executor of ["codex", "agent", "copilot", "opencode"])
     assert.deepEqual(waitCapEnv(executor, e), { PATH: "/bin" });
+});
+
+// ---- dsh executor (docs/specs/engines.spec.md) ----
+
+const DSH_SETTINGS = { base_url: "http://127.0.0.1:9/v1", label: "custom", model: "m-1" };
+const ev = (o) => JSON.stringify(o);
+
+/** A stub `dsh` that records argv, the overlay it was given and DSH_HOME, then prints `emit`. */
+function dshSandbox(t, { emit, exit = 0, stderr = "", settings = DSH_SETTINGS, key = KEY }) {
+  const s = customSandbox(t, "dsh", { settings, policy: { harness: {}, implementation: {} } });
+  const rec = path.join(s.dir, "rec");
+  s.fake(
+    "dsh",
+    `if [ "$1" = "--version" ]; then echo 0.2.2-alpha.3; exit 0; fi
+printf '%s\\n' "$@" > ${rec}.argv
+while [ "$1" != "--patch" ]; do shift; done
+cp "$2" ${rec}.overlay
+printf '%s\\n' "$PWD" "$DSH_HOME" > ${rec}.where
+cat >${rec}.stdin
+cat <<'EOF_EVENTS'
+${emit.join("\n")}
+EOF_EVENTS
+printf '%s' '${stderr}' >&2
+exit ${exit}`,
+  );
+  s.env = { ...s.env, ...(key ? {} : { [CUSTOM_KEY_ENV]: "" }) };
+  return s;
+}
+
+test("dsh events map to the report: final text is the summary, unknown events are ignored", async (t) => {
+  const s = dshSandbox(t, {
+    emit: [
+      ev({ type: "session", sessionId: "s1", cwd: "/x" }),
+      ev({ type: "future_event", n: 1 }),
+      "not json",
+      ev({ type: "text", text: "partial" }),
+      ev({ type: "final", sessionId: "s1", reason: { kind: "completed" }, text: "all done" }),
+    ],
+  });
+  const { code, report } = await run(["dsh", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 0);
+  assert.equal(report.version, "0.2.2-alpha.3");
+  assert.equal(report.dsh_version, "0.2.2-alpha.3");
+  assert.equal(report.tail, "all done");
+  assert.equal(report.executor_error, undefined);
+  assert.match(s.read("argv"), /^--profile\nheadless\n--patch\n.*\n--json\n-\n$/);
+  assert.ok(s.read("stdin").endsWith("do the thing"));
+  const [cwd, home] = s.read("where").split("\n");
+  assert.equal(cwd, fs.realpathSync(s.work));
+  assert.ok(home.includes("dsh-home"));
+  const overlay = s.read("overlay");
+  assert.match(overlay, /baseURL: "http:\/\/127\.0\.0\.1:9\/v1"/);
+  assert.match(overlay, /apiKeyEnv: ARGUS_ACCOUNT_API_KEY/);
+  assert.match(overlay, /model: "m-1"/);
+  assert.ok(!overlay.includes(KEY));
+  assert.ok(!dump(report).includes(KEY));
+});
+
+test("dsh failures: an error final or an error event fails the run even with exit 0", () => {
+  const ok = dshOutcome(ev({ type: "final", reason: { kind: "completed" }, text: "t" }));
+  assert.equal(ok.failure, null);
+  assert.equal(ok.summary, "t");
+  const failed = dshOutcome(
+    ev({ type: "final", reason: { kind: "error", error: { message: "boom", code: "TRANSPORT" } } }),
+  );
+  assert.deepEqual(failed.failure, { kind: "dsh_error", detail: "boom", code: "TRANSPORT" });
+  assert.equal(failed.auth, false);
+  const errored = dshOutcome(
+    [
+      ev({ type: "error", message: "bad" }),
+      ev({ type: "final", reason: { kind: "completed" } }),
+    ].join("\n"),
+  );
+  assert.equal(errored.failure.detail, "bad");
+  assert.equal(dshOutcome("").failure.kind, "no_final");
+});
+
+test("dsh: a stderr auth code is blocked with the code preserved", async (t) => {
+  const s = dshSandbox(t, {
+    emit: [
+      ev({
+        type: "final",
+        reason: { kind: "error", error: { message: "key rejected", code: "INVALID_CREDENTIAL" } },
+      }),
+    ],
+    exit: 1,
+    stderr: "dsh: INVALID_CREDENTIAL: key rejected\n",
+  });
+  const { code, report } = await run(["dsh", "--cwd", s.work, "--out", s.out], { env: s.env });
+  assert.equal(code, 78);
+  assert.equal(report.blocked, "auth_missing");
+  assert.equal(report.code, "INVALID_CREDENTIAL");
+  assert.equal(report.executor_error.kind, "dsh_error");
+});
+
+test("dsh: a missing provider credential is blocked and nothing runs", async (t) => {
+  const s = dshSandbox(t, { emit: [] });
+  const env = { ...s.env };
+  delete env[CUSTOM_KEY_ENV];
+  const { code, report } = await run(["dsh", "--cwd", s.work, "--out", s.out], { env });
+  assert.equal(code, 78);
+  assert.equal(report.blocked, "auth_missing");
+  assert.equal(report.code, "dsh_provider_credential_missing");
+  assert.match(report.need, /ARGUS_ACCOUNT_API_KEY/);
+  assert.ok(!fs.existsSync(path.join(s.dir, "rec.argv")));
+});
+
+test("dsh: a missing binary is blocked as not_installed (127) once the credential is present", async (t) => {
+  const s = dshSandbox(t, { emit: [] });
+  fs.rmSync(path.join(s.bin, "dsh"));
+  const env = { ...s.env, PATH: s.bin };
+  const { code, report } = await run(["dsh", "--cwd", s.work, "--out", s.out], { env });
+  assert.equal(code, 127);
+  assert.equal(report.blocked, "not_installed");
+  assert.equal(report.code, "dsh_not_installed");
+});
+
+test("--auth-probe for dsh: installed does not mean authenticated", async (t) => {
+  const s = dshSandbox(t, { emit: [] });
+  const env = { ...s.env };
+  delete env[CUSTOM_KEY_ENV];
+  const missing = await run(["dsh", "--auth-probe"], { env });
+  assert.equal(missing.code, 78);
+  assert.equal(missing.report.code, "dsh_provider_credential_missing");
+  const ready = await run(["dsh", "--auth-probe"], { env: s.env });
+  assert.equal(ready.code, 0);
 });
