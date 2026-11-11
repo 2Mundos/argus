@@ -726,7 +726,9 @@ export async function runRepositoryPreflight(
       outcome,
       reason: preflightReason(outcome),
       error:
-        detail === undefined ? null : `repository preflight ${outcome}: ${safeText(detail, 500)}${suffix}`,
+        detail === undefined
+          ? null
+          : `repository preflight ${outcome}: ${safeText(detail, 500)}${suffix}`,
       repositoryUrl,
       event,
     };
@@ -871,7 +873,10 @@ export async function runRepositoryPreflight(
     const sleep = input.sleep ?? defaultSleep;
     const windowStart = now();
     const closeWindow = () => {
-      event.rearm_window_ms = Math.min(FAULT_WINDOW_MAX_MS, Math.max(0, Math.round(now() - windowStart)));
+      event.rearm_window_ms = Math.min(
+        FAULT_WINDOW_MAX_MS,
+        Math.max(0, Math.round(now() - windowStart)),
+      );
     };
     for (let round = 1; round <= REARM_MAX_ATTEMPTS; round++) {
       if (!input.rearm) return finish(failure.outcome, failure.message);
@@ -902,7 +907,8 @@ export async function runRepositoryPreflight(
           )
         : await attempt();
       closeWindow();
-      if (shared.kind === "rearm_failed") return finish(failure.outcome, failure.message, "rearm_failed");
+      if (shared.kind === "rearm_failed")
+        return finish(failure.outcome, failure.message, "rearm_failed");
       event.rearmed = true;
       event.rearm_attempts = round;
       if (shared.kind === "answer") {

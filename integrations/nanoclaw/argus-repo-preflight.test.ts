@@ -1435,10 +1435,7 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       armed();
       await gate;
     });
-    const probeCalls = vi
-      .fn()
-      .mockRejectedValueOnce(missing("first"))
-      .mockResolvedValue(proven);
+    const probeCalls = vi.fn().mockRejectedValueOnce(missing("first")).mockResolvedValue(proven);
     const first = preflight({ probe: probeCalls, rearm, agentIdentifier: "agent-1" });
     await started;
     const second = preflight({
