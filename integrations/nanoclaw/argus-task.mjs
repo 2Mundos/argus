@@ -80,15 +80,29 @@ export function signalDir(git, cwd) {
 
 function readJson(file) {
   try {
+    if (lstatSync(file).isSymbolicLink()) return null;
     return JSON.parse(readFileSync(file, "utf8"));
   } catch {
     return null;
   }
 }
 
+/** Atomic write that refuses a symlink at the target or the temp file; throws on any failure. */
 function writeJson(file, value) {
+  try {
+    if (lstatSync(file).isSymbolicLink())
+      throw new Error(`refusing to write through a symlink: ${file}`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
   const temp = `${file}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(value)}\n`);
+  rmSync(temp, { force: true });
+  const fd = openSync(temp, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | fsc.O_NOFOLLOW, 0o644);
+  try {
+    writeSync(fd, `${JSON.stringify(value)}\n`);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(temp, file);
 }
 
@@ -150,12 +164,11 @@ export function ciSummary(statuses) {
   return { state, total: checks.length, running, failed };
 }
 
-async function headSha(api, number, sha) {
-  if (sha !== undefined) return internals.commitSha(sha);
+async function headSha(api, number) {
   const pr = await api.getPullRequest(number);
   if (typeof pr?.head?.sha !== "string")
     throw new GiteaError("bad_response", "PR response has no head SHA");
-  return pr.head.sha;
+  return pr.head.sha.toLowerCase();
 }
 
 // ---- wait ----
@@ -179,17 +192,50 @@ export function waitCap(option, env) {
   return seconds(option, "max", configured, 1, configured);
 }
 
-async function checkCi(api, o) {
-  const sha = await headSha(api, o.number, o.sha);
+const SHA = /^[0-9a-f]{7,64}$/i;
+const short = (sha) => sha.slice(0, 7);
+
+/**
+ * One CI observation of the watched commit. `watch` pins the commit for the whole call: an
+ * explicit --sha as given, else the stored one while the PR head still is it, else the PR head
+ * at the first observation. The PR head is read afresh on every check; the wait is done only
+ * when the checks on the watched commit have finished and the PR head still is that commit.
+ */
+async function checkCi(api, o, watch) {
+  const head = await headSha(api, o.number);
+  if (!watch.bound) {
+    watch.bound = true;
+    if (watch.sha && !watch.explicit && !head.startsWith(watch.sha)) {
+      watch.reboundFrom = watch.sha;
+      watch.sha = null;
+    }
+    watch.sha ??= head;
+  }
+  const sha = watch.sha;
   const ci = ciSummary(await api.ciStatuses(sha));
+  const headMatches = head.startsWith(sha); // an abbreviated --sha matches by prefix
+  const evidence = {
+    sha,
+    watched_sha: sha,
+    pr_head_sha: head,
+    head_matches: headMatches,
+    ...(watch.reboundFrom ? { rebound_from: watch.reboundFrom } : {}),
+    ...ci,
+  };
+  if (!headMatches)
+    return {
+      done: false,
+      status: `PR head ${short(head)} is not the watched ${short(sha)}`,
+      ...evidence,
+    };
   // Done only when every check has finished, even after one has failed (spec 3.3).
-  if (ci.state !== "missing" && ci.running === 0) return { done: true, sha, ...ci };
+  if (ci.state !== "missing" && ci.running === 0) return { done: true, ...evidence };
   const failedSoFar = ci.failed.length ? `, ${ci.failed.length} failed` : "";
   const status =
     ci.state === "missing"
       ? "no checks reported yet"
       : `${ci.running} of ${ci.total} checks running${failedSoFar}`;
-  return { done: false, sha, status, ...ci };
+  return { done: false, status, ...evidence };
 }
 
 const reviewTime = (r) => r.submitted_at ?? r.updated_at ?? r.created_at ?? null;
@@ -235,11 +281,42 @@ async function wait(api, o, ctx) {
   const since = same ? previous.since : new Date(start).toISOString();
   const cursor =
     on === "review" ? (o.since === undefined ? since : timestamp(o.since, "since")) : null;
-  if (file) {
-    mkdirSync(ctx.dir, { recursive: true });
-    writeJson(file, { on, ref, since });
-  }
-  const clear = () => file && rmSync(file, { force: true });
+  const stored =
+    same && typeof previous.sha === "string" && SHA.test(previous.sha)
+      ? previous.sha.toLowerCase()
+      : null;
+  const watch =
+    on === "ci"
+      ? {
+          sha: o.sha === undefined ? stored : internals.commitSha(o.sha),
+          explicit: o.sha !== undefined,
+          bound: false,
+          reboundFrom: null,
+        }
+      : null;
+  // The waiting file is best effort: a failed write (or a symlink in the way) is skipped and
+  // the wait goes on, the result being the same; the milestone is only lost.
+  let published = null;
+  const publish = () => {
+    if (!file) return;
+    const sha = watch?.sha ?? null;
+    if (published && published.sha === sha) return;
+    try {
+      mkdirSync(ctx.dir, { recursive: true });
+      writeJson(file, { on, ref, since, ...(sha ? { sha } : {}) });
+      published = { sha };
+    } catch {
+      // retried at the next check
+    }
+  };
+  const clear = () => {
+    try {
+      if (file) rmSync(file, { force: true });
+    } catch {
+      // best effort
+    }
+  };
+  publish();
   // One deadline bounds the whole wait: every exchange (each page, the head lookup) checks it
   // before it starts and is cut to the time left. No retries inside a wait (the next check is
   // the retry), so there is no backoff to bound either.
@@ -264,13 +341,14 @@ async function wait(api, o, ctx) {
       }
       let check;
       try {
-        check = on === "ci" ? await checkCi(api, o) : await checkReview(api, o, cursor);
+        check = on === "ci" ? await checkCi(api, o, watch) : await checkReview(api, o, cursor);
       } catch (error) {
         if (!(error instanceof GiteaError)) throw error;
         if (error.code === "deadline_exceeded") return pending({ status: "wait budget spent" });
         if (!TRANSIENT.has(error.code)) throw error;
         check = { done: false, status: `forge not answering (${error.code}); will check again` };
       }
+      publish();
       // A check that finished after the budget is late: report pending, never success.
       if (check.done && ctx.now() >= deadline) check = { done: false, status: "wait budget spent" };
       if (check.done) {

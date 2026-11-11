@@ -22,7 +22,7 @@ const STALE_MS = 15 * 60_000; // a wait call is capped well below this (spec 3.3
 const REPOST_MS = 5 * 60_000; // keeps a long wait out of the quiet flag (20 min)
 const DIR_FLAGS = fsc.O_RDONLY | fsc.O_DIRECTORY | fsc.O_NOFOLLOW;
 
-export type Waiting = { on: "ci" | "review"; ref: string; since: string };
+export type Waiting = { on: "ci" | "review"; ref: string; since: string; sha?: string };
 
 const via = (fh: FileHandle, name = "") => `/proc/self/fd/${fh.fd}${name ? `/${name}` : ""}`;
 
@@ -82,13 +82,16 @@ export async function markSteer(groupDir: string, taskId: string, now: Date): Pr
 /** Validate what the helper wrote; null for anything that is not exactly a waiting record. */
 export function parseWaiting(raw: unknown, nowMs: number): Waiting | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const { on, ref, since } = raw as Record<string, unknown>;
+  const { on, ref, since, sha } = raw as Record<string, unknown>;
   if (on !== "ci" && on !== "review") return null;
   if (typeof ref !== "string" || !/^[\x20-\x7e]{1,200}$/.test(ref)) return null;
   if (typeof since !== "string" || since.length > 40) return null;
   const at = Date.parse(since);
   if (!Number.isFinite(at) || at > nowMs + 60_000) return null;
-  return { on, ref, since: new Date(at).toISOString() };
+  const base: Waiting = { on, ref, since: new Date(at).toISOString() };
+  if (sha === undefined) return base;
+  if (typeof sha !== "string" || !/^[0-9a-f]{7,64}$/i.test(sha)) return null;
+  return { ...base, sha: sha.toLowerCase() };
 }
 
 /** The waiting record, or null when there is none, it is stale, or it is not valid. */
@@ -120,7 +123,8 @@ export async function readWaiting(
 }
 
 export function waitingMessage(w: Waiting): string {
-  return `Waiting on ${w.on === "ci" ? "CI" : "review"} for ${w.ref}`;
+  const at = w.on === "ci" && w.sha ? ` at ${w.sha.slice(0, 7)}` : "";
+  return `Waiting on ${w.on === "ci" ? "CI" : "review"} for ${w.ref}${at}`;
 }
 
 /**
@@ -135,11 +139,11 @@ export function createWaitingRelay() {
         last = null;
         return false;
       }
-      const key = `${w.on}|${w.ref}|${w.since}`;
+      const key = `${w.on}|${w.ref}|${w.since}|${w.sha ?? ""}`;
       return !last || last.key !== key || nowMs - last.at >= REPOST_MS;
     },
     posted(w: Waiting, nowMs: number): void {
-      last = { key: `${w.on}|${w.ref}|${w.since}`, at: nowMs };
+      last = { key: `${w.on}|${w.ref}|${w.since}|${w.sha ?? ""}`, at: nowMs };
     },
     reset(): void {
       last = null;
