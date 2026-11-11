@@ -30,7 +30,7 @@ def _run(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _checkout(tmp_path: Path, text: str = EXCERPT) -> Path:
-    providers = tmp_path / "src" / "providers"
+    providers = tmp_path / "container" / "agent-runner" / "src" / "providers"
     providers.mkdir(parents=True)
     (providers / "codex-app-server.ts").write_text(text)
     return providers / "codex-app-server.ts"
@@ -64,6 +64,15 @@ def test_fails_loudly_when_anchor_missing(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "buildCodexProcessEnv not found" in result.stderr
     assert "codex-cli-path" not in target.read_text()
+
+
+def test_ignores_old_host_tree_location(tmp_path: Path) -> None:
+    providers = tmp_path / "src" / "providers"
+    providers.mkdir(parents=True)
+    (providers / "codex-app-server.ts").write_text(EXCERPT)
+    result = _run(tmp_path)
+    assert result.returncode != 0
+    assert "missing" in result.stderr
 
 
 def test_fails_loudly_when_import_anchor_missing(tmp_path: Path) -> None:

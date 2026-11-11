@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Make the Codex app-server child resolve the image-installed codex CLI (install.sh).
+"""Make the Codex app-server child resolve the image-installed codex CLI.
+
+Runs from install-engines.sh, after the upstream Codex payload copy: the patched
+file only exists once the payload is in place.
 
 usage: patch-codex-cli-path.py <runner-root>
 
@@ -21,7 +24,14 @@ FUNC = (
 )
 RETURN = "  return next;\n}"
 
-p = Path(sys.argv[1]) / "src" / "providers" / "codex-app-server.ts"
+p = (
+    Path(sys.argv[1])
+    / "container"
+    / "agent-runner"
+    / "src"
+    / "providers"
+    / "codex-app-server.ts"
+)
 if not p.is_file():
     sys.exit(f"{p}: missing; NanoClaw layout changed upstream")
 text = p.read_text()
