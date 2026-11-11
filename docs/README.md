@@ -194,7 +194,7 @@ why you are here.
 - [Task archive](specs/task-archive.spec.md) — archive terminal tasks out of lists
   and totals; reversible, never deletes
 - [Task graph](specs/task-graph.spec.md) — a project's tasks and
-  dependencies drawn as a left-to-right graph (draft).
+  dependencies drawn as a left-to-right graph.
 - [Task dependencies](specs/task-dependencies.spec.md) — edit a waiting task's
   dependencies with a cycle check; stuck dependents surface in the inbox
 - [Task edit](specs/task-edit.spec.md) — edit a task's title, spec, criteria, priority,

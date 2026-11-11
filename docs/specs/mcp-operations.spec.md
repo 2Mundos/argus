@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-06
+updated: 2026-11-11
 ---
 
 # MCP operations
@@ -305,6 +305,10 @@ Findings outside the gap list:
 - **Task changes:** MCP `get_task_changes(task_id, attempt?)` reads the attempt's
   workspace diff snapshot like `GET /api/tasks/{id}/changes` ([task
   changes](task-changes.spec.md) 3.6), with REST's permissions; listed to every scope.
+- **Task graph:** MCP `get_task_graph(project, include_done?)` wraps `GET
+  /api/projects/{name}/task-graph` ([task graph](task-graph.spec.md) 3.1): nodes,
+  edges and `truncated` in one snapshot. Listed to orchestrators and admins;
+  workers read the REST route for the tasks they leased.
 - **Task steering:** MCP `steer_task(task_id, message)`, `list_task_steers(task_id,
   attempt?)` and `cancel_steer(task_id, steer_id)` wrap the steer routes
   ([task steering](task-steering.spec.md) 3.8). Listed to orchestrators and admins.

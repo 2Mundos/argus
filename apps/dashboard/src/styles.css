@@ -4461,3 +4461,83 @@ label.header-toggle {
 .field-hint .link {
   font-size: inherit;
 }
+/* Project task graph (task graph 3.2). */
+.task-graph-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.task-graph-scroll {
+  overflow: auto;
+  max-height: 70vh;
+  padding: 4px;
+}
+.tg-edge {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.tg-edge.is-on {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.tg-edge.is-dim,
+.tg-node.is-dim {
+  opacity: 0.25;
+}
+.tg-node {
+  cursor: pointer;
+  text-decoration: none;
+}
+.tg-node rect {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.tg-node text {
+  fill: var(--text);
+  font-size: 12px;
+}
+.tg-node .tg-sub {
+  fill: var(--muted);
+  font-size: 11px;
+}
+.tg-node.is-foreign rect {
+  stroke-dasharray: 4 3;
+}
+.tg-node.is-on rect,
+.tg-node:focus-visible rect {
+  stroke: var(--accent);
+}
+.tg-succeeded rect {
+  fill: color-mix(in srgb, var(--ok) 14%, var(--surface-2));
+}
+.tg-ready rect {
+  fill: color-mix(in srgb, var(--ok) 22%, var(--surface-2));
+  stroke: var(--ok);
+  stroke-width: 2.5;
+}
+.tg-claimed rect,
+.tg-in_review rect {
+  fill: color-mix(in srgb, var(--accent) 25%, var(--surface-2));
+}
+.tg-blocked rect,
+.tg-awaiting_approval rect {
+  fill: color-mix(in srgb, var(--warn) 22%, var(--surface-2));
+}
+.tg-failed rect,
+.tg-node.is-stuck rect {
+  fill: color-mix(in srgb, var(--danger) 22%, var(--surface-2));
+}
+.tg-node.is-stuck rect {
+  stroke: var(--danger);
+  stroke-width: 2;
+}
+.tg-cancelled rect {
+  fill: var(--surface);
+}
+.tg-cancelled text {
+  text-decoration: line-through;
+}

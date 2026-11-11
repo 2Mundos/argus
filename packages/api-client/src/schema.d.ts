@@ -2042,6 +2042,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{name}/task-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Graph
+         * @description The project's tasks as nodes and dependencies as edges (`from` is the
+         *     dependency, `to` the task waiting for it), read in one snapshot, at most 500
+         *     nodes, newest first with their dependencies; `truncated` says some were left
+         *     out. Archived tasks and tasks `succeeded` over 7 days ago with no unfinished
+         *     dependent are left out unless `include_done=true`. A dependency in another
+         *     project is a stub node. Workers only see tasks they have leased.
+         */
+        get: operations["get_task_graph_api_projects__name__task_graph_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{slug}": {
         parameters: {
             query?: never;
@@ -6868,6 +6893,31 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** GraphEdge */
+        GraphEdge: {
+            /** From */
+            from: string;
+            /** To */
+            to: string;
+        };
+        /** GraphNode */
+        GraphNode: {
+            /** Block Reason */
+            block_reason: string | null;
+            /** Failed Dependencies */
+            failed_dependencies: string[];
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Priority */
+            priority: number;
+            /** Project */
+            project: string;
+            state: components["schemas"]["TaskState"];
+            /** Title */
+            title: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -11233,6 +11283,15 @@ export interface components {
             changes: components["schemas"]["TaskChanges"];
             /** Expected Version */
             expected_version: string;
+        };
+        /** TaskGraph */
+        TaskGraph: {
+            /** Edges */
+            edges: components["schemas"]["GraphEdge"][];
+            /** Nodes */
+            nodes: components["schemas"]["GraphNode"][];
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * TaskInput
@@ -15993,6 +16052,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectStats"][];
+                };
+            };
+        };
+    };
+    get_task_graph_api_projects__name__task_graph_get: {
+        parameters: {
+            query?: {
+                include_done?: boolean;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskGraph"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

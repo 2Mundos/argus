@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-19
-updated: 2026-10-31
+updated: 2026-11-11
 ---
 
 # Task dependencies
@@ -78,6 +78,8 @@ unchanged, including the `task_not_waiting` code.
   since the latest of those dependencies ended.
 - `states` accepts `pending` for these rows; they count under `pending` in
   `totals_by_state` and under `none` in `totals_by_decision_kind`.
+- The [task graph](task-graph.spec.md) draws the same marks: a `pending` node
+  with a failed or cancelled dependency is stuck, with `failed_dependencies`.
 - The orchestrator then retries the dependency (`retry_task`, if `failed`),
   replaces the dependencies (3.1), or cancels the dependent.
 
