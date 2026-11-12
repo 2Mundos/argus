@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 from api_support import DONE, FakeClock, insert_agent
-from argus_api.db import Database
+from argus_api.db import Database, ts
 from argus_api.errors import (
     ForbiddenError,
     LeaseConflictError,
@@ -159,6 +159,65 @@ async def test_claim_requires_all_capabilities(db: Database) -> None:
     c = await claim(db, caps=["git", "python", "docker"])
     assert c is not None
     assert c.id == task.id
+
+
+async def test_incompatible_task_reports_why_and_spends_nothing(
+    db: Database,
+) -> None:
+    async with db.write() as tx:
+        # A pool that could launch a "docker" worker and has free slots: launchable,
+        # but not a live worker, so it never makes the task claimable.
+        await tx.conn.execute(
+            "INSERT INTO pools (name, target, runtime, image, capabilities, desired_replicas,"
+            " max_replicas, config, created_at, updated_at)"
+            " VALUES ('p', 'docker', 'plain', 'img', '[\"docker\"]', 0, 3, '{}', ?, ?)",
+            (ts(tx.now), ts(tx.now)),
+        )
+    task = await create(db, required_capabilities=["python", "docker"])
+    assert await claim(db, caps=["python"]) is None
+    row = await get(db, task.id)
+    assert row.state is S.READY and row.attempt == 0 and row.failures == 0
+    assert row.assignee_agent_id is None and row.lease_expires_at is None
+    assert row.progress_message == (
+        "no compatible worker: no live worker declares docker, python"
+    )
+    # Declared by different workers, never by one: a different, precise reason.
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE agents SET capabilities = ? WHERE id = ?", ('["docker"]', B)
+        )
+    assert await claim(db, caps=["python"]) is None
+    await set_caps(db, A, ["python"])
+    assert await claim(db, A, ["python"]) is None
+    assert (await get(db, task.id)).progress_message == (
+        "no compatible worker: no single live worker declares all of docker, python"
+    )
+    # A worker that is not active offers nothing.
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE agents SET capabilities = ?, state = 'draining' WHERE id = ?",
+            ('["docker", "python"]', B),
+        )
+    assert await claim(db, A, ["python"]) is None
+    assert "no compatible worker" in (await get(db, task.id)).progress_message
+    # One event per distinct reason, none for a repeat poll.
+    reasons = [
+        d["reason"] for k, d in await events(db, task.id) if k == "task.incompatible"
+    ]
+    assert len(reasons) == len(set(reasons)) == 4
+    # A compatible live worker clears the note and claims with attempt 1.
+    await set_caps(db, B, ["docker", "python"])
+    async with db.write() as tx:
+        await tx.conn.execute("UPDATE agents SET state = 'active' WHERE id = ?", (B,))
+    c = await claim(db, B, ["docker", "python"])
+    assert c is not None and c.attempt == 1 and c.progress_message is None
+
+
+async def set_caps(db: Database, agent: str, caps: list[str]) -> None:
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE agents SET capabilities = ? WHERE id = ?", (json.dumps(caps), agent)
+        )
 
 
 async def test_claim_sets_lease_and_attempt(db: Database, clock: FakeClock) -> None:

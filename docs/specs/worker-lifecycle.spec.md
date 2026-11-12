@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -183,6 +183,14 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   `required_capabilities ⊆ agent.capabilities`, sets `claimed` and the assignee,
   increments `attempt` (initially zero), and sets the lease deadline to the
   current Argus time plus `lease_ttl`.
+- **Readiness before the lease.** A `ready` task whose capabilities no live
+  `active` worker declares (one worker must declare all of them; a pool that
+  could launch such a worker, or a free scale slot, does not count) stays `ready`
+  and is not claimable. Its progress note says why (`no compatible worker: no
+  live worker declares docker`) and one `task.incompatible` event records each
+  distinct reason; no attempt, failure or lease is spent, and the note clears
+  when a compatible worker is live. A task whose project runtime is not ready on
+  the claiming host is deferred the same way ([project runtime 3.5](project-runtime.spec.md)).
 - The claimed task comes with `knowledge_refs`: pinned and best-matching
   knowledge pages ([knowledge](knowledge.spec.md) 3.4).
 - Claim long-polls (up to 30 s) when nothing is ready, so idle workers do not

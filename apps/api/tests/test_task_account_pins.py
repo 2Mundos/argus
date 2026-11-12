@@ -162,6 +162,36 @@ async def test_pin_waits_when_no_allowed_account_can_serve(
     assert (await engine_lease(db, store, task)).account_id == "acc-or"
 
 
+async def test_route_must_be_supported_and_available_before_an_attempt(
+    db: Database, store, agent
+) -> None:
+    await fleet(db, store)
+    task_id = await make_task(db, account_providers=["custom"])
+    # Unsupported: this worker's runtime applies no custom account. Nothing is spent.
+    assert await claim(db, ["anthropic", "openai"]) is None
+    task = await get(db, task_id)
+    assert task.attempt == 0 and task.failures == 0 and task.assignee_agent_id is None
+    # Temporarily unavailable: the allowed accounts are disabled. It parks, still free.
+    for account in ("acc-or", "acc-or2"):
+        async with db.write() as tx:
+            await accounts.update_account(
+                tx, account, AccountUpdate(enabled=False), "admin:test"
+            )
+    assert await claim(db) is None
+    task = await get(db, task_id)
+    assert task.block_reason == "awaiting_quota" and task.attempt == 0
+    # Supported and available again: exactly one attempt, one lease.
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, "acc-or", AccountUpdate(enabled=True), "admin:test"
+        )
+        await tasks.wake_waiting(tx)
+    task = await claim(db)
+    assert task is not None and task.attempt == 1
+    assert (await engine_lease(db, store, task)).account_id == "acc-or"
+    assert await claim(db) is None  # no second lease of the same task
+
+
 async def test_wake_spends_only_the_pinned_accounts_slot(
     db: Database, store, agent
 ) -> None:

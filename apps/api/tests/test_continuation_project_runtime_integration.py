@@ -148,7 +148,8 @@ async def test_radar_continuation_waits_on_runtime_without_spending_attempts(
     held = await manager.prepare(A, req(first))
     assert held.task_held and held.state == "preparing"
     row = await task_row(db, t.id)
-    assert row["failures"] == 0 and row["attempt"] == first.attempt
+    # The deferral handed the claim's attempt back: the resume is still one attempt.
+    assert row["failures"] == 0 and row["attempt"] == first.attempt - 1
 
     # Same host is building radar: sibling radar tasks stay ready; another project may claim.
     assert (await task_row(db, other.id))["state"] == S.READY.value
@@ -160,6 +161,7 @@ async def test_radar_continuation_waits_on_runtime_without_spending_attempts(
     assert await manager.work_once()
     resumed = await claim(db, A)
     assert resumed is not None and resumed.id == t.id
+    assert resumed.attempt == first.attempt
     sel = await manager.prepare(A, req(resumed))
     assert sel.state == "ready" and sel.image is not None
     assert "radar" in sel.image.ref

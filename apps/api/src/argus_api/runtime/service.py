@@ -331,6 +331,7 @@ class RuntimeManager:
                     req.attempt,
                     tasks.RUNTIME_FAILED if failed else tasks.RUNTIME_PREPARING,
                     row["reason"] if failed else None,
+                    void_claim=True,
                 )
                 selection.task_held = True
         self.wake()
@@ -350,7 +351,13 @@ class RuntimeManager:
         )
         async with self.db.write() as tx:
             await tasks.hold_for_runtime(
-                tx, agent_id, req.task_id, req.attempt, tasks.RUNTIME_FAILED, reason
+                tx,
+                agent_id,
+                req.task_id,
+                req.attempt,
+                tasks.RUNTIME_FAILED,
+                reason,
+                void_claim=True,
             )
         return Selection(
             state="failed",

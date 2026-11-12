@@ -252,7 +252,41 @@ async def test_first_claim_is_held_without_spending_an_attempt(
     row = await task_row(db, t.id)
     assert row["state"] == "blocked" and row["block_reason"] == "runtime_preparing"
     assert row["failures"] == 0 and row["max_attempts"] == 1
+    assert row["attempt"] == 0 and row["assignee_agent_id"] is None
+    assert row["lease_expires_at"] is None
     assert docker.builds == []  # preparation never builds inside the request
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT count(*) FROM task_attempts WHERE task_id = ?", (t.id,)
+        ) as cur,
+    ):
+        assert (await cur.fetchone())[0] == 0  # the voided claim leaves no snapshot
+
+
+async def test_concurrent_claims_around_a_ready_build_lease_once(
+    db, manager, docker
+) -> None:
+    await create(db, "radar")
+    first = await claim(db)
+    await manager.prepare(A, req(first))
+    assert (await task_row(db, first.id))["attempt"] == 0
+    # Still building: nobody holding a prepared host is handed the task.
+    assert await claim(db) is None
+    await manager.work_once()
+    won = await asyncio.gather(claim(db, A), claim(db, B))
+    (winner,) = [t for t in won if t is not None]
+    assert winner.attempt == 1
+    row = await task_row(db, first.id)
+    assert row["attempt"] == 1 and row["assignee_agent_id"] == winner.assignee_agent_id
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT count(*) FROM events WHERE subject_id = ? AND kind = 'task.claim'",
+            (first.id,),
+        ) as cur,
+    ):
+        assert (await cur.fetchone())[0] == 2  # the voided claim and the real one
 
 
 async def test_build_verifies_with_probes_then_task_is_released_and_ready(
@@ -282,6 +316,7 @@ async def test_build_verifies_with_probes_then_task_is_released_and_ready(
     assert docker.builds[0]["base"].startswith("argus-project-runtime-base:")
     row = await task_row(db, task.id)
     assert row["state"] == "claimed" and row["failures"] == 0
+    assert row["attempt"] == 1  # preparing -> ready cost exactly one attempt
     async with db.read() as conn:
         selected = await service.task_runtime(conn, task.id)
     assert (
