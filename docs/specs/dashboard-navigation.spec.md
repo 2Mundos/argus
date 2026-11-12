@@ -26,7 +26,8 @@ the page. On a narrow screen the menu moves to a bar across the top.
   Knowledge, Routines, Workers, Setup. Tasks and Inbox keep their counts. There is
   no "More" section.
 - **Workers** groups Agents, Pools and Fleet. **Setup** groups Settings, Accounts,
-  Engines, Cost and Events. The menu entry is current on any of its tabs and links to
+  [Integrations](integrations.spec.md), Engines, Cost and Events. The menu entry is
+  current on any of its tabs and links to
   the group's first tab (`#workers` opens Agents, `#setup` opens Settings).
 - **Tabs** are links (`#group/tab`) in a `nav` above the page, the current one marked
   `aria-current="page"`; they are not a client-side switch, so back/forward, reload

@@ -253,6 +253,9 @@ why you are here.
 - [Settings](specs/settings.spec.md) — typed global settings with per-project
   overrides; model preferences move there; optional review by a different model
   before a code task succeeds
+- [Integrations](specs/integrations.spec.md) — the Setup tab for MCP connections and
+  Kubernetes clusters, project-scoped and kept out of Settings and Accounts; the
+  dashboard and API manage credentials securely; worker delivery is not yet available
 - [Routines](specs/routines.spec.md) — cron-scheduled task templates per project;
   run findings become deduplicated tasks, approval-gated by default
 - [Internal orchestrator](specs/internal-orchestrator.spec.md) — Argus hosts its own
@@ -395,6 +398,8 @@ why you are here.
 
 ### Postmortems
 
+- [Integration validation and credential changes failed open](postmortems/2026-11-12.integration-rbac-validation.ref.md) —
+  incomplete protocol, authorization and store evidence masked validation and cancellation failures
 - [Repository preflight blamed credentials when OneCLI published no policy rule](postmortems/2026-11-05.onecli-policy-rule-materialization.ref.md) —
   a P2028 in the gateway's rule publication looked like a push-permission failure
 - [Worker instance directory permission denial under launcher](postmortems/2026-11-04.launcher-instance-permission.ref.md) —

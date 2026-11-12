@@ -38,6 +38,7 @@ Every spec in this directory with its status, kept in sync by
 | [Gitea helper for workers (`argus-gitea-api`)](gitea-helper.spec.md) | `implemented` |
 | [GitHub repositories](github-repositories.spec.md) | `implemented` |
 | [Home](home.spec.md) | `implemented` |
+| [Integrations: MCP connections and Kubernetes clusters](integrations.spec.md) | `partial` |
 | [Internal Orchestrator](internal-orchestrator.spec.md) | `implemented` |
 | [Knowledge Spec](knowledge.spec.md) | `implemented` |
 | [Launcher](launcher.spec.md) | `implemented` |
