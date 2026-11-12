@@ -49,6 +49,7 @@ from argus_api.fleet.reconciler import FleetSettings
 from argus_api.fleet.routes import router as fleet_router
 from argus_api.fleet.targets import InProcessTarget, TargetRegistry
 from argus_api.fleet.workspace_cleanup import WorkspaceCleaner
+from argus_api.integrations.routes import router as integrations_router
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
 from argus_api.model_policy import router as models_router
@@ -330,6 +331,7 @@ for router in (
     events_router,
     knowledge_router,
     accounts_router,
+    integrations_router,
     fleet_router,
     engines_router,
     models_router,

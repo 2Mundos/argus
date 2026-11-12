@@ -25,6 +25,9 @@ const Engines = lazy(() => import("./views/Engines").then((m) => ({ default: m.E
 const Events = lazy(() => import("./views/Events").then((m) => ({ default: m.Events })));
 const Fleet = lazy(() => import("./views/Fleet").then((m) => ({ default: m.Fleet })));
 const Inbox = lazy(() => import("./views/Inbox").then((m) => ({ default: m.Inbox })));
+const Integrations = lazy(() =>
+  import("./views/Integrations").then((m) => ({ default: m.Integrations })),
+);
 const Knowledge = lazy(() => import("./views/Knowledge").then((m) => ({ default: m.Knowledge })));
 const Pools = lazy(() => import("./views/Pools").then((m) => ({ default: m.Pools })));
 const Projects = lazy(() => import("./views/Projects").then((m) => ({ default: m.Projects })));
@@ -55,6 +58,7 @@ type WorkersSub = keyof typeof WORKERS_SUB;
 const SETUP_SUB = {
   settings: "Settings",
   accounts: "Accounts",
+  integrations: "Integrations",
   engines: "Engines",
   cost: "Cost",
   events: "Events",
@@ -382,6 +386,8 @@ function RouteView({
             <Engines />
           ) : route.sub === "accounts" ? (
             <Accounts />
+          ) : route.sub === "integrations" ? (
+            <Integrations />
           ) : route.sub === "cost" ? (
             <Cost />
           ) : route.sub === "events" ? (

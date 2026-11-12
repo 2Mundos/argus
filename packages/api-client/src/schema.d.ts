@@ -1615,6 +1615,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Integrations
+         * @description Every project's integrations, revoked included. Never a secret.
+         */
+        get: operations["list_integrations_api_integrations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/knowledge/pages": {
         parameters: {
             query?: never;
@@ -2118,6 +2138,101 @@ export interface paths {
          *     this grants no write access and no credential reaches the caller.
          */
         post: operations["checkout_project_api_projects__slug__checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Integrations */
+        get: operations["list_project_integrations_api_projects__slug__integrations_get"];
+        put?: never;
+        /**
+         * Create Integration
+         * @description The token goes to the SOPS file; the row keeps only its reference.
+         */
+        post: operations["create_integration_api_projects__slug__integrations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/integrations/{integration_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Integration */
+        get: operations["get_integration_api_projects__slug__integrations__integration_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/integrations/{integration_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Integration
+         * @description Delete the token from the SOPS file; the record stays, revoked.
+         */
+        post: operations["revoke_integration_api_projects__slug__integrations__integration_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/integrations/{integration_id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Integration
+         * @description Replace the token; validation goes back to `unchecked`.
+         */
+        post: operations["rotate_integration_api_projects__slug__integrations__integration_id__rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{slug}/integrations/{integration_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Integration */
+        post: operations["validate_integration_api_projects__slug__integrations__integration_id__validate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7333,6 +7448,88 @@ export interface components {
             /** Draining */
             draining: number;
         };
+        /** Integration */
+        Integration: {
+            /**
+             * Access
+             * @enum {string}
+             */
+            access: "read_only" | "read_write";
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Has Secret */
+            has_secret: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "mcp" | "kubernetes";
+            /** Name */
+            name: string;
+            /** Project */
+            project: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Revoked By */
+            revoked_by: string | null;
+            /** Rotated At */
+            rotated_at: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "revoked";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Validated At */
+            validated_at: string | null;
+            /**
+             * Validation
+             * @enum {string}
+             */
+            validation: "unchecked" | "ok" | "failed";
+            /** Validation Detail */
+            validation_detail: string | null;
+        };
+        /** IntegrationCreate */
+        IntegrationCreate: {
+            /**
+             * Access
+             * @default read_only
+             * @enum {string}
+             */
+            access?: "read_only" | "read_write";
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "mcp" | "kubernetes";
+            /** Name */
+            name: string;
+            secret: components["schemas"]["SecretIn"];
+        };
+        /** IntegrationRotate */
+        IntegrationRotate: {
+            secret: components["schemas"]["SecretIn"];
+        };
         /**
          * InterruptionAssessment
          * @description Bounded reuse of continuation.interruption (spec 3.7).
@@ -10297,6 +10494,17 @@ export interface components {
             summary: string;
             /** Title */
             title: string;
+        };
+        /**
+         * SecretIn
+         * @description Write-only: accepted on create and rotate, never returned.
+         */
+        SecretIn: {
+            /**
+             * Token
+             * Format: password
+             */
+            token: string;
         };
         /** SecretsReloaded */
         SecretsReloaded: {
@@ -15345,6 +15553,26 @@ export interface operations {
             };
         };
     };
+    list_integrations_api_integrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"][];
+                };
+            };
+        };
+    };
     list_pages_api_knowledge_pages_get: {
         parameters: {
             query?: {
@@ -16250,6 +16478,204 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectCheckout"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_integrations_api_projects__slug__integrations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_integration_api_projects__slug__integrations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_integration_api_projects__slug__integrations__integration_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_integration_api_projects__slug__integrations__integration_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_integration_api_projects__slug__integrations__integration_id__rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationRotate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_integration_api_projects__slug__integrations__integration_id__validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"];
                 };
             };
             /** @description Validation Error */

@@ -2621,6 +2621,21 @@ th {
 .settings-page .card > section > p {
   margin: 0;
 }
+.integration-prereqs {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.integration-fields {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
 .model-preferences {
   display: flex;
   flex-direction: column;

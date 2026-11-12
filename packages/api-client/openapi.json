@@ -11517,6 +11517,212 @@
         "title": "InstancesOverview",
         "type": "object"
       },
+      "Integration": {
+        "properties": {
+          "access": {
+            "enum": [
+              "read_only",
+              "read_write"
+            ],
+            "title": "Access",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "has_secret": {
+            "title": "Has Secret",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "mcp",
+              "kubernetes"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "revoked_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked By"
+          },
+          "rotated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rotated At"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "validated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated At"
+          },
+          "validation": {
+            "enum": [
+              "unchecked",
+              "ok",
+              "failed"
+            ],
+            "title": "Validation",
+            "type": "string"
+          },
+          "validation_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Detail"
+          }
+        },
+        "required": [
+          "id",
+          "project",
+          "kind",
+          "name",
+          "config",
+          "access",
+          "state",
+          "has_secret",
+          "validation",
+          "validation_detail",
+          "validated_at",
+          "created_at",
+          "created_by",
+          "updated_at",
+          "rotated_at",
+          "revoked_at",
+          "revoked_by"
+        ],
+        "title": "Integration",
+        "type": "object"
+      },
+      "IntegrationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "default": "read_only",
+            "enum": [
+              "read_only",
+              "read_write"
+            ],
+            "title": "Access",
+            "type": "string"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "kind": {
+            "enum": [
+              "mcp",
+              "kubernetes"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "secret": {
+            "$ref": "#/components/schemas/SecretIn"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "config",
+          "secret"
+        ],
+        "title": "IntegrationCreate",
+        "type": "object"
+      },
+      "IntegrationRotate": {
+        "additionalProperties": false,
+        "properties": {
+          "secret": {
+            "$ref": "#/components/schemas/SecretIn"
+          }
+        },
+        "required": [
+          "secret"
+        ],
+        "title": "IntegrationRotate",
+        "type": "object"
+      },
       "InterruptionAssessment": {
         "additionalProperties": false,
         "description": "Bounded reuse of continuation.interruption (spec 3.7).",
@@ -19652,6 +19858,23 @@
           "stale"
         ],
         "title": "SearchHit",
+        "type": "object"
+      },
+      "SecretIn": {
+        "additionalProperties": false,
+        "description": "Write-only: accepted on create and rotate, never returned.",
+        "properties": {
+          "token": {
+            "format": "password",
+            "title": "Token",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "SecretIn",
         "type": "object"
       },
       "SecretsReloaded": {
@@ -31642,6 +31865,37 @@
         ]
       }
     },
+    "/api/integrations": {
+      "get": {
+        "description": "Every project's integrations, revoked included. Never a secret.",
+        "operationId": "list_integrations_api_integrations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Integration"
+                  },
+                  "title": "Response List Integrations Api Integrations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Integrations",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/api/knowledge/pages": {
       "get": {
         "operationId": "list_pages_api_knowledge_pages_get",
@@ -33144,6 +33398,349 @@
         "summary": "Checkout Project",
         "tags": [
           "knowledge"
+        ]
+      }
+    },
+    "/api/projects/{slug}/integrations": {
+      "get": {
+        "operationId": "list_project_integrations_api_projects__slug__integrations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Integration"
+                  },
+                  "title": "Response List Project Integrations Api Projects  Slug  Integrations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Project Integrations",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "post": {
+        "description": "The token goes to the SOPS file; the row keeps only its reference.",
+        "operationId": "create_integration_api_projects__slug__integrations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Integration",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/projects/{slug}/integrations/{integration_id}": {
+      "get": {
+        "operationId": "get_integration_api_projects__slug__integrations__integration_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Integration",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/projects/{slug}/integrations/{integration_id}/revoke": {
+      "post": {
+        "description": "Delete the token from the SOPS file; the record stays, revoked.",
+        "operationId": "revoke_integration_api_projects__slug__integrations__integration_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Integration",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/projects/{slug}/integrations/{integration_id}/rotate": {
+      "post": {
+        "description": "Replace the token; validation goes back to `unchecked`.",
+        "operationId": "rotate_integration_api_projects__slug__integrations__integration_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationRotate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Integration",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/api/projects/{slug}/integrations/{integration_id}/validate": {
+      "post": {
+        "operationId": "validate_integration_api_projects__slug__integrations__integration_id__validate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Validate Integration",
+        "tags": [
+          "integrations"
         ]
       }
     },

@@ -46,6 +46,7 @@ describe("menu", () => {
       ["#workers", { tab: "workers", sub: "agents" }],
       ["#setup", { tab: "setup", sub: "settings" }],
       ["#accounts", { tab: "setup", sub: "accounts" }],
+      ["#setup/integrations", { tab: "setup", sub: "integrations" }],
       ["#frota", { tab: "workers", sub: "fleet" }],
     ] as const) {
       window.location.hash = hash;
