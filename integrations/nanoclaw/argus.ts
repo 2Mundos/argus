@@ -125,10 +125,12 @@ import {
   type IntegrationsSource,
   installTaskIntegrations,
   integrationLines,
+  type RouteProbe,
   recheckTaskIntegrations,
   removeTaskIntegrations,
   sweepTaskIntegrations,
 } from "./argus-integrations.js";
+import { gatewayRouteProbe, nanoclawGatewayProxy } from "./argus-integrations-route.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
 import {
   localHarnessFromCredential,
@@ -399,6 +401,14 @@ export interface ArgusConfig {
    * proceed. Absent: not probed. `fromEnv` wires the ephemeral-session probe.
    */
   probeExecutor?: (executor: string) => Promise<{ reason: string; error: string } | null>;
+  /**
+   * The Kubernetes integration gateway route probe (integrations spec 3.6, "Gateway path"),
+   * run before a kubeconfig is installed and again before a rotated one replaces it: a
+   * CONNECT with the session's gateway identity and a TLS handshake verified against the
+   * cluster's CA. Absent: a task with integrations blocks with
+   * `env_integration_gateway_intercepts`. `fromEnv` wires the gateway-lease probe.
+   */
+  probeIntegrationRoutes?: RouteProbe;
   /**
    * Independent exact-agent evidence on whether the gateway injects the repository credential,
    * consulted only for a 404 that proves no authentication. `fromEnv` leaves it absent: the
@@ -3766,6 +3776,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       engineProvider: account?.provider ?? null,
       executorProvider: executor?.provider ?? null,
       source: integrationsSource,
+      routeProbe: cfg.probeIntegrationRoutes,
     });
     if (!result.ok) return result;
     integrationsAttempt = result.installed;
@@ -3793,7 +3804,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
       if (!groupDir) return;
-      const r = await recheckTaskIntegrations(groupDir, held, integrationsSource);
+      const r = await recheckTaskIntegrations(
+        groupDir,
+        held,
+        integrationsSource,
+        cfg.probeIntegrationRoutes,
+      );
       if (integrationsAttempt !== held) return; // the attempt ended meanwhile
       integrationsAttempt = r.installed;
       if (r.state === "removed")
@@ -5988,6 +6004,7 @@ export function fromEnv(): ChannelAdapter | null {
     accounts: accountsFromEnv(),
     probeRepository: sessionRepositoryProbe(nanoclawPreflightRunner(argusGroup)),
     probeExecutor: (cli) => runExecutorPreflight(nanoclawPreflightRunner(argusGroup), cli),
+    probeIntegrationRoutes: gatewayRouteProbe(nanoclawGatewayProxy(argusGroup)),
     sessionImage: nanoclawSessionImage,
     startupReady: nanoclawStartupReady,
     runtime,

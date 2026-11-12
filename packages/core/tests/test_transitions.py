@@ -74,8 +74,11 @@ def test_single_attempt_task_fails_immediately() -> None:
     assert transition(S.CLAIMED, A.FAIL, ctx) is S.FAILED
 
 
-def test_env_guard_missing_is_an_environment_failure() -> None:
+@pytest.mark.parametrize(
+    "reason", ["env_guard_missing", "env_integration_gateway_intercepts"]
+)
+def test_worker_env_reasons_are_environment_failures(reason: str) -> None:
     from argus_core.tasks import ENV_BLOCK_REASONS, FAILURE_CLASS, RetryClass
 
-    assert "env_guard_missing" in ENV_BLOCK_REASONS
-    assert FAILURE_CLASS["env_guard_missing"] is RetryClass.ENVIRONMENT
+    assert reason in ENV_BLOCK_REASONS
+    assert FAILURE_CLASS[reason] is RetryClass.ENVIRONMENT

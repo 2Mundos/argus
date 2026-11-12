@@ -326,6 +326,7 @@ ENV_BLOCK_REASONS = frozenset(
         "env_integration_unavailable",
         "env_integration_unsupported",
         "env_integration_invalid",
+        "env_integration_gateway_intercepts",
         "env_guard_missing",
         "worker_env",
     }

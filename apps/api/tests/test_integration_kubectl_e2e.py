@@ -4,20 +4,30 @@ against a fake HTTPS Kubernetes API whose CA this test mints
 (docs/specs/integrations.spec.md 3.6, 3.7). No real cluster, no real credential, no
 network beyond 127.0.0.1, and neither ~/.kube nor KUBECONFIG of the host is read.
 
+The gateway path (3.6 "Gateway path") runs through a local CONNECT proxy in two modes.
+"intercept" terminates TLS with its own CA, as OneCLI v1.42.0 does for every
+authenticated CONNECT: kubectl must refuse it and the channel's route probe must block.
+"splice" passes the authenticated tunnel through untouched. It is a fixture that
+models the upstream prerequisite, not OneCLI 1.42 behaviour.
+
 kubectl comes from ARGUS_TEST_KUBECTL or PATH; without it (or without node) the test
 is skipped with a reason.
 """
 
 import base64
+import contextlib
 import json
 import os
 import shutil
+import socket
+import socketserver
 import ssl
 import subprocess
 import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import IPv4Address
@@ -47,6 +57,9 @@ from test_integration_delivery import (
 
 ROOT = Path(__file__).resolve().parents[3]
 CHANNEL = ROOT / "integrations" / "nanoclaw" / "argus-integrations.ts"
+ROUTE = ROOT / "integrations" / "nanoclaw" / "argus-integrations-route.ts"
+# What kubectl dials through a proxy: Go never proxies a loopback host.
+HOST = "k8s.example.test"
 KUBECTL = os.environ.get("ARGUS_TEST_KUBECTL") or shutil.which("kubectl")
 NODE = shutil.which("node")
 pytestmark = [
@@ -137,7 +150,9 @@ def _cert(subject: str, key, issuer=None, issuer_key=None, *, ca: bool):
         )
     if not ca:
         builder = builder.add_extension(
-            x509.SubjectAlternativeName([x509.IPAddress(IPv4Address("127.0.0.1"))]),
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(IPv4Address("127.0.0.1")), x509.DNSName(HOST)]
+            ),
             critical=False,
         )
     return builder.sign(issuer_key or key, hashes.SHA256())
@@ -193,16 +208,16 @@ class FakeKubernetes(BaseHTTPRequestHandler):
     do_GET = do_POST = do_DELETE = do_PUT = do_PATCH = _handle
 
 
-@pytest.fixture
-def cluster(tmp_path: Path) -> Iterator[tuple[str, str]]:
-    """A fake API server on 127.0.0.1; yields its URL and the base64 CA bundle."""
+def _server_tls(directory: Path, name: str) -> tuple[ssl.SSLContext, bytes]:
+    """A CA and a leaf it signs for 127.0.0.1 and HOST; the leaf's server context and
+    the CA's PEM."""
     ca_key = ec.generate_private_key(ec.SECP256R1())
-    ca = _cert("argus-test-ca", ca_key, ca=True)
+    ca = _cert(f"{name}-test-ca", ca_key, ca=True)
     key = ec.generate_private_key(ec.SECP256R1())
-    cert = _cert("127.0.0.1", key, ca, ca_key, ca=False)
-    (tmp_path / "tls").mkdir()
-    (tmp_path / "tls" / "cert.pem").write_bytes(_pem(cert))
-    (tmp_path / "tls" / "key.pem").write_bytes(
+    cert = _cert(HOST, key, ca, ca_key, ca=False)
+    directory.mkdir(exist_ok=True)
+    (directory / f"{name}.pem").write_bytes(_pem(cert))
+    (directory / f"{name}.key").write_bytes(
         key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
@@ -211,7 +226,14 @@ def cluster(tmp_path: Path) -> Iterator[tuple[str, str]]:
     )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(tmp_path / "tls" / "cert.pem", tmp_path / "tls" / "key.pem")
+    context.load_cert_chain(directory / f"{name}.pem", directory / f"{name}.key")
+    return context, _pem(ca)
+
+
+@pytest.fixture
+def cluster(tmp_path: Path) -> Iterator[tuple[str, str]]:
+    """A fake API server on 127.0.0.1; yields its URL and the base64 CA bundle."""
+    context, ca = _server_tls(tmp_path / "tls", "cluster")
     FakeKubernetes.token = TOKEN
     FakeKubernetes.seen = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeKubernetes)
@@ -221,8 +243,123 @@ def cluster(tmp_path: Path) -> Iterator[tuple[str, str]]:
     try:
         yield (
             f"https://127.0.0.1:{server.server_address[1]}",
-            base64.b64encode(_pem(ca)).decode(),
+            base64.b64encode(ca).decode(),
         )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+AGENTS = {"agent-a": "onecli-agent-token-a", "agent-b": "onecli-agent-token-b"}
+
+
+@dataclass
+class Tunnel:
+    """One CONNECT the gateway answered, and every byte it saw inside the tunnel."""
+
+    authority: str
+    agent: str | None
+    status: int = 0
+    sent: bytearray = field(default_factory=bytearray)  # client to cluster, as relayed
+    plaintext: bytearray = field(default_factory=bytearray)  # what interception read
+
+
+class Gateway(socketserver.ThreadingTCPServer):
+    """A CONNECT proxy that authenticates the agent token in Proxy-Authorization (407
+    otherwise), refuses any host but the cluster (403) and then either splices the
+    tunnel or terminates TLS with its own CA."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, upstream: int, mitm: ssl.SSLContext) -> None:
+        super().__init__(("127.0.0.1", 0), GatewayHandler)
+        self.upstream = upstream
+        self.mitm = mitm
+        self.mode = "intercept"
+        self.tunnels: list[Tunnel] = []
+
+    def url(self, agent: str) -> str:
+        return f"http://x:{AGENTS.get(agent, 'unknown')}@127.0.0.1:{self.server_address[1]}"
+
+
+class GatewayHandler(socketserver.BaseRequestHandler):
+    server: Gateway
+
+    def handle(self) -> None:
+        sock: socket.socket = self.request
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return
+            head += chunk
+        header, early = head.split(b"\r\n\r\n", 1)
+        lines = header.decode("latin1").split("\r\n")
+        auth = next(
+            (
+                v.strip()
+                for k, _, v in (h.partition(":") for h in lines[1:])
+                if k.strip().lower() == "proxy-authorization"
+            ),
+            "",
+        )
+        token = (
+            base64.b64decode(auth.removeprefix("Basic ") or "")
+            .decode()
+            .partition(":")[2]
+        )
+        agent = next((a for a, t in AGENTS.items() if t == token), None)
+        tunnel = Tunnel(authority=lines[0].split(" ")[1], agent=agent)
+        self.server.tunnels.append(tunnel)
+        tunnel.sent += early
+        if agent is None:
+            tunnel.status = 407
+            sock.sendall(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+            return
+        if tunnel.authority.rpartition(":")[0] != HOST:
+            tunnel.status = 403
+            sock.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            return
+        tunnel.status = 200
+        sock.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        if self.server.mode == "intercept":
+            # The client refuses our certificate: nothing is ever decrypted.
+            with (
+                contextlib.suppress(OSError),
+                self.server.mitm.wrap_socket(sock, server_side=True) as tls,
+            ):
+                while data := tls.recv(65536):
+                    tunnel.plaintext += data
+            return
+        with socket.create_connection(("127.0.0.1", self.server.upstream)) as up:
+            up.sendall(early)
+            back = threading.Thread(target=self._pump, args=(up, sock, None))
+            back.start()
+            self._pump(sock, up, tunnel.sent)
+            back.join()
+
+    @staticmethod
+    def _pump(src: socket.socket, dst: socket.socket, seen: bytearray | None) -> None:
+        with contextlib.suppress(OSError):
+            while data := src.recv(65536):
+                if seen is not None:
+                    seen += data
+                dst.sendall(data)
+        with contextlib.suppress(OSError):
+            dst.shutdown(socket.SHUT_WR)
+
+
+@pytest.fixture
+def gateway(tmp_path: Path, cluster: tuple[str, str]) -> Iterator[Gateway]:
+    """The worker's gateway in front of `cluster`, intercepting until told to splice."""
+    mitm, _ = _server_tls(tmp_path / "gateway-tls", "gateway")
+    server = Gateway(int(cluster[0].rpartition(":")[2]), mitm)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
     finally:
         server.shutdown()
         server.server_close()
@@ -231,9 +368,12 @@ def cluster(tmp_path: Path) -> Iterator[tuple[str, str]]:
 
 def channel(op: str, payload: dict) -> dict:
     """Run the channel's installer (install or recheck) under node with a source that
-    answers from `payload`, the way it would answer from Argus."""
+    answers from `payload`, the way it would answer from Argus. With `proxy`, the
+    route probe is the channel's own, through that proxy; without, the probe passes
+    (no gateway in the path)."""
     script = f"""
       import * as m from {json.dumps(CHANNEL.as_uri())};
+      import {{ gatewayRouteProbe }} from {json.dumps(ROUTE.as_uri())};
       const p = JSON.parse(await new Promise((ok) => {{
         let s = ""; process.stdin.on("data", (d) => (s += d)); process.stdin.on("end", () => ok(s));
       }}));
@@ -241,9 +381,12 @@ def channel(op: str, payload: dict) -> dict:
         status: async () => p.states,
         credential: async (_t, id) => p.credentials[id],
       }};
+      const routeProbe = p.proxy
+        ? gatewayRouteProbe(async () => ({{ proxy: p.proxy, release: async () => {{}} }}))
+        : async () => null;
       const out = p.op === "install"
-        ? await m.installTaskIntegrations({{ ...p.opts, source }})
-        : await m.recheckTaskIntegrations(p.opts.groupDir, p.installed, source);
+        ? await m.installTaskIntegrations({{ ...p.opts, source, routeProbe }})
+        : await m.recheckTaskIntegrations(p.opts.groupDir, p.installed, source, routeProbe);
       console.log(JSON.stringify(out));
     """
     done = subprocess.run(
@@ -264,16 +407,19 @@ def channel(op: str, payload: dict) -> dict:
 
 
 def kubectl(
-    tmp_path: Path, kubeconfig: Path, *args: str
+    tmp_path: Path, kubeconfig: Path, *args: str, proxy: str | None = None
 ) -> subprocess.CompletedProcess:
     home = tmp_path / "home"  # an empty HOME: the host's ~/.kube is never read
     home.mkdir(exist_ok=True)
+    env = {"PATH": os.environ["PATH"], "HOME": str(home)}
+    if proxy:
+        env["HTTPS_PROXY"] = proxy  # as the worker's session gets it from the gateway
     return subprocess.run(
         [KUBECTL or "kubectl", "--kubeconfig", str(kubeconfig), *args],
         capture_output=True,
         text=True,
         check=False,
-        env={"PATH": os.environ["PATH"], "HOME": str(home)},
+        env=env,
     )
 
 
@@ -400,3 +546,181 @@ async def test_kubectl_reads_pods_and_is_refused_writes_and_other_namespaces(
         await deliver(db, store, task_id, iid)
     assert revoked.value.code == "integration_revoked"
     assert [s.readiness for s in await status(db, store, task_id)] == ["revoked"]
+
+
+async def _delivered(
+    db: Database, store: MemorySecretStore, clock: FakeClock, server: str, ca_data: str
+) -> tuple[str, list[tuple[str, dict]]]:
+    """One integration at `server`, two tasks selecting it, each claimed by its own
+    agent; yields the integration id and, per agent, the channel's install payload."""
+    for agent in AGENTS:
+        await insert_agent(db, agent)
+        await account(db, store, f"acc-{agent}", "anthropic")
+    body = service.IntegrationCreate.model_validate(
+        {
+            "kind": "kubernetes",
+            "name": "fake-cluster",
+            "config": {
+                "server": f"https://{HOST}",
+                "namespace": NAMESPACE,
+                "ca_data": ca_data,
+            },
+            "secret": {"token": TOKEN},
+            "expires_at": clock.now + timedelta(seconds=60),
+        }
+    )
+    iid = (await service.create(db, store, "demo", body, "admin:test")).id
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE integrations SET validation = 'ok',"
+            " config = json_set(config, '$.server', ?) WHERE id = ?",
+            (server, iid),
+        )
+    payloads = []
+    for agent in AGENTS:
+        task_id = await make_task(db, iid)
+        await start(db, store, agent)
+        states = await status(db, store, task_id, agent=agent)
+        credential = await deliver(
+            db, store, task_id, iid, agent=agent, version=states[0].secret_version
+        )
+        payloads.append(
+            (
+                agent,
+                {
+                    "opts": {
+                        "taskId": task_id,
+                        "attempt": 1,
+                        "selected": [iid],
+                        "engineProvider": "anthropic",
+                        "executorProvider": None,
+                    },
+                    "states": [_jsonable(s) for s in states],
+                    "credentials": {iid: _jsonable(credential)},
+                },
+            )
+        )
+    return iid, payloads
+
+
+async def test_an_intercepting_gateway_is_refused_by_kubectl_and_blocked_by_the_channel(
+    db: Database,
+    clock: FakeClock,
+    tmp_path: Path,
+    cluster: tuple[str, str],
+    gateway: Gateway,
+) -> None:
+    port = cluster[0].rpartition(":")[2]
+    store = MemorySecretStore()
+    _, [(agent, payload), _] = await _delivered(
+        db, store, clock, f"https://{HOST}:{port}", cluster[1]
+    )
+    group = tmp_path / "group"
+    group.mkdir()
+    payload["opts"]["groupDir"] = str(group)
+
+    # The channel's probe sees the gateway's certificate and blocks before any file.
+    out = channel("install", {**payload, "proxy": gateway.url(agent)})
+    assert out["ok"] is False
+    assert out["reason"] == "env_integration_gateway_intercepts"
+    assert "the gateway intercepts TLS" in out["error"]
+    assert TOKEN not in json.dumps(out)
+    assert AGENTS[agent] not in json.dumps(out)
+    assert not any(group.rglob("kubeconfig"))
+
+    # Had a kubeconfig been delivered anyway, kubectl with only the cluster's CA
+    # refuses the gateway's certificate: x509, and no request leaves kubectl.
+    installed = channel("install", payload)["installed"]  # no gateway in this path
+    kubeconfig = Path(installed["dir"]) / "kubeconfig"
+    got = kubectl(tmp_path, kubeconfig, "get", "pods", proxy=gateway.url(agent))
+    assert got.returncode != 0
+    assert "x509" in got.stderr or "certificate" in got.stderr, got.stderr
+    assert FakeKubernetes.seen == []
+    assert {t.status for t in gateway.tunnels} == {200}
+    for tunnel in gateway.tunnels:
+        assert tunnel.plaintext == b""
+        assert TOKEN.encode() not in tunnel.sent
+
+
+async def test_a_spliced_tunnel_carries_kubectl_end_to_end_per_task_identity(
+    db: Database,
+    clock: FakeClock,
+    tmp_path: Path,
+    cluster: tuple[str, str],
+    gateway: Gateway,
+) -> None:
+    """Fixture-only: the splice models the upstream prerequisite (an authenticated
+    per-agent CONNECT passed through), not what OneCLI v1.42.0 does."""
+    gateway.mode = "splice"
+    port = cluster[0].rpartition(":")[2]
+    store = MemorySecretStore()
+    _, payloads = await _delivered(
+        db, store, clock, f"https://{HOST}:{port}", cluster[1]
+    )
+
+    kubeconfigs = {}
+    for agent, payload in payloads:
+        group = tmp_path / agent
+        group.mkdir()
+        payload["opts"]["groupDir"] = str(group)
+        out = channel("install", {**payload, "proxy": gateway.url(agent)})
+        assert out["ok"] is True, out
+        kubeconfigs[agent] = Path(out["installed"]["dir"]) / "kubeconfig"
+    probes = list(gateway.tunnels)
+    assert [(t.agent, t.status) for t in probes] == [(a, 200) for a in AGENTS]
+    gateway.tunnels.clear()
+
+    for agent, kubeconfig in kubeconfigs.items():
+        got = kubectl(
+            tmp_path, kubeconfig, "get", "pods", "-o", "name", proxy=gateway.url(agent)
+        )
+        assert got.returncode == 0, got.stderr
+        assert got.stdout.strip() == "pod/web-0"
+        # Each task's tunnels carry its own agent identity, never the other's.
+        assert {t.agent for t in gateway.tunnels} == {agent}
+        gateway.tunnels.clear()
+    assert {auth for _, _, auth in FakeKubernetes.seen} == {f"Bearer {TOKEN}"}
+    # The gateway relayed ciphertext only: neither the bearer nor the request line.
+    for tunnel in probes:
+        assert TOKEN.encode() not in tunnel.sent
+        assert b"GET " not in tunnel.sent
+
+
+async def test_the_route_probe_refuses_a_ca_mismatch_and_a_refused_connect(
+    db: Database,
+    clock: FakeClock,
+    tmp_path: Path,
+    cluster: tuple[str, str],
+    gateway: Gateway,
+) -> None:
+    gateway.mode = "splice"
+    port = cluster[0].rpartition(":")[2]
+    store = MemorySecretStore()
+    other_ca = base64.b64encode(_server_tls(tmp_path / "other", "other")[1]).decode()
+    _, [(agent, payload), _] = await _delivered(
+        db, store, clock, f"https://{HOST}:{port}", cluster[1]
+    )
+    group = tmp_path / "group"
+    group.mkdir()
+    payload["opts"]["groupDir"] = str(group)
+    [credential] = payload["credentials"].values()
+
+    def install(proxy: str, **over) -> dict:
+        cred = {**credential, **over}
+        return channel(
+            "install",
+            {**payload, "credentials": {cred["integration_id"]: cred}, "proxy": proxy},
+        )
+
+    # The cluster's certificate under another CA: refused even through a clean splice.
+    out = install(gateway.url(agent), ca_data=other_ca)
+    assert (out["ok"], out["reason"]) == (False, "env_integration_gateway_intercepts")
+    assert "not trusted" in out["error"]
+    # Deny controls: an unknown agent token (407) and a host the gateway refuses (403).
+    out = install(gateway.url("nobody"))
+    assert out["error"].endswith("the gateway refused the CONNECT (HTTP 407)")
+    out = install(gateway.url(agent), server="https://elsewhere.example.test:6443")
+    assert out["error"].endswith("the gateway refused the CONNECT (HTTP 403)")
+    assert not any(group.rglob("kubeconfig"))
+    for tunnel in gateway.tunnels:
+        assert TOKEN.encode() not in tunnel.sent

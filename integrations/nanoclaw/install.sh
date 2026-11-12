@@ -57,6 +57,8 @@ cp "$here/argus-workspace.test.ts" "$target/src/channels/argus-workspace.test.ts
 cp "$here/argus-inputs.ts" "$target/src/channels/argus-inputs.ts"
 cp "$here/argus-inputs.test.ts" "$target/src/channels/argus-inputs.test.ts"
 cp "$here/argus-integrations.ts" "$target/src/channels/argus-integrations.ts"
+# The gateway route probe (integrations spec 3.6, "Gateway path").
+cp "$here/argus-integrations-route.ts" "$target/src/channels/argus-integrations-route.ts"
 cp "$here/argus-integrations.test.ts" "$target/src/channels/argus-integrations.test.ts"
 cp "$here/argus-integrations-channel.test.ts" "$target/src/channels/argus-integrations-channel.test.ts"
 cp "$here/argus-task-inputs.e2e.test.ts" "$target/src/channels/argus-task-inputs.e2e.test.ts"

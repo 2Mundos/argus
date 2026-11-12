@@ -23,6 +23,8 @@ export const BLOCK_COPY: Record<string, string> = {
     "a selected integration is revoked, expired, unvalidated or its credential is unavailable",
   env_integration_unsupported: "the worker's engine cannot use Kubernetes integrations",
   env_integration_invalid: "the worker could not install a selected integration safely",
+  env_integration_gateway_intercepts:
+    "the worker's gateway intercepts TLS, so a cluster credential would be exposed to it",
   env_guard_missing: "the worker image has no command guard hook for its engine",
   env_oom: "sessions on its pool keep running out of memory; raise the pool's memory or unblock",
   worker_env: "the worker reported a missing workspace, tool or credential",
