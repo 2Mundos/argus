@@ -3781,10 +3781,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return { ok: true };
   }
 
+  /** Set while a recheck runs: heartbeats overlap, and two would both rewrite the file. */
+  let integrationsRechecking = false;
+
   /** On each heartbeat: a revoked, expired or rotated integration takes effect now. */
   async function recheckIntegrations(): Promise<void> {
     const held = integrationsAttempt;
     if (!held || !current || current.id !== held.taskId || current.attempt !== held.attempt) return;
+    if (integrationsRechecking) return; // the next heartbeat rechecks
+    integrationsRechecking = true;
     try {
       const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
       if (!groupDir) return;
@@ -3803,6 +3808,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         task: held.taskId,
         err: String(err),
       });
+    } finally {
+      integrationsRechecking = false;
     }
   }
 

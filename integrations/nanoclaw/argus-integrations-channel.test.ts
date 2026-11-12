@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { createArgusAdapter } from "./argus.js";
 import { type AccountLease, OneCliClient } from "./argus-accounts.js";
-import { TASK_INTEGRATIONS_DIR } from "./argus-integrations.js";
+import { KUBECONFIG_FILE, TASK_INTEGRATIONS_DIR } from "./argus-integrations.js";
 import { until } from "./argus-test-until.js";
 
 vi.mock("../db/messaging-groups.js", () => ({
@@ -61,7 +61,8 @@ type Call = { method: string; path: string; body: any };
 
 function world(provider: string, readiness: string) {
   const calls: Call[] = [];
-  const state = { readiness, version: 1, rejectHeartbeat: false };
+  const state = { readiness, version: 1, rejectHeartbeat: false, holdRotation: false };
+  let releaseOnHeartbeat: (() => void) | null = null;
   let task: object | undefined = {
     id: TASK,
     title: "Check the pods",
@@ -95,12 +96,14 @@ function world(provider: string, readiness: string) {
     calls.push({ method, path: p, body });
     if (p === "/agents/register")
       return json(201, { token: "t", agent: { id: "ag" }, heartbeat_interval_s: 1 });
-    if (p === "/agents/me/heartbeat")
+    if (p === "/agents/me/heartbeat") {
+      releaseOnHeartbeat?.();
       return json(200, {
         state: "active",
         renewed: [],
         rejected: state.rejectHeartbeat ? [{ task_id: TASK, attempt: 1, code: "not_claimed" }] : [],
       });
+    }
     if (p === "/accounts/lease") {
       const l = (body?.role ?? "engine") === "engine" ? leases.shift() : undefined;
       return l ? json(200, l) : json(409, { detail: { code: "no_account", message: "none" } });
@@ -126,7 +129,12 @@ function world(provider: string, readiness: string) {
           readiness: state.readiness,
         },
       ]);
-    if (p === `/tasks/${TASK}/integrations/int-1/credential`)
+    if (p === `/tasks/${TASK}/integrations/int-1/credential`) {
+      // A rotated fetch outlasts a heartbeat interval: the next one overlaps it.
+      if (state.holdRotation && body.secret_version === 2)
+        await new Promise<void>((r) => {
+          releaseOnHeartbeat = r;
+        });
       return json(200, {
         integration_id: "int-1",
         name: "staging",
@@ -134,10 +142,11 @@ function world(provider: string, readiness: string) {
         namespace: "team-a",
         ca_data: null,
         access: "read_only",
-        token: TOKEN,
+        token: `${TOKEN}-v${state.version}`,
         secret_version: state.version,
         expires_at: "2026-12-01T00:00:00Z",
       });
+    }
     return json(200, {});
   }) as unknown as typeof fetch;
   return { calls, fetchImpl, state };
@@ -240,13 +249,24 @@ describe("task integrations through the channel", () => {
   it("replaces the kubeconfig on the next heartbeat after a rotation", async () => {
     const r = await run();
     await until(() => r.inbound.length > 0, 8000, "the task prompt");
+    r.w.state.holdRotation = true;
     r.w.state.version = 2;
+    // The rename is the write's last step: the new token visible means it finished.
     await until(
-      () => r.posts("/integrations/int-1/credential").some((c) => c.body.secret_version === 2),
+      () =>
+        kubeconfigs(r.root).some(
+          (f) =>
+            path.basename(f) === KUBECONFIG_FILE && readFileSync(f, "utf8").includes(`${TOKEN}-v2`),
+        ),
       8000,
-      "the rotated credential",
+      "the kubeconfig is replaced",
     );
-    expect(kubeconfigs(r.root)).toHaveLength(1);
+    // One fetch and one write: the overlapping heartbeat did not start a second.
+    const rotated = r
+      .posts("/integrations/int-1/credential")
+      .filter((c) => c.body.secret_version === 2);
+    expect(rotated).toHaveLength(1);
+    expect(kubeconfigs(r.root).map((f) => path.basename(f))).toEqual([KUBECONFIG_FILE]);
   });
 
   it("sweeps a previous process's kubeconfigs from the group directory before claiming", async () => {
