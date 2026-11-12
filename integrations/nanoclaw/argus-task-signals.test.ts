@@ -18,6 +18,7 @@ import {
   parseWaiting,
   readWaiting,
   waitingMessage,
+  waitingMilestone,
 } from "./argus-task-signals.js";
 
 const NOW = Date.parse("2026-11-02T10:00:00Z");
@@ -41,6 +42,7 @@ function group(): { root: string; signals: string } {
   return { root, signals: path.join(ws, ".git", "argus") };
 }
 
+const SHA = "abcdef1234567890abcdef1234567890abcdef12";
 const record = { on: "ci", ref: "#412", since: "2026-11-02T09:54:00.000Z" };
 
 function writeWaiting(signals: string, mtimeMs = NOW - 60_000): string {
@@ -129,6 +131,15 @@ describe("readWaiting", () => {
     [{ ...record, sha: 42 }],
     [{ ...record, since: "2026-11-02T11:00:00Z" }],
     [[record]],
+    [{ ...record, sha: SHA, outcome: "failure" }],
+    [{ ...record, sha: SHA, outcome: { state: "weird", failed: [] } }],
+    [{ ...record, sha: SHA, outcome: { state: "failure", failed: "lint" } }],
+    [{ ...record, sha: SHA, outcome: { state: "failure", failed: [7] } }],
+    [{ ...record, sha: SHA, outcome: { state: "failure", failed: ["a\nb"] } }],
+    [{ ...record, sha: SHA, outcome: { state: "failure", failed: ["x".repeat(101)] } }],
+    [{ ...record, sha: SHA, outcome: { state: "failure", failed: Array(21).fill("x") } }],
+    [{ ...record, outcome: { state: "failure", failed: ["lint"] } }], // an outcome needs its commit
+    [{ ...record, on: "review", sha: SHA, outcome: { state: "success", failed: [] } }],
   ])("refuses %j", (raw) => {
     expect(parseWaiting(raw, NOW)).toBeNull();
   });
@@ -144,7 +155,56 @@ describe("readWaiting", () => {
   });
 });
 
+describe("waitingMilestone", () => {
+  const failed = {
+    ...record,
+    sha: SHA,
+    outcome: { state: "failure", failed: ["python", "secret-scan"] },
+  };
+
+  it("keeps a pending wait a waiting milestone without the keys the API refuses", () => {
+    const m = waitingMilestone(parseWaiting({ ...record, sha: SHA }, NOW)!);
+    expect(m).toEqual({
+      kind: "waiting",
+      message: "Waiting on CI for #412 at abcdef1",
+      data: { on: "ci", ref: "#412", since: record.since },
+    });
+  });
+
+  it.each([
+    ["failure", failed.outcome, "ci_failed", "CI failed at abcdef1: python, secret-scan"],
+    ["success", { state: "success", failed: [] }, "ci_passed", "CI passed at abcdef1"],
+    ["skipped", { state: "skipped", failed: [] }, "ci_passed", "CI skipped at abcdef1"],
+    [
+      "unknown",
+      { state: "unknown", failed: [] },
+      "ci_failed",
+      "CI inconclusive at abcdef1: unknown",
+    ],
+  ])("turns a %s outcome into one superseding milestone", (_, outcome, kind, message) => {
+    const m = waitingMilestone(parseWaiting({ ...record, sha: SHA, outcome }, NOW)!);
+    expect(m).toEqual({ kind, message, data: { sha: SHA } });
+  });
+});
+
 describe("createWaitingRelay", () => {
+  it("posts an outcome once, not on every heartbeat, and the next wait again", () => {
+    const relay = createWaitingRelay();
+    const pending = parseWaiting({ ...record, sha: SHA }, NOW)!;
+    const done = parseWaiting(
+      { ...record, sha: SHA, outcome: { state: "failure", failed: ["lint"] } },
+      NOW,
+    )!;
+    relay.posted(pending, NOW);
+    expect(relay.due(done, NOW + 1000)).toBe(true);
+    relay.posted(done, NOW + 1000);
+    expect(relay.due(done, NOW + 60_000)).toBe(false);
+    expect(relay.due(done, NOW + 10 * 60_000)).toBe(false); // no five-minute repost
+    const other = { ...done, outcome: { state: "failure" as const, failed: ["lint", "test"] } };
+    expect(relay.due(other, NOW + 60_000)).toBe(true);
+    expect(relay.due(pending, NOW + 60_000)).toBe(true); // a new wait after the outcome
+  });
+
   it("posts a new wait, then again only after five minutes or a change", () => {
     const relay = createWaitingRelay();
     const w = parseWaiting(record, NOW)!;

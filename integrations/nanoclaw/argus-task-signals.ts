@@ -22,7 +22,20 @@ const STALE_MS = 15 * 60_000; // a wait call is capped well below this (spec 3.3
 const REPOST_MS = 5 * 60_000; // keeps a long wait out of the quiet flag (20 min)
 const DIR_FLAGS = fsc.O_RDONLY | fsc.O_DIRECTORY | fsc.O_NOFOLLOW;
 
-export type Waiting = { on: "ci" | "review"; ref: string; since: string; sha?: string };
+const OUTCOME_STATES = ["failure", "success", "skipped", "unknown"] as const;
+const MAX_FAILED = 20;
+
+/** How a finished ci wait ended: the overall state and the failed contexts of the watched commit. */
+export type Outcome = { state: (typeof OUTCOME_STATES)[number]; failed: string[] };
+
+/** A pending wait, or (with `outcome`) a finished one that the host turns into one last milestone. */
+export type Waiting = {
+  on: "ci" | "review";
+  ref: string;
+  since: string;
+  sha?: string;
+  outcome?: Outcome;
+};
 
 const via = (fh: FileHandle, name = "") => `/proc/self/fd/${fh.fd}${name ? `/${name}` : ""}`;
 
@@ -82,16 +95,28 @@ export async function markSteer(groupDir: string, taskId: string, now: Date): Pr
 /** Validate what the helper wrote; null for anything that is not exactly a waiting record. */
 export function parseWaiting(raw: unknown, nowMs: number): Waiting | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const { on, ref, since, sha } = raw as Record<string, unknown>;
+  const { on, ref, since, sha, outcome } = raw as Record<string, unknown>;
   if (on !== "ci" && on !== "review") return null;
   if (typeof ref !== "string" || !/^[\x20-\x7e]{1,200}$/.test(ref)) return null;
   if (typeof since !== "string" || since.length > 40) return null;
   const at = Date.parse(since);
   if (!Number.isFinite(at) || at > nowMs + 60_000) return null;
   const base: Waiting = { on, ref, since: new Date(at).toISOString() };
-  if (sha === undefined) return base;
+  if (sha === undefined) return outcome === undefined ? base : null;
   if (typeof sha !== "string" || !/^[0-9a-f]{7,64}$/i.test(sha)) return null;
-  return { ...base, sha: sha.toLowerCase() };
+  const withSha = { ...base, sha: sha.toLowerCase() };
+  if (outcome === undefined) return withSha;
+  const parsed = on === "ci" ? parseOutcome(outcome) : null;
+  return parsed ? { ...withSha, outcome: parsed } : null;
+}
+
+function parseOutcome(raw: unknown): Outcome | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const { state, failed } = raw as Record<string, unknown>;
+  if (!OUTCOME_STATES.includes(state as Outcome["state"])) return null;
+  if (!Array.isArray(failed) || failed.length > MAX_FAILED) return null;
+  if (!failed.every((c) => typeof c === "string" && /^[\x20-\x7e]{1,100}$/.test(c))) return null;
+  return { state: state as Outcome["state"], failed: [...failed] };
 }
 
 /** The waiting record, or null when there is none, it is stale, or it is not valid. */
@@ -122,6 +147,36 @@ export async function readWaiting(
   });
 }
 
+/**
+ * The progress post for a record. A pending wait is `waiting`; a finished one is the single
+ * `ci_failed` / `ci_passed` milestone that replaces it (the API has no kind for "inconclusive",
+ * so `unknown` is not a pass). The failed contexts travel in the message: milestone data is a
+ * closed set (progress milestones spec 3.1) and carries only the sha.
+ */
+export function waitingMilestone(w: Waiting): {
+  kind: string;
+  message: string;
+  data: Record<string, string>;
+} {
+  const { outcome, sha } = w;
+  if (!outcome || !sha) {
+    return {
+      kind: "waiting",
+      message: waitingMessage(w),
+      data: { on: w.on, ref: w.ref, since: w.since },
+    };
+  }
+  const at = sha.slice(0, 7);
+  const message = {
+    failure: `CI failed at ${at}${outcome.failed.length ? `: ${outcome.failed.join(", ")}` : ""}`,
+    success: `CI passed at ${at}`,
+    skipped: `CI skipped at ${at}`,
+    unknown: `CI inconclusive at ${at}: unknown`,
+  }[outcome.state];
+  const passed = outcome.state === "success" || outcome.state === "skipped";
+  return { kind: passed ? "ci_passed" : "ci_failed", message, data: { sha: sha.slice(0, 40) } };
+}
+
 export function waitingMessage(w: Waiting): string {
   const at = w.on === "ci" && w.sha ? ` at ${w.sha.slice(0, 7)}` : "";
   return `Waiting on ${w.on === "ci" ? "CI" : "review"} for ${w.ref}${at}`;
@@ -133,17 +188,21 @@ export function waitingMessage(w: Waiting): string {
  */
 export function createWaitingRelay() {
   let last: { key: string; at: number } | null = null;
+  // An outcome is posted once; only a pending wait is repeated to stay out of the quiet flag.
+  const keyOf = (w: Waiting) =>
+    w.outcome
+      ? `${w.on}|${w.ref}|${w.sha}|${w.outcome.state}|${w.outcome.failed.join("\n")}`
+      : `${w.on}|${w.ref}|${w.since}|${w.sha ?? ""}`;
   return {
     due(w: Waiting | null, nowMs: number): boolean {
       if (!w) {
         last = null;
         return false;
       }
-      const key = `${w.on}|${w.ref}|${w.since}|${w.sha ?? ""}`;
-      return !last || last.key !== key || nowMs - last.at >= REPOST_MS;
+      return !last || last.key !== keyOf(w) || (!w.outcome && nowMs - last.at >= REPOST_MS);
     },
     posted(w: Waiting, nowMs: number): void {
-      last = { key: `${w.on}|${w.ref}|${w.since}|${w.sha ?? ""}`, at: nowMs };
+      last = { key: keyOf(w), at: nowMs };
     },
     reset(): void {
       last = null;

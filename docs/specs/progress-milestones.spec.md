@@ -39,7 +39,7 @@ has gone quiet.
 | `ci_running`, `ci_passed`, `ci_failed` | `sha` (7-40 hex) |
 | `gate_failed` | `gate` (string, at most 200 characters) |
 | `waiting_input` | none |
-| `waiting` | `on` (`ci` or `review`), `ref` (string, at most 200 characters), `since` (ISO time); posted by the host for an `argus-task wait` ([task helpers](task-helpers.spec.md) 3.7) |
+| `waiting` | `on` (`ci` or `review`), `ref` (string, at most 200 characters), `since` (ISO time); posted by the host for a pending `argus-task wait` ([task helpers](task-helpers.spec.md) 3.7) |
 
 Any other kind, or `data` that does not match its kind, is `422 validation_failed`.
 `data` without `kind` is refused. Unknown keys are refused.
