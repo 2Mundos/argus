@@ -190,7 +190,7 @@ import {
   createWaitingRelay,
   markSteer,
   readWaiting,
-  waitingMessage,
+  waitingMilestone,
 } from "./argus-task-signals.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import { prepareTaskWorkspace, taskBranch, type WorkspaceResult } from "./argus-workspace.js";
@@ -3082,9 +3082,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     try {
       await client.call("POST", `/tasks/${task.id}/progress`, {
         attempt: task.attempt,
-        message: waitingMessage(waiting),
-        kind: "waiting",
-        data: waiting,
+        ...waitingMilestone(waiting),
       });
       waitingRelay.posted(waiting, now);
     } catch (err) {

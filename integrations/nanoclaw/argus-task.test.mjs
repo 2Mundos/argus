@@ -235,7 +235,67 @@ describe("wait ci", () => {
     assert.deepEqual(r.out.failed, ["test"]);
     assert.equal(r.elapsed, 60); // checks at 0, 30 and 60 s
     assert.deepEqual(during, { on: "ci", ref: "#7", since: iso(0), sha: HEAD });
-    assert.equal(existsSync(join(signals(r.cwd), "waiting.json")), false);
+    // The terminal record replaces the pending one, so the host can supersede the milestone.
+    assert.deepEqual(JSON.parse(readFileSync(join(signals(r.cwd), "waiting.json"), "utf8")), {
+      on: "ci",
+      ref: "#7",
+      since: iso(0),
+      sha: HEAD,
+      outcome: { state: "failure", failed: ["test"] },
+    });
+  });
+
+  it("records the outcome of a success and bounds odd context names", async () => {
+    const odd = `bad\nname\u00e9${"x".repeat(200)}`;
+    const failing = Array.from({ length: 30 }, (_, i) => ({
+      id: i + 1,
+      context: i === 0 ? odd : `c${i}`,
+      status: "failure",
+    }));
+    const routes = (list) => ({ "GET /pulls/7": pr(), [`GET /statuses/${HEAD}`]: list });
+    const ok = await run(["wait", "ci", "--pr", "7"], {
+      routes: routes([{ id: 1, context: "test", status: "success" }]),
+    });
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(signals(ok.cwd), "waiting.json"), "utf8")).outcome,
+      {
+        state: "success",
+        failed: [],
+      },
+    );
+    const bad = await run(["wait", "ci", "--pr", "7"], { routes: routes(failing) });
+    const { failed } = JSON.parse(
+      readFileSync(join(signals(bad.cwd), "waiting.json"), "utf8"),
+    ).outcome;
+    assert.equal(failed.length, 20);
+    assert.match(failed[0], /^[\x20-\x7e]{1,100}$/);
+  });
+
+  it("does not continue a finished wait: a terminal record is never reused as previous", async () => {
+    const cwd = repo();
+    mkdirSync(signals(cwd), { recursive: true });
+    const file = join(signals(cwd), "waiting.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        on: "ci",
+        ref: "#7",
+        since: iso(-300),
+        sha: NEW,
+        outcome: { state: "failure", failed: ["lint"] },
+      }),
+    );
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "10"], {
+      cwd,
+      routes: {
+        "GET /pulls/7": pr(),
+        [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "pending" }],
+      },
+    });
+    assert.equal(r.out.rebound_from, undefined);
+    assert.equal(r.out.watched_sha, HEAD);
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    assert.deepEqual(saved, { on: "ci", ref: "#7", since: iso(0), sha: HEAD });
   });
 
   it("returns still pending at the cap, keeps the waiting file, and a re-call keeps its start", async () => {
@@ -324,6 +384,13 @@ describe("wait ci pins one commit", () => {
     assert.equal(r.code, EXIT.pending);
     assert.deepEqual([r.out.watched_sha, r.out.pr_head_sha, r.out.head_matches], [X, NEW, false]);
     assert.deepEqual(r.out.failed, ["lint"]);
+    // The failed old head is not an outcome: the record stays pending, on the watched commit.
+    assert.deepEqual(JSON.parse(readFileSync(join(signals(r.cwd), "waiting.json"), "utf8")), {
+      on: "ci",
+      ref: "#7",
+      since: iso(0),
+      sha: X,
+    });
   });
 
   it("never returns done while the PR head is not the watched commit", async () => {

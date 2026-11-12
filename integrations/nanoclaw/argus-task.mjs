@@ -193,6 +193,11 @@ export function waitCap(option, env) {
 }
 
 const SHA = /^[0-9a-f]{7,64}$/i;
+const MAX_FAILED = 20; // the host accepts at most this many contexts of 100 printable ASCII
+const contextName = (name) =>
+  String(name)
+    .replace(/[^\x20-\x7e]/g, "?")
+    .slice(0, 100) || "?";
 const short = (sha) => sha.slice(0, 7);
 
 /**
@@ -277,7 +282,8 @@ async function wait(api, o, ctx) {
   // A re-call for the same condition keeps the original start, so the dashboard's
   // timer and the review cursor survive the cap.
   const previous = file ? readJson(file) : null;
-  const same = previous?.on === on && previous?.ref === ref;
+  // A record with an outcome is a finished wait: only a pending one is continued.
+  const same = previous?.on === on && previous?.ref === ref && !previous?.outcome;
   const since = same ? previous.since : new Date(start).toISOString();
   const cursor =
     on === "review" ? (o.since === undefined ? since : timestamp(o.since, "since")) : null;
@@ -307,6 +313,18 @@ async function wait(api, o, ctx) {
       published = { sha };
     } catch {
       // retried at the next check
+    }
+  };
+  // A finished ci wait leaves a terminal record: the same fields plus the outcome, so the host
+  // can supersede the waiting milestone (spec 3.4). Best effort like the pending record.
+  const finish = (check) => {
+    if (!file || on !== "ci" || !watch?.sha) return clear();
+    try {
+      mkdirSync(ctx.dir, { recursive: true });
+      const failed = check.failed.slice(0, MAX_FAILED).map(contextName);
+      writeJson(file, { on, ref, since, sha: watch.sha, outcome: { state: check.state, failed } });
+    } catch {
+      clear();
     }
   };
   const clear = () => {
@@ -352,7 +370,7 @@ async function wait(api, o, ctx) {
       // A check that finished after the budget is late: report pending, never success.
       if (check.done && ctx.now() >= deadline) check = { done: false, status: "wait budget spent" };
       if (check.done) {
-        clear();
+        finish(check);
         return {
           code: EXIT.ok,
           result: { on, ref, waited_s: (ctx.now() - start) / 1000, ...check },

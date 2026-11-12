@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-02
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Task helpers (`argus-task`)
@@ -87,17 +87,19 @@ argus-task wait review --pr N [--since CURSOR]
 
 - `ci` watches one commit for the whole call: `--sha` as given, else the PR head read once
   at the first observation, never re-read to retarget. A re-call for the same `on` and
-  `ref` without `--sha` reuses the sha stored in `waiting.json` (3.4) while it still is
-  the PR head; if the head moved on, the new first observation is bound and the result
+  `ref` without `--sha` reuses the sha stored in a pending `waiting.json` record (3.4) while
+  it still is the PR head (a finished wait's record is never reused); if the head moved on, the new first observation is bound and the result
   says `rebound_from: <old sha>`. Every check reads the PR head afresh and returns
   `watched_sha`, `pr_head_sha` and `head_matches` (the head equals the watched sha; an
   abbreviated `--sha` matches by prefix). It returns when no check on the watched commit is
   pending, including after one has already failed, so one result covers the whole run,
   and only while `head_matches` is true. If the head is another commit the wait keeps
   going, bounded like any wait, with the status "PR head abc1234 is not the watched
-  def5678"; it is never done on a commit the PR no longer points at. The JSON carries the
+  def5678"; it is never done on a commit the PR no longer points at, so a failure on an
+  old head is never reported as an outcome. The JSON carries the
   overall `state` and the names of the failed checks of the watched commit only (not other
-  commits' contexts); a pending result says how many failed so far. Each check's state is normalized and anything unrecognized, missing or malformed
+  commits' contexts); a pending result says how many failed so far. When the wait is done
+  it also leaves the outcome (`state`, failed contexts) in the terminal record (3.4). Each check's state is normalized and anything unrecognized, missing or malformed
   (a Gitea `warning`, a status without a state) is `unknown`, never success. The overall
   `state` is the first that applies: `failure` (failure, error, cancelled, timed_out),
   `pending` (pending, queued, in_progress, waiting, requested, running), `unknown`,
@@ -136,17 +138,26 @@ with `git rev-parse --absolute-git-dir`, and outside a repository it runs withou
   read by the agent only after its current tool call returns, so `wait` exits 11 when the
   marker's `at` is later than the moment that wait started. The marker is never deleted:
   a later steer overwrites it, and an older one does not interrupt a new wait.
-- **`waiting.json`** (helper → host). `wait` writes `{on: "ci"|"review", ref, since}` when
-  it starts, adding `sha` (the watched commit, 7-64 hex) once a `ci` wait has one. It
-  removes the file on every terminal result (done, steer, error), so no stale wait
-  remains; on exit 10 (the cap) it stays for the re-call. A re-call for the same `on` and
-  `ref` keeps `since` and `sha` (3.3), so the dashboard timer and the review cursor
-  survive the cap. The helper never reads or writes through a symlink there, and the file
-  is best effort: a failed write is skipped, the wait carries on and returns the same
-  result, only the milestone is lost. On each heartbeat the host posts a present record as
-  a `waiting` milestone (3.7) when it changed, and again every 5 minutes while it lasts, so
-  a long wait never reaches the 20-minute quiet flag. A file not modified for 15 minutes is
-  stale and ignored.
+- **`waiting.json`** (helper → host). One record, pending or terminal.
+  - *Pending.* `wait` writes `{on: "ci"|"review", ref, since}` when it starts, adding `sha`
+    (the watched commit, 7-64 hex) once a `ci` wait has one. On exit 10 (the cap) it stays
+    for the re-call. A re-call for the same `on` and `ref` keeps `since` and `sha` (3.3), so
+    the dashboard timer and the review cursor survive the cap. The host posts it as a
+    `waiting` milestone (3.7) when it changed, and again every 5 minutes while it lasts, so
+    a long wait never reaches the 20-minute quiet flag.
+  - *Terminal.* When a `ci` wait is done, the helper replaces the record with
+    `{on, ref, since, sha, outcome: {state, failed}}`: `state` is the overall CI state
+    (`failure`, `success`, `skipped` or `unknown`) and `failed` the failed contexts of the
+    watched commit (at most 20, each printable ASCII of at most 100 characters; the helper
+    replaces other characters with `?` and truncates). The host posts it once as the
+    outcome milestone (3.7) and not again on later heartbeats. A record with an `outcome`
+    is never continued: a new wait starts a fresh `since` and binds the head anew. A
+    `review` wait that is done, a steer (exit 11) and an error remove the file: they have
+    no outcome milestone (the API has no kind for them), and a steered agent acts at once
+    and its next milestone replaces the `waiting` one.
+  - The helper never reads or writes through a symlink there, and the file is best effort:
+    a failed write is skipped, the wait carries on and returns the same result, only the
+    milestone is lost. A file not modified for 15 minutes is stale and ignored.
 
 The workspace belongs to the container, which can swap any directory in it for a symlink
 at any moment, so the host treats both files as untrusted. It walks from its own group
@@ -155,7 +166,9 @@ following a symlink, and then reaches the files only through the last open handl
 (`/proc/self/fd/N/…`), so nothing is resolved by path again after a check. It writes the
 marker through a new temporary file and a rename, opens `waiting.json` non-blocking so a
 FIFO is refused instead of hanging the heartbeat, reads at most 4 KiB, and rebuilds the
-milestone field by field (`ref` printable ASCII, `since` a past ISO time).
+milestone field by field (`ref` printable ASCII, `since` a past ISO time; an `outcome` only
+with a `sha` on a `ci` record, a known `state`, and bounded printable-ASCII `failed`
+contexts, else the whole record is refused).
 
 ## 3.5 `ci-digest`
 
@@ -222,19 +235,26 @@ change in the worktree when a rebase is needed is refused (`dirty_worktree`, wit
 and first paths); nothing is stashed or reset. Only a rebase this invocation started is
 aborted; if the abort fails, that is the error.
 
-## 3.7 `waiting` milestone
+## 3.7 `waiting` milestone and the outcome that replaces it
 
-[Progress milestones](progress-milestones.spec.md) gains one kind:
+[Progress milestones](progress-milestones.spec.md) already has the kinds used; no kind is added.
 
-| `kind` | `data` |
-| --- | --- |
-| `waiting` | `on` (`ci` or `review`), `ref` (string, at most 200 characters), `since` (ISO time), `sha` (optional, the watched commit of a `ci` wait) |
+| Record | `kind` | `data` | Message |
+| --- | --- | --- | --- |
+| pending | `waiting` | `on`, `ref`, `since` | "Waiting on CI for #412 at abc1234" (a review wait has no commit) |
+| `failure` | `ci_failed` | `sha` | "CI failed at abc1234: python, secret-scan" |
+| `success` | `ci_passed` | `sha` | "CI passed at abc1234" |
+| `skipped` | `ci_passed` | `sha` | "CI skipped at abc1234" (skipped is not a blocker, as in `pr-ready`) |
+| `unknown` | `ci_failed` | `sha` | "CI inconclusive at abc1234: unknown" (not a pass) |
 
-The message names the watched commit: "Waiting on CI for #412 at abc1234" (a review wait has
-no commit). The dashboard renders it as "Waiting on CI for #412 · 6 min" from `since`. The next
-milestone or note with a kind replaces it, as for every other kind. A posted `waiting`
-milestone renews the quiet clock like any progress post. The delegate's milestone relay
-file ([progress milestones](progress-milestones.spec.md) 3.3) never carries `waiting`.
+The API refuses data keys outside the closed set, so the pending post carries no `sha` (the
+message names it) and the failed contexts travel only in the message of `ci_failed`. The
+outcome milestone replaces the `waiting` one, so a finished wait never keeps saying
+"Waiting on CI"; it is posted once per outcome, not per heartbeat. The dashboard renders a
+pending one as "Waiting on CI for #412 · 6 min" from `since`. The next milestone or note with
+a kind replaces any of them. A posted milestone renews the quiet clock like any progress
+post. The delegate's milestone relay file ([progress milestones](progress-milestones.spec.md)
+3.3) never carries `waiting`.
 
 ## 3.8 Engines
 
