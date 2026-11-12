@@ -4,7 +4,15 @@
  * installed before the prompt, named but never quoted in it, removed on revocation
  * and when the attempt ends, and a non-deliverable integration blocks the attempt.
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -239,6 +247,25 @@ describe("task integrations through the channel", () => {
       "the rotated credential",
     );
     expect(kubeconfigs(r.root)).toHaveLength(1);
+  });
+
+  it("sweeps a previous process's kubeconfigs from the group directory before claiming", async () => {
+    // The real group directory (`groups/<folder>` under the cwd), not the workspace seam.
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "argus-integrations-cwd-"));
+    tmp.push(cwd);
+    const stale = path.join(cwd, "groups", "argus-worker", TASK_INTEGRATIONS_DIR, "other", "1-x");
+    mkdirSync(stale, { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(stale, "kubeconfig"), TOKEN);
+    const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    try {
+      const r = await run();
+      await until(() => r.w.calls.some((c) => c.path === "/tasks/claim"), 8000, "the claim");
+      expect(readdirSync(path.join(cwd, "groups", "argus-worker", TASK_INTEGRATIONS_DIR))).toEqual(
+        [],
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("removes the kubeconfig when Argus ends the claim", async () => {

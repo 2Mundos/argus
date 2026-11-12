@@ -3750,10 +3750,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     task: ArgusTask,
   ): Promise<{ ok: true } | { ok: false; reason: string; error: string }> {
     integrationsAttempt = null;
-    if (!task.integrations?.length) {
-      if (isCanonicalTaskId(task.id)) await dropIntegrations(task.id);
-      return { ok: true };
-    }
+    if (!task.integrations?.length) return { ok: true };
     const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
     if (!groupDir)
       return {
@@ -4674,13 +4671,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   async function claimLoop(): Promise<void> {
     let backoff = 1000;
-    // No attempt runs yet: a kubeconfig a previous process left behind goes now.
-    try {
-      const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
-      if (groupDir) await sweepTaskIntegrations(groupDir);
-    } catch (err) {
-      log.error("Could not sweep stale task kubeconfigs", { err: String(err) });
-    }
+    // No attempt runs yet: a kubeconfig a previous process left behind goes now. The real
+    // group directory, not the test workspace seam; none resolvable means nothing to sweep.
+    const groupDir = await argusGroupDir().catch(() => null);
+    if (groupDir)
+      await sweepTaskIntegrations(groupDir).catch((err) =>
+        log.error("Could not sweep stale task kubeconfigs", { err: String(err) }),
+      );
     let mayClaim = true;
     let nextVisibility = Date.now() + STARTUP_ADOPTION_VISIBILITY_MS;
     if (cfg.startupReady) {
@@ -4761,7 +4758,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             await runTask(task);
           } finally {
             await closeAttemptSession(task);
-            if (isCanonicalTaskId(task.id)) await dropIntegrations(task.id);
+            if (task.integrations?.length && isCanonicalTaskId(task.id))
+              await dropIntegrations(task.id);
             await inputsAfterAttempt(task);
             await checkpointAfterAttempt(task);
           }

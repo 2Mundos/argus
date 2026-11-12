@@ -210,6 +210,7 @@ def cluster(tmp_path: Path) -> Iterator[tuple[str, str]]:
         )
     )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(tmp_path / "tls" / "cert.pem", tmp_path / "tls" / "key.pem")
     FakeKubernetes.token = TOKEN
     FakeKubernetes.seen = []

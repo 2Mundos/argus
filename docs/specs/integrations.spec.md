@@ -272,6 +272,8 @@ once; a new `secret_version` replaces it with a fresh delivery. Revocation and e
 therefore take effect within one heartbeat interval. The channel removes the
 attempt directory when the attempt ends, on every path (done, failed, blocked,
 cancelled, lost lease, crash of the session), so attempts never share a file.
+Before its first claim, the channel empties the group's integrations directory, so
+a kubeconfig a previous (crashed) process left behind never outlives it.
 Deleting the local file does not revoke anything upstream: a token a session
 copied stays valid until it expires or is revoked at the cluster. Revoke the
 service-account token there too.
