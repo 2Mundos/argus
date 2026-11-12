@@ -19,6 +19,10 @@ export const BLOCK_COPY: Record<string, string> = {
   env_input_unavailable: "a required task input could not be downloaded",
   env_input_invalid: "a required task input failed its safety or integrity check",
   env_input_limit: "the task inputs exceed the worker's size or file limits",
+  env_integration_unavailable:
+    "a selected integration is revoked, expired, unvalidated or its credential is unavailable",
+  env_integration_unsupported: "the worker's engine cannot use Kubernetes integrations",
+  env_integration_invalid: "the worker could not install a selected integration safely",
   env_guard_missing: "the worker image has no command guard hook for its engine",
   env_oom: "sessions on its pool keep running out of memory; raise the pool's memory or unblock",
   worker_env: "the worker reported a missing workspace, tool or credential",

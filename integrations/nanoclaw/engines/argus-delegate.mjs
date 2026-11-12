@@ -747,6 +747,48 @@ export function withCliToolsPath(e = process.env, dirs = ["/pnpm"]) {
   return missing.length ? { ...e, PATH: [...missing, ...parts].join(":") } : e;
 }
 
+/** Where the channel installs each attempt's integration kubeconfig
+ * (docs/specs/integrations.spec.md 3.6); mirrors `TASK_INTEGRATIONS_DIR`. */
+export const TASK_INTEGRATIONS_ROOT = "/workspace/agent/task-integrations";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The kubeconfig the channel installed for this policy's task attempt, or null.
+ * Only a regular file in `<root>/<task>/<attempt>-<id>/` counts: never a symlink. */
+export function attemptKubeconfig(context, root = TASK_INTEGRATIONS_ROOT) {
+  const taskId = context?.task_id;
+  const attempt = Number(context?.attempt);
+  if (typeof taskId !== "string" || !UUID_RE.test(taskId)) return null;
+  if (!Number.isInteger(attempt) || attempt < 1) return null;
+  const taskDir = path.join(root, taskId);
+  let names;
+  try {
+    if (!fs.lstatSync(taskDir).isDirectory()) return null;
+    names = fs.readdirSync(taskDir);
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    if (!name.startsWith(`${attempt}-`)) continue;
+    const dir = path.join(taskDir, name);
+    const file = path.join(dir, "kubeconfig");
+    try {
+      if (fs.lstatSync(dir).isDirectory() && fs.lstatSync(file).isFile()) return file;
+    } catch {}
+  }
+  return null;
+}
+
+/** An executor never inherits a KUBECONFIG; a Claude executor gets the attempt's.
+ * Any other executor with an installed kubeconfig is refused: Argus cannot confine
+ * its session (spec 3.6 engine matrix). Returns `{ env, refused }`. */
+export function scopeKubeconfig(executor, e, kubeconfig) {
+  const { KUBECONFIG: _inherited, ...rest } = e;
+  if (!kubeconfig) return { env: rest, refused: false };
+  if (executor !== "claude") return { env: rest, refused: true };
+  return { env: { ...rest, KUBECONFIG: kubeconfig }, refused: false };
+}
+
 /** `cwd` must resolve (symlinks included) inside one of the allowed roots. */
 export function authorizedCwd(cwd, roots) {
   let real;
@@ -1111,6 +1153,20 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   }
   e = prepareExecutorEnv(executor, e, path.join(cwd, ".argus-delegate-runtime"));
   e = withCliToolsPath(e);
+  const kube = scopeKubeconfig(
+    executor,
+    e,
+    attemptKubeconfig(snapshot.context, e.ARGUS_TASK_INTEGRATIONS_ROOT || TASK_INTEGRATIONS_ROOT),
+  );
+  e = kube.env;
+  if (kube.refused) {
+    reportBlocked(e, snapshot, selection, executor, "integration_engine_unsupported");
+    finish(78, {
+      ...identity,
+      blocked: "integration_engine_unsupported",
+      need: "this task's Kubernetes integration is available to the claude executor only",
+    });
+  }
 
   // Auth first: a missing credential blocks, it never reroutes.
   const auth = authStatus(executor, e, os.homedir(), settings);

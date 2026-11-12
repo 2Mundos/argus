@@ -501,8 +501,8 @@ def _raises(exc: Exception):
 
 def test_image_tools_probe_decisions() -> None:
     assert image_tools.probe("img", _docker(""))["ok"] is True
-    gone = image_tools.probe("img", _docker("ssh\nrsync\n"))
-    assert gone == {"ok": False, "detail": "missing in image: ssh, rsync"}
+    gone = image_tools.probe("img", _docker("ssh\nrsync\nkubectl\n"))
+    assert gone == {"ok": False, "detail": "missing in image: ssh, rsync, kubectl"}
     # a docker failure says nothing about the image
     assert image_tools.probe("img", _docker("", code=125))["ok"] is None
     assert image_tools.probe("img", _raises(FileNotFoundError()))["ok"] is None

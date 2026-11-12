@@ -43,6 +43,7 @@ QUEUED_STATES = ("pending", "ready", "claimed")
 DROP_TABLES = (
     "routines",
     "tokens",
+    "task_integrations",  # selections of the dropped integrations
     "integrations",  # project connections and SOPS secret references stay isolated
     "account_leases",
     "instances",

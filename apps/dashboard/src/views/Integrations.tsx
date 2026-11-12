@@ -68,9 +68,12 @@ export function Integrations() {
       />
       <div className="card">
         <p>
-          Credentials are securely stored and managed in the encrypted SOPS secret store, but are
-          not yet injected into task workers. Saving or validating a connection does not grant any
-          engine access to it.
+          Credentials are stored in the encrypted SOPS secret store. MCP connections are not yet
+          injected into task workers. A Kubernetes connection reaches a worker only when a task of
+          the same project selects it: each attempt of that task on a Claude engine gets an
+          ephemeral kubeconfig pinned to the target namespace, removed when the attempt ends or the
+          connection is revoked, rotated or expires. Removing that file does not revoke the token;
+          revoke it at the cluster too.
         </p>
         <p className="muted small">
           Encrypted secret store:{" "}
@@ -268,12 +271,21 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
         {connection.validation_detail && (
           <div className="small">{connection.validation_detail}</div>
         )}
+        {connection.expires_at && (
+          <div>
+            Expires: <DateChip at={connection.expires_at} />
+          </div>
+        )}
         {connection.validated_at && (
           <div>
             Last validated: <DateChip at={connection.validated_at} />
           </div>
         )}
-        <div className="muted small">Not delivered to workers</div>
+        <div className="muted small">
+          {connection.kind === "kubernetes"
+            ? "Delivered only to attempts of tasks that select it"
+            : "Not delivered to workers"}
+        </div>
       </td>
       <td>
         {active && (
@@ -426,6 +438,9 @@ function CredentialForm({
     const field = (name: string) => (form.elements.namedItem(name) as HTMLInputElement).value;
     const secret = { token: token.current.value };
     token.current.value = "";
+    const expiry = field("expires_at");
+    // A datetime-local value has no zone: read it as the browser's local time.
+    const expires_at = expiry ? new Date(expiry).toISOString() : undefined;
     const config: IntegrationCreate["config"] = integration
       ? {}
       : kind === "mcp"
@@ -443,13 +458,13 @@ function CredentialForm({
           ? await call(
               api.POST("/api/projects/{slug}/integrations/{integration_id}/rotate", {
                 params: { path: { slug: project, integration_id: integration.id } },
-                body: { secret },
+                body: { secret, expires_at },
               }),
             )
           : await call(
               api.POST("/api/projects/{slug}/integrations", {
                 params: { path: { slug: project } },
-                body: { kind, name: field("name"), access, config, secret },
+                body: { kind, name: field("name"), access, config, secret, expires_at },
               }),
             );
         onSaved(result);
@@ -468,7 +483,7 @@ function CredentialForm({
     >
       <p className="muted small">
         Project: {project}. Tokens are encrypted in SOPS and never shown again. Re-enter the token
-        after a failed request. No worker access is enabled.
+        after a failed request. Workers get a Kubernetes connection only for tasks that select it.
       </p>
       <fieldset className="integration-fields" disabled={action.busy}>
         {!integration && (
@@ -578,6 +593,14 @@ function CredentialForm({
         <p className="muted small">
           {kind === "kubernetes" ? "Service-account bearer token. " : "MCP bearer token. "}1–8192
           printable characters without whitespace.
+        </p>
+        <label>
+          Expires (optional, your local time)
+          <input name="expires_at" type="datetime-local" />
+        </label>
+        <p className="muted small">
+          When the token stops working. Argus stops delivering it then; a token with its own expiry
+          claim uses the earlier of the two. Rotating replaces the expiry.
         </p>
       </fieldset>
       {error && (

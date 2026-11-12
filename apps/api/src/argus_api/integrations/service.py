@@ -8,7 +8,7 @@ import json
 import re
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import wraps
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -58,11 +58,16 @@ class IntegrationCreate(BaseModel):
     access: Access = "read_only"
     config: dict[str, Any]
     secret: SecretIn
+    # When the upstream credential stops working (spec 3.1). Omitted: the token's
+    # own `exp` claim if it has one; the earlier of the two otherwise.
+    expires_at: datetime | None = None
 
 
 class IntegrationRotate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     secret: SecretIn
+    # Replaces the previous expiry, as `expires_at` on create does.
+    expires_at: datetime | None = None
 
 
 class Integration(BaseModel):
@@ -77,6 +82,7 @@ class Integration(BaseModel):
     validation: Literal["unchecked", "ok", "failed"]
     validation_detail: str | None
     validated_at: datetime | None
+    expires_at: datetime | None
     created_at: datetime
     created_by: str
     updated_at: datetime
@@ -153,6 +159,42 @@ def check_token(secret: SecretIn) -> str:
     return token
 
 
+def _token_exp(token: str) -> datetime | None:
+    """The `exp` claim of a JWT-shaped token, unverified: only a hint for when the
+    credential stops working, never an authorization decision."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))
+        )
+        exp = payload["exp"] if isinstance(payload, dict) else None
+        if isinstance(exp, bool) or not isinstance(exp, int | float):
+            return None
+        return datetime.fromtimestamp(exp, UTC)
+    except (ValueError, KeyError, OverflowError, OSError, binascii.Error):
+        return None
+
+
+def expiry(given: datetime | None, token: str, now: datetime) -> str | None:
+    """The stored `expires_at`: the earlier of the given value and the token's own
+    `exp`. A credential that is already expired is refused (spec 3.1)."""
+    if given is not None and given.tzinfo is None:
+        raise ValidationFailedError(
+            "expires_at needs a timezone", code="expires_at_invalid"
+        )
+    known = [d for d in (given, _token_exp(token)) if d is not None]
+    if not known:
+        return None
+    at = min(known)
+    if at <= now:
+        raise ValidationFailedError(
+            f"the credential expired at {ts(at)}", code="expires_at_past"
+        )
+    return ts(at)
+
+
 def _model(row: aiosqlite.Row) -> Integration:
     return Integration(
         id=row["id"],
@@ -166,6 +208,7 @@ def _model(row: aiosqlite.Row) -> Integration:
         validation=row["validation"],
         validation_detail=row["validation_detail"],
         validated_at=row["validated_at"],
+        expires_at=row["expires_at"],
         created_at=row["created_at"],
         created_by=row["created_by"],
         updated_at=row["updated_at"],
@@ -301,6 +344,7 @@ async def create(
         )
     config = check_config(body.kind, body.config)
     token = check_token(body.secret)
+    expires_at = expiry(body.expires_at, token, db.now())
     async with db.read() as conn:
         await _project(conn, project)
         await _name_free(conn, project, body.name)
@@ -308,15 +352,17 @@ async def create(
     integration_id = str(uuid4())
     secret = f"{STORE_ENTRY_PREFIX}{integration_id}"
     try:
-        await store.put(secret, {"token": token})  # may fail after applying
+        await store.put(
+            secret, {"token": token, "version": 1}
+        )  # may fail after applying
         async with db.write() as tx:
             await _project(tx.conn, project)
             await _name_free(tx.conn, project, body.name)
             now = ts(tx.now)
             await tx.conn.execute(
                 "INSERT INTO integrations (id, project, kind, name, config, access,"
-                " secret_ref, state, created_at, created_by, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+                " secret_ref, state, created_at, created_by, updated_at, expires_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
                 (
                     integration_id,
                     project,
@@ -328,6 +374,7 @@ async def create(
                     now,
                     actor,
                     now,
+                    expires_at,
                 ),
             )
             await record(
@@ -341,6 +388,7 @@ async def create(
                     "kind": body.kind,
                     "name": body.name,
                     "access": body.access,
+                    "expires_at": expires_at,
                 },
             )
     except BaseException:
@@ -367,6 +415,7 @@ async def _swap_secret(
     actor: str,
     revoke: bool,
     token: str | None = None,
+    expires_at: str | None = None,
     *,
     store_available: bool = True,
 ) -> Integration:
@@ -386,7 +435,7 @@ async def _swap_secret(
             prior = _credential(store, secret)
             assert secret is not None
             version = row["secret_version"]
-            await _write_swap(tx, row, actor, revoke)
+            await _write_swap(tx, row, actor, revoke, expires_at)
             # Set first: a store call that fails part way may still have changed it,
             # and putting the prior value back is harmless when it did not.
             changed = True
@@ -398,7 +447,9 @@ async def _swap_secret(
                     )
             else:
                 assert token is not None
-                await store.put(secret, {"token": token})
+                # The version travels with the token, so a delivery can tell a
+                # store that is behind the row from one that matches it (3.6).
+                await store.put(secret, {"token": token, "version": version + 1})
     except BaseException:
         if changed and secret is not None and prior is not None:
             # Serialize readback and compensation with other mutations. Restore
@@ -421,7 +472,9 @@ async def _swap_secret(
     return await get(db, project, integration_id)
 
 
-async def _write_swap(tx: Tx, row: aiosqlite.Row, actor: str, revoke: bool) -> None:
+async def _write_swap(
+    tx: Tx, row: aiosqlite.Row, actor: str, revoke: bool, expires_at: str | None
+) -> None:
     now = ts(tx.now)
     if revoke:
         await tx.conn.execute(
@@ -433,8 +486,8 @@ async def _write_swap(tx: Tx, row: aiosqlite.Row, actor: str, revoke: bool) -> N
         await tx.conn.execute(
             "UPDATE integrations SET secret_version = secret_version + 1,"
             " validation = 'unchecked', validation_detail = NULL, validated_at = NULL,"
-            " rotated_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, row["id"]),
+            " expires_at = ?, rotated_at = ?, updated_at = ? WHERE id = ?",
+            (expires_at, now, now, row["id"]),
         )
     await record(
         tx,
@@ -465,6 +518,7 @@ async def rotate(
         actor,
         False,
         token,
+        expiry(body.expires_at, token, db.now()),
         store_available=store_available,
     )
 

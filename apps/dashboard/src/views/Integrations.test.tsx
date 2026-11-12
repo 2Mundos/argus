@@ -42,6 +42,7 @@ function connection(overrides: Partial<Integration> = {}): Integration {
     rotated_at: null,
     revoked_at: null,
     revoked_by: null,
+    expires_at: null,
     ...overrides,
   };
 }
@@ -153,6 +154,7 @@ describe("Integrations management", () => {
         validation: "failed",
         validation_detail: "token rejected (HTTP 401)",
         validated_at: timestamp,
+        expires_at: "2026-12-01T00:00:00Z",
       }),
       connection({ id: "other", project: "beta", name: "beta-only" }),
     ];
@@ -162,6 +164,8 @@ describe("Integrations management", () => {
     expect(row().getByText("Secret present")).toBeTruthy();
     expect(row("cluster").getByText("Validation: failed")).toBeTruthy();
     expect(row("cluster").getByText("token rejected (HTTP 401)")).toBeTruthy();
+    expect(row("cluster").getByText(/Expires:/)).toBeTruthy();
+    expect(row().queryByText(/Expires:/)).toBeNull();
     expect(screen.getByText(/not yet injected into task workers/)).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Global" })).toBeNull();
     expect(screen.queryByText("beta-only")).toBeNull();
@@ -267,10 +271,12 @@ describe("Integrations management", () => {
       await row().findByText("Validation: ok");
       await user.click(row().getByRole("button", { name: "Rotate docs" }));
       await user.type(screen.getByLabelText("Bearer token"), TOKEN);
+      await user.type(screen.getByLabelText(/Expires/), "2026-12-01T10:30");
       await user.click(screen.getByRole("button", { name: "Rotate token" }));
       await row().findByText("Validation: unchecked");
       expect(requests.find((request) => request.path.endsWith("/rotate"))?.body).toEqual({
         secret: { token: TOKEN },
+        expires_at: new Date("2026-12-01T10:30").toISOString(),
       });
       noSecret();
       await user.click(row().getByRole("button", { name: "Revoke docs" }));

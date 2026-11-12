@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Failure classes
@@ -245,6 +245,9 @@ task. No model session starts and no attempt is spent.
 | A required task input is listed, shared and downloadable ([task inputs](task-inputs.spec.md) 3.6) | `env_input_unavailable` |
 | A required task input has a safe name and destination, and its size and SHA-256 match after the retry | `env_input_invalid` |
 | The task inputs stay within the per-input, per-task and file-count limits | `env_input_limit` |
+| Every selected Kubernetes integration is active, unexpired, validated and its credential is in the store ([integrations](integrations.spec.md) 3.6) | `env_integration_unavailable` |
+| The worker's engine and any delegated executor are Claude | `env_integration_unsupported` |
+| The attempt's kubeconfig directory is private, not a link, and the credential matches the selection | `env_integration_invalid` |
 | A guarded engine's managed settings register the command guard hook, when the guard is enabled ([command guard](command-guard.spec.md) 3) | `env_guard_missing` |
 
 - The executor probe runs after the repository checks and before the inputs and the
@@ -255,6 +258,8 @@ task. No model session starts and no attempt is spent.
 - The input checks run for every task with a required input, before the
   workspace is prepared and before any model runs
   ([task inputs](task-inputs.spec.md) 3.4).
+- The integration checks run for every task that selected an integration, after
+  the inputs and before any model runs ([integrations](integrations.spec.md) 3.6).
 
 ### 3.3.1 Repository preflight session
 

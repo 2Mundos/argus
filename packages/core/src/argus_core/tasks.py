@@ -323,6 +323,9 @@ ENV_BLOCK_REASONS = frozenset(
         "env_input_unavailable",
         "env_input_invalid",
         "env_input_limit",
+        "env_integration_unavailable",
+        "env_integration_unsupported",
+        "env_integration_invalid",
         "env_guard_missing",
         "worker_env",
     }
@@ -468,6 +471,9 @@ class TaskCreate(BaseModel):
     # Required; a subtask may omit it to inherit its parent's project.
     project: str | None = None
     knowledge: list[str] = []  # page ids pinned to the task, delivered on claim
+    # Kubernetes integration ids of the task's project whose credential the worker
+    # installs for each attempt (integrations spec 3.6). Admin only; empty: none.
+    integrations: list[str] = Field(default=[], max_length=8)
     max_attempts: int | None = Field(default=None, ge=1, le=20)
     lease_ttl_s: int = Field(default=120, ge=10, le=3600)
     # Wall-clock cap per attempt, counted from the claim; heartbeats and progress
@@ -583,6 +589,7 @@ class Task(BaseModel):
     depends_on: list[str]
     project: str
     knowledge: list[str]
+    integrations: list[str] = []  # opted-in integration ids, never a secret
     difficulty: Difficulty = Difficulty.STANDARD
     difficulty_source: DifficultySource = DifficultySource.INFERRED
     deliverable: Deliverable = Deliverable.RESPONSE

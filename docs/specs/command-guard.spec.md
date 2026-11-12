@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-01
-updated: 2026-11-06
+updated: 2026-11-12
 ---
 
 # Command guard
@@ -49,6 +49,11 @@ bypass. Background: draft (removed; in git history),
     `loop`, `md`, `dm-`).
   - `device_redirect`: `> /dev/<disk>`.
   - `fork_bomb`: the classic `:(){ :|:& };:`.
+  - `kubeconfig_secret`: any command other than `kubectl` (and `export`) that
+    names a `task-integrations` path, and `kubectl config view --raw`/`--flatten`.
+    `kubectl --kubeconfig <path> get pods` passes. It stops an accidental print
+    or copy of the attempt's kubeconfig; it is not a boundary
+    ([integrations](integrations.spec.md) 3.6).
   - `commit_attribution`: a `git commit` (including in a compound shell command)
     whose `-m`/`--message`/`-F`/`--file` text contains a prohibited co-author
     or attribution trailer line (case-insensitive), uses `--no-verify`/`-n`, or

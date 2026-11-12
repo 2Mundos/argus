@@ -49,11 +49,18 @@ REASONS = {
     "dd_device": "writing to a block device overwrites a disk",
     "device_redirect": "redirecting output to a block device overwrites a disk",
     "fork_bomb": "a fork bomb exhausts the machine",
+    "kubeconfig_secret": (
+        "the task's kubeconfig holds a credential: use it only through "
+        "kubectl --kubeconfig, never print, copy or decode it"
+    ),
 }
 _FORK_BOMB = re.compile(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:")
 _DEVICE_REDIRECT = re.compile(rf">\s*{BLOCK_DEVICE}")
 _DD_OF = re.compile(rf"^of={BLOCK_DEVICE}")
 _MKFS = re.compile(r"^(?:mkfs(?:\.\w+)?|mke2fs)$")
+# The attempt's kubeconfig lives under this directory (integrations spec 3.6).
+TASK_INTEGRATIONS = "task-integrations"
+KUBECTL_RAW = {"--raw", "--raw=true", "--flatten", "--flatten=true"}
 
 
 def _segments(command: str) -> list[list[str]]:
@@ -98,6 +105,13 @@ def _check_segment(tokens: list[str], depth: int) -> str | None:
     if not tokens:
         return None
     name, args = posixpath.basename(tokens[0]), tokens[1:]
+    if name == "kubectl":
+        view = any(args[i : i + 2] == ["config", "view"] for i in range(len(args)))
+        if view and KUBECTL_RAW & set(args):
+            return "kubeconfig_secret"
+        return None
+    if name != "export" and any(TASK_INTEGRATIONS in t for t in tokens):
+        return "kubeconfig_secret"
     if name == "eval":
         return _check(" ".join(args), depth + 1)
     if name in SHELLS:

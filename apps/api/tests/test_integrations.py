@@ -185,7 +185,10 @@ def test_admin_creates_and_reads_without_the_secret(
     one = client.get(f"/api/projects/alpha/integrations/{created['id']}")
     for text in (json.dumps(created), listed.text, one.text):
         assert SECRET not in text
-    assert app.state.secrets.get(f"integration-{created['id']}") == {"token": SECRET}
+    assert app.state.secrets.get(f"integration-{created['id']}") == {
+        "token": SECRET,
+        "version": 1,
+    }
     no_secret_anywhere(client, tmp_path, SECRET)
     assert SECRET not in caplog.text
     kinds = [e["kind"] for e in client.get("/api/events", params={"limit": 50}).json()]
@@ -230,7 +233,10 @@ def test_another_projects_id_is_not_found(client: TestClient) -> None:
             action
         )
     assert client.get("/api/projects/beta/integrations").json() == []
-    assert app.state.secrets.get(f"integration-{item['id']}") == {"token": SECRET}
+    assert app.state.secrets.get(f"integration-{item['id']}") == {
+        "token": SECRET,
+        "version": 1,
+    }
 
 
 @pytest.mark.parametrize(
@@ -443,7 +449,10 @@ def test_rotate_replaces_the_secret_and_resets_validation(
     assert res.status_code == 200
     rotated = res.json()
     assert rotated["validation"] == "unchecked" and rotated["rotated_at"]
-    assert app.state.secrets.get(f"integration-{item['id']}") == {"token": ROTATED}
+    assert app.state.secrets.get(f"integration-{item['id']}") == {
+        "token": ROTATED,
+        "version": 2,
+    }
     no_secret_anywhere(client, tmp_path, SECRET, ROTATED)
 
 
@@ -506,7 +515,7 @@ def test_a_failed_store_change_rolls_back_both_sides(client: TestClient) -> None
         and after["has_secret"]
         and after["rotated_at"] is None
     )
-    assert store.get(f"integration-{item['id']}") == {"token": SECRET}
+    assert store.get(f"integration-{item['id']}") == {"token": SECRET, "version": 1}
     # A create whose store write fails leaves neither a row nor an entry.
     res = client.post(
         "/api/projects/alpha/integrations",
@@ -573,22 +582,95 @@ async def test_a_rotation_during_validation_voids_its_result(db: Database) -> No
     assert after.validation == "unchecked"
 
 
-def test_a_worker_holding_a_live_claim_gets_no_secret(
+def _worker(client: TestClient) -> tuple[str, dict[str, str]]:
+    boot = client.post("/api/agents/bootstrap-tokens", json={"role": "worker"}).json()
+    res = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    return res.json()["agent"]["id"], {"Authorization": f"Bearer {res.json()['token']}"}
+
+
+def _lease_claude(client: TestClient, agent_id: str, task: dict) -> None:
+    from argus_api.accounts import service as accounts
+    from argus_core.accounts import AccountCreate
+
+    store, db = app.state.secrets, app.state.db
+
+    async def lease() -> None:
+        await store.put("acc-claude", {"api_key": "key-claude"})
+        body = AccountCreate(
+            name="claude", provider="anthropic", secret_ref="sops:acc-claude"
+        )
+        async with db.write() as tx:
+            await accounts.create_account(
+                tx, "acc-claude", body, "sops:acc-claude", "admin:test", store
+            )
+            await accounts.lease(
+                tx,
+                agent_id,
+                ["anthropic"],
+                store,
+                task_id=task["id"],
+                attempt=task["attempt"],
+            )
+
+    assert client.portal is not None
+    client.portal.call(lease)
+
+
+def test_only_the_opted_in_attempts_worker_gets_the_secret(
     client: TestClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    item = mcp(client)
+    item = k8s(client)
     assert act(client, item, "validate").json()["validation"] == "ok"
-    worker = register(client)
-    task = claim(client, worker, "alpha")
-    body = {"task_id": task["id"], "attempt": task["attempt"]}
-    # Worker delivery is disabled (spec 3.6): there is no route that hands a token out.
-    assert client.post(
-        "/api/integrations/attempt", json=body, headers=worker
-    ).status_code in (404, 405)
-    for path in ("/api/integrations", "/api/projects/alpha/integrations"):
-        assert client.get(path, headers=worker).status_code == 403
-    assert not any("attempt" in p for p in app.openapi()["paths"] if "integration" in p)
+    body = {"project": "alpha", "title": "t", "integrations": [item["id"]]}
+    res = client.post("/api/tasks", json=body, headers=register(client, "orchestrator"))
+    assert res.status_code == 403
+    assert res.json()["detail"]["code"] == "integration_admin_only"
+    # A worker holding a claim without opt-in gets nothing.
+    _, plain = _worker(client)
+    plain_task = claim(client, plain, "alpha")
+    cred = f"/api/tasks/{plain_task['id']}/integrations/{item['id']}/credential"
+    res = client.post(cred, json={"attempt": 1}, headers=plain)
+    assert res.json()["detail"]["code"] == "integration_not_selected"
+    # The admin opts a task in; only its assignee's current attempt is served.
+    task = client.post("/api/tasks", json={"project": "alpha", "title": "k"}).json()
+    res = client.put(
+        f"/api/tasks/{task['id']}/integrations",
+        json={"expected_version": task["version"], "integrations": [item["id"]]},
+    )
+    assert res.status_code == 200 and res.json()["integrations"] == [item["id"]]
+    agent_id, worker = _worker(client)
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    assert claimed["id"] == task["id"]
+    _lease_claude(client, agent_id, claimed)
+    status = f"/api/tasks/{task['id']}/integrations/status"
+    cred = f"/api/tasks/{task['id']}/integrations/{item['id']}/credential"
+    for headers in (ADMIN, register(client, "orchestrator")):
+        assert (
+            client.post(cred, json={"attempt": 1}, headers=headers).status_code == 403
+        )
+        assert (
+            client.get(status, params={"attempt": 1}, headers=headers).status_code
+            == 403
+        )
+    res = client.post(cred, json={"attempt": 1}, headers=plain)
+    assert res.json()["detail"]["code"] == "not_assignee"
+    res = client.get(status, params={"attempt": 1}, headers=worker)
+    assert res.json()[0]["readiness"] == "ready" and SECRET not in res.text
+    res = client.post(cred, json={"attempt": 1, "secret_version": 1}, headers=worker)
+    assert res.status_code == 200 and res.json()["token"] == SECRET
+    assert res.headers["cache-control"] == "no-store"
+    paths = app.openapi()["paths"]
+    assert not any(p.startswith("/api/tasks/{task_id}/integrations/") for p in paths)
+    # Everything else stays secret-free: records, task, events, files, logs.
+    for path in (
+        "/api/integrations",
+        f"/api/projects/alpha/integrations/{item['id']}",
+        f"/api/tasks/{task['id']}",
+    ):
+        assert SECRET not in client.get(path).text
+    events = client.get("/api/events", params={"limit": 500}).text
+    assert "task.integration_delivered" in events
     no_secret_anywhere(client, tmp_path, SECRET)
     assert SECRET not in caplog.text
 

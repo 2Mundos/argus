@@ -52,7 +52,7 @@ from argus_api.deps import (
     TokenDep,
 )
 from argus_api.engines.router import DEFAULT_EXECUTORS
-from argus_api.errors import ValidationFailedError
+from argus_api.errors import ForbiddenError, ValidationFailedError
 from argus_api.events import Event, OverflowedError
 from argus_api.knowledge import service as knowledge
 from argus_api.paging import DEFAULT_LIMIT
@@ -210,6 +210,12 @@ async def create_task(
     human approval (a `policy` decision) instead of being refused. A retry with
     the same `Idempotency-Key` and body returns the task the first call created;
     the same key with another body is 409 `idempotency_key_reused`."""
+    if body.integrations and caller.scope is not Scope.ADMIN:
+        # A credential grant is an operator decision (integrations spec 3.6).
+        raise ForbiddenError(
+            "only an admin may opt a task into integrations",
+            code="integration_admin_only",
+        )
     as_worker = caller.agent_id if caller.scope is Scope.WORKER else None
     limit = settings.max_tasks_per_agent_hour
     hourly_limit = limit if caller.agent_id is not None and limit > 0 else None

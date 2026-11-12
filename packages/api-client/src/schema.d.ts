@@ -3296,6 +3296,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Task Integrations
+         * @description Opt a task into Kubernetes integrations of its own project (ids only), or
+         *     clear the list. Each id must be active and of kind `kubernetes`; not while an
+         *     attempt runs. Selecting is the only grant: capabilities, titles and pool
+         *     labels never give a task a credential.
+         */
+        put: operations["set_task_integrations_api_tasks__task_id__integrations_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/log": {
         parameters: {
             query?: never;
@@ -5143,6 +5166,11 @@ export interface components {
             input: {
                 [key: string]: unknown;
             };
+            /**
+             * Integrations
+             * @default []
+             */
+            integrations?: string[];
             /** Kind */
             kind: string;
             /** Knowledge */
@@ -7466,6 +7494,8 @@ export interface components {
             created_at: string;
             /** Created By */
             created_by: string;
+            /** Expires At */
+            expires_at: string | null;
             /** Has Secret */
             has_secret: boolean;
             /** Id */
@@ -7517,6 +7547,8 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** Expires At */
+            expires_at?: string | null;
             /**
              * Kind
              * @enum {string}
@@ -7528,6 +7560,8 @@ export interface components {
         };
         /** IntegrationRotate */
         IntegrationRotate: {
+            /** Expires At */
+            expires_at?: string | null;
             secret: components["schemas"]["SecretIn"];
         };
         /**
@@ -10896,6 +10930,11 @@ export interface components {
             input: {
                 [key: string]: unknown;
             };
+            /**
+             * Integrations
+             * @default []
+             */
+            integrations?: string[];
             /** Kind */
             kind: string;
             /** Knowledge */
@@ -11163,6 +11202,11 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Integrations
+             * @default []
+             */
+            integrations?: string[];
+            /**
              * Kind
              * @default generic
              */
@@ -11347,6 +11391,11 @@ export interface components {
             input: {
                 [key: string]: unknown;
             };
+            /**
+             * Integrations
+             * @default []
+             */
+            integrations?: string[];
             /** Kind */
             kind: string;
             /** Knowledge */
@@ -11491,6 +11540,11 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Integrations
+             * @default []
+             */
+            integrations?: string[];
+            /**
              * Kind
              * @default generic
              */
@@ -11607,6 +11661,16 @@ export interface components {
             task_id: string;
             /** Unshared Attachments */
             unshared_attachments?: number | null;
+        };
+        /**
+         * TaskIntegrations
+         * @description The body of `PUT /api/tasks/{id}/integrations` (admin only).
+         */
+        TaskIntegrations: {
+            /** Expected Version */
+            expected_version: string;
+            /** Integrations */
+            integrations: string[];
         };
         /** TaskKind */
         TaskKind: {
@@ -11754,6 +11818,11 @@ export interface components {
             input: {
                 [key: string]: unknown;
             };
+            /**
+             * Integrations
+             * @default []
+             */
+            integrations?: string[];
             /** Kind */
             kind: string;
             /** Knowledge */
@@ -18706,6 +18775,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskInput"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_task_integrations_api_tasks__task_id__integrations_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskIntegrations"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
                 };
             };
             /** @description Validation Error */

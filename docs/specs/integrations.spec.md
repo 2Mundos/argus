@@ -9,7 +9,8 @@ updated: 2026-11-12
 # 1. Purpose and Scope
 
 An **integration** is an outside-service connection managed by an admin for one
-project. Credentials can be saved and validated, but are not yet injected into task
+project. Credentials are saved and validated; a Kubernetes connection reaches a task
+worker only when that task opts in (3.6). MCP credentials are not delivered to
 workers. Two kinds:
 
 - **`mcp`**: a remote MCP server over HTTPS with a bearer token.
@@ -27,7 +28,8 @@ agents lease) and typed [Settings](settings.spec.md) (which never hold a secret)
 - No secret in SQLite, a setting, a task spec or input, a knowledge page, a pool's
   `env`, an event, a log, an artifact, browser storage or an API response.
 - No global injection: an integration never reaches every worker, the orchestrator,
-  or a task of another project.
+  or a task of another project, and never a worker's `~/.kube` or process-wide
+  `KUBECONFIG`.
 - No MCP tools for integrations: creating or rotating one through MCP would pass the
   secret through a model's context. Admins use the dashboard or REST.
 - No change to Kubernetes pools: a pool's kubeconfig context lets Argus place worker
@@ -42,7 +44,12 @@ among the project's active integrations, `^[a-z0-9][a-z0-9-]{0,62}$`), `config`
 (non-secret JSON, 3.2/3.3), `access` (`read_only` | `read_write`), `secret_ref`,
 `secret_version`, `state` (`active` | `revoked`), `validation` (`unchecked` | `ok` |
 `failed`), `validation_detail`, `validated_at`, `created_at`/`created_by`,
-`updated_at`, `rotated_at`, `revoked_at`/`revoked_by`.
+`updated_at`, `rotated_at`, `revoked_at`/`revoked_by`, `expires_at`.
+
+`expires_at` is when the upstream credential stops working, or null when unknown.
+Create and rotate take an optional `expires_at` (with a timezone, in the future) and
+store the earlier of it and the token's own JWT `exp` claim, when it has one; rotate
+replaces the previous value. Delivery refuses an expired integration (3.6).
 
 The secret is `{token}` (1–8192 printable characters, no whitespace) in the SOPS file
 as `integration-<id>` ([single node](single-node.spec.md) 3.6); the row holds only
@@ -99,13 +106,23 @@ Admin token only (`403` otherwise); a missing token is `401`.
 - `GET /api/integrations`: every project's integrations, revoked included.
 - `GET /api/projects/{slug}/integrations`, `POST` same path (create).
 - `GET /api/projects/{slug}/integrations/{id}`, and `POST …/{id}/validate`,
-  `…/{id}/rotate` (`{secret}`), `…/{id}/revoke`.
+  `…/{id}/rotate` (`{secret, expires_at?}`), `…/{id}/revoke`.
+- `PUT /api/tasks/{id}/integrations` (`{expected_version, integrations}`): a task's
+  opt-in (3.6). The task's `integrations` field lists the selected ids.
 
 An id outside `{slug}` is `404`, the same as an unknown id. Responses never carry the
-secret: they say `has_secret`. There is no delivery field or worker-delivery
-endpoint in the generated API contract. Rotating or revoking a revoked integration is `409 integration_revoked`. Every change records an
-event with subject `integration` and no secret: `integration.created`, `.validated`
-(`{status, detail}`), `.rotated`, and `.revoked`.
+secret: they say `has_secret`. Rotating or revoking a revoked integration is `409
+integration_revoked`. Every change records an event with subject `integration` and no
+secret: `integration.created`, `.validated` (`{status, detail}`), `.rotated`, and
+`.revoked`. Opt-in and delivery record task events (3.6).
+
+Two worker routes are left out of the generated API contract: only a NanoClaw
+channel calls them, with a worker token (`403` for admin and orchestrator tokens):
+
+- `GET /api/tasks/{id}/integrations/status?attempt=N`: non-secret; each selected
+  integration's id, name, namespace, `secret_version`, `expires_at` and `readiness`.
+- `POST /api/tasks/{id}/integrations/{iid}/credential` (`{attempt, secret_version?}`):
+  the only response that carries a token, with `Cache-Control: no-store`.
 
 ## 3.5 Validation
 
@@ -183,21 +200,101 @@ HTTP logging remains enabled.
 
 Rotation resets validation to `unchecked`.
 
-## 3.6 Worker delivery limitation
+## 3.6 Worker delivery
 
-Neither MCP nor Kubernetes credentials are injected into task workers. There is no
-worker-delivery endpoint in the generated API contract and no channel integration
-that installs these connections for an attempt. Validation checks the configured
-service from the API process; it does not establish worker access.
+**Opt-in.** A task selects Kubernetes integrations of its own project by id (at most
+8); selection is the only grant. Capabilities, titles, pool labels and the project
+itself never give a task a credential. `POST /api/tasks` takes the same list as
+`integrations`, from an admin token only (`403 integration_admin_only`), with the
+same checks. The admin-only `PUT` (3.4) checks the task's
+`version` (`409 stale_version`) and that each id is an active `kubernetes`
+integration of the task's project; one `422 integration_invalid` names every bad id,
+and an id of another project reads as unknown. The selection changes only while the
+task is `awaiting_approval`, `pending`, `ready` or `blocked` and not archived (`409
+task_not_editable`): a running attempt keeps the selection it started with. A change
+records `task.integrations_changed` (`{added, removed}`). Clearing the list is the
+way back. MCP and the orchestrator have no selection tool.
 
-This limitation applies to Claude, Codex, Cursor, Copilot, custom and local engines,
-including NanoClaw sessions, and to the built-in orchestrator. Worker delivery needs
-a separate implementation and verification before any engine can use a connection.
+**Delivery binding.** Both worker routes require the caller to hold the task's
+current lease for exactly that `attempt` ([worker lifecycle](worker-lifecycle.spec.md)
+3.3); a stale attempt or another worker gets the lease error. The credential route
+runs inside one write transaction, so it serializes with rotate and revoke, and
+checks in order:
 
-Revocation deletes the stored secret and leaves a revoked record. Revoked
-connections cannot be validated, rotated or used. Re-adding a connection is the way
-back; this creates a new record and requires a new token. Revoke the token at its
-provider too to invalidate any copies held outside Argus.
+1. The integration is selected by the task and of the task's project (`403
+   integration_not_selected` otherwise).
+2. The worker's leased engine account, and its leased executor if any, are Claude
+   (`anthropic`); otherwise `409 integration_engine_unsupported`.
+3. Readiness: `revoked` (`409 integration_revoked`), `expired` (`409
+   integration_expired`), validation not `ok` (`409 integration_unvalidated`), the
+   store down (`503 secret_store_unavailable`), the stored secret missing (`503
+   integration_secret_missing`) or behind the row's version (`503`).
+4. `secret_version`, when given, matches the row (`409 integration_changed`): a
+   worker never receives an older token than the status it read.
+
+Success records `task.integration_delivered` (`{attempt, integration_id, name,
+secret_version}`), never the token. Errors carry fixed text and no secret. The status
+route reports the same readiness except the store-version check: rotate writes the
+store inside its transaction, so a status read may see the new token beside the old
+row, and only delivery decides.
+
+**Installation.** Before the session starts, after the task inputs, the NanoClaw
+channel reads the status and fetches every selected credential. Any failure blocks
+the task before a model runs, with no attempt spent ([failure
+classes](failure-classes.spec.md) 3.3):
+
+| Reason | When |
+| --- | --- |
+| `env_integration_unavailable` | revoked, expired, unvalidated, missing secret, store down, Argus unreachable |
+| `env_integration_unsupported` | the engine or delegated executor is not Claude |
+| `env_integration_invalid` | an unsafe directory, a credential that does not match the selection, or a write failure |
+
+The channel writes one kubeconfig per attempt to
+`<group>/task-integrations/<task>/<attempt>-<random>/kubeconfig` (in the container,
+`/workspace/agent/task-integrations/…`): directories `0700`, the file `0600`. Each
+directory is opened with `O_NOFOLLOW` and must be a real, private directory owned
+by the channel; the file is written to an exclusive sibling, fsynced and renamed
+into place. It holds one context per integration, named after it and pinned to its
+namespace, with the token as a bearer token. TLS verifies `certificate-authority-data`
+when `ca_data` is set, else the system store; `insecure-skip-tls-verify` is never
+written. `~/.kube` is never read, copied or written and no process-wide
+`KUBECONFIG` is set.
+
+The worker prompt gets a non-secret hint: the file path, the context names and
+namespaces, to run `kubectl --kubeconfig <path>` (or `KUBECONFIG=<path> kubectl`),
+and not to print or copy the file. The worker image ships a pinned kubectl whose
+download is SHA-256 verified and probed with `kubectl version --client`
+([engines](engines.spec.md)).
+
+**Recheck, revocation and expiry.** On each heartbeat the channel reads the status
+again. An integration that is no longer `ready` removes the attempt's kubeconfig at
+once; a new `secret_version` replaces it with a fresh delivery. Revocation and expiry
+therefore take effect within one heartbeat interval. The channel removes the
+attempt directory when the attempt ends, on every path (done, failed, blocked,
+cancelled, lost lease, crash of the session), so attempts never share a file.
+Deleting the local file does not revoke anything upstream: a token a session
+copied stays valid until it expires or is revoked at the cluster. Revoke the
+service-account token there too.
+
+**Engine matrix.**
+
+| Engine | Kubernetes integration |
+| --- | --- |
+| Claude (NanoClaw harness) | supported |
+| Claude executor via `argus-delegate` | supported: gets the attempt's kubeconfig as `KUBECONFIG` |
+| Codex, Cursor, Copilot, custom, local (as engine or executor) | not supported: delivery refuses and the task blocks with `env_integration_unsupported`; `argus-delegate` refuses a non-Claude executor when a kubeconfig is installed and strips any inherited `KUBECONFIG` |
+| Built-in orchestrator | none |
+| MCP connections | not delivered to any worker |
+
+The channel refuses as soon as the leased executor is not Claude, even if the task
+would not have delegated.
+
+**Limits.** The model's session can read the file: the [command
+guard](command-guard.spec.md) blocks Bash commands that print, copy or decode it
+(`kubeconfig_secret`) and `kubectl config view --raw`/`--flatten`, but it is accident
+prevention, not a boundary; a file-read tool or an encoded command can still read
+the token. Confinement to the namespace rests on the token's RBAC (3.3), not on the
+kubeconfig.
 
 ## 3.7 Dashboard
 
@@ -221,22 +318,29 @@ for retry.
 
 Active rows offer **Validate**, **Rotate** (new token) and **Revoke** (confirm by
 typing the name). Pending actions are disabled. Revoked rows remain visible without
-these actions. The screen shows secret-store readiness, explains that credentials
-are securely managed in SOPS but not yet injected into task workers, and states that
-OAuth is unavailable. It links to Accounts, Settings and worker pools without
+these actions. Each row shows its expiry; the add and rotate forms take an optional
+expiry in local time. The screen shows secret-store readiness, explains that MCP
+credentials are not delivered to workers while Kubernetes ones reach only attempts of
+tasks that select them (Claude engines), that removing the local file does not
+revoke the token, and that OAuth is unavailable. It links to Accounts, Settings and worker pools without
 claiming that pools grant tasks access to these connections.
+
+A task's detail view lists the project's active Kubernetes integrations (and any
+already selected) as checkboxes and saves the selection at the task's `version`. It
+is read-only while an attempt runs or after the task ends; errors are fixed messages.
+Each choice shows its expiry, or why an attempt would block (revoked, expired, not
+validated). The New task form offers the project's active Kubernetes integrations,
+none chosen by default, and sends the choice as `integrations`.
 
 # 4. Open Questions
 
-- If worker delivery is implemented, should a task opt in to its project's
-  integrations? Currently the project is a management scope and grants no worker access.
 - Should the orchestrator see integration names (not secrets) to plan tasks?
 
 ## Open items
 
 - MCP OAuth sign-in (3.2).
-- Worker delivery for both MCP and Kubernetes, including attempt-scoped installation
-  and cleanup, revocation and engine verification (3.6).
+- Worker delivery of MCP connections (3.6).
+- Kubernetes delivery for engines other than Claude (3.6 engine matrix).
 
 # 5. Constraints
 
@@ -246,11 +350,18 @@ claiming that pools grant tasks access to these connections.
 
 # 6. Implementation Consequences
 
-- Migration `0080_integrations.sql`; package `argus_api/integrations` (service,
-  validation, routes); `make openapi`.
-- Dashboard: `views/Integrations.tsx`, the Setup tab in `App.tsx`.
-- MCP entry points deliberately exclude credential management (section 2). REST and
-  the dashboard share the existing API service; no worker or engine behavior changes.
+- Migrations `0080_integrations.sql` and `0081_task_integrations.sql` (the
+  `task_integrations` table and `integrations.expires_at`); package
+  `argus_api/integrations` (service, validation, `selection`, `delivery`, routes);
+  `make openapi`.
+- Dashboard: `views/Integrations.tsx`, the Setup tab in `App.tsx`,
+  `views/TaskIntegrations.tsx` in the task detail.
+- NanoClaw: `argus-integrations.ts` (install, recheck, cleanup, prompt hint), wired in
+  `argus.ts`; `engines/argus-delegate.mjs` scopes `KUBECONFIG`;
+  `engines/install-kubectl.sh` in the tools layer; the `task-integrations` heartbeat
+  feature; the command guard's `kubeconfig_secret` rule.
+- MCP entry points deliberately exclude credential management and selection
+  (section 2). REST and the dashboard share the API services.
 
 ## Verification boundary
 
@@ -266,12 +377,26 @@ claiming that pools grant tasks access to these connections.
   cancellation immediately before/after COMMIT cover database/secret/audit
   consistency. All upstream traffic uses a fake transport and resolver.
 - Focused dashboard checks: `pnpm --filter @argus/dashboard exec vitest run
-  src/views/Integrations.test.tsx src/App.test.tsx`, dashboard TypeScript checking,
+  src/views/Integrations.test.tsx src/views/TaskIntegrations.test.tsx
+  src/App.test.tsx`, dashboard TypeScript checking,
   and Biome on the touched dashboard files. Canonical full gates belong to the parent
   run.
 - Component coverage uses a fake fetch transport through the generated client and
   real live-data loading: both forms, project isolation, loading/empty/error states,
   token clearing on success and failure, response/error non-disclosure, validation,
   rotation, revocation confirmation and unavailable actions on revoked records.
-- No real MCP server, Kubernetes cluster, credential change, or worker delivery is
-  exercised by these checks. Combined final gates belong to the parent run.
+- Delivery: `uv run pytest apps/api/tests/test_integration_delivery.py` covers
+  selection validation and versioning, the lease binding, the engine matrix, every
+  readiness refusal, the version race and the secret-free audit event.
+- Channel: vitest `argus-integrations.test.ts` (paths, permissions, symlinks, atomic
+  writes, rendering, recheck, cleanup) and `argus-integrations-channel.test.ts`
+  (preflight blocks, heartbeat removal, cleanup on every path, delegate passthrough),
+  plus `argus-delegate.test.mjs` and `tests/test_command_guard.py`.
+- End to end: `ARGUS_TEST_KUBECTL=<kubectl> uv run pytest
+  apps/api/tests/test_integration_kubectl_e2e.py` runs the API, the channel module and
+  a real kubectl against a local fake Kubernetes API over TLS with a test CA and a
+  fake token: allowed reads in the namespace, forbidden other namespaces and writes,
+  a request without the token rejected, cross-project refusal, expiry and revocation
+  removing the file. Skipped without the variable.
+- No real MCP server, Kubernetes cluster, credential or model run is exercised by
+  these checks.
