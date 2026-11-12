@@ -23,6 +23,13 @@ def build_source(path: Path) -> None:
         "INSERT INTO projects (slug, name, description, created_at, updated_at) VALUES ('p', 'P', 'd', ?, ?)",
         (T0, T0),
     )
+    conn.execute(
+        "INSERT INTO integrations (id, project, kind, name, config, access,"
+        " secret_ref, state, created_at, created_by, updated_at)"
+        " VALUES ('int', 'p', 'mcp', 'fake', '{\"url\":\"https://example.invalid/mcp\"}',"
+        " 'read_only', 'fake.integration.secret', 'active', ?, 'me', ?)",
+        (T0, T0),
+    )
     states = ["succeeded", "failed", "succeeded", "ready", "pending", "in_review"]
     for n, state in enumerate(states):  # created_at ascends with n
         conn.execute(
@@ -136,7 +143,14 @@ def test_seed_keeps_history_and_drops_live_state(source: Path, tmp_path: Path) -
     assert conn.execute("SELECT parent_id FROM tasks WHERE id = 't002'").fetchone() == (
         "t001",
     )
-    for table in ("routines", "tokens", "account_leases", "instances", "artifacts"):
+    for table in (
+        "routines",
+        "tokens",
+        "integrations",
+        "account_leases",
+        "instances",
+        "artifacts",
+    ):
         assert ids(db, table) == set(), table
     for table in ("accounts", "account_usage", "account_quota"):
         assert ids(db, table, "rowid") == set(), table
@@ -158,6 +172,7 @@ def test_seed_copies_and_never_touches_the_source(source: Path, tmp_path: Path) 
     assert not (out / "argus.db").is_symlink()
     assert ids(source, "routines") == {"r"}
     assert ids(source, "tokens") == {"tok"}
+    assert ids(source, "integrations") == {"int"}
 
 
 def test_accounts_are_copied_only_on_request_and_only_into_data_dir(
@@ -167,11 +182,13 @@ def test_accounts_are_copied_only_on_request_and_only_into_data_dir(
     plain = tmp_path / "plain"
     dev.seed(source, plain)
     assert ids(plain / "argus.db", "accounts") == set()
+    assert ids(plain / "argus.db", "integrations") == set()
     assert not (plain / "secrets.sops.yaml").exists()
 
     withacc = tmp_path / "withacc"
     dev.seed(source, withacc, accounts=True)
     assert ids(withacc / "argus.db", "accounts") == {"acc"}
+    assert ids(withacc / "argus.db", "integrations") == set()
     assert ids(withacc / "argus.db", "account_leases") == set()  # leases never
     assert (withacc / "secrets.sops.yaml").read_text() == "sops"
     assert sorted(p.name for p in source.parent.iterdir()) == [
