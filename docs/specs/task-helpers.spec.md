@@ -227,6 +227,17 @@ as it was, and exits 12 with `reasons: ["rebase_conflict"]` and the conflicting 
 never force-pushes a branch it did not just rebase, and pushes with `--force-with-lease`
 when it did.
 
+Before any remote update, after any rebase, `deliver` runs the checks `.githooks/pre-push`
+runs for a developer push, on the exact commit it pushes: `make check-changed`, then
+`gitleaks version` and `make secret-scan`. Worker checkouts do not enable that hook (their
+`core.hooksPath` is the Argus commit-attribution hook), so the gate is in `deliver`. It needs
+a clean worktree with no untracked files at HEAD, and it fails closed: a failing check exits
+12 with `reasons: ["pre_push_failed"]`, the check name, its exit status and the last bytes of
+its output, and nothing is pushed; a missing `make` or `gitleaks` exits 1
+(`pre_push_unavailable`); HEAD or the worktree changing during the checks is refused
+(`dirty_worktree`). Unlike the hook it never skips the secret scan. The checks run with
+`GIT_*` variables removed, and `make hooks` and `--no-verify` are not used.
+
 `merge-base --is-ancestor` exiting 1 means the branch is behind; any other failure is a Git
 error. Any other Git failure exits 1 with a bounded error (`git_failed`: subcommand, exit
 status, the first bytes of stderr) and no push or PR change. A merge, rebase, cherry-pick or revert
@@ -384,7 +395,7 @@ does not create an artifact.
   `wait` condition, a failure while other checks run, a 5xx without retry, the cap
   clamp, interrupt by a newer marker and not an older one, the `pr-ready` reasons
   including a moved head, digest deduplication and the printed-size bound, `deliver` on
-  a clean rebase and on a conflict, the `waiting` kind validation, the host's symlink
+  a clean rebase and on a conflict, the pre-push gate (order, the rebased commit, a failing check or scanner, a dirty tree; no push on failure), the `waiting` kind validation, the host's symlink
   refusals at each component, FIFOs, stale records and repost timing. `attach`
   (`argus-task-attach.test.mjs`, the real CLI against the real bridge with a fake store
   that keeps the bytes): the receipt and its checks, same-bytes retry, the hashed-name

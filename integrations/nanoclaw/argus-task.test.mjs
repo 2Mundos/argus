@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -30,6 +32,8 @@ after(() => rmSync(scratch, { recursive: true, force: true }));
 
 const git = (args, cwd) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+// The fake checks run with a PATH of their own; the worker git front needs python3 on PATH, so use the real git.
+const gitBin = ["/usr/bin/git", "/usr/local/bin/git"].find((p) => existsSync(p)) ?? "git";
 
 // Worker git fronts inject the project identity and reject identity writes; CI has none.
 function identity(dir) {
@@ -64,7 +68,7 @@ function forge(routes) {
 }
 
 /** Run the CLI with a fake clock that `sleep` advances; `onSleep(seconds)` runs after each tick. */
-async function run(argv, { routes, cwd = repo(), env = {}, onSleep, onFetch } = {}) {
+async function run(argv, { routes, cwd = repo(), env = {}, onSleep, onFetch, git: gitIo } = {}) {
   let t = T0;
   const out = [];
   const err = [];
@@ -83,6 +87,7 @@ async function run(argv, { routes, cwd = repo(), env = {}, onSleep, onFetch } = 
     {
       fetch: f.fetch,
       cwd,
+      git: gitIo,
       now: () => t,
       sleep: async (ms) => {
         t += ms;
@@ -994,6 +999,44 @@ describe("deliver", () => {
     },
   });
 
+  /**
+   * Fake `make` and `gitleaks` on a PATH of their own. Each call and each push is appended to
+   * one log in order; `make` logs the HEAD it ran on and fails for the target `fail` names.
+   */
+  function gateFixture({ fail = "", scanner = true } = {}) {
+    const bin = join(scratch, `bin${repoCount++}`);
+    const log = join(scratch, `gate${repoCount++}.log`);
+    mkdirSync(bin);
+    const script = (name, body) => {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}`);
+      chmodSync(join(bin, name), 0o755);
+    };
+    script(
+      "make",
+      `echo "make $*" >> "$ARGUS_TEST_LOG"\n` +
+        `echo "head $("$ARGUS_TEST_GIT" rev-parse HEAD)" >> "$ARGUS_TEST_LOG"\n` +
+        `if [ "$*" = "$ARGUS_TEST_FAIL" ]; then echo "$* finding" >&2; exit 2; fi\nexit 0\n`,
+    );
+    if (scanner) script("gitleaks", `echo "gitleaks $*" >> "$ARGUS_TEST_LOG"\nexit 0\n`);
+    const options = {
+      env: {
+        PATH: bin,
+        ARGUS_TEST_LOG: log,
+        ARGUS_TEST_GIT: gitBin,
+        ARGUS_TEST_FAIL: fail,
+      },
+      // A push is logged with its arguments, so ordering against the checks is visible.
+      git: (args, cwd) => {
+        if (args[0] === "push") appendFileSync(log, `push ${args.slice(1).join(" ")}\n`);
+        return git(args, cwd);
+      },
+    };
+    return {
+      options,
+      lines: () => (existsSync(log) ? readFileSync(log, "utf8").trimEnd().split("\n") : []),
+    };
+  }
+
   it("rebases cleanly, pushes and opens the PR", async () => {
     const { origin, seed, work } = setup();
     writeFileSync(join(work, "b.txt"), "new\n");
@@ -1004,7 +1047,8 @@ describe("deliver", () => {
     git(["commit", "-qm", "Add c"], seed);
     git(["push", "-q", origin, "main"], seed);
     const created = [];
-    const r = await run(["deliver"], { routes: forgeRoutes(created), cwd: work });
+    const g = gateFixture();
+    const r = await run(["deliver"], { routes: forgeRoutes(created), cwd: work, ...g.options });
     assert.equal(r.code, EXIT.ok, r.err);
     assert.equal(r.out.rebased, true);
     assert.equal(r.out.created, true);
@@ -1153,6 +1197,112 @@ describe("deliver", () => {
     assert.equal(id, "git_failed");
     assert.match(message, /^git fetch failed \(exit 128\): fatal line of stderr text\. /);
     assert.ok(message.length <= 201);
+  });
+
+  it("runs the checks on the commit it pushes, before the push", async () => {
+    const { origin, work } = setup();
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture();
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.ok, r.err);
+    const head = git(["rev-parse", "HEAD"], work);
+    assert.equal(r.out.head_sha, head);
+    assert.deepEqual(g.lines(), [
+      "make check-changed",
+      `head ${head}`,
+      "gitleaks version",
+      "make secret-scan",
+      `head ${head}`,
+      "push --quiet origin HEAD:refs/heads/feature",
+    ]);
+    assert.equal(git(["rev-parse", "refs/heads/feature"], origin), head);
+  });
+
+  it("checks the rebased commit and pushes it with --force-with-lease", async () => {
+    const s = behind();
+    const g = gateFixture();
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: s.work, ...g.options });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.rebased, true);
+    const lines = g.lines();
+    assert.equal(lines[1], `head ${r.out.head_sha}`);
+    assert.equal(lines.at(-1), "push --quiet --force-with-lease origin HEAD:refs/heads/feature");
+    assert.equal(git(["rev-parse", "refs/heads/feature"], s.origin), r.out.head_sha);
+  });
+
+  it("a failing check prevents every push and reports it", async () => {
+    const { origin, work } = setup();
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture({ fail: "check-changed" });
+    const created = [];
+    const r = await run(["deliver"], { routes: forgeRoutes(created), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.not_ready);
+    assert.deepEqual(r.out.reasons, ["pre_push_failed"]);
+    assert.equal(r.out.check, "make check-changed");
+    assert.equal(r.out.exit, 2);
+    assert.match(r.out.output_tail, /check-changed finding/);
+    assert.match(r.out.action, /run deliver again/);
+    assert.deepEqual(
+      g
+        .lines()
+        .filter((l) => l.startsWith("make") || l.startsWith("gitleaks") || l.startsWith("push")),
+      ["make check-changed"],
+    );
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+    assert.deepEqual(created, []);
+  });
+
+  it("a failing secret scan prevents the push after check-changed passed", async () => {
+    const { origin, work } = setup();
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture({ fail: "secret-scan" });
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.not_ready);
+    assert.equal(r.out.check, "make secret-scan");
+    assert.equal(
+      g.lines().some((l) => l.startsWith("push")),
+      false,
+    );
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+  });
+
+  it("refuses to push when gitleaks is not installed", async () => {
+    const { origin, work } = setup();
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture({ scanner: false });
+    const created = [];
+    const r = await run(["deliver"], { routes: forgeRoutes(created), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.error);
+    assert.equal(JSON.parse(r.err).error.code, "pre_push_unavailable");
+    assert.match(JSON.parse(r.err).error.message, /gitleaks is not installed/);
+    assert.equal(
+      g.lines().some((l) => l.startsWith("push")),
+      false,
+    );
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+    assert.deepEqual(created, []);
+  });
+
+  it("refuses an untracked file before any check runs", async () => {
+    const { origin, work } = setup();
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    writeFileSync(join(work, "scratch.txt"), "wip\n");
+    const g = gateFixture();
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.error);
+    assert.equal(JSON.parse(r.err).error.code, "dirty_worktree");
+    assert.deepEqual(g.lines(), []);
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
   });
 });
 
