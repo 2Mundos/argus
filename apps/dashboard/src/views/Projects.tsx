@@ -8,8 +8,9 @@ import { useHash } from "../unsaved";
 import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ProjectGraph } from "./ProjectGraph";
 import { ProjectRepositoryDialog } from "./ProjectRepositoryDialog";
-import { settingsHash } from "./Settings";
+import { Settings, settingsHash } from "./Settings";
 import { TaskDefaultsEditor } from "./TaskDefaultsEditor";
+import { Tasks } from "./Tasks";
 
 type Stats = Awaited<ReturnType<typeof loadStats>>[number];
 
@@ -43,7 +44,9 @@ export function taskCounts(tasks: Record<string, number>): [string, number][] {
 
 const SECTIONS = {
   overview: "Overview",
+  tasks: "Tasks",
   graph: "Graph",
+  settings: "Settings",
   "task-defaults": "Task defaults",
 } as const;
 type Section = keyof typeof SECTIONS;
@@ -184,7 +187,11 @@ export function Projects() {
               ))}
               <a href={settingsHash(selected.slug)}>Other settings</a>
             </nav>
-            {route.section === "task-defaults" ? (
+            {route.section === "tasks" ? (
+              <Tasks project={selected.slug} showHeader={false} />
+            ) : route.section === "settings" ? (
+              <Settings scope={selected.slug} showHeader={false} />
+            ) : route.section === "task-defaults" ? (
               <div className="card">
                 <TaskDefaultsEditor key={selected.slug} project={selected.slug} />
               </div>
@@ -221,18 +228,33 @@ function ProjectCard({
 }) {
   const isGlobal = project.slug === "global";
   return (
-    <article className="card project-card">
+    <article className={`card project-card ${linked ? "project-card-concise" : ""}`}>
       <header>
-        <h3>
-          {linked && !isGlobal ? (
-            <a href={projectHash(project.slug)}>{project.name}</a>
-          ) : (
-            project.name
+        <div className="project-identity">
+          <h3>
+            {linked && !isGlobal ? (
+              <a href={projectHash(project.slug)}>{project.name}</a>
+            ) : (
+              project.name
+            )}
+          </h3>
+          <code className="muted small">{project.slug}</code>
+          {linked && project.description && (
+            <span className="muted small project-desc-inline">{project.description}</span>
           )}
-        </h3>
-        <code className="muted small">{project.slug}</code>
+        </div>
+        {!isGlobal && linked && (
+          <div className="actions right">
+            <button type="button" className="compact" onClick={onEdit}>
+              {project.repository_url ? "Edit repository" : "Set repository"}
+            </button>
+            <a href={projectHash(project.slug)} className="button compact secondary">
+              Details →
+            </a>
+          </div>
+        )}
       </header>
-      {project.description && <p className="muted">{project.description}</p>}
+      {!linked && project.description && <p className="muted">{project.description}</p>}
       <dl className="facts">
         <dt>Repository</dt>
         <dd>
@@ -268,8 +290,12 @@ function ProjectCard({
           </>
         )}
       </dl>
-      {!isGlobal && <ProjectGitIdentity slug={project.slug} />}
       {!isGlobal && (
+        <div className="project-git-author-section">
+          <ProjectGitIdentity slug={project.slug} />
+        </div>
+      )}
+      {!isGlobal && !linked && (
         <div className="actions left">
           <button type="button" onClick={onEdit}>
             {project.repository_url ? "Edit repository" : "Set repository"}

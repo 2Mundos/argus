@@ -4585,3 +4585,106 @@ label.header-toggle {
 .tg-cancelled text {
   text-decoration: line-through;
 }
+
+/* -- concise project list & embedded views --------------------------------- */
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.project-card-concise {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.85rem 1.15rem;
+  border-radius: var(--radius);
+}
+
+.project-card-concise header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.project-card-concise .project-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.project-card-concise .project-desc-inline {
+  color: var(--muted);
+  max-width: 32rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-concise .actions.right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.project-card-concise .facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 1.25rem;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.project-card-concise .facts dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.project-card-concise .facts dt::after {
+  content: ":";
+}
+
+.project-card-concise .facts dd {
+  margin: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.project-card-concise .project-git-author-section {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-top: 0.15rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.project-card-concise .project-git-author-section h4 {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.project-card-concise .project-git-author-section .git-identity {
+  margin: 0;
+}
+
+.project-card-concise .project-git-author-section .git-identity p {
+  margin: 0;
+}
+
+.project-card-concise .project-git-author-section .git-identity .row {
+  display: none;
+}
+
+.tasks-embedded-actions {
+  margin-bottom: 0.75rem;
+}
