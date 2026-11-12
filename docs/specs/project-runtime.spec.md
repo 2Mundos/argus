@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Project runtime images
@@ -90,12 +90,19 @@ gaps for `pnpm`, `sops-age`, `minio`, and `elasticsearch` until provisioned.
 - **Prepare.** `POST /runtime/prepare` with `task_id`, `attempt`, `host_id`,
   `run_as`, `base_ref`, `base_id`, `platform` upserts `runtime_hosts` for the
   agent, ensures a build exists, and either selects a `ready` image (writes
-  `task_runtimes`) or **holds** the task (`runtime_preparing`) without
-  incrementing attempt. Returns `Selection` (see 3.7). `project_runtime=off`
+  `task_runtimes`) or **holds** the task (`runtime_preparing`). A hold made here happens before
+  any executor work, so it **voids the claim**: in the same transaction the
+  lease is released, the attempt number is handed back (`attempt` as before the
+  claim), the attempt's snapshot row is dropped and no usage placeholder or
+  interruption is written (the event carries `voided: true`). The task starts
+  with exactly one attempt once the image is ready. Returns `Selection` (see 3.7). `project_runtime=off`
   yields `state=disabled` and does not hold.
 - **Claim gate (3.5).** After an agent has a `runtime_hosts` row, `claim` skips
-  tasks whose latest matching build is not `ready` unless none exists yet (first
-  prepare creates it). `failed` → task blocked with `runtime_failed` and the
+  tasks whose latest matching build is not `ready` unless none exists yet. A host with no build
+  row (or no host row) cannot be gated at claim, because only `prepare` carries
+  the host identity needed to create a build; that first claim is handed out and
+  immediately voided by the hold above, so no attempt is spent. `runtime.ready`
+  (`release_runtime_holds`) returns the held tasks to `ready`; nothing polls. `failed` → task blocked with `runtime_failed` and the
   build reason.
 - **Used image.** After the session starts, `POST /runtime/used` compares the
   container's image id to the selected id; mismatch → `409 runtime_image_mismatch`

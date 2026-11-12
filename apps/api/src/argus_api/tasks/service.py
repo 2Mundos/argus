@@ -122,6 +122,8 @@ QUOTA_WAIT_REASONS = (AWAITING_QUOTA, "no_account")
 # (project runtime spec 3.4): neither spends `failures` or `max_attempts`.
 RUNTIME_PREPARING = "runtime_preparing"
 RUNTIME_FAILED = "runtime_failed"
+# Prefix of the progress note on a ready task no live active worker can run.
+NO_COMPATIBLE_WORKER = "no compatible worker: "
 # `blocked` after the worker said FAIL with attempts left (failure classes 3.2).
 WORKER_GAVE_UP = "worker_gave_up"
 
@@ -438,6 +440,7 @@ async def claim(
         await wake_waiting(tx)
     if await awaiting_quota(tx.conn, tx.now):
         return None
+    await _note_incompatible(tx, agent_id)
     async with tx.conn.execute(
         "SELECT * FROM tasks t WHERE state = 'ready'"
         " AND (retry_at IS NULL OR retry_at <= ?) AND NOT EXISTS ("
@@ -544,6 +547,58 @@ async def claim(
     task = await get_task(tx.conn, row["id"])
     await _snapshot_attempt(tx, task, agent_id)
     return task
+
+
+async def _note_incompatible(tx: Tx, agent_id: str) -> None:
+    """Say why a ready task nobody can run now is not being claimed: no live active
+    worker declares its capabilities (a pool that could launch one does not count).
+    Only the progress note and one `task.incompatible` event change; the task stays
+    `ready`, no attempt or lease is spent, and the note is cleared when a compatible
+    worker is live again (or the claim resets it)."""
+    async with tx.conn.execute(
+        "SELECT capabilities FROM agents WHERE state = ?", (AgentState.ACTIVE,)
+    ) as cur:
+        workers = [set(json.loads(r[0])) for r in await cur.fetchall()]
+    offered = set().union(*workers)
+    async with tx.conn.execute(
+        "SELECT id, required_capabilities, progress_message, updated_at FROM tasks"
+        " WHERE state = 'ready' AND (required_capabilities != '[]'"
+        " OR progress_message LIKE ?)",
+        (NO_COMPATIBLE_WORKER + "%",),
+    ) as cur:
+        rows = await cur.fetchall()
+    for r in rows:
+        need = set(json.loads(r["required_capabilities"]))
+        note: str | None = None
+        if need and not any(need <= w for w in workers):
+            missing = sorted(need - offered)
+            note = NO_COMPATIBLE_WORKER + (
+                f"no live worker declares {', '.join(missing)}"
+                if missing
+                else f"no single live worker declares all of {', '.join(sorted(need))}"
+            )
+        had = (r["progress_message"] or "").startswith(NO_COMPATIBLE_WORKER)
+        if note == r["progress_message"] or (note is None and not had):
+            continue
+        await tx.conn.execute(
+            "UPDATE tasks SET progress_message = ?, progress_percent = NULL,"
+            " progress_at = ?, updated_at = ? WHERE id = ?",
+            (
+                note,
+                ts(tx.now),
+                ts(max(tx.now, datetime.fromisoformat(r["updated_at"]) + _TICK)),
+                r["id"],
+            ),
+        )
+        if note is not None:
+            await record(
+                tx,
+                f"agent:{agent_id}",
+                "task",
+                r["id"],
+                "task.incompatible",
+                {"reason": note.removeprefix(NO_COMPATIBLE_WORKER)},
+            )
 
 
 async def prefers_local(conn: aiosqlite.Connection, task_id: str) -> bool:
@@ -1550,9 +1605,14 @@ async def hold_for_runtime(
     attempt: int,
     reason: str,
     error: str | None,
+    *,
+    void_claim: bool = False,
 ) -> Task:
     """The project's image is not usable for this claim: block the task before any
-    model work, `attempt` and `failures` as they were. `runtime_preparing` is woken
+    model work, `attempt` and `failures` as they were. `void_claim` (the prepare
+    step, before any executor started) also hands the claim's attempt number back,
+    so the deferral spends nothing and the task starts with one attempt once the
+    image is ready. `runtime_preparing` is woken
     by the build; `runtime_failed` carries the durable `error` and waits for a
     changed recipe or an operator rebuild."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
@@ -1574,6 +1634,7 @@ async def hold_for_runtime(
             "progress_at": ts(tx.now),
         },
         data={"reason": reason, **({"error": error} if error else {})},
+        voided=void_claim,
     )
     return await get_task(tx.conn, task_id)
 
@@ -3430,9 +3491,14 @@ async def _apply(
     open_review_decision: bool = True,
     exhausted: bool = False,
     disposition: tuple[str, str | None] | None = None,
+    voided: bool = False,
 ) -> TaskState:
     """Validate and persist one transition, its event (`task.<action>` unless
     `event` names it), and its knock-on effects.
+
+    `voided=True` ends a claim that did no work (a readiness deferral before any
+    executor started): the attempt number is handed back, the attempt's snapshot row
+    is dropped, and it leaves no usage placeholder, claim-end mark or interruption.
 
     `counts_failure=False` evaluates a fail/expire as if no failure had counted, so it
     can never exhaust the attempts (the caller leaves `failures` unchanged).
@@ -3482,6 +3548,10 @@ async def _apply(
         if settled.unmet:
             data["unmet"] = settled.unmet
     leaving_claim = old is S.CLAIMED and new is not S.CLAIMED
+    voided = voided and leaving_claim
+    if voided:
+        fields["attempt"] = row["attempt"] - 1
+        data = {**(data or {}), "voided": True}
     if leaving_claim:
         fields |= {
             "assignee_agent_id": None,
@@ -3507,15 +3577,22 @@ async def _apply(
         # Pending steers belong to this attempt only: they expire, or end `unknown`
         # when a heartbeat carried them (task steering spec 3.3).
         await steers.close_attempt(tx, row["id"], row["attempt"])
-        await finalization.record_claim_end(
-            tx, row["id"], row["attempt"], str(action.value)
-        )
-        await _ensure_usage_outcome(tx, row, action, data or {})
+        if voided:
+            await tx.conn.execute(
+                "DELETE FROM task_attempts WHERE id = ("
+                " SELECT max(id) FROM task_attempts WHERE task_id = ? AND attempt = ?)",
+                (row["id"], row["attempt"]),
+            )
+        else:
+            await finalization.record_claim_end(
+                tx, row["id"], row["attempt"], str(action.value)
+            )
+            await _ensure_usage_outcome(tx, row, action, data or {})
     # Decisions that waited on the old state are moot once the task leaves it
     # (an answered decision is already closed before its transition runs).
     if (moot := moot_decisions(old, new)) is not None:
         await decisions.cancel_open(tx, "task", row["id"], moot[0])
-    if old is S.CLAIMED and action in _INTERRUPTIONS:
+    if old is S.CLAIMED and action in _INTERRUPTIONS and not voided:
         await cont.on_interruption(
             tx,
             row["id"],
