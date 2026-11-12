@@ -91,12 +91,13 @@ async function updateBoard(
   archived: boolean,
   states: TaskState[],
   q: string,
+  project?: string,
 ): Promise<BoardData> {
   // Whether a changed task still matches is the server's call, so a search refetches.
-  if (q) return boardTasks(archived, { signal, states, q });
+  if (q || project) return boardTasks(archived, { signal, states, q, project });
   const ids = [...new Set(events.map((event) => event.subject_id))];
   const known = new Set(data.items.map((task) => task.id));
-  if (ids.some((id) => !known.has(id))) return boardTasks(archived, { signal, states });
+  if (ids.some((id) => !known.has(id))) return boardTasks(archived, { signal, states, project });
   const batches = [];
   for (let i = 0; i < ids.length; i += 50) {
     batches.push(
@@ -114,15 +115,24 @@ async function updateBoard(
   if (
     changed.length !== ids.length ||
     changed.some((task) => Boolean(task.archived_at) !== archived) ||
-    (states.length > 0 && changed.some((task) => !states.includes(task.state)))
+    (states.length > 0 && changed.some((task) => !states.includes(task.state))) ||
+    (project && changed.some((task) => task.project !== project))
   ) {
-    return boardTasks(archived, { signal, states });
+    return boardTasks(archived, { signal, states, project });
   }
   const replacements = new Map(changed.map((task) => [task.id, task]));
   return { ...data, items: data.items.map((task) => replacements.get(task.id) ?? task) };
 }
 
-export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
+export function Tasks({
+  filter = NO_TASK_FILTER,
+  project,
+  showHeader = true,
+}: {
+  filter?: TaskFilter;
+  project?: string;
+  showHeader?: boolean;
+}) {
   const { states, q } = filter;
   const filterKey = states.join(",");
   // `#tasks/<id>` (linked from Fleet) opens that task's detail.
@@ -141,13 +151,17 @@ export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
       boardTasks(archived, {
         signal,
         states,
+        project,
         q: q || undefined,
         onPage: (page) => reportPage(signal, page),
       }),
-    [archived, filterKey, q],
+    [archived, filterKey, q, project],
     {
+      // Task events carry no project field, so a project-scoped board refetches on
+      // any task event; updateBoard decides whether the change still matches.
       accepts: boardEvent,
-      update: (data, events, signal) => updateBoard(data, events, signal, archived, states, q),
+      update: (data, events, signal) =>
+        updateBoard(data, events, signal, archived, states, q, project),
     },
   );
   function search(e: FormEvent) {
@@ -191,24 +205,47 @@ export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
 
   return (
     <section className={selected ? "tasks-open" : "tasks-page"}>
-      <PageHeader title="Tasks">
-        <label className="check header-toggle">
-          <input
-            type="checkbox"
-            checked={archived}
-            onChange={(e) => setArchived(e.target.checked)}
-          />
-          Archived
-        </label>
-        {!archived && (
-          <button type="button" className="compact" onClick={() => setArchiving(true)}>
-            Archive…
+      {showHeader ? (
+        <PageHeader title="Tasks">
+          <label className="check header-toggle">
+            <input
+              type="checkbox"
+              checked={archived}
+              onChange={(e) => setArchived(e.target.checked)}
+            />
+            Archived
+          </label>
+          {!archived && (
+            <button type="button" className="compact" onClick={() => setArchiving(true)}>
+              Archive…
+            </button>
+          )}
+          <button type="button" className="primary compact" onClick={() => setCreating(true)}>
+            + New task
           </button>
-        )}
-        <button type="button" className="primary compact" onClick={() => setCreating(true)}>
-          + New task
-        </button>
-      </PageHeader>
+        </PageHeader>
+      ) : (
+        <div className="tasks-embedded-actions">
+          <div className="actions left">
+            <label className="check header-toggle">
+              <input
+                type="checkbox"
+                checked={archived}
+                onChange={(e) => setArchived(e.target.checked)}
+              />
+              Archived
+            </label>
+            {!archived && (
+              <button type="button" className="compact" onClick={() => setArchiving(true)}>
+                Archive…
+              </button>
+            )}
+            <button type="button" className="primary compact" onClick={() => setCreating(true)}>
+              + New task
+            </button>
+          </div>
+        </div>
+      )}
       {states.length > 0 && (
         <p className="muted small" data-testid="task-filter">
           Filtered by state:{" "}
@@ -325,7 +362,7 @@ export function Tasks({ filter = NO_TASK_FILTER }: { filter?: TaskFilter }) {
         </div>
       )}
       {archiving && <ArchiveTasks onClose={() => setArchiving(false)} />}
-      {creating && <NewTask onClose={() => setCreating(false)} />}
+      {creating && <NewTask onClose={() => setCreating(false)} initialProject={project} />}
     </section>
   );
 }
@@ -410,7 +447,7 @@ function cardFields(task: TaskSummary) {
   ];
 }
 
-function NewTask({ onClose }: { onClose: () => void }) {
+function NewTask({ onClose, initialProject }: { onClose: () => void; initialProject?: string }) {
   const { data: kinds } = useLiveData<TaskKind[]>(
     (signal) => call(api.GET("/api/task-kinds", { signal })),
     [],
@@ -428,7 +465,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
     title: "",
     spec: "",
     kind: "generic",
-    project: "",
+    project: initialProject ?? "",
     accountProviders: "",
     requires_approval: false,
     review: "none" as "none" | "human" | "orchestrator",

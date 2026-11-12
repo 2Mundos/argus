@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-04
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Dashboard navigation
@@ -39,9 +39,11 @@ the page. On a narrow screen the menu moves to a bar across the top.
   below 960 px only icons show, each keeping its text as its accessible name. The
   server status box is not shown there.
 - **Projects** opens a project at `#projects/<slug>` and its tabs at
-  `#projects/<slug>/<tab>` (Overview, Graph, Task defaults: [task
-  defaults](task-defaults.spec.md) 3.7, [task graph](task-graph.spec.md) 3.2); Settings
-  opens a project's scope at `#setup/settings/<slug>`.
+  `#projects/<slug>/<tab>` (Overview, Tasks, Graph, Settings, Task defaults:
+  [task defaults](task-defaults.spec.md) 3.7, [task graph](task-graph.spec.md)
+  3.2). The Tasks tab is the task board filtered to that project (new tasks
+  default to it); the Settings tab is that project's settings scope without the
+  scope picker. Settings opens a project's scope at `#setup/settings/<slug>`.
 - **Unsaved edits** hold navigation: a hash change away from a form with unsaved
   edits asks first, and "no" puts the old hash back.
 - Every entry has its own icon.

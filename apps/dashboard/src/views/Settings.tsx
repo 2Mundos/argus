@@ -38,9 +38,20 @@ export const settingsHash = (scope: string) =>
   scope === "global" ? "#setup/settings" : `#setup/settings/${encodeURIComponent(scope)}`;
 
 /** Global settings with per-project overrides (docs/specs/settings.spec.md). */
-export function Settings() {
-  const { data: projects } = useLiveData((signal) => fetchProjects(signal), []);
-  const scope = settingsScope(useHash());
+export function Settings({
+  scope: propScope,
+  showHeader = true,
+}: {
+  scope?: string;
+  showHeader?: boolean;
+} = {}) {
+  // Embedded mode (showHeader={false}) locks the scope, so it needs no project list.
+  const { data: projects } = useLiveData(
+    (signal) => (showHeader ? fetchProjects(signal) : Promise.resolve([])),
+    [showHeader],
+  );
+  const hashScope = settingsScope(useHash());
+  const scope = propScope ?? hashScope;
   const project = scope === "global" ? null : scope;
   const { data, error, reload } = useLiveData((signal) => fetchSettings(project, signal), [scope]);
 
@@ -58,33 +69,35 @@ export function Settings() {
 
   return (
     <section className="settings-page">
-      <PageHeader
-        title="Settings"
-        lead="Operator choices with per-project overrides. An override replaces the global value for that project; Reset restores inheritance."
-      >
-        <label>
-          Scope{" "}
-          <select
-            aria-label="settings scope"
-            value={scope}
-            onChange={(e) => {
-              window.location.hash = settingsHash(e.target.value);
-            }}
-          >
-            <option value="global">Global</option>
-            {(projects ?? [])
-              .filter((p) => p.slug !== "global")
-              .map((p) => (
-                <option key={p.slug} value={p.slug}>
-                  {p.name} ({p.slug})
-                </option>
-              ))}
-          </select>
-        </label>
-        <button type="button" onClick={() => reload()}>
-          Reload
-        </button>
-      </PageHeader>
+      {showHeader && (
+        <PageHeader
+          title="Settings"
+          lead="Operator choices with per-project overrides. An override replaces the global value for that project; Reset restores inheritance."
+        >
+          <label>
+            Scope{" "}
+            <select
+              aria-label="settings scope"
+              value={scope}
+              onChange={(e) => {
+                window.location.hash = settingsHash(e.target.value);
+              }}
+            >
+              <option value="global">Global</option>
+              {(projects ?? [])
+                .filter((p) => p.slug !== "global")
+                .map((p) => (
+                  <option key={p.slug} value={p.slug}>
+                    {p.name} ({p.slug})
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button type="button" onClick={() => reload()}>
+            Reload
+          </button>
+        </PageHeader>
+      )}
       {error && <p className="error">{error.message}</p>}
       {!data && !error && <p className="muted">Loading…</p>}
       {data && (

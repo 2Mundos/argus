@@ -149,6 +149,7 @@ export async function newestTasks(
   opts?: {
     signal?: AbortSignal;
     states?: TaskState[];
+    project?: string;
     /** Literal text search over title and spec, applied by the server on every page. */
     q?: string;
     onPage?: (page: { items: TaskSummary[]; total: number }) => void;
@@ -160,7 +161,16 @@ export async function newestTasks(
   for (let n = 0; n < pages; n++) {
     const page = await call(
       api.GET("/api/tasks", {
-        params: { query: { limit: 100, cursor, archived, state: opts?.states, q: opts?.q } },
+        params: {
+          query: {
+            limit: 100,
+            cursor,
+            archived,
+            state: opts?.states,
+            q: opts?.q,
+            project: opts?.project,
+          },
+        },
         signal: opts?.signal,
       }),
     );
@@ -201,6 +211,7 @@ export async function boardTasks(
   opts?: {
     signal?: AbortSignal;
     states?: TaskState[];
+    project?: string;
     q?: string;
     onPage?: (board: TaskBoard) => void;
   },
@@ -210,6 +221,7 @@ export async function boardTasks(
     const found = await newestTasks(5, archived, {
       signal: opts.signal,
       states: opts.states?.length ? opts.states : undefined,
+      project: opts.project,
       q: opts.q,
       onPage: (page) => opts.onPage?.({ ...page, loading: false }),
     });
@@ -227,6 +239,7 @@ export async function boardTasks(
     newestTasks(5, archived, {
       signal: opts?.signal,
       states,
+      project: opts?.project,
       onPage: (page) => {
         keep(page);
         if (active) opts?.onPage?.(merged());
