@@ -96,6 +96,7 @@ from argus_api.errors import (
     ValidationFailedError,
 )
 from argus_api.events import record
+from argus_api.integrations import selection
 from argus_api.kinds import service as kinds
 from argus_api.modeltrace import service as modeltrace
 from argus_api.routines import failures as routine_failures
@@ -350,6 +351,9 @@ async def _create_task(
         "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
         [(task_id, d) for d in deps],
     )
+    if body.integrations:
+        assert body.project is not None  # resolved above
+        await selection.select(tx, task_id, body.project, body.integrations)
     # The defaults applied, by source: the creation-time snapshot (3.3).
     await record(
         tx,
@@ -4103,6 +4107,7 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
         (row["id"],),
     ) as cur:
         data["knowledge"] = [r[0] for r in await cur.fetchall()]
+    data["integrations"] = await selection.selected(conn, row["id"])
     return Task.model_validate(data)
 
 

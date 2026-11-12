@@ -56,6 +56,9 @@ cp "$here/argus-workspace.test.ts" "$target/src/channels/argus-workspace.test.ts
 # Task inputs (task-inputs spec): materialized by the channel, never by the container.
 cp "$here/argus-inputs.ts" "$target/src/channels/argus-inputs.ts"
 cp "$here/argus-inputs.test.ts" "$target/src/channels/argus-inputs.test.ts"
+cp "$here/argus-integrations.ts" "$target/src/channels/argus-integrations.ts"
+cp "$here/argus-integrations.test.ts" "$target/src/channels/argus-integrations.test.ts"
+cp "$here/argus-integrations-channel.test.ts" "$target/src/channels/argus-integrations-channel.test.ts"
 cp "$here/argus-task-inputs.e2e.test.ts" "$target/src/channels/argus-task-inputs.e2e.test.ts"
 cp "$here/argus-checkpoint.ts" "$target/src/channels/argus-checkpoint.ts"
 cp "$here/argus-checkpoint.test.ts" "$target/src/channels/argus-checkpoint.test.ts"

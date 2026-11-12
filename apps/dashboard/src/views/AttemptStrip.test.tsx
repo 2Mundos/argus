@@ -55,6 +55,7 @@ vi.mock("../api", () => {
       if (path.endsWith("/artifacts") || path.endsWith("/events"))
         return path.endsWith("/events") ? mock.notes : [];
       if (path.endsWith("/delivery")) return null;
+      if (path.endsWith("/integrations")) return [];
       return {
         id: "t1",
         title: "t",

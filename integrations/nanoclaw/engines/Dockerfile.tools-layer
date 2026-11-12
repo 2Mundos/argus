@@ -16,6 +16,10 @@ RUN apt-get update \
       openssh-client rsync python3 python3-venv make ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
  && for b in ssh ssh-keygen ssh-keyscan rsync git python3 make; do command -v "$b" || exit 1; done
+# kubectl, pinned and checksum verified (integrations spec 3.6): the client for a
+# task's opted-in Kubernetes integration. No kubeconfig ships in the image.
+COPY --chmod=0755 install-kubectl.sh /tmp/install-kubectl.sh
+RUN sh /tmp/install-kubectl.sh && rm -f /tmp/install-kubectl.sh && command -v kubectl
 # uv as a standalone binary: no pip, no PEP 668 workarounds, same version for every image.
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
  && command -v uv && uv --version
@@ -49,4 +53,4 @@ RUN echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
 COPY --chmod=0644 argus-oom-priority.sh argus-cpu-count.sh argus-cpu-count.cjs /usr/local/lib/argus/
 COPY --chmod=0644 argus-cpu-count-sitecustomize.py /usr/local/lib/argus/pycpu/sitecustomize.py
 USER node
-LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make argus-delegate model-policy command-guard argus-task"
+LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make kubectl argus-delegate model-policy command-guard argus-task"

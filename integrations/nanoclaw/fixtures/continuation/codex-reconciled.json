@@ -87,6 +87,7 @@
   "harness_model": null,
   "id": "codex-reconciled",
   "input": {},
+  "integrations": [],
   "kind": "generic",
   "knowledge": [],
   "knowledge_refs": [],

@@ -101,6 +101,7 @@
   "harness_model": null,
   "id": "fl4-merged-qa",
   "input": {},
+  "integrations": [],
   "kind": "generic",
   "knowledge": [],
   "knowledge_refs": [],

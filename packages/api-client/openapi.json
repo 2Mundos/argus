@@ -4468,6 +4468,14 @@
             "title": "Input",
             "type": "object"
           },
+          "integrations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Integrations",
+            "type": "array"
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -11541,6 +11549,18 @@
             "title": "Created By",
             "type": "string"
           },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "has_secret": {
             "title": "Has Secret",
             "type": "boolean"
@@ -11658,6 +11678,7 @@
           "validation",
           "validation_detail",
           "validated_at",
+          "expires_at",
           "created_at",
           "created_by",
           "updated_at",
@@ -11684,6 +11705,18 @@
             "additionalProperties": true,
             "title": "Config",
             "type": "object"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           },
           "kind": {
             "enum": [
@@ -11713,6 +11746,18 @@
       "IntegrationRotate": {
         "additionalProperties": false,
         "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
           "secret": {
             "$ref": "#/components/schemas/SecretIn"
           }
@@ -21054,6 +21099,14 @@
             "title": "Input",
             "type": "object"
           },
+          "integrations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Integrations",
+            "type": "array"
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -21949,6 +22002,15 @@
             "title": "Input",
             "type": "object"
           },
+          "integrations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Integrations",
+            "type": "array"
+          },
           "kind": {
             "default": "generic",
             "title": "Kind",
@@ -22515,6 +22577,14 @@
             "title": "Input",
             "type": "object"
           },
+          "integrations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Integrations",
+            "type": "array"
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
@@ -23017,6 +23087,15 @@
             "title": "Input",
             "type": "object"
           },
+          "integrations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Integrations",
+            "type": "array"
+          },
           "kind": {
             "default": "generic",
             "title": "Kind",
@@ -23321,6 +23400,30 @@
           "inputs"
         ],
         "title": "TaskInputs",
+        "type": "object"
+      },
+      "TaskIntegrations": {
+        "description": "The body of `PUT /api/tasks/{id}/integrations` (admin only).",
+        "properties": {
+          "expected_version": {
+            "minLength": 1,
+            "title": "Expected Version",
+            "type": "string"
+          },
+          "integrations": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Integrations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_version",
+          "integrations"
+        ],
+        "title": "TaskIntegrations",
         "type": "object"
       },
       "TaskKind": {
@@ -23851,6 +23954,14 @@
             "additionalProperties": true,
             "title": "Input",
             "type": "object"
+          },
+          "integrations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Integrations",
+            "type": "array"
           },
           "kind": {
             "title": "Kind",
@@ -37228,6 +37339,64 @@
         "summary": "Post Input Receipt",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/integrations": {
+      "put": {
+        "description": "Opt a task into Kubernetes integrations of its own project (ids only), or\nclear the list. Each id must be active and of kind `kubernetes`; not while an\nattempt runs. Selecting is the only grant: capabilities, titles and pool\nlabels never give a task a credential.",
+        "operationId": "set_task_integrations_api_tasks__task_id__integrations_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskIntegrations"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Task Integrations",
+        "tags": [
+          "integrations"
         ]
       }
     },

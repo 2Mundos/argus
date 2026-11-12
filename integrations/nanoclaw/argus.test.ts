@@ -800,7 +800,7 @@ describe("Argus channel", () => {
       engine: null,
       executor: null,
       node_id: defaultNodeId(),
-      features: ["steer", "task-inputs"],
+      features: ["steer", "task-inputs", "task-integrations"],
     });
   });
 

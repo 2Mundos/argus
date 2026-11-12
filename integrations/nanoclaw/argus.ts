@@ -120,6 +120,15 @@ import {
   parseInputRef,
   taskInputLines,
 } from "./argus-inputs.js";
+import {
+  type InstalledIntegrations,
+  type IntegrationsSource,
+  installTaskIntegrations,
+  integrationLines,
+  recheckTaskIntegrations,
+  removeTaskIntegrations,
+  sweepTaskIntegrations,
+} from "./argus-integrations.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
 import {
   localHarnessFromCredential,
@@ -609,6 +618,8 @@ export interface ArgusTask {
   auto_merge?: boolean;
   /** Effective `review.forge_agentic` (settings 3.12). Absent (older API) is treated as required. */
   forge_agentic_review_required?: boolean | null;
+  /** Kubernetes integration ids the task opted into (integrations spec 3.6); never a secret. */
+  integrations?: string[];
 }
 
 /** Empty difficulty executor chain and no pin: NanoClaw does the work (task difficulty / local harness). */
@@ -1354,6 +1365,8 @@ export function renderTask(
     workspace?: TaskWorkspace | null;
     /** Materialized task inputs: trusted metadata only, never content (task inputs spec 3.5). */
     inputs?: MaterializedInput[];
+    /** The attempt's installed kubeconfig: path, namespaces and expiry, never the token. */
+    integrations?: InstalledIntegrations | null;
     /** The single-layer experiment arm: the harness codes, with no delegate. */
     singleLayer?: boolean;
   } = {},
@@ -1415,6 +1428,7 @@ export function renderTask(
       : []),
     ...(opts.runtime ? runtimeTaskLines(opts.runtime) : []),
     ...(opts.inputs?.length ? ["", ...taskInputLines(task.id, opts.inputs)] : []),
+    ...(opts.integrations ? ["", ...integrationLines(opts.integrations)] : []),
     "",
     UNTRUSTED_TASK_DATA_RULES,
     frameUntrustedTaskData(untrusted),
@@ -2467,7 +2481,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           engine: engineInUse,
           executor: executor?.provider ?? null,
           node_id: defaultNodeId(),
-          features: ["steer", "task-inputs"],
+          features: ["steer", "task-inputs", "task-integrations"],
         },
       });
       for (const id of acks) steerAcks.delete(id);
@@ -2477,6 +2491,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
       const lost = current && data.rejected?.find((r: any) => r.task_id === current!.id);
       if (lost) await abandonTask(lost.code);
+      else await recheckIntegrations();
       await deliverSteers(Array.isArray(data.steers) ? data.steers : []);
       await relayWaiting();
     } catch (err) {
@@ -3713,6 +3728,102 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     return { ok: true, inputs: result.inputs };
   }
 
+  const integrationsSource: IntegrationsSource = {
+    status: async (taskId, attempt) =>
+      (await client.call("GET", `/tasks/${taskId}/integrations/status?attempt=${attempt}`)).data,
+    credential: async (taskId, integrationId, attempt, version) =>
+      (
+        await client.call("POST", `/tasks/${taskId}/integrations/${integrationId}/credential`, {
+          attempt,
+          secret_version: version,
+        })
+      ).data,
+  };
+  /** The attempt's installed kubeconfig (integrations spec 3.6); removed when it ends. */
+  let integrationsAttempt: InstalledIntegrations | null = null;
+
+  /**
+   * Install the kubeconfig of the task's Kubernetes integrations before the session
+   * starts (integrations spec 3.6). Anything not deliverable blocks the attempt.
+   */
+  async function integrationsPreflight(
+    task: ArgusTask,
+  ): Promise<{ ok: true } | { ok: false; reason: string; error: string }> {
+    integrationsAttempt = null;
+    if (!task.integrations?.length) return { ok: true };
+    const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
+    if (!groupDir)
+      return {
+        ok: false,
+        reason: "env_integration_invalid",
+        error: "the group directory is unknown",
+      };
+    const result = await installTaskIntegrations({
+      groupDir,
+      taskId: task.id,
+      attempt: task.attempt,
+      selected: task.integrations,
+      engineProvider: account?.provider ?? null,
+      executorProvider: executor?.provider ?? null,
+      source: integrationsSource,
+    });
+    if (!result.ok) return result;
+    integrationsAttempt = result.installed;
+    if (result.installed)
+      log.info("Task integrations installed", {
+        task: task.id,
+        integrations: result.installed.integrations.map((i) => ({
+          name: i.name,
+          namespace: i.namespace,
+          version: i.secret_version,
+        })),
+      });
+    return { ok: true };
+  }
+
+  /** Set while a recheck runs: heartbeats overlap, and two would both rewrite the file. */
+  let integrationsRechecking = false;
+
+  /** On each heartbeat: a revoked, expired or rotated integration takes effect now. */
+  async function recheckIntegrations(): Promise<void> {
+    const held = integrationsAttempt;
+    if (!held || !current || current.id !== held.taskId || current.attempt !== held.attempt) return;
+    if (integrationsRechecking) return; // the next heartbeat rechecks
+    integrationsRechecking = true;
+    try {
+      const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
+      if (!groupDir) return;
+      const r = await recheckTaskIntegrations(groupDir, held, integrationsSource);
+      if (integrationsAttempt !== held) return; // the attempt ended meanwhile
+      integrationsAttempt = r.installed;
+      if (r.state === "removed")
+        log.warn("Task integration no longer deliverable; kubeconfig removed", {
+          task: held.taskId,
+          why: r.why,
+        });
+      else if (r.state === "refreshed")
+        log.info("Task integration rotated; kubeconfig replaced", { task: held.taskId });
+    } catch (err) {
+      log.warn("Could not recheck the task's integrations", {
+        task: held.taskId,
+        err: String(err),
+      });
+    } finally {
+      integrationsRechecking = false;
+    }
+  }
+
+  /** Remove every kubeconfig of `taskId`; logged, never fatal. */
+  async function dropIntegrations(taskId: string): Promise<void> {
+    if (integrationsAttempt?.taskId === taskId) integrationsAttempt = null;
+    try {
+      const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
+      if (groupDir) await removeTaskIntegrations(groupDir, taskId);
+    } catch (err) {
+      log.error("Could not remove the task's kubeconfig", { task: taskId, err: String(err) });
+    }
+  }
+
   /** Relay the in-session verifier's `consumed.json` as receipts, once per attempt. */
   async function inputsAfterAttempt(task: Pick<ArgusTask, "id" | "attempt">): Promise<void> {
     const held = inputsAttempt;
@@ -3985,6 +4096,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         else envBlock = got;
       }
       if (!envBlock) {
+        // Before the session: a selected integration that cannot be had blocks.
+        step = "task integrations";
+        const got = await integrationsPreflight(task);
+        if (!got.ok) envBlock = got;
+      }
+      if (!envBlock) {
         step = "task workspace";
         const prepared = await workspacePreflight(task);
         if (prepared?.ok) workspace = prepared;
@@ -4038,6 +4155,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           runtime: runtimeSelection,
           workspace,
           inputs,
+          integrations: integrationsAttempt,
           ...(singleLayer ? { singleLayer } : {}),
         });
       currentText = renderCurrent();
@@ -4560,6 +4678,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   async function claimLoop(): Promise<void> {
     let backoff = 1000;
+    // No attempt runs yet: a kubeconfig a previous process left behind goes now. The real
+    // group directory, not the test workspace seam; none resolvable means nothing to sweep.
+    const groupDir = await argusGroupDir().catch(() => null);
+    if (groupDir)
+      await sweepTaskIntegrations(groupDir).catch((err) =>
+        log.error("Could not sweep stale task kubeconfigs", { err: String(err) }),
+      );
     let mayClaim = true;
     let nextVisibility = Date.now() + STARTUP_ADOPTION_VISIBILITY_MS;
     if (cfg.startupReady) {
@@ -4640,6 +4765,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             await runTask(task);
           } finally {
             await closeAttemptSession(task);
+            if (task.integrations?.length && isCanonicalTaskId(task.id))
+              await dropIntegrations(task.id);
             await inputsAfterAttempt(task);
             await checkpointAfterAttempt(task);
           }

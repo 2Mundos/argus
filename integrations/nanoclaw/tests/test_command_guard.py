@@ -84,6 +84,25 @@ CASES = {
         "block": [":(){ :|:& };:", "bash -c ':(){ :|: & }; :'"],
         "allow": ["echo done; ls"],
     },
+    "kubeconfig_secret": {
+        "block": [
+            "cat /workspace/agent/task-integrations/T/1-u/kubeconfig",
+            "base64 < /workspace/agent/task-integrations/T/1-u/kubeconfig",
+            "cp /workspace/agent/task-integrations/T/1-u/kubeconfig ./kc",
+            "grep token /workspace/agent/task-integrations/*/*/kubeconfig",
+            "python3 -c 'print(open(\"/workspace/agent/task-integrations/T/1-u/kubeconfig\").read())'",
+            "kubectl config view --raw",
+            "kubectl --kubeconfig /workspace/agent/task-integrations/T/1-u/kubeconfig config view --flatten",
+            "bash -c 'kubectl config view --raw=true'",
+        ],
+        "allow": [
+            "kubectl --kubeconfig /workspace/agent/task-integrations/T/1-u/kubeconfig get pods",
+            "KUBECONFIG=/workspace/agent/task-integrations/T/1-u/kubeconfig kubectl get pods -n team-a",
+            "export KUBECONFIG=/workspace/agent/task-integrations/T/1-u/kubeconfig",
+            "kubectl config view",
+            "cat ./kubeconfig.example",
+        ],
+    },
     "commit_attribution": {
         "block": [
             'git commit -m "x\n\nCo-Authored-By: bot@example.com"',

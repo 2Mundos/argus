@@ -28,6 +28,8 @@ export const COMMAND_GUARD_REASONS: Readonly<Record<string, string>> = {
   dd_device: "writing to a block device overwrites a disk",
   device_redirect: "redirecting output to a block device overwrites a disk",
   fork_bomb: "a fork bomb exhausts the machine",
+  kubeconfig_secret:
+    "the task's kubeconfig holds a credential: use it only through kubectl --kubeconfig, never print, copy or decode it",
 };
 
 const PREFIX = "Blocked by Argus command guard: ";

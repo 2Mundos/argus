@@ -37,6 +37,7 @@ import { ModelChip } from "./ModelChip";
 import { ModelPin } from "./ModelPin";
 import { ProjectRepositoryDialog } from "./ProjectRepositoryDialog";
 import { TaskDetail } from "./TaskDetail";
+import { NewTaskIntegrations } from "./TaskIntegrations";
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
   { title: "Waiting", states: ["awaiting_approval", "pending", "blocked"] },
@@ -481,6 +482,8 @@ function NewTask({ onClose, initialProject }: { onClose: () => void; initialProj
     budget: null as string | null,
     maxAttempts: null as string | null,
     timeoutMinutes: null as string | null,
+    // Kubernetes integration ids, kept with the project they were chosen in.
+    integrations: { project: "", ids: [] as string[] },
   });
   const [error, setError] = useState<string>();
   const [configuring, setConfiguring] = useState<string | null>(null);
@@ -508,6 +511,7 @@ function NewTask({ onClose, initialProject }: { onClose: () => void; initialProj
     [project, form.kind],
   );
   const shown = defaults?.values;
+  const integrations = form.integrations.project === project ? form.integrations.ids : [];
   const deliverable = form.deliverable ?? shown?.deliverable ?? "response";
   const capabilitiesText =
     form.capabilities ??
@@ -617,6 +621,7 @@ function NewTask({ onClose, initialProject }: { onClose: () => void; initialProj
               ...(executor ? { executor_model: executor } : {}),
               ...(form.harnessAccount ? { harness_account: form.harnessAccount } : {}),
               ...(parsed ? { budget_usd: parsed.value } : {}),
+              ...(integrations.length ? { integrations } : {}),
             },
           }),
         );
@@ -820,6 +825,11 @@ function NewTask({ onClose, initialProject }: { onClose: () => void; initialProj
               />
             ),
           )}
+          <NewTaskIntegrations
+            project={project}
+            chosen={integrations}
+            onChange={(ids) => set("integrations", { project, ids })}
+          />
           <label className="check">
             <input
               type="checkbox"

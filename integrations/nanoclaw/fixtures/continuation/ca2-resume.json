@@ -119,6 +119,7 @@
   "harness_model": null,
   "id": "ca2-resume",
   "input": {},
+  "integrations": [],
   "kind": "generic",
   "knowledge": [],
   "knowledge_refs": [],

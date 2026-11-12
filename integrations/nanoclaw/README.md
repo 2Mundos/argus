@@ -440,6 +440,25 @@ feature. Activating it on a fleet is an operator step:
 `scripts/task-input-e2e.sh` runs a disposable API and this channel in a
 disposable checkout end to end.
 
+## Task integrations (Kubernetes)
+
+When an admin opts a task into Kubernetes integrations, the channel fetches each
+one at preflight, bound to the attempt's lease, and writes a kubeconfig to
+`/workspace/agent/task-integrations/<task id>/<attempt>-<id>/kubeconfig` (`0700`
+directories, `0600` file, TLS verified, context pinned to the namespace). The
+prompt lists the path; the worker runs `kubectl --kubeconfig <path> ...`, and
+`argus-delegate claude` passes it on as `KUBECONFIG`. Only the Claude engine and
+executor are supported; any other blocks the attempt as
+`env_integration_unsupported`. Each heartbeat rechecks: a revoked, expired or
+unvalidated integration removes the file, a rotation rewrites it. The file is
+removed when the attempt ends, and stale ones are swept at start. Deleting the
+file does not revoke the token: revoke it at the cluster as well
+([spec](../../docs/specs/integrations.spec.md) 3.6).
+
+Activation: `install.sh` and `pnpm run build`, rebuild the tools layer
+(`provision.sh`, for `kubectl`), recreate the instances, then add
+`task-integrations` to the pool's capabilities.
+
 ## Not done yet
 
 - No token usage is reported back (NanoClaw does not expose it to the channel).

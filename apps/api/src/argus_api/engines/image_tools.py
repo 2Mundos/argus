@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-REQUIRED = ("ssh", "rsync", "git")
+REQUIRED = ("ssh", "rsync", "git", "kubectl")
 _SCRIPT = f'for b in {" ".join(REQUIRED)}; do command -v "$b" >/dev/null 2>&1 || echo "$b"; done'
 _ENGINE_IDS = ("codex", "claude", "opencode", "cursor-agent")
 

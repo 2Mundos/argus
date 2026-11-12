@@ -80,6 +80,7 @@
   "harness_model": null,
   "id": "codex-legacy",
   "input": {},
+  "integrations": [],
   "kind": "generic",
   "knowledge": [],
   "knowledge_refs": [],

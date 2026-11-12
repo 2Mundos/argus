@@ -21,6 +21,7 @@ import { RepositoryBlockAction } from "./RepositoryBlockAction";
 import { TaskContinuation } from "./TaskContinuation";
 import { TaskCostTile } from "./TaskCost";
 import { TaskEditForm } from "./TaskEditForm";
+import { TaskIntegrations } from "./TaskIntegrations";
 import { TaskPrerequisites } from "./TaskPrerequisites";
 import { TaskSteers, useSteersSource } from "./TaskSteers";
 import { TaskTerminal } from "./TaskTerminal";
@@ -575,6 +576,7 @@ export function TaskDetail({
               </div>
             </>
           )}
+          {task.project !== "global" && <TaskIntegrations task={task} onSaved={reload} />}
           {task.attempt > 0 && (
             <TaskTerminal
               key={`terminal-${selected}`}

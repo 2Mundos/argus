@@ -255,7 +255,8 @@ why you are here.
   before a code task succeeds
 - [Integrations](specs/integrations.spec.md) — the Setup tab for MCP connections and
   Kubernetes clusters, project-scoped and kept out of Settings and Accounts; the
-  dashboard and API manage credentials securely; worker delivery is not yet available
+  dashboard and API manage credentials securely; an admin opts a task into Kubernetes
+  integrations and its Claude worker gets a per-attempt kubeconfig, other engines fail closed
 - [Routines](specs/routines.spec.md) — cron-scheduled task templates per project;
   run findings become deduplicated tasks, approval-gated by default
 - [Internal orchestrator](specs/internal-orchestrator.spec.md) — Argus hosts its own

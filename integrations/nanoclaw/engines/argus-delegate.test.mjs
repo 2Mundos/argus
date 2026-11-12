@@ -2321,3 +2321,66 @@ test("--auth-probe for dsh: installed does not mean authenticated", async (t) =>
   const ready = await run(["dsh", "--auth-probe"], { env: s.env });
   assert.equal(ready.code, 0);
 });
+
+import { attemptKubeconfig, scopeKubeconfig } from "./argus-delegate.mjs";
+
+test("integrations: only the claude executor gets the attempt's kubeconfig; others are refused", async (t) => {
+  const s = sandbox(t);
+  const taskId = "0b5a3a6e-8f4c-4d0e-9a51-7c1f2b3d4e5f";
+  const root = path.join(s.dir, "task-integrations");
+  const dir = path.join(root, taskId, "2-abc");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const kubeconfig = path.join(dir, "kubeconfig");
+  fs.writeFileSync(kubeconfig, "{}", { mode: 0o600 });
+  // A different attempt's dir and a symlinked one never count.
+  fs.mkdirSync(path.join(root, taskId, "1-old"));
+  fs.writeFileSync(path.join(root, taskId, "1-old", "kubeconfig"), "{}");
+  fs.mkdirSync(path.join(root, taskId, "3-link"));
+  fs.symlinkSync(kubeconfig, path.join(root, taskId, "3-link", "kubeconfig"));
+
+  assert.equal(attemptKubeconfig({ task_id: taskId, attempt: 2 }, root), kubeconfig);
+  assert.equal(attemptKubeconfig({ task_id: taskId, attempt: 3 }, root), null);
+  assert.equal(attemptKubeconfig({ task_id: taskId, attempt: 4 }, root), null);
+  assert.equal(attemptKubeconfig({ task_id: "../x", attempt: 2 }, root), null);
+  assert.equal(attemptKubeconfig(undefined, root), null);
+
+  const inherited = { PATH: "/bin", KUBECONFIG: "/home/node/.kube/config" };
+  assert.deepEqual(scopeKubeconfig("codex", inherited, null), {
+    env: { PATH: "/bin" },
+    refused: false,
+  });
+  assert.deepEqual(scopeKubeconfig("codex", inherited, kubeconfig).refused, true);
+  assert.equal(scopeKubeconfig("codex", inherited, kubeconfig).env.KUBECONFIG, undefined);
+  assert.equal(scopeKubeconfig("claude", inherited, kubeconfig).env.KUBECONFIG, kubeconfig);
+
+  const policy = {
+    harness: { claude: ["sonnet"] },
+    implementation: { claude: ["sonnet"], codex: ["gpt"] },
+  };
+  const file = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(file, JSON.stringify(policySnapshot(policy, { task_id: taskId, attempt: 2 })));
+  const seen = path.join(s.dir, "seen");
+  for (const name of ["claude", "codex"])
+    s.fake(
+      name,
+      `if [ "$1" = "--version" ]; then echo v; exit 0; fi\ncat >/dev/null; printf '%s' "$KUBECONFIG" > ${seen}; echo '{"result":"ok"}'`,
+    );
+  const env = {
+    ...s.env,
+    ANTHROPIC_API_KEY: "x",
+    OPENAI_API_KEY: "x",
+    KUBECONFIG: "/home/node/.kube/config",
+    ARGUS_MODEL_POLICY_FILE: file,
+    ARGUS_TASK_INTEGRATIONS_ROOT: root,
+  };
+  const out = path.join(s.dir, "out");
+  const claude = await run(["claude", "--cwd", s.work, "--out", out, "--timeout", "20"], { env });
+  assert.equal(claude.code, 0);
+  assert.equal(fs.readFileSync(seen, "utf8"), kubeconfig);
+
+  fs.rmSync(seen);
+  const codex = await run(["codex", "--cwd", s.work, "--out", out, "--timeout", "20"], { env });
+  assert.equal(codex.code, 78);
+  assert.equal(codex.report.blocked, "integration_engine_unsupported");
+  assert.equal(fs.existsSync(seen), false, "codex never ran");
+});

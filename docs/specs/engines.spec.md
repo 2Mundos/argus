@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 
 # Engines, executors and the local model
@@ -291,8 +291,9 @@ In scope:
 - `integrations/nanoclaw/engines/`: installer for the Codex payload and the
   CLI manifest, the image steps for opencode and the Cursor agent (checksum
   pinned), `install-dsh.sh` (and its test), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
-  (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client and rsync on
-  top of NanoClaw's image, applied by `provision.sh`; its build context is a
+  (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client, rsync and
+  `kubectl` (`install-kubectl.sh`: pinned version, SHA-256 checked, probed by
+  `image_tools`) on top of NanoClaw's image, applied by `provision.sh`; its build context is a
   staged copy of `engines/` plus `../gitea-api.mjs`, and CI's `tools-layer` job
   builds it on a minimal base and loads every `argus-delegate` import).
   `patch-engines-dockerfile.py` (called by `install-engines.sh`) writes the
