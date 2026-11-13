@@ -120,6 +120,7 @@ const errCode = (err: unknown) => {
   const c = (err as { code?: unknown } | null)?.code;
   return typeof c === "string" && /^[A-Z0-9_]{1,64}$/.test(c) ? c : "error";
 };
+const PATH_SEGMENT = /^[A-Za-z0-9_-]+$/;
 const keyOf = (secret: string) => createHash("sha256").update(secret).digest("hex");
 const idKey = (id: unknown) => JSON.stringify(id ?? null);
 const isObject = (v: unknown): v is Rpc => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -514,14 +515,13 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
     });
     up.on("response", (upRes) => {
       clearTimeout(headersTimer);
-      void relay(grant, m[1], upRes, res, cut, single, reply).catch(() => cut());
+      void relay(grant, upRes, res, cut, single, reply).catch(() => cut());
     });
     up.end(body);
   }
 
   async function relay(
     grant: Grant,
-    secret: string,
     upRes: http.IncomingMessage,
     res: http.ServerResponse,
     cut: () => void,
@@ -584,16 +584,18 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
       if (e.event === "endpoint") {
         // Legacy HTTP+SSE: the server names where to POST. Same origin only, and the
         // session is told a grant path instead, so it never learns or picks the target.
-        const to = URL.canParse(e.data, grant.url) ? new URL(e.data, grant.url) : null;
+        const to = URL.canParse(e.data, grant.url.href) ? new URL(e.data, grant.url) : null;
         if (grant.transport !== "sse" || !to || !sameOrigin(to, grant.url) || to.hash) {
           if (grant.transport === "sse")
             block(grant, "the server announced an endpoint on another origin");
           return cut();
         }
+        // The grant's own secret, never the request path's text.
         const key = randomBytes(16).toString("base64url");
+        if (!PATH_SEGMENT.test(grant.secret)) return cut();
         grant.endpoints.set(key, { url: to, stream: res });
         keys.push(key);
-        res.write(sseEvent({ event: "endpoint", data: `/mcp/${secret}/messages/${key}` }));
+        res.write(sseEvent({ event: "endpoint", data: `/mcp/${grant.secret}/messages/${key}` }));
         return;
       }
       let out: unknown;
@@ -774,7 +776,7 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
       stream.res.destroy();
       if (
         first?.event !== "endpoint" ||
-        !URL.canParse(first.data, g.url) ||
+        !URL.canParse(first.data, g.url.href) ||
         !sameOrigin(new URL(first.data, g.url), g.url)
       )
         throw new McpRefusal(

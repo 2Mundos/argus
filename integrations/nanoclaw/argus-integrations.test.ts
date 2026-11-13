@@ -202,7 +202,8 @@ function install(
   });
 }
 
-function hostPath(groupDir: string, containerPath: string): string {
+function hostPath(groupDir: string, containerPath: string | null): string {
+  if (containerPath === null) throw new Error("no kubeconfig installed");
   return path.join(groupDir, path.relative("/workspace/agent", containerPath));
 }
 
@@ -865,6 +866,7 @@ describe("cleanup", () => {
 
 it("renderKubeconfig never emits insecure-skip-tls-verify, nor a cluster without its route", () => {
   const cred: KubernetesCredential = {
+    kind: "kubernetes",
     integration_id: "i",
     name: "c",
     server: "https://x.test",
