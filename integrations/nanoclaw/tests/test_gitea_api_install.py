@@ -442,10 +442,11 @@ def test_copy_nanoclaw_places_runtime_modules_in_dist_channels(tmp_path: Path) -
 
 
 def test_install_sh_wires_the_preflight_session_files() -> None:
-    """A fresh install copies the preflight module and its tests, and exports the gateway lease."""
+    """A fresh install copies the gateway-lease users and their tests, and exports the lease."""
     script = (NANOCLAW / "install.sh").read_text()
     for name in (
         "argus-repo-preflight.ts",
+        "argus-integrations-route.ts",
         "argus-repo-preflight.test.ts",
         "argus-repo-preflight.docker.test.ts",
         "argus-onecli-preflight-lease.test.ts",

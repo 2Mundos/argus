@@ -30,7 +30,8 @@ const SUPPORTED_PROVIDERS = new Set(["anthropic"]);
 export type IntegrationFailureReason =
   | "env_integration_unavailable"
   | "env_integration_unsupported"
-  | "env_integration_invalid";
+  | "env_integration_invalid"
+  | "env_integration_gateway_intercepts";
 
 export type Readiness =
   | "ready"
@@ -62,6 +63,22 @@ export interface KubernetesCredential {
   secret_version: number;
   expires_at: string | null;
 }
+
+/** A cluster the kubeconfig would name: what the gateway route probe checks. Non-secret. */
+export interface IntegrationRoute {
+  name: string;
+  server: string;
+  ca_data: string | null;
+}
+
+/**
+ * Proves the attempt's session reaches every route end to end through its own gateway
+ * (argus-integrations-route.ts): null when it does, else a non-secret reason.
+ */
+export type RouteProbe = (
+  routes: readonly IntegrationRoute[],
+  who: { taskId: string; attempt: number },
+) => Promise<string | null>;
 
 export interface IntegrationsSource {
   status(taskId: string, attempt: number): Promise<IntegrationState[]>;
@@ -286,6 +303,24 @@ export function renderKubeconfig(creds: readonly KubernetesCredential[]): string
   )}\n`;
 }
 
+/**
+ * Refuse unless the session would reach every cluster without the gateway terminating its
+ * TLS. No probe at all fails closed: production wiring always supplies one.
+ */
+async function checkRoutes(
+  probe: RouteProbe | undefined,
+  creds: readonly KubernetesCredential[],
+  who: { taskId: string; attempt: number },
+): Promise<void> {
+  const why = probe
+    ? await probe(
+        creds.map((c) => ({ name: c.name, server: c.server, ca_data: c.ca_data })),
+        who,
+      )
+    : "no gateway route probe is configured";
+  if (why) throw new IntegrationError("env_integration_gateway_intercepts", why);
+}
+
 /** Every selected integration at its current version, or a typed refusal. */
 async function fetchAll(
   source: IntegrationsSource,
@@ -357,6 +392,8 @@ export async function installTaskIntegrations(opts: {
   engineProvider: string | null;
   executorProvider: string | null;
   source: IntegrationsSource;
+  /** The gateway route probe; absent, the install fails closed. */
+  routeProbe?: RouteProbe;
 }): Promise<IntegrationsResult> {
   const { groupDir, taskId, attempt, source } = opts;
   try {
@@ -382,6 +419,8 @@ export async function installTaskIntegrations(opts: {
         "env_integration_unavailable",
         "none of the selected integrations is deliverable to this task",
       );
+    // Before anything is written: a route the gateway intercepts never gets a kubeconfig.
+    await checkRoutes(opts.routeProbe, creds, { taskId, attempt });
     const leaf = `${attempt}-${randomUUID()}`;
     await withDirs(groupDir, taskId, true, async (_root, task) => {
       await emptyDir(task!);
@@ -406,12 +445,14 @@ export async function installTaskIntegrations(opts: {
  * On every heartbeat while the attempt runs: anything no longer deliverable (revoked,
  * expired, the store down, the selection or the lease gone) removes the file; a rotation
  * replaces it atomically. A transient failure to reach Argus keeps it: the lease ends
- * the attempt, and removes it, if that persists.
+ * the attempt, and removes it, if that persists. A rotated credential is probed again
+ * before it replaces the file.
  */
 export async function recheckTaskIntegrations(
   groupDir: string,
   installed: InstalledIntegrations,
   source: IntegrationsSource,
+  routeProbe?: RouteProbe,
 ): Promise<{
   state: "kept" | "refreshed" | "removed";
   installed: InstalledIntegrations | null;
@@ -440,6 +481,7 @@ export async function recheckTaskIntegrations(
     return { state: "kept", installed };
   try {
     const { creds } = await fetchAll(source, taskId, attempt);
+    await checkRoutes(routeProbe, creds, { taskId, attempt });
     const leaf = path.basename(installed.dir);
     const wrote = await withDirs(groupDir, taskId, false, async (_root, task) => {
       const d = await privateDir(task!, leaf, "attempt directory", false);
@@ -491,5 +533,9 @@ export function integrationLines(installed: InstalledIntegrations): string[] {
     "Claude runs get it as KUBECONFIG. Each context is pinned to its namespace; use `--context <name>`",
     "to pick another. Never print, copy or commit the kubeconfig (`cat`, `kubectl config view --raw`):",
     "it holds a live token. It is removed when the attempt ends or the integration is revoked.",
+    "kubectl must reach the cluster through the gateway proxy with end-to-end TLS. An x509 or",
+    "certificate error from kubectl is an environment problem, not one to work around: never",
+    "pass --insecure-skip-tls-verify, change the CA, unset HTTPS_PROXY or set NO_PROXY; stop",
+    "and reply FAIL: with the kubectl error.",
   ];
 }

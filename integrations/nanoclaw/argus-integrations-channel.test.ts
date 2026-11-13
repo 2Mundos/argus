@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { createArgusAdapter } from "./argus.js";
 import { type AccountLease, OneCliClient } from "./argus-accounts.js";
-import { KUBECONFIG_FILE, TASK_INTEGRATIONS_DIR } from "./argus-integrations.js";
+import { KUBECONFIG_FILE, type RouteProbe, TASK_INTEGRATIONS_DIR } from "./argus-integrations.js";
 import { until } from "./argus-test-until.js";
 
 vi.mock("../db/messaging-groups.js", () => ({
@@ -152,7 +152,14 @@ function world(provider: string, readiness: string) {
   return { calls, fetchImpl, state };
 }
 
-async function run(provider = "anthropic", readiness = "ready") {
+/** A gateway that splices end to end; null runs the adapter with no probe configured. */
+const endToEnd: RouteProbe = async () => null;
+
+async function run(
+  provider = "anthropic",
+  readiness = "ready",
+  probe: RouteProbe | null = endToEnd,
+) {
   const w = world(provider, readiness);
   const groupDir = mkdtempSync(path.join(os.tmpdir(), "argus-integrations-channel-"));
   tmp.push(groupDir);
@@ -181,6 +188,7 @@ async function run(provider = "anthropic", readiness = "ready") {
     claimWaitS: 1,
     heartbeatMs: 50,
     workspaceRoot: async () => groupDir,
+    ...(probe ? { probeIntegrationRoutes: probe } : {}),
     sessionImage: async () => "argus-nanoclaw-agent:test",
     readImageFile: async () =>
       readFileSync(new URL("./engines/claude-managed-settings.json", import.meta.url), "utf8"),
@@ -247,7 +255,8 @@ describe("task integrations through the channel", () => {
   });
 
   it("replaces the kubeconfig on the next heartbeat after a rotation", async () => {
-    const r = await run();
+    const probe = vi.fn(endToEnd);
+    const r = await run("anthropic", "ready", probe);
     await until(() => r.inbound.length > 0, 8000, "the task prompt");
     r.w.state.holdRotation = true;
     r.w.state.version = 2;
@@ -267,6 +276,17 @@ describe("task integrations through the channel", () => {
       .filter((c) => c.body.secret_version === 2);
     expect(rotated).toHaveLength(1);
     expect(kubeconfigs(r.root).map((f) => path.basename(f))).toEqual([KUBECONFIG_FILE]);
+    // The rotated credential went through the route probe again before it was written.
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes the kubeconfig when a rotation no longer passes the route probe", async () => {
+    let intercepted = false;
+    const r = await run("anthropic", "ready", async () => (intercepted ? "intercepted" : null));
+    await until(() => r.inbound.length > 0, 8000, "the task prompt");
+    intercepted = true;
+    r.w.state.version = 2;
+    await until(() => kubeconfigs(r.root).length === 0, 8000, "the kubeconfig is removed");
   });
 
   it("sweeps a previous process's kubeconfigs from the group directory before claiming", async () => {
@@ -311,4 +331,37 @@ describe("task integrations through the channel", () => {
       expect(r.posts("/integrations/int-1/credential")).toHaveLength(0);
     },
   );
+
+  it("blocks before the model when the gateway intercepts TLS, and keeps no kubeconfig", async () => {
+    const seen: Array<Parameters<RouteProbe>> = [];
+    const r = await run("anthropic", "ready", async (...a) => {
+      seen.push(a);
+      return "staging: the certificate presented through the gateway is not trusted by the integration's CA (SELF_SIGNED_CERT_IN_CHAIN); the gateway intercepts TLS";
+    });
+    await until(() => r.posts("/block").length > 0, 8000, "the block");
+    const block = r.posts("/block")[0]!.body;
+    expect(block).toMatchObject({ attempt: 1, reason: "env_integration_gateway_intercepts" });
+    expect(JSON.stringify(block)).toContain("the gateway intercepts TLS");
+    expect(r.inbound).toHaveLength(0);
+    expect(existsSync(r.root)).toBe(false);
+    // The probe ran for this task and attempt, on the route alone.
+    expect(seen).toEqual([
+      [
+        [{ name: "staging", server: "https://k8s.example.test:6443", ca_data: null }],
+        { taskId: TASK, attempt: 1 },
+      ],
+    ]);
+    expect(JSON.stringify(r.w.calls.filter((c) => c.path.endsWith("/block")))).not.toContain(TOKEN);
+    expect(r.logs.join("\n")).not.toContain(TOKEN);
+  });
+
+  it("blocks when no route probe is configured", async () => {
+    const r = await run("anthropic", "ready", null);
+    await until(() => r.posts("/block").length > 0, 8000, "the block");
+    expect(r.posts("/block")[0]!.body).toMatchObject({
+      reason: "env_integration_gateway_intercepts",
+    });
+    expect(r.inbound).toHaveLength(0);
+    expect(existsSync(r.root)).toBe(false);
+  });
 });

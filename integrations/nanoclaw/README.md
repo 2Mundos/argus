@@ -455,6 +455,17 @@ removed when the attempt ends, and stale ones are swept at start. Deleting the
 file does not revoke the token: revoke it at the cluster as well
 ([spec](../../docs/specs/integrations.spec.md) 3.6).
 
+Before a kubeconfig is written or replaced, `argus-integrations-route.ts` probes
+each cluster through a short gateway lease of the worker's agent group: a CONNECT
+with the session's `Proxy-Authorization`, then a TLS handshake only, verified
+against the integration's CA. If the gateway intercepts TLS, refuses the CONNECT or
+is missing, the attempt blocks as `env_integration_gateway_intercepts` and no file
+is left. OneCLI v1.42.0 intercepts every authenticated CONNECT, so against it every
+Kubernetes task blocks until OneCLI offers an authenticated per-agent CONNECT
+passthrough (spec 3.6 "Gateway path"); this is unverified against a live gateway.
+An x509 error from kubectl through the gateway is an environment block: never
+disable TLS verification, add the gateway CA, unset `HTTPS_PROXY` or set `NO_PROXY`.
+
 Activation: `install.sh` and `pnpm run build`, rebuild the tools layer
 (`provision.sh`, for `kubectl`), recreate the instances, then add
 `task-integrations` to the pool's capabilities.
