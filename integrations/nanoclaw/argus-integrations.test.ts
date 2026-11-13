@@ -72,6 +72,7 @@ function fakeArgus(
     name: e.name ?? `cluster-${i}`,
     namespace: e.namespace ?? "team-a",
     secret_version: e.secret_version ?? 1,
+    config_version: e.config_version ?? 1,
     expires_at: e.expires_at ?? "2026-12-01T00:00:00Z",
     readiness: e.readiness ?? "ready",
     token: e.token ?? `${SECRET}-${i}`,
@@ -105,6 +106,7 @@ function fakeArgus(
         access: "read_only",
         token: r.token,
         secret_version: r.secret_version,
+        config_version: r.config_version,
         expires_at: r.expires_at,
       } satisfies KubernetesCredential;
     },
@@ -418,6 +420,9 @@ describe("installTaskIntegrations", () => {
     argus.rows[0]!.readiness = "revoked";
     expect(await one!.authorize()).toBe(false);
     expect(await two!.authorize()).toBe(true);
+    argus.rows[1]!.config_version = 2;
+    expect(await two!.authorize()).toBe(false);
+    argus.rows[1]!.config_version = 1;
     argus.rows[1]!.secret_version = 2;
     expect(await two!.authorize()).toBe(false);
     argus.rows.splice(1, 1);
@@ -503,6 +508,20 @@ describe("recheckTaskIntegrations", () => {
     expect(readdirSync(path.dirname(file))).toEqual([KUBECONFIG_FILE]);
   });
 
+  it("re-fetches and re-grants after an admin edits the config", async () => {
+    const g = group();
+    const argus = fakeArgus();
+    const inst = await installed(g, argus);
+    argus.rows[0].config_version = 2;
+    argus.rows[0].namespace = "team-b";
+    const route = fakeRoute();
+    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
+    expect(r.state).toBe("refreshed");
+    expect(route.opened.map((o) => o.who)).toEqual([{ taskId: TASK, attempt: 1 }]);
+    expect(r.installed?.integrations[0]).toMatchObject({ config_version: 2, namespace: "team-b" });
+    expect(readFileSync(hostPath(g, inst.kubeconfig), "utf8")).toContain("team-b");
+  });
+
   it("removes the file and revokes when the rotated credential gets no route", async () => {
     const g = group();
     const argus = fakeArgus();
@@ -581,6 +600,7 @@ it("renderKubeconfig never emits insecure-skip-tls-verify, nor a cluster without
     access: "read_only",
     token: "t",
     secret_version: 1,
+    config_version: 1,
     expires_at: null,
   };
   const text = renderKubeconfig([cred], { i: grantUrl("i") });

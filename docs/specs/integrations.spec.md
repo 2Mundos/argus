@@ -42,9 +42,15 @@ agents lease) and typed [Settings](settings.spec.md) (which never hold a secret)
 Table `integrations`: `id`, `project` (FK, never `global`), `kind`, `name` (unique
 among the project's active integrations, `^[a-z0-9][a-z0-9-]{0,62}$`), `config`
 (non-secret JSON, 3.2/3.3), `access` (`read_only` | `read_write`), `secret_ref`,
-`secret_version`, `state` (`active` | `revoked`), `validation` (`unchecked` | `ok` |
-`failed`), `validation_detail`, `validated_at`, `created_at`/`created_by`,
-`updated_at`, `rotated_at`, `revoked_at`/`revoked_by`, `expires_at`.
+`secret_version`, `config_version`, `state` (`active` | `revoked`), `validation`
+(`unchecked` | `ok` | `failed`), `validation_detail`, `validated_at`,
+`created_at`/`created_by`, `updated_at`, `rotated_at`, `revoked_at`/`revoked_by`,
+`expires_at`.
+
+Responses add `version` (the row's `updated_at`, which every change moves forward;
+an edit passes it back, 3.4) and, for MCP, `tool_policy` (3.2). `config_version`
+starts at 1 and every config or access edit raises it, as rotation raises
+`secret_version`.
 
 `expires_at` is when the upstream credential stops working, or null when unknown.
 Create and rotate take an optional `expires_at` (with a timezone, in the future) and
@@ -82,10 +88,25 @@ before any network access, including credentials read back from the store.
 
 ## 3.2 MCP connections
 
-`config`: `{url}`, an `https://` URL without user info, query or fragment (a token in
-a URL would be stored in plain text). Authentication is a bearer token. `access`
-records what the admin intends the server's tools to do; Argus cannot narrow an MCP
-server's tools, so it is a label, shown as such.
+`config`: `{url, tools?}`. `url` is an `https://` URL without user info, query or
+fragment (a token in a URL would be stored in plain text). Authentication is a
+bearer token.
+
+`tools` is the admin's explicit allowlist: 1–128 MCP tool names
+(`^[A-Za-z0-9_.-]{1,128}$`, case-sensitive), stored sorted and without duplicates.
+Argus cannot tell from a server which of its tools only read, so the list is
+trusted as the admin wrote it, not verified against the server. Each MCP record
+reports a `tool_policy`:
+
+| `tool_policy` | When | A worker may use |
+| --- | --- | --- |
+| `allowlist` | `tools` is set | only the listed tools |
+| `all` | no `tools`, `access` `read_write` | every tool the server lists |
+| `unknown` | no `tools`, `access` `read_only` | nothing: tool coverage is unknown |
+
+A `read_only` connection without an allowlist is therefore unusable by workers until
+an admin adds one (3.4). No MCP connection reaches a worker yet (3.6); the policy
+is what that delivery will enforce.
 
 **OAuth is not available.** The MCP authorization flow needs a registered redirect
 URL, a refresh loop, and re-delivery of refreshed tokens to an attempt that is
@@ -107,28 +128,41 @@ Admin token only (`403` otherwise); a missing token is `401`.
 - `GET /api/projects/{slug}/integrations`, `POST` same path (create).
 - `GET /api/projects/{slug}/integrations/{id}`, and `POST …/{id}/validate`,
   `…/{id}/rotate` (`{secret, expires_at?}`), `…/{id}/revoke`.
+- `PATCH /api/projects/{slug}/integrations/{id}` (`{expected_version, config?,
+  access?}`): corrects the non-secret fields of an active integration. It keeps the
+  id, the credential and `secret_version`, and neither reads nor takes a secret.
+  `config` replaces the whole config and passes the same checks as create (scheme,
+  user info, query, fragment, keys, MCP `tools`; `422 config_invalid`); the
+  validation request that follows applies the same address, DNS-pinning and
+  no-redirect rules. A stale `expected_version` is `409 stale_version` with the
+  current version in `details`; a revoked record is `409 integration_revoked`.
+  A change raises `config_version` and resets validation to `unchecked`; saving
+  what was read changes and records nothing.
 - `PUT /api/tasks/{id}/integrations` (`{expected_version, integrations}`): a task's
   opt-in (3.6). The task's `integrations` field lists the selected ids.
 
 An id outside `{slug}` is `404`, the same as an unknown id. Responses never carry the
 secret: they say `has_secret`. Rotating or revoking a revoked integration is `409
 integration_revoked`. Every change records an event with subject `integration` and no
-secret: `integration.created`, `.validated` (`{status, detail}`), `.rotated`, and
-`.revoked`. Opt-in and delivery record task events (3.6).
+secret: `integration.created`, `.validated` (`{status, detail}`), `.updated`
+(`{name, config_version, changes}`, each changed key with `before` and `after`; a
+CA bundle appears as a `sha256:` digest), `.rotated`, and `.revoked`. Opt-in and delivery record task events (3.6).
 
 Two worker routes are left out of the generated API contract: only a NanoClaw
 channel calls them, with a worker token (`403` for admin and orchestrator tokens):
 
 - `GET /api/tasks/{id}/integrations/status?attempt=N`: non-secret; each selected
-  integration's id, name, namespace, `secret_version`, `expires_at` and `readiness`.
+  integration's id, name, namespace, `secret_version`, `config_version`,
+  `expires_at` and `readiness`.
 - `POST /api/tasks/{id}/integrations/{iid}/credential` (`{attempt, secret_version?}`):
   the only response that carries a token, with `Cache-Control: no-store`.
 
 ## 3.5 Validation
 
 `POST …/validate` makes the network check outside any write transaction, then records
-`ok` or `failed` with a short detail and `validated_at`, unless the secret was rotated
-or revoked meanwhile (`409 integration_changed`). A detail never quotes a response
+`ok` or `failed` with a short detail and `validated_at`, unless the secret was rotated,
+the record revoked, or its config edited meanwhile (`409 integration_changed`): a
+result is only about the token and config it checked. A detail never quotes a response
 body or header, which could echo the token. Credentialed checks suppress the
 HTTP libraries' trace logs in their own async context, including response headers,
 reason phrases and exceptions, even when HTTP DEBUG logging is enabled. Unrelated
@@ -198,7 +232,7 @@ HTTP logging remains enabled.
   complete permission inventory. A namespace-only credential must be provisioned
   and reviewed independently of this validation.
 
-Rotation resets validation to `unchecked`.
+Rotation and a config edit reset validation to `unchecked`.
 
 ## 3.6 Worker delivery
 
@@ -232,8 +266,10 @@ checks in order:
 4. `secret_version`, when given, matches the row (`409 integration_changed`): a
    worker never receives an older token than the status it read.
 
-Success records `task.integration_delivered` (`{attempt, integration_id, name,
-secret_version}`), never the token. Errors carry fixed text and no secret. The status
+The credential carries `config_version`; a channel that receives a different one
+than its status read reads the status again. Success records
+`task.integration_delivered` (`{attempt, integration_id, name, secret_version,
+config_version}`), never the token. Errors carry fixed text and no secret. The status
 route reports the same readiness except the store-version check: rotate writes the
 store inside its transaction, so a status read may see the new token beside the old
 row, and only delivery decides.
@@ -271,8 +307,8 @@ download is SHA-256 verified and probed with `kubectl version --client`
 
 **Recheck, revocation and expiry.** On each heartbeat the channel reads the status
 again. An integration that is no longer `ready` removes the attempt's kubeconfig at
-once and revokes its route grants; a new `secret_version` replaces it with a fresh
-delivery and fresh grants, after the route probe passes again (a failing probe
+once and revokes its route grants; a new `secret_version` or `config_version`
+replaces it with a fresh delivery and fresh grants, after the route probe passes again (a failing probe
 removes the file). Revocation and expiry
 therefore take effect within one heartbeat interval. The channel removes the
 attempt directory when the attempt ends, on every path (done, failed, blocked,
@@ -291,7 +327,7 @@ service-account token there too.
 | Claude executor via `argus-delegate` | supported: gets the attempt's kubeconfig as `KUBECONFIG` |
 | Codex, Cursor, Copilot, custom, local (as engine or executor) | not supported: delivery refuses and the task blocks with `env_integration_unsupported`; `argus-delegate` refuses a non-Claude executor when a kubeconfig is installed and strips any inherited `KUBECONFIG` |
 | Built-in orchestrator | none |
-| MCP connections | not delivered to any worker |
+| MCP connections | not delivered to any worker yet (Open items) |
 
 The channel refuses as soon as the leased executor is not Claude, even if the task
 would not have delegated.
@@ -330,7 +366,9 @@ its own CONNECT broker (`argus-integrations-route.ts`) that never terminates TLS
   it.
 - **Every CONNECT is authorized** against Argus: the attempt must still hold the
   task's lease (the worker status route), and the integration must still be `ready`
-  at the `secret_version` the grant was opened for. Answers are `407` (no or unknown
+  at the `secret_version` and `config_version` the grant was opened for, so a grant
+  for an edited server stops working even if the edit is re-validated within one
+  heartbeat. Answers are `407` (no or unknown
   grant), `403` (another `host:port`, or authorization refused or failed), `405`
   (not CONNECT), `502` (the dial failed), else `200` and a byte splice. A worker's
   environment or flags cannot authorize anything: only the channel mints grants,
@@ -385,8 +423,13 @@ replaced with fixed, actionable messages so a token echoed by a server cannot be
 shown. An unsuccessful save retains only non-secret fields and needs a fresh token
 for retry.
 
-Active rows offer **Validate**, **Rotate** (new token) and **Revoke** (confirm by
-typing the name). Pending actions are disabled. Revoked rows remain visible without
+Active rows offer **Validate**, **Edit**, **Rotate** (new token) and **Revoke**
+(confirm by typing the name). **Edit** changes the target (MCP URL; Kubernetes server,
+namespace, CA bundle), the intended access and, for MCP, the tool allowlist (one name
+per line, empty for none) at the record's `version`, with no token field; it says
+that saving resets validation. A stale version, an invalid config and a revoked
+record get fixed messages. MCP rows show their tool policy: the allowlist size,
+"all tools", or "unknown coverage: unusable by workers". Pending actions are disabled. Revoked rows remain visible without
 these actions. Each row shows its expiry; the add and rotate forms take an optional
 expiry in local time. The screen shows secret-store readiness, explains that MCP
 credentials are not delivered to workers while Kubernetes ones reach only attempts of
@@ -408,7 +451,11 @@ none chosen by default, and sends the choice as `integrations`.
 ## Open items
 
 - MCP OAuth sign-in (3.2).
-- Worker delivery of MCP connections (3.6).
+- Worker delivery of MCP connections (3.6): task selection of MCP integrations;
+  session delivery through a trusted host broker that holds the token and enforces
+  `tool_policy` (refusing `unknown`); pinning the `tools/list` result; cleanup on
+  expiry, rotation, config edit, revocation and lease loss; worker guidance; end to
+  end tests against a fake HTTPS server over Streamable HTTP and legacy SSE.
 - Kubernetes delivery for engines other than Claude (3.6 engine matrix).
 - Kubernetes routing for socket-mode workers (3.6 Route).
 - Verify the route live on a worker against a real cluster, after the operator
@@ -422,8 +469,9 @@ none chosen by default, and sends the choice as `integrations`.
 
 # 6. Implementation Consequences
 
-- Migrations `0080_integrations.sql` and `0081_task_integrations.sql` (the
-  `task_integrations` table and `integrations.expires_at`); package
+- Migrations `0080_integrations.sql`, `0081_task_integrations.sql` (the
+  `task_integrations` table and `integrations.expires_at`) and
+  `0082_integration_config_version.sql`; package
   `argus_api/integrations` (service, validation, `selection`, `delivery`, routes);
   `make openapi`.
 - Dashboard: `views/Integrations.tsx`, the Setup tab in `App.tsx`,
@@ -447,7 +495,11 @@ none chosen by default, and sends the choice as `integrations`.
   authentication and modern errors, malformed responses, and credential echoes through real HTTP core tracing with
   an in-memory network backend. Store readiness, missing references and deterministic
   cancellation immediately before/after COMMIT cover database/secret/audit
-  consistency. All upstream traffic uses a fake transport and resolver.
+  consistency. Edits cover the kept credential and id, `stale_version`, revoked and
+  foreign records, create's config checks with no upstream request, the validation
+  reset, the audit diff, an edit voiding an in-flight validation, the MCP tool
+  policy, and no secret in responses, events, logs or the database. All upstream
+  traffic uses a fake transport and resolver.
 - Focused dashboard checks: `pnpm --filter @argus/dashboard exec vitest run
   src/views/Integrations.test.tsx src/views/TaskIntegrations.test.tsx
   src/App.test.tsx`, dashboard TypeScript checking,
@@ -456,13 +508,16 @@ none chosen by default, and sends the choice as `integrations`.
 - Component coverage uses a fake fetch transport through the generated client and
   real live-data loading: both forms, project isolation, loading/empty/error states,
   token clearing on success and failure, response/error non-disclosure, validation,
-  rotation, revocation confirmation and unavailable actions on revoked records.
+  rotation, editing (payload, version, tool policy, fixed errors), revocation
+  confirmation and unavailable actions on revoked records.
 - Delivery: `uv run pytest apps/api/tests/test_integration_delivery.py` covers
   selection validation and versioning, the lease binding, the engine matrix, every
-  readiness refusal, the version race and the secret-free audit event.
+  readiness refusal, the version race, config-edit fencing and the secret-free
+  audit event.
 - Channel: vitest `argus-integrations.test.ts` (paths, permissions, symlinks, atomic
   writes, rendering with a `proxy-url` per cluster, recheck, cleanup, grant
-  authorization per attempt and version, and the broker over real TLS: splice with
+  authorization per attempt, secret and config version, re-granting after a
+  config edit, and the broker over real TLS: splice with
   ciphertext only, `407`/`405`/`403`, refused authorization, DNS pinning, internal
   addresses, revocation closing tunnels, attempt fencing, tunnel lifetime, CA and
   hostname mismatch, no bridge, bad port, cluster down) and

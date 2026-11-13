@@ -54,6 +54,8 @@ export interface IntegrationState {
   name: string;
   namespace: string;
   secret_version: number;
+  /** Raised by an admin's config edit: reinstall, as for a new secret_version. */
+  config_version: number;
   expires_at: string | null;
   readiness: Readiness;
 }
@@ -68,6 +70,7 @@ export interface KubernetesCredential {
   access: "read_only" | "read_write";
   token: string;
   secret_version: number;
+  config_version: number;
   expires_at: string | null;
 }
 
@@ -351,7 +354,8 @@ async function openRoutes(
       (s) =>
         s.integration_id === c.integration_id &&
         s.readiness === "ready" &&
-        s.secret_version === c.secret_version,
+        s.secret_version === c.secret_version &&
+        s.config_version === c.config_version,
     );
   const opened = await transport.open(
     who,
@@ -385,6 +389,8 @@ async function fetchAll(
       const creds: KubernetesCredential[] = [];
       for (const s of states) {
         const c = await source.credential(taskId, s.integration_id, attempt, s.secret_version);
+        // A config edit landed after the status read: read it again, as for a rotation.
+        if (c.config_version !== s.config_version) throw { code: "integration_changed" };
         checkCredential(c, s);
         creds.push(c);
       }
@@ -419,6 +425,7 @@ function describe(
       name: c.name,
       namespace: c.namespace,
       secret_version: c.secret_version,
+      config_version: c.config_version,
       expires_at: c.expires_at,
       access: c.access,
     })),
@@ -527,8 +534,11 @@ export async function recheckTaskIntegrations(
     const why = gone.map((s) => `${s.name} (${s.readiness})`).join(", ") || "selection changed";
     return { state: "removed", installed: null, why };
   }
-  if (states.every((s) => had.get(s.integration_id)?.secret_version === s.secret_version))
-    return { state: "kept", installed };
+  const same = (s: IntegrationState) => {
+    const i = had.get(s.integration_id);
+    return i?.secret_version === s.secret_version && i.config_version === s.config_version;
+  };
+  if (states.every(same)) return { state: "kept", installed };
   try {
     const { creds } = await fetchAll(source, taskId, attempt);
     const proxies = await openRoutes(transport, source, creds, { taskId, attempt });

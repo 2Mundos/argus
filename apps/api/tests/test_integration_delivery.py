@@ -381,6 +381,46 @@ async def test_a_rotation_between_status_and_delivery_is_refused(
     assert (cred.token, cred.secret_version) == (ROTATED, 2)
 
 
+async def test_a_config_edit_fences_the_delivered_attempt(
+    db: Database, store: MemorySecretStore, world: str
+) -> None:
+    task_id = await make_task(db, world)
+    await start(db, store)
+    first = await deliver(db, store, task_id, world)
+    assert (first.config_version, first.namespace) == (1, "team-a")
+    item = await service.get(db, "demo", world)
+    await service.update(
+        db,
+        "demo",
+        world,
+        service.IntegrationUpdate(
+            expected_version=item.version, config={**K8S, "namespace": "team-b"}
+        ),
+        "admin:test",
+    )
+    # Not deliverable until validated again; the token and its version are kept.
+    [now] = await status(db, store, task_id)
+    assert (now.readiness, now.secret_version, now.config_version) == (
+        "unvalidated",
+        1,
+        2,
+    )
+    with pytest.raises(ConflictError) as err:
+        await deliver(db, store, task_id, world, version=1)
+    assert err.value.code == "integration_unvalidated"
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE integrations SET validation = 'ok' WHERE id = ?", (world,)
+        )
+    # Re-validated at the same secret_version, the new config_version still tells
+    # the channel that what it installed is stale.
+    [now] = await status(db, store, task_id)
+    assert (now.readiness, now.config_version, now.namespace) == ("ready", 2, "team-b")
+    cred = await deliver(db, store, task_id, world, version=1)
+    assert (cred.token, cred.config_version, cred.namespace) == (TOKEN, 2, "team-b")
+    assert '\\"config_version\\": 2' in await events(db)
+
+
 async def test_engines_that_cannot_be_confined_are_refused(
     db: Database, store: MemorySecretStore, world: str
 ) -> None:

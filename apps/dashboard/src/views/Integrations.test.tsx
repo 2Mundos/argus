@@ -8,6 +8,7 @@ import { Integrations } from "./Integrations";
 
 type Integration = components["schemas"]["Integration"];
 type Create = components["schemas"]["IntegrationCreate"];
+type Update = components["schemas"]["IntegrationUpdate"];
 const mock = vi.hoisted(() => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
@@ -43,6 +44,9 @@ function connection(overrides: Partial<Integration> = {}): Integration {
     revoked_at: null,
     revoked_by: null,
     expires_at: null,
+    version: timestamp,
+    config_version: 1,
+    tool_policy: (overrides.kind ?? "mcp") === "mcp" ? "unknown" : null,
     ...overrides,
   };
 }
@@ -58,6 +62,7 @@ const json = (data: unknown, status = 200) =>
 let items: Integration[];
 let projects: { slug: string; name: string }[];
 let requests: { method: string; path: string; body?: Create }[];
+let patches: Update[];
 let intercept: ((request: Request) => Response | Promise<Response> | undefined) | undefined;
 
 beforeEach(() => {
@@ -68,6 +73,7 @@ beforeEach(() => {
     { slug: "beta", name: "Beta" },
   ];
   requests = [];
+  patches = [];
   intercept = undefined;
   mock.fetch.mockReset().mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
@@ -76,6 +82,7 @@ beforeEach(() => {
         ? ((await request.clone().json()) as Create)
         : undefined;
     requests.push({ method: request.method, path, body });
+    if (request.method === "PATCH") patches.push((await request.clone().json()) as Update);
     const intercepted = intercept?.(request);
     if (intercepted) return intercepted;
     if (path === "/api/system")
@@ -104,6 +111,31 @@ beforeEach(() => {
         validated_at: null,
         rotated_at: timestamp,
       });
+    if (request.method === "PATCH") {
+      const edit = patches.at(-1) as Update;
+      if (edit.expected_version !== item.version)
+        return json({ detail: { code: "stale_version", message: "changed" } }, 409);
+      const config = edit.config ?? item.config;
+      const access = edit.access ?? item.access;
+      Object.assign(item, {
+        config,
+        access,
+        config_version: item.config_version + 1,
+        version: "2026-11-12T18:00:00Z",
+        updated_at: "2026-11-12T18:00:00Z",
+        validation: "unchecked",
+        validation_detail: null,
+        validated_at: null,
+        tool_policy:
+          item.kind !== "mcp"
+            ? null
+            : config.tools
+              ? "allowlist"
+              : access === "read_write"
+                ? "all"
+                : "unknown",
+      });
+    }
     if (path.endsWith("/revoke"))
       Object.assign(item, { state: "revoked", has_secret: false, revoked_at: timestamp });
     return json({ ...item, secret: { token: TOKEN } });
@@ -302,6 +334,98 @@ describe("Integrations management", () => {
       noSecret();
     },
   );
+
+  it("edits the MCP endpoint and tool allowlist at the read version without a token", async () => {
+    items = [connection({ validation: "ok", validated_at: timestamp })];
+    mount();
+    const user = userEvent.setup();
+    await screen.findByRole("row", { name: /docs/ });
+    expect(row().getByText(/unknown coverage; unusable by workers/)).toBeTruthy();
+    await user.click(row().getByRole("button", { name: "Edit docs" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit docs" }));
+    expect(document.querySelector("input[type=password]")).toBeNull();
+    expect(dialog.getByText(/resets validation/)).toBeTruthy();
+    const url = dialog.getByLabelText("MCP server URL") as HTMLInputElement;
+    expect(url.value).toBe("https://mcp.example/api");
+    await user.clear(url);
+    await user.type(url, "https://mcp-2.example/api");
+    await user.type(dialog.getByLabelText(/Tool allowlist/), "search\n fetch \n\n");
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    await row().findByText("Tool allowlist: 2 tools");
+    expect(patches).toEqual([
+      {
+        expected_version: timestamp,
+        config: { url: "https://mcp-2.example/api", tools: ["search", "fetch"] },
+        access: "read_only",
+      },
+    ]);
+    expect(requests.find((r) => r.method === "PATCH")?.path).toBe(
+      "/api/projects/alpha/integrations/mcp-1",
+    );
+    expect(row().getByText("Validation: unchecked")).toBeTruthy();
+    expect(row().getByText("https://mcp-2.example/api")).toBeTruthy();
+    // Clearing the list removes the allowlist; read and write then allows every tool.
+    await user.click(row().getByRole("button", { name: "Edit docs" }));
+    const again = within(screen.getByRole("dialog", { name: "Edit docs" }));
+    expect((again.getByLabelText(/Tool allowlist/) as HTMLTextAreaElement).value).toBe(
+      "search\nfetch",
+    );
+    await user.clear(again.getByLabelText(/Tool allowlist/));
+    await user.selectOptions(again.getByLabelText("Access"), "read_write");
+    await user.click(again.getByRole("button", { name: "Save changes" }));
+    await row().findByText("Tools: all tools the server lists");
+    expect(patches.at(-1)).toEqual({
+      expected_version: "2026-11-12T18:00:00Z",
+      config: { url: "https://mcp-2.example/api" },
+      access: "read_write",
+    });
+    noSecret();
+  });
+
+  it("edits a Kubernetes target and keeps its CA bundle", async () => {
+    items = [
+      connection({
+        kind: "kubernetes",
+        config: { server: "https://cluster.example", namespace: "tools", ca_data: CA },
+      }),
+    ];
+    mount();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit docs" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit docs" }));
+    expect(dialog.queryByLabelText(/Tool allowlist/)).toBeNull();
+    await user.clear(dialog.getByLabelText("Namespace"));
+    await user.type(dialog.getByLabelText("Namespace"), "team-b");
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    await row().findByText("Target namespace: team-b");
+    expect(patches).toEqual([
+      {
+        expected_version: timestamp,
+        config: { server: "https://cluster.example", namespace: "team-b", ca_data: CA },
+        access: "read_only",
+      },
+    ]);
+  });
+
+  it.each([
+    [409, "stale_version", /changed this connection since you opened it/],
+    [409, "integration_revoked", /was revoked/],
+    [422, "config_invalid", /tool names/],
+  ])("shows a fixed message for a %i %s edit", async (status, code, message) => {
+    items = [connection()];
+    intercept = (req) =>
+      req.method === "PATCH"
+        ? json({ detail: { code, message: `bad ${TOKEN}`, details: [TOKEN] } }, status)
+        : undefined;
+    mount();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit docs" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Edit docs" }));
+    await user.click(dialog.getByRole("button", { name: "Save changes" }));
+    expect((await dialog.findByRole("alert")).textContent).toMatch(message);
+    expect(row().getByText("Validation: unchecked")).toBeTruthy();
+    noSecret();
+  });
 
   it("keeps a revoked connection disabled when an older list response arrives", async () => {
     items = [connection()];

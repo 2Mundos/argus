@@ -11540,6 +11540,10 @@
             "title": "Config",
             "type": "object"
           },
+          "config_version": {
+            "title": "Config Version",
+            "type": "integer"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -11628,6 +11632,22 @@
             "title": "State",
             "type": "string"
           },
+          "tool_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "allowlist",
+                  "all",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Policy"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -11664,6 +11684,10 @@
               }
             ],
             "title": "Validation Detail"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
           }
         },
         "required": [
@@ -11684,7 +11708,10 @@
           "updated_at",
           "rotated_at",
           "revoked_at",
-          "revoked_by"
+          "revoked_by",
+          "version",
+          "config_version",
+          "tool_policy"
         ],
         "title": "Integration",
         "type": "object"
@@ -11766,6 +11793,49 @@
           "secret"
         ],
         "title": "IntegrationRotate",
+        "type": "object"
+      },
+      "IntegrationUpdate": {
+        "additionalProperties": false,
+        "description": "Correct the non-secret fields; the credential and its version are kept.",
+        "properties": {
+          "access": {
+            "anyOf": [
+              {
+                "enum": [
+                  "read_only",
+                  "read_write"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "expected_version": {
+            "minLength": 1,
+            "title": "Expected Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "IntegrationUpdate",
         "type": "object"
       },
       "InterruptionAssessment": {
@@ -33670,6 +33740,71 @@
           }
         ],
         "summary": "Get Integration",
+        "tags": [
+          "integrations"
+        ]
+      },
+      "patch": {
+        "description": "Correct the config or access, keeping the credential: pass the `version` you\nread as `expected_version`. Validation goes back to `unchecked`.",
+        "operationId": "update_integration_api_projects__slug__integrations__integration_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Integration",
         "tags": [
           "integrations"
         ]

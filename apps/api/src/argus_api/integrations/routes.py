@@ -24,6 +24,7 @@ from argus_api.integrations.service import (
     Integration,
     IntegrationCreate,
     IntegrationRotate,
+    IntegrationUpdate,
 )
 
 router = APIRouter(tags=["integrations"])
@@ -75,6 +76,15 @@ async def get_integration(
     slug: str, integration_id: str, db: DbDep, _: AdminDep
 ) -> Integration:
     return await service.get(db, slug, integration_id)
+
+
+@router.patch("/projects/{slug}/integrations/{integration_id}")
+async def update_integration(
+    slug: str, integration_id: str, body: IntegrationUpdate, db: DbDep, caller: AdminDep
+) -> Integration:
+    """Correct the config or access, keeping the credential: pass the `version` you
+    read as `expected_version`. Validation goes back to `unchecked`."""
+    return await service.update(db, slug, integration_id, body, caller.actor)
 
 
 @router.post("/projects/{slug}/integrations/{integration_id}/validate")

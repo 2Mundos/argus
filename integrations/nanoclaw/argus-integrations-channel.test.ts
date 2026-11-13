@@ -132,6 +132,7 @@ function world(provider: string, readiness: string) {
           name: "staging",
           namespace: "team-a",
           secret_version: state.version,
+          config_version: 1,
           expires_at: "2026-12-01T00:00:00Z",
           readiness: state.readiness,
         },
@@ -151,6 +152,7 @@ function world(provider: string, readiness: string) {
         access: "read_only",
         token: `${TOKEN}-v${state.version}`,
         secret_version: state.version,
+        config_version: 1,
         expires_at: "2026-12-01T00:00:00Z",
       });
     }

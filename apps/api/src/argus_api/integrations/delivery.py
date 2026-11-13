@@ -67,6 +67,8 @@ class IntegrationState(BaseModel):
     name: str
     namespace: str
     secret_version: int
+    # A config edit raises it (3.4): reinstall, as for a new secret_version.
+    config_version: int
     expires_at: datetime | None
     readiness: Readiness
 
@@ -90,6 +92,7 @@ class KubernetesCredential(BaseModel):
     access: Literal["read_only", "read_write"]
     token: str
     secret_version: int
+    config_version: int
     expires_at: datetime | None
 
 
@@ -240,6 +243,7 @@ async def status(
             name=r["name"],
             namespace=json.loads(r["config"])["namespace"],
             secret_version=r["secret_version"],
+            config_version=r["config_version"],
             expires_at=r["expires_at"],
             readiness=_readiness(r, now, store, store_available, exact_version=False),
         )
@@ -309,6 +313,7 @@ async def deliver(
             "integration_id": row["id"],
             "name": name,
             "secret_version": row["secret_version"],
+            "config_version": row["config_version"],
         },
     )
     return KubernetesCredential(
@@ -320,5 +325,6 @@ async def deliver(
         access=row["access"],
         token=stored["token"],
         secret_version=row["secret_version"],
+        config_version=row["config_version"],
         expires_at=row["expires_at"],
     )
