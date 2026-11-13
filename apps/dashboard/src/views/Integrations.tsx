@@ -96,12 +96,13 @@ export function Integrations() {
       />
       <div className="card">
         <p>
-          Credentials are stored in the encrypted SOPS secret store. MCP connections are not yet
-          injected into task workers. A Kubernetes connection reaches a worker only when a task of
-          the same project selects it: each attempt of that task on a Claude engine gets an
-          ephemeral kubeconfig pinned to the target namespace, removed when the attempt ends or the
-          connection is revoked, rotated or expires. Removing that file does not revoke the token;
-          revoke it at the cluster too.
+          Credentials are stored in the encrypted SOPS secret store. A connection reaches a worker
+          only when a task of the same project selects it, and only on a Claude engine. A Kubernetes
+          connection becomes an ephemeral kubeconfig pinned to the target namespace. An MCP
+          connection becomes a per-attempt server URL on the worker's Argus broker, which adds the
+          token and passes only the allowed tools; the session never sees the token. Either ends
+          when the attempt ends or the connection is revoked, edited, rotated or expires. That does
+          not revoke the token; revoke it at the cluster or MCP server too.
         </p>
         <p className="muted small">
           Encrypted secret store:{" "}
@@ -214,9 +215,9 @@ function ProjectIntegrations({ project }: { project: string }) {
         </div>
       )}
       <p className="muted small">
-        Access records your intent; MCP permissions are enforced by the server, and Kubernetes
-        permissions by its RBAC bindings. Revoked records remain visible. To reconnect, add a new
-        integration with a new token.
+        Argus limits MCP workers to the tool allowlist (read only needs one); what each tool does is
+        up to the server. Kubernetes permissions are enforced by its RBAC bindings. Revoked records
+        remain visible. To reconnect, add a new integration with a new token.
       </p>
       {adding && (
         <CredentialForm

@@ -21,12 +21,12 @@ export const BLOCK_COPY: Record<string, string> = {
   env_input_limit: "the task inputs exceed the worker's size or file limits",
   env_integration_unavailable:
     "a selected integration is revoked, expired, unvalidated or its credential is unavailable",
-  env_integration_unsupported: "the worker's engine cannot use Kubernetes integrations",
+  env_integration_unsupported: "the worker's engine cannot use task integrations (Claude only)",
   env_integration_invalid: "the worker could not install a selected integration safely",
   env_integration_gateway_intercepts:
-    "TLS to a cluster is intercepted or does not match its CA, so its credential would be exposed",
+    "TLS to a cluster or MCP server is intercepted or does not verify, so its credential would be exposed",
   env_integration_route_unavailable:
-    "the worker's Kubernetes route is not available (no docker bridge, or the cluster is unreachable)",
+    "the worker's Kubernetes route or MCP broker is not available (no docker bridge, or the server is unreachable)",
   env_guard_missing: "the worker image has no command guard hook for its engine",
   env_oom: "sessions on its pool keep running out of memory; raise the pool's memory or unblock",
   worker_env: "the worker reported a missing workspace, tool or credential",

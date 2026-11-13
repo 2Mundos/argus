@@ -3311,10 +3311,11 @@ export interface paths {
         get?: never;
         /**
          * Set Task Integrations
-         * @description Opt a task into Kubernetes integrations of its own project (ids only), or
-         *     clear the list. Each id must be active and of kind `kubernetes`; not while an
-         *     attempt runs. Selecting is the only grant: capabilities, titles and pool
-         *     labels never give a task a credential.
+         * @description Opt a task into Kubernetes and MCP integrations of its own project (ids
+         *     only), or clear the list. Each id must be active, and an MCP one must not be
+         *     read-only without a tool allowlist; not while an attempt runs. Selecting is
+         *     the only grant: capabilities, titles and pool labels never give a task a
+         *     credential.
          */
         put: operations["set_task_integrations_api_tasks__task_id__integrations_put"];
         post?: never;

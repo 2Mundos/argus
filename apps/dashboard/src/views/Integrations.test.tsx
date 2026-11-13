@@ -198,7 +198,7 @@ describe("Integrations management", () => {
     expect(row("cluster").getByText("token rejected (HTTP 401)")).toBeTruthy();
     expect(row("cluster").getByText(/Expires:/)).toBeTruthy();
     expect(row().queryByText(/Expires:/)).toBeNull();
-    expect(screen.getByText(/not yet injected into task workers/)).toBeTruthy();
+    expect(screen.getByText(/the session never sees the token/)).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Global" })).toBeNull();
     expect(screen.queryByText("beta-only")).toBeNull();
     await userEvent.selectOptions(screen.getByLabelText("Project"), "beta");

@@ -473,8 +473,8 @@ class TaskCreate(BaseModel):
     # Required; a subtask may omit it to inherit its parent's project.
     project: str | None = None
     knowledge: list[str] = []  # page ids pinned to the task, delivered on claim
-    # Kubernetes integration ids of the task's project whose credential the worker
-    # installs for each attempt (integrations spec 3.6). Admin only; empty: none.
+    # Integration ids (Kubernetes or MCP) of the task's project whose credential the
+    # worker installs for each attempt (integrations spec 3.6). Admin only; empty: none.
     integrations: list[str] = Field(default=[], max_length=8)
     max_attempts: int | None = Field(default=None, ge=1, le=20)
     lease_ttl_s: int = Field(default=120, ge=10, le=3600)

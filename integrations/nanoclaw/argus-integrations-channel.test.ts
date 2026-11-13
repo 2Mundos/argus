@@ -1,9 +1,10 @@
 /**
- * Kubernetes integrations through the channel (integrations spec 3.6): a fake
+ * Kubernetes and MCP integrations through the channel (integrations spec 3.6): a fake
  * Argus and OneCLI in one fetch, no network, no model, no cluster. The kubeconfig is
  * installed before the prompt, named but never quoted in it, removed (and its route
  * grants revoked) on revocation and when the attempt ends, and a non-deliverable
- * integration or an unproven route blocks the attempt.
+ * integration or an unproven route blocks the attempt. An MCP integration reaches the
+ * session as a broker grant URL in its MCP config, removed the same ways.
  */
 import {
   existsSync,
@@ -24,6 +25,8 @@ import {
   type IntegrationRoute,
   type IntegrationTransport,
   KUBECONFIG_FILE,
+  type McpServerEntry,
+  type McpTransport,
   type RouteResult,
   TASK_INTEGRATIONS_DIR,
 } from "./argus-integrations.js";
@@ -66,7 +69,7 @@ const lease = (provider: string): AccountLease => ({
 
 type Call = { method: string; path: string; body: any };
 
-function world(provider: string, readiness: string) {
+function world(provider: string, readiness: string, kind: "kubernetes" | "mcp" = "kubernetes") {
   const calls: Call[] = [];
   const state = { readiness, version: 1, rejectHeartbeat: false, holdRotation: false };
   let releaseOnHeartbeat: (() => void) | null = null;
@@ -129,8 +132,10 @@ function world(provider: string, readiness: string) {
       return json(200, [
         {
           integration_id: "int-1",
+          kind,
           name: "staging",
-          namespace: "team-a",
+          namespace: kind === "kubernetes" ? "team-a" : null,
+          tool_policy: kind === "mcp" ? "allowlist" : null,
           secret_version: state.version,
           config_version: 1,
           expires_at: "2026-12-01T00:00:00Z",
@@ -143,7 +148,22 @@ function world(provider: string, readiness: string) {
         await new Promise<void>((r) => {
           releaseOnHeartbeat = r;
         });
+      if (kind === "mcp")
+        return json(200, {
+          kind,
+          integration_id: "int-1",
+          name: "staging",
+          url: "https://mcp.example.test/mcp",
+          tools: ["search"],
+          tool_policy: "allowlist",
+          access: "read_only",
+          token: `${TOKEN}-v${state.version}`,
+          secret_version: state.version,
+          config_version: 1,
+          expires_at: "2026-12-01T00:00:00Z",
+        });
       return json(200, {
+        kind,
         integration_id: "int-1",
         name: "staging",
         server: "https://k8s.example.test:6443",
@@ -184,12 +204,47 @@ function recordingRoute(refuse: () => RouteResult | null = () => null) {
   return { opened, revoked, transport };
 }
 
+const GRANT = "http://172.17.0.1:7001/mcp/fake-grant";
+
+/** An MCP broker and session config that grant and record. */
+function recordingMcp() {
+  const tokens: string[] = [];
+  const revoked: Array<[string, number | undefined]> = [];
+  let renewed = 0;
+  const sessions: Array<Record<string, McpServerEntry>> = [];
+  const broker: McpTransport = {
+    open: async (_who, routes) => {
+      tokens.push(...routes.map((x) => x.token));
+      return {
+        ok: true,
+        servers: Object.fromEntries(
+          routes.map((x) => [x.integration_id, { type: "http", url: GRANT }]),
+        ),
+      };
+    },
+    renew: () => {
+      renewed++;
+    },
+    revoke: (taskId, attempt) => {
+      revoked.push([taskId, attempt]);
+    },
+  };
+  const sessionMcp = {
+    set: async (servers: Record<string, McpServerEntry>) => {
+      sessions.push(servers);
+    },
+  };
+  return { tokens, revoked, sessions, broker, sessionMcp, renewed: () => renewed };
+}
+
 async function run(
   provider = "anthropic",
   readiness = "ready",
   route: ReturnType<typeof recordingRoute> | null = recordingRoute(),
+  mcp?: ReturnType<typeof recordingMcp>,
+  kind: "kubernetes" | "mcp" = mcp ? "mcp" : "kubernetes",
 ) {
-  const w = world(provider, readiness);
+  const w = world(provider, readiness, kind);
   const groupDir = mkdtempSync(path.join(os.tmpdir(), "argus-integrations-channel-"));
   tmp.push(groupDir);
   const inbound: any[] = [];
@@ -218,6 +273,7 @@ async function run(
     heartbeatMs: 50,
     workspaceRoot: async () => groupDir,
     ...(route ? { integrationRoute: route.transport } : {}),
+    ...(mcp ? { integrationMcp: mcp.broker, sessionMcp: mcp.sessionMcp } : {}),
     sessionImage: async () => "argus-nanoclaw-agent:test",
     readImageFile: async () =>
       readFileSync(new URL("./engines/claude-managed-settings.json", import.meta.url), "utf8"),
@@ -424,5 +480,36 @@ describe("task integrations through the channel", () => {
     });
     expect(r.inbound).toHaveLength(0);
     expect(existsSync(r.root)).toBe(false);
+  });
+
+  it("points the session at an MCP grant, never the token, and removes it when the attempt ends", async () => {
+    const mcp = recordingMcp();
+    const r = await run("anthropic", "ready", null, mcp);
+    await until(() => r.inbound.length > 0, 8000, "the task prompt");
+    // The broker holds the token; the session config and the prompt only the grant.
+    expect(mcp.tokens).toEqual([`${TOKEN}-v1`]);
+    expect(mcp.sessions[mcp.sessions.length - 1]).toEqual({
+      "argus-integration-staging": { type: "http", url: GRANT },
+    });
+    const prompt = r.inbound[0].content.text as string;
+    expect(prompt).toContain("mcp__argus-integration-staging__search");
+    expect(prompt).not.toContain(TOKEN);
+    expect(prompt).not.toContain(GRANT);
+    await until(() => mcp.renewed() > 0, 8000, "a heartbeat renews the grant");
+
+    r.w.state.readiness = "revoked";
+    await until(() => mcp.revoked.length > 0, 8000, "the grant is revoked");
+    expect(mcp.sessions[mcp.sessions.length - 1]).toEqual({});
+    expect(r.posts("/complete")).toHaveLength(0);
+    expect(r.logs.join("\n")).not.toContain(TOKEN);
+    expect(r.logs.join("\n")).not.toContain(GRANT);
+  });
+
+  it("blocks an MCP integration when no broker is configured", async () => {
+    const r = await run("anthropic", "ready", null, undefined, "mcp");
+    await until(() => r.posts("/block").length > 0, 8000, "the block");
+    expect(r.posts("/block")[0]!.body).toMatchObject({
+      reason: "env_integration_route_unavailable",
+    });
   });
 });

@@ -37479,7 +37479,7 @@
     },
     "/api/tasks/{task_id}/integrations": {
       "put": {
-        "description": "Opt a task into Kubernetes integrations of its own project (ids only), or\nclear the list. Each id must be active and of kind `kubernetes`; not while an\nattempt runs. Selecting is the only grant: capabilities, titles and pool\nlabels never give a task a credential.",
+        "description": "Opt a task into Kubernetes and MCP integrations of its own project (ids\nonly), or clear the list. Each id must be active, and an MCP one must not be\nread-only without a tool allowlist; not while an attempt runs. Selecting is\nthe only grant: capabilities, titles and pool labels never give a task a\ncredential.",
         "operationId": "set_task_integrations_api_tasks__task_id__integrations_put",
         "parameters": [
           {

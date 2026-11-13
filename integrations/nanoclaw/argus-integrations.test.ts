@@ -27,6 +27,11 @@ import {
   integrationLines,
   KUBECONFIG_FILE,
   type KubernetesCredential,
+  type McpCredential,
+  type McpOpenResult,
+  type McpRoute,
+  type McpServerEntry,
+  type McpTransport,
   type RouteResult,
   recheckTaskIntegrations,
   removeTaskIntegrations,
@@ -34,6 +39,7 @@ import {
   sweepTaskIntegrations,
   TASK_INTEGRATIONS_DIR,
   taskIntegrationsPath,
+  withIntegrationServers,
 } from "./argus-integrations.js";
 import {
   createKubernetesRoute,
@@ -65,12 +71,24 @@ class ApiError extends Error {
 
 /** An in-memory Argus: one integration per entry, current version and readiness. */
 function fakeArgus(
-  entries: Array<Partial<IntegrationState> & { token?: string; ca_data?: string | null }> = [{}],
+  entries: Array<
+    Partial<IntegrationState> & {
+      token?: string;
+      ca_data?: string | null;
+      tools?: string[] | null;
+      url?: string;
+    }
+  > = [{}],
 ) {
   const rows = entries.map((e, i) => ({
     integration_id: e.integration_id ?? `int-${i}`,
-    name: e.name ?? `cluster-${i}`,
-    namespace: e.namespace ?? "team-a",
+    kind: e.kind ?? "kubernetes",
+    name: e.name ?? `${e.kind === "mcp" ? "server" : "cluster"}-${i}`,
+    namespace: e.kind === "mcp" ? null : (e.namespace ?? "team-a"),
+    tool_policy:
+      e.kind === "mcp" ? (e.tool_policy ?? (e.tools === null ? "all" : "allowlist")) : null,
+    tools: e.tools === undefined ? ["search"] : e.tools,
+    url: e.url ?? "https://mcp.example.test/mcp",
     secret_version: e.secret_version ?? 1,
     config_version: e.config_version ?? 1,
     expires_at: e.expires_at ?? "2026-12-01T00:00:00Z",
@@ -85,7 +103,7 @@ function fakeArgus(
     status: async (taskId, attempt) => {
       calls.push(`status:${taskId}:${attempt}`);
       if (statusError) throw statusError;
-      return rows.map(({ token: _t, ca_data: _c, ...s }) => ({ ...s }));
+      return rows.map(({ token: _t, ca_data: _c, tools: _l, url: _u, ...s }) => ({ ...s }));
     },
     credential: async (taskId, id, attempt, version) => {
       calls.push(`credential:${id}:${attempt}:${version}`);
@@ -97,11 +115,26 @@ function fakeArgus(
       }
       if (version !== r.secret_version) throw new ApiError(409, "integration_changed");
       if (r.readiness !== "ready") throw new ApiError(409, `integration_${r.readiness}`);
+      if (r.kind === "mcp")
+        return {
+          kind: "mcp",
+          integration_id: r.integration_id,
+          name: r.name,
+          url: r.url,
+          tools: r.tool_policy === "all" ? null : r.tools,
+          tool_policy: r.tool_policy === "all" ? "all" : "allowlist",
+          access: r.tool_policy === "all" ? "read_write" : "read_only",
+          token: r.token,
+          secret_version: r.secret_version,
+          config_version: r.config_version,
+          expires_at: r.expires_at,
+        } satisfies McpCredential;
       return {
+        kind: "kubernetes",
         integration_id: r.integration_id,
         name: r.name,
         server: "https://k8s.example.test:6443",
-        namespace: r.namespace,
+        namespace: r.namespace ?? "",
         ca_data: r.ca_data,
         access: "read_only",
         token: r.token,
@@ -496,7 +529,7 @@ describe("recheckTaskIntegrations", () => {
     argus.rows[0].secret_version = 2;
     argus.rows[0].token = `${SECRET}-v2`;
     const route = fakeRoute();
-    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
+    const r = await recheckTaskIntegrations(g, inst, argus.source, { transport: route.transport });
     expect(r.state).toBe("refreshed");
     // The rotated credential got a fresh, proven grant before it replaced the file.
     expect(route.opened.map((o) => o.who)).toEqual([{ taskId: TASK, attempt: 1 }]);
@@ -515,7 +548,7 @@ describe("recheckTaskIntegrations", () => {
     argus.rows[0].config_version = 2;
     argus.rows[0].namespace = "team-b";
     const route = fakeRoute();
-    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
+    const r = await recheckTaskIntegrations(g, inst, argus.source, { transport: route.transport });
     expect(r.state).toBe("refreshed");
     expect(route.opened.map((o) => o.who)).toEqual([{ taskId: TASK, attempt: 1 }]);
     expect(r.installed?.integrations[0]).toMatchObject({ config_version: 2, namespace: "team-b" });
@@ -532,7 +565,7 @@ describe("recheckTaskIntegrations", () => {
       reason: "env_integration_gateway_intercepts",
       error: "intercepted",
     }));
-    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
+    const r = await recheckTaskIntegrations(g, inst, argus.source, { transport: route.transport });
     expect(r).toMatchObject({ state: "removed", installed: null });
     expect(existsSync(taskIntegrationsPath(g, TASK))).toBe(false);
     expect(route.revoked).toEqual([[TASK, undefined]]);
@@ -551,7 +584,7 @@ describe("recheckTaskIntegrations", () => {
     argus.rows[0].readiness = "revoked";
     change(argus);
     const route = fakeRoute();
-    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
+    const r = await recheckTaskIntegrations(g, inst, argus.source, { transport: route.transport });
     expect(r.state).toBe("removed");
     expect(route.revoked).toEqual([[TASK, undefined]]);
     expect(route.opened).toEqual([]);
@@ -564,6 +597,246 @@ describe("recheckTaskIntegrations", () => {
     argus.rows.push({ ...argus.rows[0], integration_id: "int-9", name: "late" });
     const r = await recheckTaskIntegrations(g, inst, argus.source);
     expect(r.state).toBe("removed");
+  });
+});
+
+/** A broker that records what it is asked; it grants every server unless told otherwise. */
+function fakeBroker(answer?: (routes: readonly McpRoute[]) => McpOpenResult) {
+  const opened: Array<{ who: { taskId: string; attempt: number }; routes: McpRoute[] }> = [];
+  const renewed: Array<[string, number]> = [];
+  const revoked: Array<[string, number | undefined]> = [];
+  const broker: McpTransport = {
+    open: async (who, routes) => {
+      opened.push({ who, routes: [...routes] });
+      return answer
+        ? answer(routes)
+        : {
+            ok: true,
+            servers: Object.fromEntries(
+              routes.map((r) => [
+                r.integration_id,
+                {
+                  type: "http",
+                  url: `http://host.docker.internal:7001/mcp/grant-${r.integration_id}`,
+                },
+              ]),
+            ),
+          };
+    },
+    renew: (taskId, attempt) => {
+      renewed.push([taskId, attempt]);
+    },
+    revoke: (taskId, attempt) => {
+      revoked.push([taskId, attempt]);
+    },
+  };
+  const sets: Array<Record<string, McpServerEntry>> = [];
+  const sessionMcp = {
+    set: async (servers: Record<string, McpServerEntry>) => {
+      sets.push(servers);
+    },
+  };
+  return { opened, renewed, revoked, broker, sets, sessionMcp };
+}
+
+describe("MCP integrations", () => {
+  const MCP = { kind: "mcp" as const, integration_id: "mcp-0", name: "radar" };
+
+  it("replaces only the session's argus-integration servers", () => {
+    const argus = { type: "http", url: "http://argus/mcp" };
+    const now = { type: "http" as const, url: "http://broker/mcp/new" };
+    expect(
+      withIntegrationServers(
+        { argus, "argus-integration-old": { type: "sse", url: "http://broker/mcp/old" } },
+        { "argus-integration-radar": now },
+      ),
+    ).toEqual({ argus, "argus-integration-radar": now });
+    expect(withIntegrationServers(["not", "an", "object"], {})).toEqual({});
+  });
+
+  it("grants the broker the token and gives the session only grant URLs", async () => {
+    const g = group();
+    const argus = fakeArgus([
+      MCP,
+      { kind: "mcp", integration_id: "mcp-1", name: "rw", tools: null },
+    ]);
+    const b = fakeBroker();
+    const got = await install(g, argus.source, {
+      selected: ["mcp-0", "mcp-1"],
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    expect(got.ok).toBe(true);
+    if (!got.ok || !got.installed) throw new Error("not installed");
+    expect(b.opened[0]!.who).toEqual({ taskId: TASK, attempt: 1 });
+    expect(b.opened[0]!.routes.map((r) => [r.name, r.tool_policy, r.tools])).toEqual([
+      ["radar", "allowlist", ["search"]],
+      ["rw", "all", null],
+    ]);
+    expect(b.opened[0]!.routes[0]!.token).toBe(`${SECRET}-0`);
+    expect(b.sets).toEqual([
+      {
+        "argus-integration-radar": {
+          type: "http",
+          url: "http://host.docker.internal:7001/mcp/grant-mcp-0",
+        },
+        "argus-integration-rw": {
+          type: "http",
+          url: "http://host.docker.internal:7001/mcp/grant-mcp-1",
+        },
+      },
+    ]);
+    // No kubeconfig for MCP alone; the prompt names servers and tools, never a URL or token.
+    expect(got.installed.kubeconfig).toBeNull();
+    const lines = integrationLines(got.installed).join("\n");
+    expect(lines).toContain("`mcp__argus-integration-radar__search`");
+    expect(lines).toContain("every tool it lists");
+    expect(lines).not.toMatch(/kubectl|grant-|host\.docker|fake-token/);
+    expect(JSON.stringify(got.installed)).not.toContain(SECRET);
+  });
+
+  it("every grant asks Argus for exactly the attempt and versions it was given", async () => {
+    const argus = fakeArgus([MCP]);
+    const b = fakeBroker();
+    await install(group(), argus.source, {
+      selected: ["mcp-0"],
+      attempt: 2,
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    const authorize = b.opened[0]!.routes[0]!.authorize;
+    argus.calls.splice(0);
+    expect(await authorize()).toBe(true);
+    expect(argus.calls).toEqual([`status:${TASK}:2`]);
+    argus.rows[0]!.config_version = 2; // an admin edit
+    expect(await authorize()).toBe(false);
+    argus.rows[0]!.config_version = 1;
+    argus.rows[0]!.readiness = "revoked";
+    expect(await authorize()).toBe(false);
+    argus.failStatus(new ApiError(409, "stale_attempt")); // the lease is gone
+    await expect(authorize()).rejects.toThrow();
+  });
+
+  it.each([
+    ["no broker", { mcp: undefined }],
+    ["no session config", { sessionMcp: undefined }],
+  ])("fails closed with %s", async (_what, over) => {
+    const g = group();
+    const b = fakeBroker();
+    const got = await install(g, fakeArgus([MCP]).source, {
+      selected: ["mcp-0"],
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+      ...over,
+    });
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_route_unavailable" });
+  });
+
+  it("a broker refusal blocks, revokes and leaves no server in the session config", async () => {
+    const g = group();
+    const b = fakeBroker(() => ({
+      ok: false,
+      reason: "env_integration_unavailable",
+      error: "radar: the MCP server refused the credential (HTTP 401)",
+    }));
+    const got = await install(g, fakeArgus([MCP]).source, {
+      selected: ["mcp-0"],
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_unavailable" });
+    expect(b.revoked).toEqual([[TASK, undefined]]);
+    expect(b.sets).toEqual([{}]);
+  });
+
+  it("refuses an engine that cannot be confined, before any credential is fetched", async () => {
+    const argus = fakeArgus([MCP]);
+    const b = fakeBroker();
+    const got = await install(group(), argus.source, {
+      selected: ["mcp-0"],
+      engineProvider: "openai",
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_unsupported" });
+    expect(argus.calls).toEqual([]);
+    expect(b.opened).toEqual([]);
+  });
+
+  it("refuses an allowlist removed after selection (tools_unknown)", async () => {
+    const b = fakeBroker();
+    const got = await install(group(), fakeArgus([{ ...MCP, readiness: "tools_unknown" }]).source, {
+      selected: ["mcp-0"],
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_unavailable" });
+    expect(b.opened).toEqual([]);
+  });
+
+  it("a kept recheck renews the grants; an edit re-grants; a revocation clears the session", async () => {
+    const g = group();
+    const argus = fakeArgus([MCP]);
+    const b = fakeBroker();
+    const got = await install(g, argus.source, {
+      selected: ["mcp-0"],
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    if (!got.ok || !got.installed) throw new Error("not installed");
+    const t = { mcp: b.broker, sessionMcp: b.sessionMcp };
+    let r = await recheckTaskIntegrations(g, got.installed, argus.source, t);
+    expect(r.state).toBe("kept");
+    expect(b.renewed).toEqual([[TASK, 1]]);
+
+    argus.rows[0]!.config_version = 2;
+    r = await recheckTaskIntegrations(g, got.installed, argus.source, t);
+    expect(r.state).toBe("refreshed");
+    expect(b.opened).toHaveLength(2);
+    expect(r.installed?.integrations[0]?.config_version).toBe(2);
+
+    argus.rows[0]!.readiness = "revoked";
+    r = await recheckTaskIntegrations(g, r.installed!, argus.source, t);
+    expect(r).toMatchObject({ state: "removed", why: "radar (revoked)" });
+    expect(b.revoked).toEqual([[TASK, undefined]]);
+    expect(b.sets.at(-1)).toEqual({});
+  });
+
+  it("a lost lease removes the servers", async () => {
+    const g = group();
+    const argus = fakeArgus([MCP]);
+    const b = fakeBroker();
+    const got = await install(g, argus.source, {
+      selected: ["mcp-0"],
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    if (!got.ok || !got.installed) throw new Error("not installed");
+    argus.failStatus(new ApiError(409, "stale_attempt"));
+    const r = await recheckTaskIntegrations(g, got.installed, argus.source, {
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    expect(r).toMatchObject({ state: "removed", why: "stale_attempt" });
+    expect(b.revoked).toEqual([[TASK, undefined]]);
+    expect(b.sets.at(-1)).toEqual({});
+  });
+
+  it("installs Kubernetes and MCP side by side", async () => {
+    const g = group();
+    const b = fakeBroker();
+    const got = await install(g, fakeArgus([{}, MCP]).source, {
+      selected: ["int-0", "mcp-0"],
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    if (!got.ok || !got.installed?.kubeconfig) throw new Error("not installed");
+    const cfg = JSON.parse(readFileSync(hostPath(g, got.installed.kubeconfig), "utf8"));
+    expect(cfg.clusters.map((c: { name: string }) => c.name)).toEqual(["cluster-0"]);
+    expect(Object.keys(b.sets[0]!)).toEqual(["argus-integration-radar"]);
+    const lines = integrationLines(got.installed);
+    expect(lines).toContain("Kubernetes access (this attempt only):");
+    expect(lines.join("\n")).toContain("argus-integration-radar");
   });
 });
 

@@ -29,7 +29,14 @@ const kube = (id: string, name: string, state = "active") => ({
   access: "read_only",
   validation: "ok",
   expires_at: null as string | null,
-  config: { server: "https://cluster.example", namespace: "team-a" },
+  config: { server: "https://cluster.example", namespace: "team-a" } as Record<string, unknown>,
+  tool_policy: null as string | null,
+});
+const mcp = (id: string, name: string, tools: string[] | null, tool_policy: string) => ({
+  ...kube(id, name),
+  kind: "mcp",
+  config: { url: "https://mcp.example/api", ...(tools ? { tools } : {}) },
+  tool_policy,
 });
 let puts: unknown[];
 
@@ -44,7 +51,8 @@ beforeEach(() => {
         kube("k3", "gone", "revoked"),
         { ...kube("k4", "fresh"), validation: "unchecked" },
         { ...kube("k5", "stale"), expires_at: "2020-01-01T00:00:00Z" },
-        { ...kube("m1", "docs"), kind: "mcp" },
+        mcp("m1", "docs", ["search", "fetch"], "allowlist"),
+        mcp("m2", "wiki", null, "unknown"),
       ]);
     if (request.method === "PUT" && path === "/api/tasks/t1/integrations") {
       puts.push(await request.json());
@@ -75,16 +83,16 @@ function mount(overrides: Partial<Task>, onSaved = vi.fn()) {
 }
 
 describe("TaskIntegrations", () => {
-  it("offers active Kubernetes connections and saves the selection at the task's version", async () => {
+  it("offers active connections and saves the selection at the task's version", async () => {
     const onSaved = mount({});
     const user = userEvent.setup();
     const staging = (await screen.findByRole("checkbox", { name: /staging/ })) as HTMLInputElement;
     expect(staging.checked).toBe(true);
-    expect(screen.queryByText(/docs/)).toBeNull();
     expect(screen.queryByText(/gone/)).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: /prod/ }));
+    await user.click(screen.getByRole("checkbox", { name: /docs/ }));
     await user.click(screen.getByRole("button", { name: "Save integrations" }));
-    expect(puts).toEqual([{ expected_version: "v1", integrations: ["k1", "k2"] }]);
+    expect(puts).toEqual([{ expected_version: "v1", integrations: ["k1", "k2", "m1"] }]);
     expect(onSaved).toHaveBeenCalled();
   });
 
@@ -103,6 +111,12 @@ describe("TaskIntegrations", () => {
     expect(screen.getByRole("checkbox", { name: /stale/ }).closest("label")?.textContent).toMatch(
       /expired/,
     );
+    expect(screen.getByRole("checkbox", { name: /wiki/ }).closest("label")?.textContent).toMatch(
+      /unusable: read only without a tool allowlist/,
+    );
+    expect(screen.getByRole("checkbox", { name: /docs/ }).closest("label")?.textContent).toMatch(
+      /docs · MCP tools search, fetch · read only$/,
+    );
     expect(
       screen.getByRole("checkbox", { name: /staging/ }).closest("label")?.textContent,
     ).not.toMatch(/expired|not validated/);
@@ -110,7 +124,7 @@ describe("TaskIntegrations", () => {
 });
 
 describe("NewTaskIntegrations", () => {
-  it("offers the project's active Kubernetes connections, none chosen by default", async () => {
+  it("offers the project's active connections, none chosen by default", async () => {
     const onChange = vi.fn();
     render(
       <LiveProvider token={() => null} onUnauthorized={() => {}}>
@@ -120,7 +134,7 @@ describe("NewTaskIntegrations", () => {
     const prod = (await screen.findByRole("checkbox", { name: /prod/ })) as HTMLInputElement;
     expect(prod.checked).toBe(false);
     expect(screen.queryByText(/gone/)).toBeNull();
-    expect(screen.queryByText(/docs/)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: /docs/ })).toBeTruthy();
     await userEvent.setup().click(prod);
     expect(onChange).toHaveBeenCalledWith(["k2"]);
   });

@@ -417,7 +417,7 @@ const route = createKubernetesRoute({
 async function run(msg) {
   if (msg.op === "install")
     return m.installTaskIntegrations({ ...msg.opts, source, transport: route });
-  return m.recheckTaskIntegrations(msg.groupDir, msg.installed, source, route);
+  return m.recheckTaskIntegrations(msg.groupDir, msg.installed, source, { transport: route });
 }
 for await (const line of createInterface({ input: process.stdin })) {
   const msg = JSON.parse(line);

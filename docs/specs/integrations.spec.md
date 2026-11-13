@@ -9,9 +9,9 @@ updated: 2026-11-13
 # 1. Purpose and Scope
 
 An **integration** is an outside-service connection managed by an admin for one
-project. Credentials are saved and validated; a Kubernetes connection reaches a task
-worker only when that task opts in (3.6). MCP credentials are not delivered to
-workers. Two kinds:
+project. Credentials are saved and validated; a connection reaches a task worker
+only when that task opts in (3.6): a Kubernetes one as a per-attempt kubeconfig, an
+MCP one as a per-attempt server URL on a broker that holds the token. Two kinds:
 
 - **`mcp`**: a remote MCP server over HTTPS with a bearer token.
 - **`kubernetes`**: a service-account token with a configured target namespace of
@@ -105,8 +105,11 @@ reports a `tool_policy`:
 | `unknown` | no `tools`, `access` `read_only` | nothing: tool coverage is unknown |
 
 A `read_only` connection without an allowlist is therefore unusable by workers until
-an admin adds one (3.4). No MCP connection reaches a worker yet (3.6); the policy
-is what that delivery will enforce.
+an admin adds one (3.4): a task cannot select it and delivery refuses it. The MCP
+broker enforces the policy (3.6); the server's own tool annotations (`readOnlyHint`
+and the like) are untrusted and never widen or narrow it. `access` is the intended
+access the admin recorded; with an allowlist, which tools only read is the admin's
+judgment, not something Argus checks.
 
 **OAuth is not available.** The MCP authorization flow needs a registered redirect
 URL, a refresh loop, and re-delivery of refreshed tokens to an attempt that is
@@ -146,16 +149,19 @@ secret: they say `has_secret`. Rotating or revoking a revoked integration is `40
 integration_revoked`. Every change records an event with subject `integration` and no
 secret: `integration.created`, `.validated` (`{status, detail}`), `.updated`
 (`{name, config_version, changes}`, each changed key with `before` and `after`; a
-CA bundle appears as a `sha256:` digest), `.rotated`, and `.revoked`. Opt-in and delivery record task events (3.6).
+CA bundle appears as a `sha256:` digest), `.rotated`, and `.revoked`. Opt-in and
+delivery record task events (3.6).
 
 Two worker routes are left out of the generated API contract: only a NanoClaw
 channel calls them, with a worker token (`403` for admin and orchestrator tokens):
 
 - `GET /api/tasks/{id}/integrations/status?attempt=N`: non-secret; each selected
-  integration's id, name, namespace, `secret_version`, `config_version`,
-  `expires_at` and `readiness`.
+  integration's id, `kind`, name, namespace (Kubernetes), `tool_policy` (MCP),
+  `secret_version`, `config_version`, `expires_at` and `readiness`.
 - `POST /api/tasks/{id}/integrations/{iid}/credential` (`{attempt, secret_version?}`):
-  the only response that carries a token, with `Cache-Control: no-store`.
+  the only response that carries a token, with `Cache-Control: no-store`. It has a
+  `kind`: Kubernetes carries server, namespace and CA; MCP carries `url`, `tools`
+  (the allowlist, or null with `all`), `tool_policy` and `access`.
 
 ## 3.5 Validation
 
@@ -236,18 +242,20 @@ Rotation and a config edit reset validation to `unchecked`.
 
 ## 3.6 Worker delivery
 
-**Opt-in.** A task selects Kubernetes integrations of its own project by id (at most
-8); selection is the only grant. Capabilities, titles, pool labels and the project
+**Opt-in.** A task selects Kubernetes and MCP integrations of its own project by id
+(at most 8); selection is the only grant. Nothing is injected implicitly. Capabilities, titles, pool labels and the project
 itself never give a task a credential. `POST /api/tasks` takes the same list as
 `integrations`, from an admin token only (`403 integration_admin_only`), with the
 same checks. The admin-only `PUT` (3.4) checks the task's
-`version` (`409 stale_version`) and that each id is an active `kubernetes`
-integration of the task's project; one `422 integration_invalid` names every bad id,
-and an id of another project reads as unknown. The selection changes only while the
+`version` (`409 stale_version`) and that each id is an active integration of the
+task's project and, for MCP, not of `tool_policy` `unknown` (3.2); one `422
+integration_invalid` names every bad id, and an id of another project reads as
+unknown. Validation is checked at delivery, not at selection, so a task can be
+prepared while a connection is being fixed. The selection changes only while the
 task is `awaiting_approval`, `pending`, `ready` or `blocked` and not archived (`409
 task_not_editable`): a running attempt keeps the selection it started with. A change
 records `task.integrations_changed` (`{added, removed}`). Clearing the list is the
-way back. MCP and the orchestrator have no selection tool.
+way back. The orchestrator has no selection tool and no MCP tool selects (section 2).
 
 **Delivery binding.** Both worker routes require the caller to hold the task's
 current lease for exactly that `attempt` ([worker lifecycle](worker-lifecycle.spec.md)
@@ -260,7 +268,9 @@ checks in order:
 2. The worker's leased engine account, and its leased executor if any, are Claude
    (`anthropic`); otherwise `409 integration_engine_unsupported`.
 3. Readiness: `revoked` (`409 integration_revoked`), `expired` (`409
-   integration_expired`), validation not `ok` (`409 integration_unvalidated`), the
+   integration_expired`), an MCP `tool_policy` of `unknown`, from an edit after
+   selection (`409 integration_tools_unknown`; readiness `tools_unknown`),
+   validation not `ok` (`409 integration_unvalidated`), the
    store down (`503 secret_store_unavailable`), the stored secret missing (`503
    integration_secret_missing`) or behind the row's version (`503`).
 4. `secret_version`, when given, matches the row (`409 integration_changed`): a
@@ -275,17 +285,18 @@ store inside its transaction, so a status read may see the new token beside the 
 row, and only delivery decides.
 
 **Installation.** Before the session starts, after the task inputs, the NanoClaw
-channel reads the status and fetches every selected credential. Any failure blocks
-the task before a model runs, with no attempt spent ([failure
+channel reads the status and fetches every selected credential, then writes the
+kubeconfig (Kubernetes) and opens broker grants in the session's MCP config (MCP,
+see MCP broker). Any failure blocks the task before a model runs, with no attempt spent ([failure
 classes](failure-classes.spec.md) 3.3):
 
 | Reason | When |
 | --- | --- |
-| `env_integration_unavailable` | revoked, expired, unvalidated, missing secret, store down, Argus unreachable |
+| `env_integration_unavailable` | revoked, expired, unvalidated, MCP tools unknown, missing secret, store down, Argus unreachable; an MCP server refusing the token, redirecting or speaking neither transport |
 | `env_integration_unsupported` | the engine or delegated executor is not Claude |
 | `env_integration_invalid` | an unsafe directory, a credential that does not match the selection, or a write failure |
-| `env_integration_route_unavailable` | the worker has no Kubernetes route, or it cannot open a tunnel to a cluster (see Route) |
-| `env_integration_gateway_intercepts` | through the route, a cluster's TLS handshake does not verify against its CA or name its host (see Route) |
+| `env_integration_route_unavailable` | the worker has no Kubernetes route or MCP broker, or cannot reach a cluster or MCP server (see Route, MCP broker) |
+| `env_integration_gateway_intercepts` | through the route, a cluster's TLS handshake does not verify against its CA or name its host; an MCP server's certificate does not verify against the public roots |
 
 The channel writes one kubeconfig per attempt to
 `<group>/task-integrations/<task>/<attempt>-<random>/kubeconfig` (in the container,
@@ -307,27 +318,28 @@ download is SHA-256 verified and probed with `kubectl version --client`
 
 **Recheck, revocation and expiry.** On each heartbeat the channel reads the status
 again. An integration that is no longer `ready` removes the attempt's kubeconfig at
-once and revokes its route grants; a new `secret_version` or `config_version`
-replaces it with a fresh delivery and fresh grants, after the route probe passes again (a failing probe
-removes the file). Revocation and expiry
-therefore take effect within one heartbeat interval. The channel removes the
+once and revokes its route and MCP grants; a new `secret_version` or
+`config_version` replaces them with a fresh delivery and fresh grants, after the
+route and MCP probes pass again (a failing probe removes them). A recheck that keeps
+them renews the MCP grants. Revocation and expiry therefore take effect within one
+heartbeat interval, and sooner for routes and MCP calls, which ask Argus on each use. The channel removes the
 attempt directory when the attempt ends, on every path (done, failed, blocked,
 cancelled, lost lease, crash of the session), so attempts never share a file.
-Before its first claim, the channel empties the group's integrations directory, so
-a kubeconfig a previous (crashed) process left behind never outlives it.
+Before its first claim, the channel empties the group's integrations directory and
+removes the session's `argus-integration-*` MCP servers, so nothing a previous
+(crashed) process left behind outlives it.
 Deleting the local file does not revoke anything upstream: a token a session
 copied stays valid until it expires or is revoked at the cluster. Revoke the
 service-account token there too.
 
 **Engine matrix.**
 
-| Engine | Kubernetes integration |
-| --- | --- |
-| Claude (NanoClaw harness) | supported |
-| Claude executor via `argus-delegate` | supported: gets the attempt's kubeconfig as `KUBECONFIG` |
-| Codex, Cursor, Copilot, custom, local (as engine or executor) | not supported: delivery refuses and the task blocks with `env_integration_unsupported`; `argus-delegate` refuses a non-Claude executor when a kubeconfig is installed and strips any inherited `KUBECONFIG` |
-| Built-in orchestrator | none |
-| MCP connections | not delivered to any worker yet (Open items) |
+| Engine | Kubernetes integration | MCP integration |
+| --- | --- | --- |
+| Claude (NanoClaw harness) | supported | supported: the session's MCP config |
+| Claude executor via `argus-delegate` | supported: gets the attempt's kubeconfig as `KUBECONFIG` | delivered to the session; whether a delegated run sees the session's MCP servers is unverified (Open items) |
+| Codex, Cursor, Copilot, custom, local (as engine or executor) | not supported: delivery refuses and the task blocks with `env_integration_unsupported`; `argus-delegate` refuses a non-Claude executor when a kubeconfig is installed and strips any inherited `KUBECONFIG` | not supported: the same refusal and block |
+| Built-in orchestrator | none | none |
 
 The channel refuses as soon as the leased executor is not Claude, even if the task
 would not have delegated.
@@ -403,6 +415,79 @@ bridge is not reachable; their Kubernetes tasks block with
 `env_integration_route_unavailable`. A host firewall must let the bridge reach the
 port (see the [worker setup runbook](../runbooks/2026-10-16.nanoclaw-worker-setup.ref.md)).
 
+**MCP broker.** An MCP token never enters a session: no environment variable, file,
+prompt, task text, log or artifact holds it. The channel keeps it in the memory of
+its MCP broker (`argus-integrations-mcp.ts`), a plain-HTTP listener on the same
+docker bridge address as the route, at `ARGUS_INTEGRATION_MCP_PORT` or a free port,
+and gives the session a server URL instead:
+
+- **Grants.** For each selected MCP integration the channel opens a grant bound to
+  the task, the attempt and the integration: 32 random bytes in the path of
+  `http://host.docker.internal:<port>/mcp/<grant>`. The broker keeps only its SHA-256.
+  The session's MCP config (NanoClaw's `mcp_servers` for the worker's group) gets one
+  server named `argus-integration-<name>` per grant, of type `http` (Streamable HTTP)
+  or `sse` (legacy HTTP+SSE), whichever the probe found; the channel replaces only
+  servers with that prefix. The prompt names the server and its tools, never the URL.
+- **Forwarding.** A grant forwards only to its integration's URL, or, for HTTP+SSE,
+  to the same-origin endpoint the server announced (the broker rewrites the
+  `endpoint` event to a path under the grant). The host is resolved once at grant
+  time; internal addresses are refused and only those addresses are dialled, over
+  TLS verified against the public roots, never following a redirect (a `3xx`, `401`
+  or `403` upstream is a `502`). The broker adds `Authorization: Bearer <token>` and
+  forwards only content type, accept, protocol version, session id and last event
+  id; the session's own path suffix, query, `Authorization` or other headers never
+  reach the server.
+- **Every request is authorized** against Argus as a route CONNECT is: the attempt
+  holds the lease and the integration is `ready` at the grant's `secret_version` and
+  `config_version`. An unknown or lapsed grant is `404` (never `401`, which would
+  start an OAuth flow in the client).
+- **Policy.** Only `initialize`, `server/discover`, `ping`, `tools/list`,
+  `tools/call` and the initialized, cancelled and progress notifications pass, in
+  single messages or batches; resources, prompts, completion, logging and every
+  other method get a JSON-RPC error (`-32003`, "denied by Argus policy"). Server
+  requests other than `ping` (sampling, elicitation, roots) are dropped, and the
+  capabilities a server advertises are cut to `tools`. `tools/list` answers keep
+  only allowlisted tools (`allowlist`) or every tool (`all`); `tools/call` must name
+  a tool the broker has seen listed and allowed. Annotations are passed through
+  unread.
+- **Pinning.** The first `tools/list` answer of a grant pins each tool's name,
+  title, description and schemas and each page's set of names. A later answer that
+  differs blocks the grant for the rest of the attempt: that request gets the
+  error, every other open request and stream is cut, and later requests are `404`;
+  the channel logs the integration and reason. A rotation or edit opens a new grant
+  under the same URL and pins afresh. Annotation changes do not block.
+- **Lifetime.** A grant lives 15 minutes from its last renewal, never past the
+  credential's `expires_at`; each heartbeat recheck that keeps the integration
+  renews it, so a channel that stops rechecking loses MCP access within that time.
+  Opening grants for an attempt drops every other attempt's grants of the task.
+  Revocation, expiry, an edit or rotation that is not ready, a lost lease, the end of
+  the attempt and a restart of the channel drop the grants and remove the session's
+  `argus-integration-*` servers. A rotation or a ready edit keeps the URL and
+  transport and sends the new token from the next request; a server that changes
+  transport fails closed. A response stream closes after an hour at most.
+- **In flight.** Dropping a grant cuts its open requests and streams at once; the
+  session sees a closed connection. A call already forwarded may still complete at
+  the server; its answer is not relayed.
+
+Before granting, the broker probes each server with the token: modern
+`server/discover`, else legacy `initialize` (whose session it deletes), else an
+HTTP+SSE `GET` that must announce a same-origin endpoint. A `401`/`403`, a redirect
+or neither transport blocks with `env_integration_unavailable`; no bridge, a bad
+port, an unresolvable or internal host, or a refused or timed-out connection with
+`env_integration_route_unavailable`; an untrusted certificate with
+`env_integration_gateway_intercepts`. Either leaves no grant and no session server.
+
+The worker prompt lists each server and its allowed tools (`mcp__<server>__<tool>`)
+and says a policy denial is final: do not retry it or reach the server another way;
+if the tools are missing or every call fails, stop and reply `FAIL:`.
+
+**Limits of the broker.** A grant URL is a capability for its attempt: whoever on
+the bridge holds it can call the allowed tools while the attempt holds its lease. It
+is stored in NanoClaw's container config for the group while the attempt runs.
+What an allowed tool does is the server's; the broker cannot tell a read from a
+write, so `read_only` rests on the admin's allowlist (3.2). Revoking in Argus does
+not revoke the token at the server.
+
 ## 3.7 Dashboard
 
 Setup → Integrations, after Accounts. A project selector excludes `global` and
@@ -429,20 +514,24 @@ namespace, CA bundle), the intended access and, for MCP, the tool allowlist (one
 per line, empty for none) at the record's `version`, with no token field; it says
 that saving resets validation. A stale version, an invalid config and a revoked
 record get fixed messages. MCP rows show their tool policy: the allowlist size,
-"all tools", or "unknown coverage: unusable by workers". Pending actions are disabled. Revoked rows remain visible without
-these actions. Each row shows its expiry; the add and rotate forms take an optional
-expiry in local time. The screen shows secret-store readiness, explains that MCP
-credentials are not delivered to workers while Kubernetes ones reach only attempts of
-tasks that select them (Claude engines), that removing the local file does not
-revoke the token, and that OAuth is unavailable. It links to Accounts, Settings and worker pools without
+"all tools", or "unknown coverage: unusable by workers". Pending actions are
+disabled. Revoked rows remain visible without these actions. Each row shows its
+expiry; the add and rotate forms take an optional expiry in local time. The screen
+shows secret-store readiness and explains that connections reach only attempts of
+tasks that select them (Claude engines): a Kubernetes one as a kubeconfig, an MCP
+one as a broker URL that adds the token and passes only allowed tools, so the
+session never sees the token; that removing access in Argus does not revoke the
+token; and that OAuth is unavailable. It links to Accounts, Settings and worker pools without
 claiming that pools grant tasks access to these connections.
 
-A task's detail view lists the project's active Kubernetes integrations (and any
+A task's detail view lists the project's active integrations of both kinds (and any
 already selected) as checkboxes and saves the selection at the task's `version`. It
 is read-only while an attempt runs or after the task ends; errors are fixed messages.
-Each choice shows its expiry, or why an attempt would block (revoked, expired, not
-validated). The New task form offers the project's active Kubernetes integrations,
-none chosen by default, and sends the choice as `integrations`.
+Each choice shows its scope (the Kubernetes namespace, or the MCP tools, "all tools"
+or none), access and expiry, or why an attempt would block (revoked, expired, not
+validated, read only without a tool allowlist). The New task form offers the
+project's active integrations, none chosen by default, and sends the choice as
+`integrations`.
 
 # 4. Open Questions
 
@@ -451,15 +540,19 @@ none chosen by default, and sends the choice as `integrations`.
 ## Open items
 
 - MCP OAuth sign-in (3.2).
-- Worker delivery of MCP connections (3.6): task selection of MCP integrations;
-  session delivery through a trusted host broker that holds the token and enforces
-  `tool_policy` (refusing `unknown`); pinning the `tools/list` result; cleanup on
-  expiry, rotation, config edit, revocation and lease loss; worker guidance; end to
-  end tests against a fake HTTPS server over Streamable HTTP and legacy SSE.
-- Kubernetes delivery for engines other than Claude (3.6 engine matrix).
-- Kubernetes routing for socket-mode workers (3.6 Route).
+- Kubernetes and MCP delivery for engines other than Claude (3.6 engine matrix).
+- Kubernetes and MCP routing for socket-mode workers (3.6 Route, MCP broker).
 - Verify the route live on a worker against a real cluster, after the operator
   enables it there.
+- Verify the MCP broker live on a worker, after the operator enables it: that the
+  session's MCP client reaches the grant URL directly rather than through the OneCLI
+  gateway (`HTTP_PROXY`/`NO_PROXY`; through the gateway it would see the grant URL,
+  not the token), that NanoClaw applies `mcp_servers` to a session spawned after
+  preflight, and whether a Claude executor's delegated run sees those servers.
+- Verify authentication and tool scope live against the MCP server an operator
+  first connects (for example `https://agent-gateway.radar2m.com/mcp`): neither has
+  been tested, and Argus claims no particular upstream scope for it (in particular
+  not `radar:cluster-read`).
 
 # 5. Constraints
 
@@ -477,7 +570,9 @@ none chosen by default, and sends the choice as `integrations`.
 - Dashboard: `views/Integrations.tsx`, the Setup tab in `App.tsx`,
   `views/TaskIntegrations.tsx` in the task detail.
 - NanoClaw: `argus-integrations.ts` (install, recheck, cleanup, prompt hint) and
-  `argus-integrations-route.ts` (the Kubernetes route broker and probe), wired in `argus.ts`; `engines/argus-delegate.mjs` scopes `KUBECONFIG`;
+  `argus-integrations-route.ts` (the Kubernetes route broker and probe) and
+  `argus-integrations-mcp.ts` (the MCP broker and probe), wired in `argus.ts` with
+  the session's `mcp_servers`; `engines/argus-delegate.mjs` scopes `KUBECONFIG`;
   `engines/install-kubectl.sh` in the tools layer; the `task-integrations` heartbeat
   feature; the command guard's `kubeconfig_secret` rule.
 - MCP entry points deliberately exclude credential management and selection
@@ -511,9 +606,19 @@ none chosen by default, and sends the choice as `integrations`.
   rotation, editing (payload, version, tool policy, fixed errors), revocation
   confirmation and unavailable actions on revoked records.
 - Delivery: `uv run pytest apps/api/tests/test_integration_delivery.py` covers
-  selection validation and versioning, the lease binding, the engine matrix, every
-  readiness refusal, the version race, config-edit fencing and the secret-free
-  audit event.
+  selection validation (MCP included; unknown, foreign, revoked and `unknown`-policy
+  ids refused) and versioning, the lease binding, the engine matrix, every readiness
+  refusal (`tools_unknown` included), the MCP credential shape, the version race,
+  config-edit fencing and the secret-free audit event.
+- MCP broker: vitest `argus-integrations-mcp.test.ts` runs the broker against fake
+  HTTPS MCP servers on loopback (a test CA, an impostor CA, a fake token) over
+  Streamable HTTP with JSON and SSE answers and legacy HTTP+SSE: discovery, list
+  filtering, allowed and denied calls (batches included), denied methods, dropped
+  server requests, pinning blocks for a changed schema or tool set, ignored
+  annotation changes, path, query, method and header widening, redirects and `401`
+  as `502`, probe failures and their reasons, authorization per request,
+  revocation cutting a stream, attempt fencing, rotation, expiry and TTL renewal,
+  and no token in anything the session receives or in the environment.
 - Channel: vitest `argus-integrations.test.ts` (paths, permissions, symlinks, atomic
   writes, rendering with a `proxy-url` per cluster, recheck, cleanup, grant
   authorization per attempt, secret and config version, re-granting after a
@@ -522,8 +627,10 @@ none chosen by default, and sends the choice as `integrations`.
   addresses, revocation closing tunnels, attempt fencing, tunnel lifetime, CA and
   hostname mismatch, no bridge, bad port, cluster down) and
   `argus-integrations-channel.test.ts` (preflight blocks for both route reasons and a
-  missing route, re-granting on rotation, revocation on completion, revocation and
-  lease loss, cleanup on every path, delegate passthrough), plus
+  missing route or MCP broker, re-granting on rotation, revocation on completion,
+  revocation and lease loss, cleanup on every path, delegate passthrough, the MCP
+  server in the session config with neither token nor URL in the prompt or logs),
+  plus
   `argus-delegate.test.mjs` and `tests/test_command_guard.py`.
 - End to end: `ARGUS_TEST_KUBECTL=<kubectl> uv run pytest
   apps/api/tests/test_integration_kubectl_e2e.py` runs the API, the channel module and
@@ -535,5 +642,5 @@ none chosen by default, and sends the choice as `integrations`.
   broker, authorized by the real API, kubectl succeeds while a relay in front of the
   cluster sees ciphertext only; a `--server` override, a stale attempt, revocation,
   a CA mismatch and a hostname mismatch are refused. Skipped without a kubectl.
-- No real MCP server, Kubernetes cluster, credential or model run is exercised by
-  these checks.
+- No real MCP server, MCP client, Kubernetes cluster, credential or model run is
+  exercised by these checks.

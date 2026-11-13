@@ -13,7 +13,8 @@ function failure(error: unknown): string {
       return "An admin token is required to choose integrations.";
     if (error.status === 409)
       return "The task or a connection changed, or an attempt is running. Refresh and try again.";
-    if (error.status === 422) return "Choose active Kubernetes connections of this task's project.";
+    if (error.status === 422)
+      return "Choose active connections of this task's project; a read-only MCP connection needs a tool allowlist.";
   }
   return "The integrations could not be saved. Try again.";
 }
@@ -21,7 +22,7 @@ function failure(error: unknown): string {
 type Connection = components["schemas"]["Integration"];
 
 /** The project's integrations, for a picker; admin only (null without an admin token). */
-function useProjectKubernetes(project: string) {
+function useProjectIntegrations(project: string) {
   const { data } = useLiveData(
     (signal) =>
       project
@@ -42,8 +43,19 @@ function useProjectKubernetes(project: string) {
 function readiness(item: Connection): string | null {
   if (item.state !== "active") return item.state;
   if (item.expires_at && Date.parse(item.expires_at) <= Date.now()) return "expired";
+  if (item.tool_policy === "unknown") return "unusable: read only without a tool allowlist";
   if (item.validation !== "ok") return "not validated: attempts block until it is";
   return null;
+}
+
+function scope(item: Connection): string {
+  if (item.kind === "kubernetes") return `Kubernetes namespace ${String(item.config.namespace)}`;
+  const tools = item.config.tools;
+  return item.tool_policy === "allowlist" && Array.isArray(tools)
+    ? `MCP tools ${tools.join(", ")}`
+    : item.tool_policy === "all"
+      ? "MCP, all tools"
+      : "MCP";
 }
 
 function Choices({
@@ -68,8 +80,7 @@ function Choices({
             )
           }
         />{" "}
-        {item.name} · namespace {String(item.config.namespace)} ·{" "}
-        {item.access === "read_only" ? "read only" : "read and write"}
+        {item.name} · {scope(item)} · {item.access === "read_only" ? "read only" : "read and write"}
         {item.expires_at && !problem && (
           <>
             {" "}
@@ -83,11 +94,12 @@ function Choices({
 }
 
 const HELP =
-  "Each attempt gets an ephemeral kubeconfig pinned to these namespaces, on Claude engines only.";
+  "Claude engines only. Each attempt gets an ephemeral kubeconfig pinned to each namespace, and a" +
+  " broker URL per MCP server that passes only the listed tools; the session never sees a token.";
 
 /**
- * Kubernetes connections of `project` for a new task (integrations spec 3.6). Renders
- * nothing when the project has none or the caller cannot list them (admin only).
+ * Kubernetes and MCP connections of `project` for a new task (integrations spec 3.6).
+ * Renders nothing when the project has none or the caller cannot list them (admin only).
  */
 export function NewTaskIntegrations({
   project,
@@ -98,34 +110,32 @@ export function NewTaskIntegrations({
   chosen: readonly string[];
   onChange: (ids: string[]) => void;
 }) {
-  const items = useProjectKubernetes(project);
-  const kubernetes = (items ?? []).filter(
-    (item) => item.kind === "kubernetes" && item.state === "active",
-  );
-  if (kubernetes.length === 0) return null;
+  const items = useProjectIntegrations(project);
+  const active = (items ?? []).filter((item) => item.state === "active");
+  if (active.length === 0) return null;
   return (
     <fieldset aria-label="Integrations">
-      <legend>Kubernetes integrations (none: no cluster access)</legend>
-      <Choices items={kubernetes} chosen={chosen} onChange={onChange} />
+      <legend>Integrations (none: no cluster or MCP access)</legend>
+      <Choices items={active} chosen={chosen} onChange={onChange} />
       <p className="muted small">{HELP}</p>
     </fieldset>
   );
 }
 
 /**
- * The task's opt-in to Kubernetes connections of its project (integrations spec 3.6).
- * Each attempt gets an ephemeral kubeconfig for the selected connections, Claude engines only.
+ * The task's opt-in to Kubernetes and MCP connections of its project (integrations spec
+ * 3.6). Each attempt gets a kubeconfig or broker URL per selection, Claude engines only.
  */
 export function TaskIntegrations({ task, onSaved }: { task: Task; onSaved: () => void }) {
-  const items = useProjectKubernetes(task.project);
+  const items = useProjectIntegrations(task.project);
   const selected = task.integrations ?? [];
   const [draft, setDraft] = useState<string[]>();
   const [error, setError] = useState<string>();
   const action = useAction();
-  const kubernetes = (items ?? []).filter(
-    (item) => item.kind === "kubernetes" && (item.state === "active" || selected.includes(item.id)),
+  const listed = (items ?? []).filter(
+    (item) => item.state === "active" || selected.includes(item.id),
   );
-  if (kubernetes.length === 0 && selected.length === 0) return null;
+  if (listed.length === 0 && selected.length === 0) return null;
   const editable = SELECTABLE.has(task.state) && !task.archived_at;
   const chosen = draft ?? selected;
 
@@ -151,7 +161,7 @@ export function TaskIntegrations({ task, onSaved }: { task: Task; onSaved: () =>
     <section aria-label="Integrations">
       <header className="task-section-label">Integrations</header>
       <fieldset disabled={!editable || action.busy}>
-        <Choices items={kubernetes} chosen={chosen} onChange={setDraft} />
+        <Choices items={listed} chosen={chosen} onChange={setDraft} />
         {selected
           .filter((id) => items && !items.some((item) => item.id === id))
           .map((id) => (

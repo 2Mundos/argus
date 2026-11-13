@@ -1,10 +1,13 @@
 """Which integrations a task opted into (docs/specs/integrations.spec.md 3.6).
 Ids only; kept apart from delivery so the task service can call it."""
 
+import json
+
 import aiosqlite
 
 from argus_api.db import Tx
 from argus_api.errors import ValidationFailedError
+from argus_api.integrations.service import tool_policy
 
 MAX_PER_TASK = 8
 
@@ -12,9 +15,10 @@ MAX_PER_TASK = 8
 async def check_selection(
     conn: aiosqlite.Connection, project: str, ids: list[str]
 ) -> list[str]:
-    """The ids a task may select: the same project, kind `kubernetes`, active.
-    One `422 integration_invalid` naming every bad id; an id of another project
-    reads as unknown, so selection does not reveal it exists."""
+    """The ids a task may select: the same project, active, and for MCP a known
+    tool policy (a `read_only` connection without an allowlist covers unknown
+    tools, 3.2). One `422 integration_invalid` naming every bad id; an id of
+    another project reads as unknown, so selection does not reveal it exists."""
     ids = sorted(set(ids))
     if len(ids) > MAX_PER_TASK:
         raise ValidationFailedError(
@@ -25,7 +29,7 @@ async def check_selection(
         return []
     marks = ",".join("?" * len(ids))
     async with conn.execute(
-        f"SELECT id, kind, state FROM integrations WHERE project = ? AND id IN ({marks})",  # noqa: S608
+        f"SELECT id, kind, state, access, config FROM integrations WHERE project = ? AND id IN ({marks})",  # noqa: S608
         (project, *ids),
     ) as cur:
         found = {r["id"]: r for r in await cur.fetchall()}
@@ -34,10 +38,16 @@ async def check_selection(
         row = found.get(i)
         if row is None:
             problems.append(f"integrations: {i}: not an integration of {project}")
-        elif row["kind"] != "kubernetes":
-            problems.append(f"integrations: {i}: only kubernetes integrations")
         elif row["state"] != "active":
             problems.append(f"integrations: {i}: revoked")
+        elif (
+            tool_policy(row["kind"], row["access"], json.loads(row["config"]))
+            == "unknown"
+        ):
+            problems.append(
+                f"integrations: {i}: a read-only MCP connection without a tool"
+                " allowlist covers unknown tools; an admin must add one first"
+            )
     if problems:
         raise ValidationFailedError(
             "; ".join(problems), code="integration_invalid", details=problems

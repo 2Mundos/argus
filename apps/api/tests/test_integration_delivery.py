@@ -1,4 +1,4 @@
-"""Task opt-in and worker delivery of Kubernetes integrations
+"""Task opt-in and worker delivery of Kubernetes and MCP integrations
 (docs/specs/integrations.spec.md 3.6, 3.7): only the worker holding the exact
 attempt of a task that selected an active, validated, unexpired integration of its
 own project gets the token, and every other case fails closed with a code."""
@@ -29,6 +29,7 @@ A, B = "agent-a", "agent-b"
 TOKEN = "k8s-sentinel-Qm4Tz8-never-shown"
 ROTATED = "k8s-sentinel-rotated-Hc2Vw6-never-shown"
 K8S = {"server": "https://k8s.example.test:6443", "namespace": "team-a"}
+MCP = {"url": "https://mcp.example.test/mcp", "tools": ["search"]}
 
 
 @pytest.fixture
@@ -57,7 +58,7 @@ async def integration(
     validated: bool = True,
     **extra,
 ) -> str:
-    config = K8S if kind == "kubernetes" else {"url": "https://mcp.example.test/mcp"}
+    config = extra.pop("config", K8S if kind == "kubernetes" else MCP)
     body = service.IntegrationCreate.model_validate(
         {
             "kind": kind,
@@ -196,10 +197,11 @@ async def test_without_opt_in_nothing_is_delivered(
     assert err.value.code == "integration_not_selected"
 
 
+@pytest.mark.parametrize("kind", ["kubernetes", "mcp"])
 async def test_another_projects_integration_is_never_selected_or_delivered(
-    db: Database, store: MemorySecretStore, world: str
+    db: Database, store: MemorySecretStore, world: str, kind: str
 ) -> None:
-    foreign = await integration(db, store, "other")
+    foreign = await integration(db, store, "other", kind=kind)
     with pytest.raises(ValidationFailedError) as err:
         await make_task(db, foreign)
     assert err.value.code == "integration_invalid"
@@ -218,13 +220,22 @@ async def test_another_projects_integration_is_never_selected_or_delivered(
 
 @pytest.mark.parametrize(
     ("kind", "detail"),
-    [("mcp", "only kubernetes integrations"), ("revoked", "revoked")],
+    [
+        ("mcp_unknown_tools", "without a tool allowlist"),
+        ("mcp_revoked", "revoked"),
+        ("revoked", "revoked"),
+    ],
 )
-async def test_selection_takes_active_kubernetes_ids_only(
+async def test_selection_takes_active_ids_with_known_tools_only(
     db: Database, store: MemorySecretStore, world: str, kind: str, detail: str
 ) -> None:
-    if kind == "mcp":
+    if kind == "mcp_unknown_tools":
+        other = await integration(
+            db, store, kind="mcp", name="docs", config={"url": MCP["url"]}
+        )
+    elif kind == "mcp_revoked":
         other = await integration(db, store, kind="mcp", name="docs")
+        await service.revoke(db, store, "demo", other, "admin:test")
     else:
         other = await integration(db, store, name="old")
         await service.revoke(db, store, "demo", other, "admin:test")
@@ -234,6 +245,71 @@ async def test_selection_takes_active_kubernetes_ids_only(
     assert detail in json.dumps(err.value.details)
     with pytest.raises(ValidationFailedError):
         await make_task(db, "no-such-id")
+
+
+@pytest.mark.parametrize(
+    ("access", "config", "policy", "tools"),
+    [
+        ("read_only", MCP, "allowlist", ["search"]),
+        ("read_write", {"url": MCP["url"]}, "all", None),
+    ],
+)
+async def test_an_mcp_integration_is_delivered_with_its_tool_policy(
+    db: Database,
+    store: MemorySecretStore,
+    world: str,
+    access: str,
+    config: dict,
+    policy: str,
+    tools: list[str] | None,
+) -> None:
+    mcp = await integration(
+        db, store, kind="mcp", name="docs", access=access, config=config
+    )
+    task_id = await make_task(db, world, mcp)
+    await start(db, store)
+    states = {s.kind: s for s in await status(db, store, task_id)}
+    assert (states["mcp"].readiness, states["mcp"].tool_policy) == ("ready", policy)
+    assert states["mcp"].namespace is None
+    assert states["kubernetes"].tool_policy is None
+    cred = await deliver(db, store, task_id, mcp, version=1)
+    assert isinstance(cred, delivery.McpCredential)
+    assert (cred.url, cred.tools, cred.tool_policy, cred.token) == (
+        MCP["url"],
+        tools,
+        policy,
+        TOKEN,
+    )
+    audit = await events(db)
+    assert "task.integration_delivered" in audit and TOKEN not in audit
+
+
+async def test_an_allowlist_removed_after_selection_fails_closed(
+    db: Database, store: MemorySecretStore, world: str
+) -> None:
+    mcp = await integration(db, store, kind="mcp", name="docs")
+    task_id = await make_task(db, mcp)
+    await start(db, store)
+    item = await service.get(db, "demo", mcp)
+    await service.update(
+        db,
+        "demo",
+        mcp,
+        service.IntegrationUpdate(
+            expected_version=item.version, config={"url": MCP["url"]}
+        ),
+        "admin:test",
+    )
+    async with db.write() as tx:  # even if validated again
+        await tx.conn.execute(
+            "UPDATE integrations SET validation = 'ok' WHERE id = ?", (mcp,)
+        )
+    [state] = await status(db, store, task_id)
+    assert (state.readiness, state.config_version) == ("tools_unknown", 2)
+    with pytest.raises(ConflictError) as err:
+        await deliver(db, store, task_id, mcp)
+    assert err.value.code == "integration_tools_unknown"
+    assert "task.integration_delivered" not in await events(db)
 
 
 async def test_selection_changes_only_before_an_attempt_runs(
@@ -261,10 +337,13 @@ async def test_selection_changes_only_before_an_attempt_runs(
     assert err.value.code == "task_not_editable"
 
 
+@pytest.mark.parametrize("kind", ["kubernetes", "mcp"])
 @pytest.mark.parametrize("case", ["other_worker", "old_attempt", "released", "failed"])
 async def test_only_the_current_attempt_of_the_assignee_gets_it(
-    db: Database, store: MemorySecretStore, world: str, case: str
+    db: Database, store: MemorySecretStore, world: str, case: str, kind: str
 ) -> None:
+    if kind == "mcp":
+        world = await integration(db, store, kind="mcp", name="docs")
     task_id = await make_task(db, world)
     await start(db, store)
     agent, attempt, code = A, 1, None
@@ -421,9 +500,12 @@ async def test_a_config_edit_fences_the_delivered_attempt(
     assert '\\"config_version\\": 2' in await events(db)
 
 
+@pytest.mark.parametrize("kind", ["kubernetes", "mcp"])
 async def test_engines_that_cannot_be_confined_are_refused(
-    db: Database, store: MemorySecretStore, world: str
+    db: Database, store: MemorySecretStore, world: str, kind: str
 ) -> None:
+    if kind == "mcp":
+        world = await integration(db, store, kind="mcp", name="docs")
     await account(db, store, "acc-codex", "openai")
     task_id = await make_task(db, world)
     await start(db, store, runtime=("openai",))
