@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-01
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # Command guard
@@ -25,8 +25,8 @@ bypass. Background: draft (removed; in git history),
 - Allow-lists, LLM-based command review, network egress rules.
 - Containing a hostile or prompt-injected agent. Obfuscation (`eval` of a decoded
   string, scripts written then run, `find -delete`) is not detected.
-- Coverage of Cursor, opencode, the `local` executor, Copilot, or Codex (see
-  Decisions). They run no verified native hook, so the guard must not be
+- Coverage of Cursor, opencode, the `local` executor, Copilot, or Codex run by
+  `argus-delegate` (see Decisions). They run no verified native hook, so the guard must not be
   described as covering them.
 - Helper-deletion rules (`gh repo delete`, `argus-gitea-api` / `argus-github-api`
   deletes): the helpers expose no repository delete command, so there is nothing
@@ -89,9 +89,12 @@ bypass. Background: draft (removed; in git history),
   `engines/claude-managed-settings.json`), so a project's own `.claude` settings
   cannot remove the hook. Installed by `engines/Dockerfile.tools-layer`
   (`apply-tools-layer.sh`). The NanoClaw base image build is outside this repo.
-- **Codex: not implemented.** Codex hook support and trusted-hash registration in
-  the pinned version are unverified (research section 3), so no Codex hook is
-  shipped. Do not claim Codex coverage until a probe confirms it.
+- **Codex: native app-server path.** The NanoClaw Codex provider writes the guard
+  into its `hooks.json` as a `PreToolUse` hook on `Bash` and trusts it through
+  Codex's own hook trust before the first thread; a guard that is missing, disabled
+  or untrusted refuses the query ([Codex hook trust](codex-hook-trust.spec.md)).
+  Codex run as a delegated executor (`argus-delegate`) is out of scope. Block events
+  are not posted for Codex: the detection reads Claude transcripts only.
 - **Visibility.** Each block is an informational, persistent
   `task.command_blocked` event (`tool`, `rule`, `reason`, `attempt`, `command`). It
   is not a failure class, not an inbox item, and changes no task state or progress.
@@ -128,9 +131,9 @@ bypass. Background: draft (removed; in git history),
 ## Open items
 
 - Counts of blocks per task or project in Fleet.
-- Codex coverage (hook support and trusted-hash registration).
-- Codex: hook support, trusted-hash registration, whether the hook runs inside
-  Bubblewrap, and whether it survives `patch-codex-sandbox.py`.
+- Codex: that a live 0.162.1 turn calls the hook with tool name `Bash` and honours
+  the deny ([Codex hook trust](codex-hook-trust.spec.md) open items), and block
+  events for Codex.
 - Claude Code managed-settings path and precedence in the pinned Claude Code
   version are not verified against a real image.
 - Claude Code and Codex run as executors by `argus-delegate` are covered only if
@@ -153,6 +156,8 @@ bypass. Background: draft (removed; in git history),
   `apps/api/src/argus_api/tasks/command_blocked.py`, migration
   `0077_task_command_blocks.sql`
 - `integrations/nanoclaw/tests/test_command_guard.py`
+- Codex: `integrations/nanoclaw/overlays/codex-hook-trust.ts` and
+  `patch-codex-hook-trust.py` ([Codex hook trust](codex-hook-trust.spec.md)).
 
 ## Verification boundary
 
@@ -170,4 +175,5 @@ bypass. Background: draft (removed; in git history),
   `argus-single-layer.test.ts`).
 - Not verified: the image build, that Claude Code loads the managed settings and
   honours the deny, that a real denial is written to the transcript in the shape
-  the detection expects (`tool_result` with `is_error`), a blocked `rm -rf ~` on a disposable worker, Codex.
+  the detection expects (`tool_result` with `is_error`), a blocked `rm -rf ~` on a disposable worker, a
+  live Codex turn.

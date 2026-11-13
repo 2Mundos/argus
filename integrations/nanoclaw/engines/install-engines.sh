@@ -38,6 +38,11 @@ mkdir -p "$target/container/agent-runner/src/providers"
 cp "$here/../overlays/codex-cli-path.ts" "$here/../overlays/codex-cli-path.test.ts" \
   "$target/container/agent-runner/src/providers/"
 python3 "$here/../patch-codex-cli-path.py" "$target"
+# No hook-trust bypass: Codex's own trust, for the hooks the provider writes (the
+# command guard and the memory hook), established before any thread (codex-hook-trust spec).
+cp "$here/../overlays/codex-hook-trust.ts" "$here/../overlays/codex-hook-trust.test.ts" \
+  "$target/container/agent-runner/src/providers/"
+python3 "$here/../patch-codex-hook-trust.py" "$target"
 for barrel in src/providers/index.ts src/provider-contracts/index.ts \
     container/agent-runner/src/provider-contracts/index.ts \
     container/agent-runner/src/providers/index.ts setup/providers/index.ts; do

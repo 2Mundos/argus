@@ -417,6 +417,7 @@ runtime_keys = [
     "ARGUS_GIT_AUTHOR_NAME",
     "ARGUS_GIT_AUTHOR_EMAIL",
     "ARGUS_CODEX_TURN_TIMEOUT_MS",
+    "ARGUS_COMMAND_GUARD",
 ]
 missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
 if missing:
@@ -430,7 +431,7 @@ if s != original:
 PY
   )"
   if [ "$patch_result" = patched ]; then
-    echo "patched $codex_ts (Codex env allowlist: git, Cursor delegate, Gitea map)"
+    echo "patched $codex_ts (Codex env allowlist: git, Cursor delegate, Gitea map, command guard)"
   fi
 fi
 
