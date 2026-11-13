@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # Failure classes
@@ -248,7 +248,8 @@ task. No model session starts and no attempt is spent.
 | Every selected Kubernetes integration is active, unexpired, validated and its credential is in the store ([integrations](integrations.spec.md) 3.6) | `env_integration_unavailable` |
 | The worker's engine and any delegated executor are Claude | `env_integration_unsupported` |
 | The attempt's kubeconfig directory is private, not a link, and the credential matches the selection | `env_integration_invalid` |
-| Each selected cluster is reached end to end through the session's gateway: the TLS handshake verifies against the integration's CA, not an intercepting gateway's (integrations 3.6 Gateway path) | `env_integration_gateway_intercepts` |
+| The worker's Kubernetes route listens where sessions reach it, and opens a tunnel to each selected cluster's exact `host:port` at a non-internal address (integrations 3.6 Route) | `env_integration_route_unavailable` |
+| Through that tunnel, each cluster's TLS handshake verifies against the integration's CA and names its host: nothing in between terminates TLS (integrations 3.6 Route) | `env_integration_gateway_intercepts` |
 | A guarded engine's managed settings register the command guard hook, when the guard is enabled ([command guard](command-guard.spec.md) 3) | `env_guard_missing` |
 
 - The executor probe runs after the repository checks and before the inputs and the

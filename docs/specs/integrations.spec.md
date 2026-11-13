@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-13
 ---
 
 # Integrations: MCP connections and Kubernetes clusters
@@ -248,7 +248,8 @@ classes](failure-classes.spec.md) 3.3):
 | `env_integration_unavailable` | revoked, expired, unvalidated, missing secret, store down, Argus unreachable |
 | `env_integration_unsupported` | the engine or delegated executor is not Claude |
 | `env_integration_invalid` | an unsafe directory, a credential that does not match the selection, or a write failure |
-| `env_integration_gateway_intercepts` | the route probe cannot reach a cluster end to end through the session's gateway (see Gateway path) |
+| `env_integration_route_unavailable` | the worker has no Kubernetes route, or it cannot open a tunnel to a cluster (see Route) |
+| `env_integration_gateway_intercepts` | through the route, a cluster's TLS handshake does not verify against its CA or name its host (see Route) |
 
 The channel writes one kubeconfig per attempt to
 `<group>/task-integrations/<task>/<attempt>-<random>/kubeconfig` (in the container,
@@ -256,7 +257,8 @@ The channel writes one kubeconfig per attempt to
 directory is opened with `O_NOFOLLOW` and must be a real, private directory owned
 by the channel; the file is written to an exclusive sibling, fsynced and renamed
 into place. It holds one context per integration, named after it and pinned to its
-namespace, with the token as a bearer token. TLS verifies `certificate-authority-data`
+namespace, with the token as a bearer token and the attempt's route as its
+`proxy-url` (see Route). TLS verifies `certificate-authority-data`
 when `ca_data` is set, else the system store; `insecure-skip-tls-verify` is never
 written. `~/.kube` is never read, copied or written and no process-wide
 `KUBECONFIG` is set.
@@ -269,8 +271,9 @@ download is SHA-256 verified and probed with `kubectl version --client`
 
 **Recheck, revocation and expiry.** On each heartbeat the channel reads the status
 again. An integration that is no longer `ready` removes the attempt's kubeconfig at
-once; a new `secret_version` replaces it with a fresh delivery, after the route probe
-passes again (a failing probe removes the file). Revocation and expiry
+once and revokes its route grants; a new `secret_version` replaces it with a fresh
+delivery and fresh grants, after the route probe passes again (a failing probe
+removes the file). Revocation and expiry
 therefore take effect within one heartbeat interval. The channel removes the
 attempt directory when the attempt ends, on every path (done, failed, blocked,
 cancelled, lost lease, crash of the session), so attempts never share a file.
@@ -300,48 +303,67 @@ prevention, not a boundary; a file-read tool or an encoded command can still rea
 the token. Confinement to the namespace rests on the token's RBAC (3.3), not on the
 kubeconfig.
 
-**Gateway path.** A worker session reaches the network only through its OneCLI
-gateway: `HTTPS_PROXY` is `http://x:<agent token>@host.docker.internal:10255`, and
-OneCLI reads the agent token from Basic `Proxy-Authorization`. kubectl therefore opens
-an authenticated CONNECT to the cluster. In OneCLI v1.42.0 every authenticated CONNECT
-is intercepted: `apps/gateway/src/gateway.rs` `handle_connect` (about lines 596-740)
-sets `intercept = true` whenever an agent token is present, on top of
-`connect.rs` `resolve_uncached` (`intercept: has_rules || access_restricted`); the
-token comes from `inject.rs` `extract_agent_token`, and an invalid token gets `407`.
-A plain tunnel happens only for a CONNECT without `Proxy-Authorization`
-(`tests/integration.rs` `connect_without_auth_tunnels`), that is unauthenticated, for
-any host. There is no per-agent or per-host passthrough (`GATEWAY_SKIP_VERIFY_HOSTS`
-is about upstream verification, not this). So the gateway terminates TLS with its own
-CA, the cluster's CA does not verify it, kubectl fails with an x509 error, and had it
-not, the gateway would read the bearer token in plaintext.
+**Route.** A worker session reaches the network through its OneCLI gateway
+(`HTTPS_PROXY`), and OneCLI v1.42.0 intercepts every authenticated CONNECT
+(`apps/gateway/src/gateway.rs` `handle_connect` sets `intercept = true` whenever an
+agent token is present); only an unauthenticated CONNECT is spliced, for any host.
+Through the gateway, the cluster's CA does not verify the gateway's certificate,
+kubectl fails with x509, and had it not, the gateway would read the bearer token.
+`NO_PROXY`, `insecure-skip-tls-verify`, the gateway's CA in the kubeconfig and the
+anonymous tunnel each give up what the integration promises, so none is used.
 
-No workaround is acceptable, because each one gives up what the integration
-promises: `NO_PROXY` or unsetting the proxy gives the session direct egress around
-the gateway; `insecure-skip-tls-verify` or the gateway's CA in the kubeconfig hands
-the token to the interceptor; the anonymous tunnel drops the agent identity and is
-open to any host. The kubeconfig keeps the cluster's CA only, and the worker prompt
-says an x509 error from kubectl is an environment block: never disable TLS, change
-the CA, unset `HTTPS_PROXY` or set `NO_PROXY`; stop and reply `FAIL:`.
+Kubernetes traffic therefore does not use the gateway. The NanoClaw channel runs
+its own CONNECT broker (`argus-integrations-route.ts`) that never terminates TLS:
+
+- **Listener.** It binds the worker's docker bridge IPv4, the address sessions
+  already reach the host on, at `ARGUS_INTEGRATION_ROUTE_PORT` or a free port. It is
+  not configured in pool env or in the session's environment: each cluster in the
+  attempt's kubeconfig carries its own `proxy-url`, which kubectl uses for that
+  cluster only, so `HTTPS_PROXY` and `NO_PROXY` are unchanged and every other host
+  still goes through the gateway.
+- **Grants.** For each selected integration the channel opens a grant bound to the
+  task, the attempt, the integration and the API server's exact `host:port`. The
+  grant is 32 random bytes sent as the `proxy-url` password; the broker keeps only
+  its SHA-256. The host is resolved once, at grant time: an address that is
+  loopback, link-local, unspecified, multicast or reserved is refused, and the
+  tunnel dials only the addresses resolved then, so a later DNS change cannot move
+  it.
+- **Every CONNECT is authorized** against Argus: the attempt must still hold the
+  task's lease (the worker status route), and the integration must still be `ready`
+  at the `secret_version` the grant was opened for. Answers are `407` (no or unknown
+  grant), `403` (another `host:port`, or authorization refused or failed), `405`
+  (not CONNECT), `502` (the dial failed), else `200` and a byte splice. A worker's
+  environment or flags cannot authorize anything: only the channel mints grants,
+  from the API's status and delivery for the attempt it holds.
+- **Fencing and lifetime.** Opening grants for an attempt revokes every earlier grant
+  of its task, so an old attempt's grants stop working. Revocation, expiry, a
+  rotation, a lost lease and the end of the attempt revoke the grants and close
+  their open tunnels; a tunnel also closes after 15 minutes, and kubectl reconnects
+  through a fresh authorization. Lease TTL and heartbeat are unchanged.
 
 Before writing a kubeconfig, and again before a rotation replaces one, the channel
-runs a route probe (`argus-integrations-route.ts`). It takes a short gateway lease of
-the worker's agent group, as the repository preflight does, so it carries the
-identity a session would get, and sends what that session would send: a CONNECT to
-each cluster with the session's `Proxy-Authorization`, then a TLS handshake only,
-verified against the integration's `ca_data` (the bundled public roots when null,
-never the process's extra CAs, which may hold the gateway's) with hostname checking.
-No token and no HTTP request is sent. An intercepted or mismatched certificate, a
-refused CONNECT, an unreachable gateway, no proxy for the sessions or no probe
-configured blocks the task with `env_integration_gateway_intercepts` and leaves no
-kubeconfig. Reasons name the integration and a fixed code, never the proxy URL or a
-token.
+proves the route: a CONNECT through the listener with the grant, then a TLS
+handshake only, verified against the integration's `ca_data` (the bundled public
+roots when null, never the process's extra CAs) with hostname checking. No token
+and no HTTP request is sent. No route configured, no bridge address, an invalid
+port, an internal or unresolvable server, a refused CONNECT or a failed dial blocks
+the task with `env_integration_route_unavailable`; an untrusted certificate or a
+host mismatch blocks with `env_integration_gateway_intercepts`. Either leaves no
+kubeconfig and no grant. Reasons name the integration and a fixed code, never the
+route URL or a token.
 
-Against OneCLI v1.42.0 the probe therefore blocks every Kubernetes task: the
-failure is typed and fail-closed, not repaired. The repair is upstream: OneCLI needs
-an authenticated, per-agent (ideally per-host) CONNECT passthrough, a "no-intercept"
-policy mode that keeps the agent identity and the host allowlist but splices the TLS
-bytes. The kubectl end-to-end test models that mode with a fixture proxy; live
-rollout against a real gateway is unverified.
+The worker prompt says a kubectl TLS or proxy error is an environment block: never
+edit the kubeconfig's server, CA or `proxy-url`, never pass `--server`,
+`--certificate-authority` or `--insecure-skip-tls-verify`, never change
+`HTTPS_PROXY` or `NO_PROXY`; stop and reply `FAIL:`.
+
+**Limits of the route.** The broker is reachable from every container on the
+bridge, so a grant is a capability: whoever holds the attempt's kubeconfig can open
+tunnels to those clusters only, only while the attempt holds its lease. It sees only
+TLS ciphertext. Workers in socket mode run sessions on the outer daemon, where the
+bridge is not reachable; their Kubernetes tasks block with
+`env_integration_route_unavailable`. A host firewall must let the bridge reach the
+port (see the [worker setup runbook](../runbooks/2026-10-16.nanoclaw-worker-setup.ref.md)).
 
 ## 3.7 Dashboard
 
@@ -388,10 +410,9 @@ none chosen by default, and sends the choice as `integrations`.
 - MCP OAuth sign-in (3.2).
 - Worker delivery of MCP connections (3.6).
 - Kubernetes delivery for engines other than Claude (3.6 engine matrix).
-- An authenticated per-agent, per-host CONNECT passthrough in OneCLI (3.6 Gateway
-  path); until it ships, every Kubernetes task blocks with
-  `env_integration_gateway_intercepts`.
-- Verify the gateway path live against a OneCLI build with that passthrough.
+- Kubernetes routing for socket-mode workers (3.6 Route).
+- Verify the route live on a worker against a real cluster, after the operator
+  enables it there.
 
 # 5. Constraints
 
@@ -408,7 +429,7 @@ none chosen by default, and sends the choice as `integrations`.
 - Dashboard: `views/Integrations.tsx`, the Setup tab in `App.tsx`,
   `views/TaskIntegrations.tsx` in the task detail.
 - NanoClaw: `argus-integrations.ts` (install, recheck, cleanup, prompt hint) and
-  `argus-integrations-route.ts` (the gateway route probe), wired in `argus.ts`; `engines/argus-delegate.mjs` scopes `KUBECONFIG`;
+  `argus-integrations-route.ts` (the Kubernetes route broker and probe), wired in `argus.ts`; `engines/argus-delegate.mjs` scopes `KUBECONFIG`;
   `engines/install-kubectl.sh` in the tools layer; the `task-integrations` heartbeat
   feature; the command guard's `kubeconfig_secret` rule.
 - MCP entry points deliberately exclude credential management and selection
@@ -440,23 +461,24 @@ none chosen by default, and sends the choice as `integrations`.
   selection validation and versioning, the lease binding, the engine matrix, every
   readiness refusal, the version race and the secret-free audit event.
 - Channel: vitest `argus-integrations.test.ts` (paths, permissions, symlinks, atomic
-  writes, rendering, recheck, cleanup, and the route probe over real TLS through a
-  local CONNECT proxy: splice, interception, CA and hostname mismatch, `407`/`403`,
-  per-task identity, no proxy) and `argus-integrations-channel.test.ts`
-  (preflight blocks, the gateway block and a missing probe, re-probing on rotation,
-  heartbeat removal, cleanup on every path, delegate passthrough),
-  plus `argus-delegate.test.mjs` and `tests/test_command_guard.py`.
+  writes, rendering with a `proxy-url` per cluster, recheck, cleanup, grant
+  authorization per attempt and version, and the broker over real TLS: splice with
+  ciphertext only, `407`/`405`/`403`, refused authorization, DNS pinning, internal
+  addresses, revocation closing tunnels, attempt fencing, tunnel lifetime, CA and
+  hostname mismatch, no bridge, bad port, cluster down) and
+  `argus-integrations-channel.test.ts` (preflight blocks for both route reasons and a
+  missing route, re-granting on rotation, revocation on completion, revocation and
+  lease loss, cleanup on every path, delegate passthrough), plus
+  `argus-delegate.test.mjs` and `tests/test_command_guard.py`.
 - End to end: `ARGUS_TEST_KUBECTL=<kubectl> uv run pytest
   apps/api/tests/test_integration_kubectl_e2e.py` runs the API, the channel module and
   a real kubectl against a local fake Kubernetes API over TLS with a test CA and a
   fake token: allowed reads in the namespace, forbidden other namespaces and writes,
   a request without the token rejected, cross-project refusal, expiry and revocation
-  removing the file. Through a local CONNECT proxy: an intercepting gateway (another
-  CA) makes kubectl fail with x509 and the channel block with
-  `env_integration_gateway_intercepts`, and the proxy never reads the bearer; a
-  fixture-only splice (the upstream prerequisite, not OneCLI v1.42.0) lets kubectl
-  succeed per task identity while the proxy sees ciphertext only; CA mismatch, an
-  unknown agent token (`407`) and a refused host (`403`) block. Skipped without a
-  kubectl.
+  removing the file. Through an intercepting gateway fixture (another CA) kubectl
+  fails with x509 and the gateway never reads the bearer. Through the channel's
+  broker, authorized by the real API, kubectl succeeds while a relay in front of the
+  cluster sees ciphertext only; a `--server` override, a stale attempt, revocation,
+  a CA mismatch and a hostname mismatch are refused. Skipped without a kubectl.
 - No real MCP server, Kubernetes cluster, credential or model run is exercised by
   these checks.

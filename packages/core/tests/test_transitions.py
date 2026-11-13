@@ -75,7 +75,12 @@ def test_single_attempt_task_fails_immediately() -> None:
 
 
 @pytest.mark.parametrize(
-    "reason", ["env_guard_missing", "env_integration_gateway_intercepts"]
+    "reason",
+    [
+        "env_guard_missing",
+        "env_integration_gateway_intercepts",
+        "env_integration_route_unavailable",
+    ],
 )
 def test_worker_env_reasons_are_environment_failures(reason: str) -> None:
     from argus_core.tasks import ENV_BLOCK_REASONS, FAILURE_CLASS, RetryClass

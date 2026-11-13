@@ -446,7 +446,6 @@ def test_install_sh_wires_the_preflight_session_files() -> None:
     script = (NANOCLAW / "install.sh").read_text()
     for name in (
         "argus-repo-preflight.ts",
-        "argus-integrations-route.ts",
         "argus-repo-preflight.test.ts",
         "argus-repo-preflight.docker.test.ts",
         "argus-onecli-preflight-lease.test.ts",

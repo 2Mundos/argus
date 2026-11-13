@@ -5,9 +5,15 @@
  * an attempt-local directory the session container mounts. The model is told the path,
  * never the token; nothing global (no ~/.kube, no process-wide KUBECONFIG) changes.
  *
+ * Each cluster is reached only through the Argus Kubernetes route
+ * (argus-integrations-route.ts): the kubeconfig names it as the cluster's `proxy-url`
+ * with a grant for this attempt, and the process-wide gateway proxy stays as it is for
+ * everything else.
+ *
  * A token never reaches a log line, an error, a block reason or the prompt: only
- * integration names, namespaces, versions and reason codes do. Removing the file stops
- * this attempt from using the token; it does not revoke the token upstream.
+ * integration names, namespaces, versions and reason codes do. Removing the file and
+ * revoking the grants stops this attempt from using the token; it does not revoke the
+ * token upstream.
  */
 import { randomUUID } from "node:crypto";
 import { constants as fsc } from "node:fs";
@@ -31,7 +37,8 @@ export type IntegrationFailureReason =
   | "env_integration_unavailable"
   | "env_integration_unsupported"
   | "env_integration_invalid"
-  | "env_integration_gateway_intercepts";
+  | "env_integration_gateway_intercepts"
+  | "env_integration_route_unavailable";
 
 export type Readiness =
   | "ready"
@@ -64,21 +71,33 @@ export interface KubernetesCredential {
   expires_at: string | null;
 }
 
-/** A cluster the kubeconfig would name: what the gateway route probe checks. Non-secret. */
+/** A cluster the kubeconfig would name: what the route grants and probes. Non-secret. */
 export interface IntegrationRoute {
+  integration_id: string;
   name: string;
   server: string;
   ca_data: string | null;
+  /** Asked by every new tunnel: does Argus still deliver this to the attempt, at this version? */
+  authorize: () => Promise<boolean>;
 }
 
+export type RouteResult =
+  | { ok: true; proxies: Record<string, string> }
+  | { ok: false; reason: IntegrationFailureReason; error: string };
+
 /**
- * Proves the attempt's session reaches every route end to end through its own gateway
- * (argus-integrations-route.ts): null when it does, else a non-secret reason.
+ * The Kubernetes route (argus-integrations-route.ts). `open` replaces every grant of the
+ * task with one per route for this attempt and proves each end to end; its proxy URLs
+ * carry the grant secrets. `revoke` drops the task's grants (only `attempt`'s, if given)
+ * and closes their tunnels.
  */
-export type RouteProbe = (
-  routes: readonly IntegrationRoute[],
-  who: { taskId: string; attempt: number },
-) => Promise<string | null>;
+export interface IntegrationTransport {
+  open(
+    who: { taskId: string; attempt: number },
+    routes: readonly IntegrationRoute[],
+  ): Promise<RouteResult>;
+  revoke(taskId: string, attempt?: number): void;
+}
 
 export interface IntegrationsSource {
   status(taskId: string, attempt: number): Promise<IntegrationState[]>;
@@ -276,9 +295,15 @@ function checkCredential(c: KubernetesCredential, want: IntegrationState): void 
 
 /**
  * One context per integration, pinned to its namespace; the first is current. TLS is
- * verified against `ca_data` when given, else the system store; never skipped.
+ * verified against `ca_data` when given, else the system store; never skipped. Each
+ * cluster goes through its route grant (`proxy-url`), never the process-wide proxy.
  */
-export function renderKubeconfig(creds: readonly KubernetesCredential[]): string {
+export function renderKubeconfig(
+  creds: readonly KubernetesCredential[],
+  proxies: Readonly<Record<string, string>>,
+): string {
+  if (creds.some((c) => !proxies[c.integration_id]))
+    throw new IntegrationError("env_integration_route_unavailable", "a cluster has no route");
   return `${JSON.stringify(
     {
       apiVersion: "v1",
@@ -289,6 +314,7 @@ export function renderKubeconfig(creds: readonly KubernetesCredential[]): string
         cluster: {
           server: c.server,
           ...(c.ca_data ? { "certificate-authority-data": c.ca_data } : {}),
+          "proxy-url": proxies[c.integration_id],
         },
       })),
       users: creds.map((c) => ({ name: c.name, user: { token: c.token } })),
@@ -304,21 +330,41 @@ export function renderKubeconfig(creds: readonly KubernetesCredential[]): string
 }
 
 /**
- * Refuse unless the session would reach every cluster without the gateway terminating its
- * TLS. No probe at all fails closed: production wiring always supplies one.
+ * Grant this attempt a route to every cluster and prove each end to end, or refuse. Each
+ * grant asks Argus again, for every new tunnel, whether the attempt still holds that
+ * integration at that version (the status call checks the attempt's lease). No transport
+ * at all fails closed: production wiring always supplies one.
  */
-async function checkRoutes(
-  probe: RouteProbe | undefined,
+async function openRoutes(
+  transport: IntegrationTransport | undefined,
+  source: IntegrationsSource,
   creds: readonly KubernetesCredential[],
   who: { taskId: string; attempt: number },
-): Promise<void> {
-  const why = probe
-    ? await probe(
-        creds.map((c) => ({ name: c.name, server: c.server, ca_data: c.ca_data })),
-        who,
-      )
-    : "no gateway route probe is configured";
-  if (why) throw new IntegrationError("env_integration_gateway_intercepts", why);
+): Promise<Record<string, string>> {
+  if (!transport)
+    throw new IntegrationError(
+      "env_integration_route_unavailable",
+      "no Kubernetes route is configured",
+    );
+  const holds = (c: KubernetesCredential) => async () =>
+    (await source.status(who.taskId, who.attempt)).some(
+      (s) =>
+        s.integration_id === c.integration_id &&
+        s.readiness === "ready" &&
+        s.secret_version === c.secret_version,
+    );
+  const opened = await transport.open(
+    who,
+    creds.map((c) => ({
+      integration_id: c.integration_id,
+      name: c.name,
+      server: c.server,
+      ca_data: c.ca_data,
+      authorize: holds(c),
+    })),
+  );
+  if (!opened.ok) throw new IntegrationError(opened.reason, opened.error);
+  return opened.proxies;
 }
 
 /** Every selected integration at its current version, or a typed refusal. */
@@ -392,8 +438,8 @@ export async function installTaskIntegrations(opts: {
   engineProvider: string | null;
   executorProvider: string | null;
   source: IntegrationsSource;
-  /** The gateway route probe; absent, the install fails closed. */
-  routeProbe?: RouteProbe;
+  /** The Kubernetes route; absent, the install fails closed. */
+  transport?: IntegrationTransport;
 }): Promise<IntegrationsResult> {
   const { groupDir, taskId, attempt, source } = opts;
   try {
@@ -419,15 +465,15 @@ export async function installTaskIntegrations(opts: {
         "env_integration_unavailable",
         "none of the selected integrations is deliverable to this task",
       );
-    // Before anything is written: a route the gateway intercepts never gets a kubeconfig.
-    await checkRoutes(opts.routeProbe, creds, { taskId, attempt });
+    // Before anything is written: a cluster with no proven route never gets a kubeconfig.
+    const proxies = await openRoutes(opts.transport, source, creds, { taskId, attempt });
     const leaf = `${attempt}-${randomUUID()}`;
     await withDirs(groupDir, taskId, true, async (_root, task) => {
       await emptyDir(task!);
       await mkdir(at(task!, leaf), { mode: 0o700 });
       const d = await privateDir(task!, leaf, "attempt directory", false);
       try {
-        await writeAtomic(d, KUBECONFIG_FILE, renderKubeconfig(creds));
+        await writeAtomic(d, KUBECONFIG_FILE, renderKubeconfig(creds, proxies));
       } finally {
         await d.fh.close();
       }
@@ -436,6 +482,7 @@ export async function installTaskIntegrations(opts: {
     return { ok: true, installed: describe(taskId, attempt, dir, leaf, creds) };
   } catch (err) {
     const e = failure(err);
+    opts.transport?.revoke(taskId);
     if (UUID.test(taskId)) await removeTaskIntegrations(groupDir, taskId).catch(() => undefined);
     return { ok: false, reason: e.reason, error: e.message };
   }
@@ -445,14 +492,15 @@ export async function installTaskIntegrations(opts: {
  * On every heartbeat while the attempt runs: anything no longer deliverable (revoked,
  * expired, the store down, the selection or the lease gone) removes the file; a rotation
  * replaces it atomically. A transient failure to reach Argus keeps it: the lease ends
- * the attempt, and removes it, if that persists. A rotated credential is probed again
- * before it replaces the file.
+ * the attempt, and removes it, if that persists (new tunnels already fail closed: each
+ * asks Argus). Removal revokes the grants and closes their tunnels; a rotation re-grants
+ * (closing the old version's tunnels) and probes again before it replaces the file.
  */
 export async function recheckTaskIntegrations(
   groupDir: string,
   installed: InstalledIntegrations,
   source: IntegrationsSource,
-  routeProbe?: RouteProbe,
+  transport?: IntegrationTransport,
 ): Promise<{
   state: "kept" | "refreshed" | "removed";
   installed: InstalledIntegrations | null;
@@ -465,6 +513,7 @@ export async function recheckTaskIntegrations(
   } catch (err) {
     const s = apiStatus(err);
     if (s !== null && s >= 400 && s < 500 && s !== 408 && s !== 429) {
+      transport?.revoke(taskId);
       await removeTaskIntegrations(groupDir, taskId);
       return { state: "removed", installed: null, why: apiCode(err) ?? `HTTP ${s}` };
     }
@@ -473,6 +522,7 @@ export async function recheckTaskIntegrations(
   const had = new Map(installed.integrations.map((i) => [i.integration_id, i]));
   const gone = states.filter((s) => s.readiness !== "ready" || !had.has(s.integration_id));
   if (gone.length || states.length !== had.size) {
+    transport?.revoke(taskId);
     await removeTaskIntegrations(groupDir, taskId);
     const why = gone.map((s) => `${s.name} (${s.readiness})`).join(", ") || "selection changed";
     return { state: "removed", installed: null, why };
@@ -481,12 +531,12 @@ export async function recheckTaskIntegrations(
     return { state: "kept", installed };
   try {
     const { creds } = await fetchAll(source, taskId, attempt);
-    await checkRoutes(routeProbe, creds, { taskId, attempt });
+    const proxies = await openRoutes(transport, source, creds, { taskId, attempt });
     const leaf = path.basename(installed.dir);
     const wrote = await withDirs(groupDir, taskId, false, async (_root, task) => {
       const d = await privateDir(task!, leaf, "attempt directory", false);
       try {
-        await writeAtomic(d, KUBECONFIG_FILE, renderKubeconfig(creds));
+        await writeAtomic(d, KUBECONFIG_FILE, renderKubeconfig(creds, proxies));
       } finally {
         await d.fh.close();
       }
@@ -495,6 +545,7 @@ export async function recheckTaskIntegrations(
     if (!wrote) throw new IntegrationError("env_integration_invalid", "attempt directory gone");
     return { state: "refreshed", installed: describe(taskId, attempt, installed.dir, leaf, creds) };
   } catch (err) {
+    transport?.revoke(taskId);
     await removeTaskIntegrations(groupDir, taskId);
     return { state: "removed", installed: null, why: failure(err).message };
   }
@@ -533,9 +584,10 @@ export function integrationLines(installed: InstalledIntegrations): string[] {
     "Claude runs get it as KUBECONFIG. Each context is pinned to its namespace; use `--context <name>`",
     "to pick another. Never print, copy or commit the kubeconfig (`cat`, `kubectl config view --raw`):",
     "it holds a live token. It is removed when the attempt ends or the integration is revoked.",
-    "kubectl must reach the cluster through the gateway proxy with end-to-end TLS. An x509 or",
-    "certificate error from kubectl is an environment problem, not one to work around: never",
-    "pass --insecure-skip-tls-verify, change the CA, unset HTTPS_PROXY or set NO_PROXY; stop",
-    "and reply FAIL: with the kubectl error.",
+    "Each cluster is reached through its own Argus route (the kubeconfig's proxy-url), with",
+    "end-to-end TLS. A proxy, x509 or certificate error from kubectl is an environment problem,",
+    "not one to work around: never edit the proxy-url, server or CA, pass --server,",
+    "--insecure-skip-tls-verify or --certificate-authority, or change HTTPS_PROXY or NO_PROXY;",
+    "stop and reply FAIL: with the kubectl error.",
   ];
 }

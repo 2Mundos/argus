@@ -1,92 +1,179 @@
 /**
- * The gateway route probe for task Kubernetes integrations (integrations spec 3.6,
- * "Gateway path"): before a kubeconfig is installed, prove that the attempt's session
- * would reach each cluster end to end through its own gateway proxy.
+ * The Kubernetes route of task integrations (integrations spec 3.6, "Route"): an
+ * Argus-owned CONNECT broker in the channel process, the only way a session's kubectl
+ * reaches a cluster. OneCLI v1.42.0 terminates TLS on every authenticated CONNECT, so
+ * the gateway cannot carry a cluster-pinned kubeconfig; this route never terminates
+ * TLS: it splices the bytes, and kubectl verifies the cluster's CA and hostname itself.
  *
- * The probe sends what the session would send (an HTTP CONNECT with the session's
- * Proxy-Authorization) and then only a TLS handshake, verified against the
- * integration's CA (the bundled public roots when it has none, never the gateway's CA)
- * with hostname checking on. No token and no HTTP request is ever sent. A gateway that
- * terminates TLS itself (OneCLI v1.42.0 does for every authenticated CONNECT), refuses
- * the CONNECT or cannot be reached fails the probe: the attempt blocks with
- * `env_integration_gateway_intercepts` instead of handing the model a kubeconfig whose
- * token the gateway would see in plaintext.
+ * Each grant is minted by the channel after Argus delivered the credential for the
+ * attempt it holds, and lives only in this process's memory: a random secret (the
+ * kubeconfig's `proxy-url` userinfo) bound to one task, attempt, integration and the
+ * exact `host:port` of its server, dialled only at the addresses resolved when it was
+ * granted. Every new tunnel asks Argus again (`authorize`) whether the attempt still
+ * holds that integration at that version. Nothing a session sends (headers, flags,
+ * environment) names a task or widens a grant; an unknown secret is `407`, any other
+ * destination `403`. A revoked grant closes its tunnels at once; every tunnel also
+ * closes after `TUNNEL_MAX_MS`, and kubectl reconnects through a fresh authorization.
  *
- * Nothing here logs or returns the proxy URL or its credentials: failures name the
- * integration and a fixed code only.
+ * Before the kubeconfig is written, `open` proves the route: a CONNECT through the
+ * listener with the grant and a TLS handshake verified against the integration's CA
+ * (the bundled public roots when it has none, never the process's extra CAs) with
+ * hostname checking. No token and no HTTP request is sent. Failures name the
+ * integration and a fixed code only, never a grant or a token.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
 import tls from "node:tls";
 // Types only: the kubectl e2e test loads these files with node's type stripping.
-import type { IntegrationRoute, RouteProbe } from "./argus-integrations.js";
+import type {
+  IntegrationFailureReason,
+  IntegrationRoute,
+  IntegrationTransport,
+  RouteResult,
+} from "./argus-integrations.js";
 
 export const ROUTE_PROBE_TIMEOUT_MS = 10_000;
+/** The longest a tunnel lives; a revocation closes it sooner. */
+export const TUNNEL_MAX_MS = 15 * 60_000;
+const HEADER_TIMEOUT_MS = 10_000;
+const DIAL_TIMEOUT_MS = 10_000;
 const MAX_CONNECT_HEADER = 16 * 1024;
+const USER = "argus";
 
-/** The proxy the attempt's session would get, held until `release`. */
-export interface GatewayProxy {
-  /** The session's HTTPS_PROXY (it may carry the agent token as userinfo); null if none. */
-  proxy: string | null;
-  release(): Promise<void>;
+/** Loopback, link-local (cloud metadata), unspecified, multicast or reserved: never dialled. */
+const INTERNAL = new net.BlockList();
+for (const [net4, bits] of [
+  ["0.0.0.0", 8],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+] as const)
+  INTERNAL.addSubnet(net4, bits, "ipv4");
+INTERNAL.addAddress("::", "ipv6");
+INTERNAL.addAddress("::1", "ipv6");
+INTERNAL.addSubnet("fe80::", 10, "ipv6");
+INTERNAL.addSubnet("ff00::", 8, "ipv6");
+
+/** As the API's `internal_address`: IPv4-mapped IPv6 forms match the IPv4 rules. */
+export function internalAddress(ip: string): boolean {
+  const family = net.isIP(ip);
+  if (!family) return true;
+  return INTERNAL.check(ip, family === 4 ? "ipv4" : "ipv6");
 }
 
-interface ProxyAddress {
-  host: string;
+export type Lookup = (host: string) => Promise<string[]>;
+const systemLookup: Lookup = async (host) =>
+  (await dnsLookup(host, { all: true, verbatim: true })).map((a) => a.address);
+
+interface Grant {
+  key: string;
+  taskId: string;
+  attempt: number;
+  /** `host:port` exactly as kubectl asks for it, lowercased. */
+  authority: string;
+  addresses: string[];
   port: number;
-  authorization: string | null;
+  authorize: () => Promise<boolean>;
+  tunnels: Set<net.Socket>;
 }
 
-function proxyAddress(raw: string): ProxyAddress | null {
-  let u: URL;
-  let user: string;
-  let pass: string;
-  try {
-    u = new URL(raw);
-    user = decodeURIComponent(u.username);
-    pass = decodeURIComponent(u.password);
-  } catch {
-    return null;
+class RouteRefusal extends Error {
+  readonly reason: IntegrationFailureReason;
+  constructor(reason: IntegrationFailureReason, message: string) {
+    super(message);
+    this.reason = reason;
   }
-  if (u.protocol !== "http:" || !u.hostname) return null;
-  return {
-    host: u.hostname.replace(/^\[|\]$/g, ""),
-    port: Number(u.port) || 80,
-    // OneCLI reads the agent token from Basic Proxy-Authorization, as curl sends userinfo.
-    authorization:
-      user || pass ? `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}` : null,
-  };
 }
 
 const errCode = (err: unknown) => {
   const c = (err as { code?: unknown } | null)?.code;
   return typeof c === "string" && /^[A-Z0-9_]{1,64}$/.test(c) ? c : "error";
 };
+const keyOf = (secret: string) => createHash("sha256").update(secret).digest("hex");
+const bracket = (host: string) => (net.isIPv6(host) ? `[${host}]` : host);
 
-/** CONNECT through `proxy` to `host:port`; resolves the tunnel socket or a failure. */
+/** The server's host (brackets stripped), port and CONNECT authority; null if unusable. */
+function target(server: string): { host: string; port: number; authority: string } | null {
+  if (!URL.canParse(server)) return null;
+  const u = new URL(server);
+  if (u.protocol !== "https:" || !u.hostname || u.username || u.password) return null;
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const port = Number(u.port) || 443;
+  return { host, port, authority: `${bracket(host)}:${port}` };
+}
+
+/** The secret from `Proxy-Authorization: Basic`, as Go sends a proxy URL's userinfo. */
+function secretOf(headers: readonly string[]): string | null {
+  const line = headers.find((h) => /^proxy-authorization:/i.test(h));
+  const m = line && /^[^:]+:\s*Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(line);
+  if (!m) return null;
+  const plain = Buffer.from(m[1], "base64").toString("utf8");
+  const colon = plain.indexOf(":");
+  return colon < 0 ? null : plain.slice(colon + 1) || null;
+}
+
+const STATUS_TEXT: Record<number, string> = {
+  403: "Forbidden",
+  405: "Method Not Allowed",
+  407: "Proxy Authentication Required",
+  502: "Bad Gateway",
+};
+
+function answer(sock: net.Socket, status: number): void {
+  const auth = status === 407 ? `Proxy-Authenticate: Basic realm="${USER}"\r\n` : "";
+  sock.end(
+    `HTTP/1.1 ${status} ${STATUS_TEXT[status]}\r\n${auth}Connection: close\r\nContent-Length: 0\r\n\r\n`,
+  );
+}
+
+/** The first pinned address that accepts within the dial timeout. */
+async function dial(addresses: readonly string[], port: number): Promise<net.Socket | null> {
+  for (const host of addresses) {
+    const up = await new Promise<net.Socket | null>((resolve) => {
+      const s = net.connect({ host, port, timeout: DIAL_TIMEOUT_MS });
+      const fail = () => {
+        s.destroy();
+        resolve(null);
+      };
+      s.once("error", fail);
+      s.once("timeout", fail);
+      s.once("connect", () => {
+        s.off("error", fail);
+        s.off("timeout", fail);
+        s.setTimeout(0);
+        resolve(s);
+      });
+    });
+    if (up) return up;
+  }
+  return null;
+}
+
+/** CONNECT through the route to `authority`; resolves the tunnel socket or a failure. */
 function connectTunnel(
-  proxy: ProxyAddress,
-  host: string,
-  port: number,
+  listener: { host: string; port: number },
+  authority: string,
+  secret: string,
   signal: AbortSignal,
 ): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const sock = net.connect({ host: proxy.host, port: proxy.port });
+    const sock = net.connect({ host: listener.host, port: listener.port });
     const fail = (why: string) => {
       sock.destroy();
       reject(new Error(why));
     };
     const onAbort = () => fail("timeout");
-    const onError = (err: Error) => fail(`the gateway proxy is unreachable (${errCode(err)})`);
-    const onClose = () => fail("the gateway closed the connection before answering CONNECT");
+    const onError = (err: Error) => fail(`the route is unreachable (${errCode(err)})`);
+    const onClose = () => fail("the route closed the connection before answering CONNECT");
     signal.addEventListener("abort", onAbort, { once: true });
     sock.once("error", onError);
     sock.once("close", onClose);
     sock.once("connect", () => {
-      const authority = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`;
+      const auth = Buffer.from(`${USER}:${secret}`).toString("base64");
       sock.write(
-        `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n` +
-          `${proxy.authorization ? `Proxy-Authorization: ${proxy.authorization}\r\n` : ""}\r\n`,
+        `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\nProxy-Authorization: Basic ${auth}\r\n\r\n`,
       );
     });
     let head = Buffer.alloc(0);
@@ -94,15 +181,15 @@ function connectTunnel(
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf("\r\n\r\n");
       if (end < 0) {
-        if (head.length > MAX_CONNECT_HEADER) fail("the gateway sent an oversized CONNECT answer");
+        if (head.length > MAX_CONNECT_HEADER) fail("the route sent an oversized CONNECT answer");
         return;
       }
       sock.off("data", onData);
       const status = /^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString("latin1"));
-      if (!status) return fail("the gateway sent no HTTP answer to CONNECT");
-      if (status[1] !== "200") return fail(`the gateway refused the CONNECT (HTTP ${status[1]})`);
+      if (!status) return fail("the route sent no HTTP answer to CONNECT");
+      if (status[1] !== "200") return fail(`the route refused the CONNECT (HTTP ${status[1]})`);
       // The server speaks first only after our ClientHello: anything already here is not TLS.
-      if (head.length > end + 4) return fail("the gateway sent data before the TLS handshake");
+      if (head.length > end + 4) return fail("the route sent data before the TLS handshake");
       signal.removeEventListener("abort", onAbort);
       sock.off("error", onError);
       sock.off("close", onClose);
@@ -139,126 +226,261 @@ function handshake(
   });
 }
 
-/** Null when `route` is reached end to end through `proxy`, else a non-secret reason. */
-async function probeRoute(
-  proxy: ProxyAddress,
+/** Null when the grant reaches the cluster end to end through the listener, else why. */
+async function probe(
+  listener: { host: string; port: number },
+  secret: string,
   route: IntegrationRoute,
+  where: { host: string; authority: string },
   timeoutMs: number,
-): Promise<string | null> {
-  let server: URL;
-  try {
-    server = new URL(route.server);
-  } catch {
-    return `${route.name}: the server is not a URL`;
-  }
-  const host = server.hostname.replace(/^\[|\]$/g, "");
-  const port = Number(server.port) || 443;
+): Promise<RouteRefusal | null> {
   const ca = route.ca_data ? Buffer.from(route.ca_data, "base64").toString("utf8") : null;
   const signal = AbortSignal.timeout(timeoutMs);
   let sock: net.Socket;
   try {
-    sock = await connectTunnel(proxy, host, port, signal);
+    sock = await connectTunnel(listener, where.authority, secret, signal);
   } catch (err) {
     const why = (err as Error).message;
-    return why === "timeout"
-      ? `${route.name}: the gateway did not open a tunnel within ${timeoutMs} ms`
-      : `${route.name}: ${why}`;
+    return new RouteRefusal(
+      "env_integration_route_unavailable",
+      why === "timeout"
+        ? `${route.name}: the route did not open a tunnel within ${timeoutMs} ms`
+        : `${route.name}: ${why}`,
+    );
   }
   try {
     // Never the process's extra CAs (NODE_EXTRA_CA_CERTS may hold the gateway's own).
-    await handshake(sock, host, ca ?? tls.rootCertificates, signal);
+    await handshake(sock, where.host, ca ?? tls.rootCertificates, signal);
     return null;
   } catch (err) {
     if ((err as Error).message === "timeout")
-      return `${route.name}: no TLS handshake through the gateway within ${timeoutMs} ms`;
+      return new RouteRefusal(
+        "env_integration_route_unavailable",
+        `${route.name}: no TLS handshake through the route within ${timeoutMs} ms`,
+      );
     const c = errCode(err);
-    return c === "ERR_TLS_CERT_ALTNAME_INVALID"
-      ? `${route.name}: the certificate presented through the gateway does not name the server (${c}); the gateway intercepts TLS`
-      : `${route.name}: the certificate presented through the gateway is not trusted by the integration's CA (${c}); the gateway intercepts TLS`;
+    return new RouteRefusal(
+      "env_integration_gateway_intercepts",
+      c === "ERR_TLS_CERT_ALTNAME_INVALID"
+        ? `${route.name}: the certificate presented through the route does not name the server (${c}); something intercepts TLS`
+        : `${route.name}: the certificate presented through the route is not trusted by the integration's CA (${c}); something intercepts TLS or the CA is wrong`,
+    );
   }
 }
 
-/**
- * The probe the channel runs: take the session's proxy, check every route through it,
- * release it. No proxy configured fails closed: the session would have no gateway path.
- */
-export function gatewayRouteProbe(
-  gatewayProxy: (who: { taskId: string; attempt: number }) => Promise<GatewayProxy>,
-  timeoutMs = ROUTE_PROBE_TIMEOUT_MS,
-): RouteProbe {
-  return async (routes, who) => {
-    let held: GatewayProxy;
+export interface KubernetesRouteOptions {
+  /** The address sessions reach this process at (the docker bridge); null: no route. */
+  bindHost: () => Promise<string | null>;
+  /** A fixed port (for a host firewall rule), or 0 for any free port. */
+  port?: number;
+  lookup?: Lookup;
+  tunnelMaxMs?: number;
+  probeTimeoutMs?: number;
+}
+
+export interface KubernetesRoute extends IntegrationTransport {
+  /** Stop listening and close every tunnel. */
+  close(): Promise<void>;
+}
+
+export function createKubernetesRoute(opts: KubernetesRouteOptions): KubernetesRoute {
+  const lookup = opts.lookup ?? systemLookup;
+  const tunnelMaxMs = opts.tunnelMaxMs ?? TUNNEL_MAX_MS;
+  const probeTimeoutMs = opts.probeTimeoutMs ?? ROUTE_PROBE_TIMEOUT_MS;
+  const grants = new Map<string, Grant>();
+  let server: net.Server | null = null;
+  let listening: Promise<{ host: string; port: number }> | null = null;
+
+  function drop(grant: Grant): void {
+    grants.delete(grant.key);
+    for (const s of grant.tunnels) s.destroy();
+    grant.tunnels.clear();
+  }
+
+  function revoke(taskId: string, attempt?: number): void {
+    for (const g of [...grants.values()])
+      if (g.taskId === taskId && (attempt === undefined || g.attempt === attempt)) drop(g);
+  }
+
+  async function serve(sock: net.Socket, head: Buffer, end: number): Promise<void> {
+    const [requestLine, ...headers] = head.subarray(0, end).toString("latin1").split("\r\n");
+    const connect = /^CONNECT (\S+) HTTP\/1\.[01]$/.exec(requestLine);
+    if (!connect) return answer(sock, 405);
+    const secret = secretOf(headers);
+    const grant = secret ? grants.get(keyOf(secret)) : undefined;
+    if (!grant) return answer(sock, 407);
+    if (connect[1].toLowerCase() !== grant.authority) return answer(sock, 403);
+    let allowed = false;
     try {
-      held = await gatewayProxy(who);
-    } catch (err) {
-      return `the gateway lease for the probe failed (${errCode(err)})`;
+      allowed = await grant.authorize();
+    } catch {}
+    if (!allowed || grants.get(grant.key) !== grant || sock.destroyed) return answer(sock, 403);
+    const up = await dial(grant.addresses, grant.port);
+    if (!up) return answer(sock, 502);
+    if (grants.get(grant.key) !== grant || sock.destroyed) {
+      up.destroy();
+      return answer(sock, 403);
     }
-    try {
-      if (!held.proxy) return "no gateway proxy is configured for this worker's sessions";
-      const proxy = proxyAddress(held.proxy);
-      if (!proxy) return "the session's gateway proxy is not a plain http URL";
-      for (const route of routes) {
-        const why = await probeRoute(proxy, route, timeoutMs);
-        if (why) return why;
+    grant.tunnels.add(sock);
+    const timer = setTimeout(() => sock.destroy(), tunnelMaxMs);
+    timer.unref();
+    const close = () => {
+      clearTimeout(timer);
+      grant.tunnels.delete(sock);
+      sock.destroy();
+      up.destroy();
+    };
+    sock.on("close", close);
+    up.on("close", close);
+    sock.on("error", close);
+    up.on("error", close);
+    sock.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    const early = head.subarray(end + 4);
+    if (early.length) up.write(early);
+    sock.pipe(up);
+    up.pipe(sock);
+    sock.resume();
+  }
+
+  function accept(sock: net.Socket): void {
+    const timer = setTimeout(() => sock.destroy(), HEADER_TIMEOUT_MS);
+    timer.unref();
+    sock.on("error", () => sock.destroy());
+    sock.on("close", () => clearTimeout(timer));
+    let head = Buffer.alloc(0);
+    const onData = (chunk: Buffer) => {
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf("\r\n\r\n");
+      if (end < 0) {
+        if (head.length > MAX_CONNECT_HEADER) sock.destroy();
+        return;
       }
-      return null;
-    } finally {
-      await held.release().catch(() => undefined);
+      sock.off("data", onData);
+      sock.pause();
+      clearTimeout(timer);
+      void serve(sock, head, end).catch(() => sock.destroy());
+    };
+    sock.on("data", onData);
+  }
+
+  function listen(): Promise<{ host: string; port: number }> {
+    listening ??= (async () => {
+      const host = await opts.bindHost();
+      if (!host)
+        throw new RouteRefusal(
+          "env_integration_route_unavailable",
+          "this worker has no docker bridge address for the Kubernetes route",
+        );
+      const port = opts.port ?? 0;
+      if (!Number.isInteger(port) || port < 0 || port > 65535)
+        throw new RouteRefusal(
+          "env_integration_route_unavailable",
+          "ARGUS_INTEGRATION_ROUTE_PORT is not a port number",
+        );
+      const s = net.createServer(accept);
+      await new Promise<void>((resolve, reject) => {
+        s.once("error", reject);
+        s.listen({ host, port }, () => {
+          s.off("error", reject);
+          resolve();
+        });
+      });
+      server = s;
+      return { host, port: (s.address() as net.AddressInfo).port };
+    })();
+    return listening.catch((err) => {
+      listening = null;
+      throw err instanceof RouteRefusal
+        ? err
+        : new RouteRefusal(
+            "env_integration_route_unavailable",
+            `the Kubernetes route cannot listen (${errCode(err)})`,
+          );
+    });
+  }
+
+  async function grantOne(
+    who: { taskId: string; attempt: number },
+    route: IntegrationRoute,
+    listener: { host: string; port: number },
+  ): Promise<string> {
+    const where = target(route.server);
+    if (!where)
+      throw new RouteRefusal("env_integration_invalid", `${route.name}: the server is not a URL`);
+    let addresses: string[];
+    try {
+      addresses = net.isIP(where.host) ? [where.host] : await lookup(where.host);
+    } catch (err) {
+      throw new RouteRefusal(
+        "env_integration_route_unavailable",
+        `${route.name}: the server does not resolve (${errCode(err)})`,
+      );
     }
+    if (!addresses.length || addresses.some(internalAddress))
+      throw new RouteRefusal(
+        "env_integration_route_unavailable",
+        `${route.name}: the server resolves to a loopback or link-local address`,
+      );
+    const secret = randomBytes(32).toString("base64url");
+    const grant: Grant = {
+      key: keyOf(secret),
+      taskId: who.taskId,
+      attempt: who.attempt,
+      authority: where.authority,
+      addresses,
+      port: where.port,
+      authorize: route.authorize,
+      tunnels: new Set(),
+    };
+    grants.set(grant.key, grant);
+    const refused = await probe(listener, secret, route, where, probeTimeoutMs);
+    if (refused) throw refused;
+    return `http://${USER}:${secret}@${bracket(listener.host)}:${listener.port}`;
+  }
+
+  return {
+    async open(who, routes): Promise<RouteResult> {
+      // A new attempt (or a rotation) fences every earlier grant of the task first.
+      revoke(who.taskId);
+      try {
+        const listener = await listen();
+        const proxies: Record<string, string> = {};
+        for (const route of routes)
+          proxies[route.integration_id] = await grantOne(who, route, listener);
+        return { ok: true, proxies };
+      } catch (err) {
+        revoke(who.taskId);
+        const e =
+          err instanceof RouteRefusal
+            ? err
+            : new RouteRefusal(
+                "env_integration_route_unavailable",
+                `route error (${errCode(err)})`,
+              );
+        return { ok: false, reason: e.reason, error: e.message };
+      }
+    },
+    revoke,
+    async close() {
+      for (const g of [...grants.values()]) drop(g);
+      const s = server;
+      server = null;
+      listening = null;
+      if (s) await new Promise<void>((resolve) => s.close(() => resolve()));
+    },
   };
 }
 
 /**
- * The production gateway proxy: a short lease of the Argus agent group through NanoClaw's
- * own `ensureGatewaySession`, as the repository preflight takes one (argus-repo-preflight.ts),
- * so the probe carries the same OneCLI agent identity a worker session of this group gets.
- * No container starts. The container's `host.docker.internal` is the docker bridge here.
+ * The production route: listen on the docker bridge, the address the session
+ * containers of this process reach it at (as the local Strata forward does), on
+ * `ARGUS_INTEGRATION_ROUTE_PORT` or any free port. The operator's process
+ * environment sets the port only; nothing turns the checks off.
  */
-export function nanoclawGatewayProxy(
-  resolveGroup: () => Promise<{ id: string; name: string } | null>,
-): (who: { taskId: string; attempt: number }) => Promise<GatewayProxy> {
-  return async () => {
-    const [runner, lifecycle, config, drivers, forward] = await Promise.all([
-      import("../container-runner.js"),
-      import("../gateway-session-lifecycle.js"),
-      import("../config.js"),
-      import("../drivers/index.js"),
-      import("./argus-local-forward.js"),
-    ]);
-    if (typeof runner.ensureGatewaySession !== "function")
-      throw new Error(
-        "container-runner does not export ensureGatewaySession: run install.sh and rebuild NanoClaw",
-      );
-    const group = await resolveGroup();
-    if (!group) throw new Error("no Argus agent group for the integration route probe");
-    const sessionId = `preflight-${randomBytes(6).toString("hex")}`;
-    const key = { installSlug: config.INSTALL_SLUG, agentGroupId: group.id, sessionId };
-    const control = (await runner.ensureGatewaySession({
-      key,
-      disposition: "create",
-      runtimeIdentity: `${key.installSlug}/${group.id}/${sessionId}`,
-      groupName: group.name,
-      containerName: `nanoclaw-v2-preflight-${sessionId.slice(10)}`,
-      capabilities: drivers.getSessionDriver().capabilities(),
-    } as never)) as {
-      lease: { contribution: { env?: Record<string, string> } };
-      controller: AbortController;
-    };
-    const env = control.lease.contribution.env ?? {};
-    let proxy = env.HTTPS_PROXY || env.https_proxy || null;
-    const u = proxy && URL.canParse(proxy) ? new URL(proxy) : null;
-    const bridge = forward.dockerBridgeIpv4();
-    if (u?.hostname.toLowerCase() === "host.docker.internal" && bridge) {
-      u.hostname = bridge;
-      proxy = u.href;
-    }
-    return {
-      proxy,
-      release: () =>
-        lifecycle.releaseGatewaySession(
-          control as never,
-          { kind: "session-ended", reason: "integration-route-probe-done" } as never,
-        ),
-    };
-  };
+export function nanoclawKubernetesRoute(env: NodeJS.ProcessEnv): KubernetesRoute {
+  const raw = env.ARGUS_INTEGRATION_ROUTE_PORT?.trim();
+  return createKubernetesRoute({
+    bindHost: async () => (await import("./argus-local-forward.js")).dockerBridgeIpv4(),
+    port: raw ? (/^\d{1,5}$/.test(raw) ? Number(raw) : -1) : 0,
+  });
 }

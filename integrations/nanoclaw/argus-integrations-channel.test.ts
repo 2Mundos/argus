@@ -1,8 +1,9 @@
 /**
  * Kubernetes integrations through the channel (integrations spec 3.6): a fake
  * Argus and OneCLI in one fetch, no network, no model, no cluster. The kubeconfig is
- * installed before the prompt, named but never quoted in it, removed on revocation
- * and when the attempt ends, and a non-deliverable integration blocks the attempt.
+ * installed before the prompt, named but never quoted in it, removed (and its route
+ * grants revoked) on revocation and when the attempt ends, and a non-deliverable
+ * integration or an unproven route blocks the attempt.
  */
 import {
   existsSync,
@@ -19,7 +20,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetup } from "./adapter.js";
 import { createArgusAdapter } from "./argus.js";
 import { type AccountLease, OneCliClient } from "./argus-accounts.js";
-import { KUBECONFIG_FILE, type RouteProbe, TASK_INTEGRATIONS_DIR } from "./argus-integrations.js";
+import {
+  type IntegrationRoute,
+  type IntegrationTransport,
+  KUBECONFIG_FILE,
+  type RouteResult,
+  TASK_INTEGRATIONS_DIR,
+} from "./argus-integrations.js";
 import { until } from "./argus-test-until.js";
 
 vi.mock("../db/messaging-groups.js", () => ({
@@ -152,13 +159,33 @@ function world(provider: string, readiness: string) {
   return { calls, fetchImpl, state };
 }
 
-/** A gateway that splices end to end; null runs the adapter with no probe configured. */
-const endToEnd: RouteProbe = async () => null;
+const PROXY = "http://argus:grant@172.17.0.1:7000";
+
+/** A route that grants and records; `refuse` answers instead when it returns a result. */
+function recordingRoute(refuse: () => RouteResult | null = () => null) {
+  const opened: Array<[{ taskId: string; attempt: number }, IntegrationRoute[]]> = [];
+  const revoked: Array<[string, number | undefined]> = [];
+  const transport: IntegrationTransport = {
+    open: async (who, routes) => {
+      opened.push([who, [...routes]]);
+      return (
+        refuse() ?? {
+          ok: true,
+          proxies: Object.fromEntries(routes.map((x) => [x.integration_id, PROXY])),
+        }
+      );
+    },
+    revoke: (taskId, attempt) => {
+      revoked.push([taskId, attempt]);
+    },
+  };
+  return { opened, revoked, transport };
+}
 
 async function run(
   provider = "anthropic",
   readiness = "ready",
-  probe: RouteProbe | null = endToEnd,
+  route: ReturnType<typeof recordingRoute> | null = recordingRoute(),
 ) {
   const w = world(provider, readiness);
   const groupDir = mkdtempSync(path.join(os.tmpdir(), "argus-integrations-channel-"));
@@ -188,7 +215,7 @@ async function run(
     claimWaitS: 1,
     heartbeatMs: 50,
     workspaceRoot: async () => groupDir,
-    ...(probe ? { probeIntegrationRoutes: probe } : {}),
+    ...(route ? { integrationRoute: route.transport } : {}),
     sessionImage: async () => "argus-nanoclaw-agent:test",
     readImageFile: async () =>
       readFileSync(new URL("./engines/claude-managed-settings.json", import.meta.url), "utf8"),
@@ -210,7 +237,7 @@ async function run(
   const say = (text: string) =>
     adapter.deliver("local", thread, { kind: "chat", content: { text } } as never);
   const posts = (suffix: string) => w.calls.filter((c) => c.path === `/tasks/${TASK}${suffix}`);
-  return { w, inbound, root, say, posts, logs, recycleRuntime };
+  return { w, inbound, root, say, posts, logs, recycleRuntime, route };
 }
 
 const kubeconfigs = (root: string) =>
@@ -227,6 +254,7 @@ describe("task integrations through the channel", () => {
     const [file] = kubeconfigs(r.root);
     expect(file).toMatch(/\/1-[0-9a-f-]{36}\/kubeconfig$/);
     expect(readFileSync(file!, "utf8")).toContain(TOKEN);
+    expect(JSON.parse(readFileSync(file!, "utf8")).clusters[0].cluster["proxy-url"]).toBe(PROXY);
     const prompt = r.inbound[0].content.text as string;
     expect(prompt).toContain(
       `/workspace/agent/${TASK_INTEGRATIONS_DIR}/${TASK}/${path.basename(path.dirname(file!))}/kubeconfig`,
@@ -242,21 +270,25 @@ describe("task integrations through the channel", () => {
     await r.say("COMPLETE: listed the pods");
     await until(() => r.posts("/complete").length > 0, 8000, "complete");
     await until(() => !existsSync(r.root), 8000, "the kubeconfig is removed");
+    // The attempt's grants end with it: no new tunnel, open ones closed.
+    expect(r.route!.revoked).toContainEqual([TASK, undefined]);
     expect(r.logs.join("\n")).not.toContain(TOKEN);
+    expect(r.logs.join("\n")).not.toContain(PROXY);
   });
 
   it("removes the kubeconfig on the next heartbeat after a revocation", async () => {
     const r = await run();
     await until(() => r.inbound.length > 0, 8000, "the task prompt");
     expect(kubeconfigs(r.root)).toHaveLength(1);
+    expect(r.route!.revoked).toEqual([]);
     r.w.state.readiness = "revoked";
     await until(() => kubeconfigs(r.root).length === 0, 8000, "the kubeconfig is removed");
+    expect(r.route!.revoked).toContainEqual([TASK, undefined]);
     expect(r.posts("/complete")).toHaveLength(0);
   });
 
   it("replaces the kubeconfig on the next heartbeat after a rotation", async () => {
-    const probe = vi.fn(endToEnd);
-    const r = await run("anthropic", "ready", probe);
+    const r = await run();
     await until(() => r.inbound.length > 0, 8000, "the task prompt");
     r.w.state.holdRotation = true;
     r.w.state.version = 2;
@@ -276,13 +308,24 @@ describe("task integrations through the channel", () => {
       .filter((c) => c.body.secret_version === 2);
     expect(rotated).toHaveLength(1);
     expect(kubeconfigs(r.root).map((f) => path.basename(f))).toEqual([KUBECONFIG_FILE]);
-    // The rotated credential went through the route probe again before it was written.
-    expect(probe).toHaveBeenCalledTimes(2);
+    // The rotated credential got a fresh, proven grant for the same attempt before it was written.
+    expect(r.route!.opened.map(([who]) => who)).toEqual([
+      { taskId: TASK, attempt: 1 },
+      { taskId: TASK, attempt: 1 },
+    ]);
   });
 
-  it("removes the kubeconfig when a rotation no longer passes the route probe", async () => {
+  it("removes the kubeconfig when a rotation no longer gets a proven route", async () => {
     let intercepted = false;
-    const r = await run("anthropic", "ready", async () => (intercepted ? "intercepted" : null));
+    const r = await run(
+      "anthropic",
+      "ready",
+      recordingRoute(() =>
+        intercepted
+          ? { ok: false, reason: "env_integration_gateway_intercepts", error: "intercepted" }
+          : null,
+      ),
+    );
     await until(() => r.inbound.length > 0, 8000, "the task prompt");
     intercepted = true;
     r.w.state.version = 2;
@@ -314,6 +357,7 @@ describe("task integrations through the channel", () => {
     r.w.state.rejectHeartbeat = true;
     await until(() => r.recycleRuntime.mock.calls.length > 0, 8000, "the session stops");
     await until(() => !existsSync(r.root), 8000, "the kubeconfig is removed");
+    expect(r.route!.revoked).toContainEqual([TASK, undefined]);
   });
 
   it.each([
@@ -332,34 +376,49 @@ describe("task integrations through the channel", () => {
     },
   );
 
-  it("blocks before the model when the gateway intercepts TLS, and keeps no kubeconfig", async () => {
-    const seen: Array<Parameters<RouteProbe>> = [];
-    const r = await run("anthropic", "ready", async (...a) => {
-      seen.push(a);
-      return "staging: the certificate presented through the gateway is not trusted by the integration's CA (SELF_SIGNED_CERT_IN_CHAIN); the gateway intercepts TLS";
-    });
+  it.each([
+    [
+      "env_integration_gateway_intercepts",
+      "staging: the certificate presented through the route is not trusted by the integration's CA (SELF_SIGNED_CERT_IN_CHAIN); something intercepts TLS or the CA is wrong",
+    ],
+    [
+      "env_integration_route_unavailable",
+      "this worker has no docker bridge address for the Kubernetes route",
+    ],
+  ] as const)("blocks with %s before the model, and keeps no kubeconfig", async (reason, error) => {
+    const route = recordingRoute(() => ({ ok: false, reason, error }));
+    const r = await run("anthropic", "ready", route);
     await until(() => r.posts("/block").length > 0, 8000, "the block");
     const block = r.posts("/block")[0]!.body;
-    expect(block).toMatchObject({ attempt: 1, reason: "env_integration_gateway_intercepts" });
-    expect(JSON.stringify(block)).toContain("the gateway intercepts TLS");
+    expect(block).toMatchObject({ attempt: 1, reason });
+    expect(JSON.stringify(block)).toContain(error);
     expect(r.inbound).toHaveLength(0);
     expect(existsSync(r.root)).toBe(false);
-    // The probe ran for this task and attempt, on the route alone.
-    expect(seen).toEqual([
+    // The route was asked for this task and attempt, with the cluster alone.
+    expect(route.opened).toEqual([
       [
-        [{ name: "staging", server: "https://k8s.example.test:6443", ca_data: null }],
         { taskId: TASK, attempt: 1 },
+        [
+          {
+            integration_id: "int-1",
+            name: "staging",
+            server: "https://k8s.example.test:6443",
+            ca_data: null,
+            authorize: expect.any(Function),
+          },
+        ],
       ],
     ]);
+    expect(route.revoked).toContainEqual([TASK, undefined]);
     expect(JSON.stringify(r.w.calls.filter((c) => c.path.endsWith("/block")))).not.toContain(TOKEN);
     expect(r.logs.join("\n")).not.toContain(TOKEN);
   });
 
-  it("blocks when no route probe is configured", async () => {
+  it("blocks when no route is configured", async () => {
     const r = await run("anthropic", "ready", null);
     await until(() => r.posts("/block").length > 0, 8000, "the block");
     expect(r.posts("/block")[0]!.body).toMatchObject({
-      reason: "env_integration_gateway_intercepts",
+      reason: "env_integration_route_unavailable",
     });
     expect(r.inbound).toHaveLength(0);
     expect(existsSync(r.root)).toBe(false);
