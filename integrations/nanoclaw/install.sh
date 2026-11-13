@@ -59,6 +59,9 @@ cp "$here/argus-inputs.test.ts" "$target/src/channels/argus-inputs.test.ts"
 cp "$here/argus-integrations.ts" "$target/src/channels/argus-integrations.ts"
 # The gateway route probe (integrations spec 3.6, "Gateway path").
 cp "$here/argus-integrations-route.ts" "$target/src/channels/argus-integrations-route.ts"
+# The MCP broker (integrations spec 3.6, MCP broker).
+cp "$here/argus-integrations-mcp.ts" "$target/src/channels/argus-integrations-mcp.ts"
+cp "$here/argus-integrations-mcp.test.ts" "$target/src/channels/argus-integrations-mcp.test.ts"
 cp "$here/argus-integrations.test.ts" "$target/src/channels/argus-integrations.test.ts"
 cp "$here/argus-integrations-channel.test.ts" "$target/src/channels/argus-integrations-channel.test.ts"
 cp "$here/argus-task-inputs.e2e.test.ts" "$target/src/channels/argus-task-inputs.e2e.test.ts"

@@ -126,10 +126,14 @@ import {
   type IntegrationTransport,
   installTaskIntegrations,
   integrationLines,
+  type McpTransport,
   recheckTaskIntegrations,
   removeTaskIntegrations,
+  type SessionMcp,
   sweepTaskIntegrations,
+  withIntegrationServers,
 } from "./argus-integrations.js";
+import { nanoclawMcpBroker } from "./argus-integrations-mcp.js";
 import { nanoclawKubernetesRoute } from "./argus-integrations-route.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
 import {
@@ -410,6 +414,15 @@ export interface ArgusConfig {
    */
   integrationRoute?: IntegrationTransport;
   /**
+   * The MCP broker (integrations spec 3.6, "MCP broker"): grants the attempt an opaque
+   * URL per MCP integration, injects the bearer upstream and enforces the tool policy;
+   * revoked when the attempt ends. `sessionMcp` points the session's MCP config at the
+   * grants. Either absent: a task with an MCP integration blocks with
+   * `env_integration_route_unavailable`. `fromEnv` wires both.
+   */
+  integrationMcp?: McpTransport;
+  sessionMcp?: SessionMcp;
+  /**
    * Independent exact-agent evidence on whether the gateway injects the repository credential,
    * consulted only for a 404 that proves no authentication. `fromEnv` leaves it absent: the
    * OneCLI adapter has no supported policy or request-log read, so such a 404 stays fail-closed.
@@ -628,7 +641,7 @@ export interface ArgusTask {
   auto_merge?: boolean;
   /** Effective `review.forge_agentic` (settings 3.12). Absent (older API) is treated as required. */
   forge_agentic_review_required?: boolean | null;
-  /** Kubernetes integration ids the task opted into (integrations spec 3.6); never a secret. */
+  /** Integration ids (Kubernetes or MCP) the task opted into (integrations spec 3.6); never a secret. */
   integrations?: string[];
 }
 
@@ -2876,7 +2889,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   function finishTask(): void {
     const ended = current?.id;
     // Every end of the attempt, a lost lease included: no new tunnel, open ones closed.
-    if (ended) cfg.integrationRoute?.revoke(ended);
+    if (ended) {
+      cfg.integrationRoute?.revoke(ended);
+      cfg.integrationMcp?.revoke(ended);
+    }
     if (cfg.runtime) {
       // Exactly this task's test services and declaration; a failure is logged, never fatal.
       void cfg.runtime.cleanup(ended).catch((err) => {
@@ -3751,12 +3767,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         })
       ).data,
   };
-  /** The attempt's installed kubeconfig (integrations spec 3.6); removed when it ends. */
+  /** The attempt's kubeconfig and MCP grants (integrations spec 3.6); removed when it ends. */
   let integrationsAttempt: InstalledIntegrations | null = null;
 
   /**
-   * Install the kubeconfig of the task's Kubernetes integrations before the session
-   * starts (integrations spec 3.6). Anything not deliverable blocks the attempt.
+   * Install the kubeconfig of the task's Kubernetes integrations and grant its MCP
+   * servers before the session starts (integrations spec 3.6). Anything not
+   * deliverable blocks the attempt.
    */
   async function integrationsPreflight(
     task: ArgusTask,
@@ -3778,7 +3795,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       engineProvider: account?.provider ?? null,
       executorProvider: executor?.provider ?? null,
       source: integrationsSource,
-      transport: cfg.integrationRoute,
+      ...integrationTransports(),
     });
     if (!result.ok) return result;
     integrationsAttempt = result.installed;
@@ -3788,6 +3805,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         integrations: result.installed.integrations.map((i) => ({
           name: i.name,
           namespace: i.namespace,
+          tools: i.tools,
           version: i.secret_version,
         })),
       });
@@ -3810,21 +3828,24 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         groupDir,
         held,
         integrationsSource,
-        cfg.integrationRoute,
+        integrationTransports(),
       );
       if (integrationsAttempt !== held) {
         // The attempt ended meanwhile: a rotation may have granted it again.
         cfg.integrationRoute?.revoke(held.taskId, held.attempt);
+        cfg.integrationMcp?.revoke(held.taskId, held.attempt);
         return;
       }
       integrationsAttempt = r.installed;
       if (r.state === "removed")
-        log.warn("Task integration no longer deliverable; kubeconfig removed", {
+        log.warn("Task integration no longer deliverable; kubeconfig and MCP grants removed", {
           task: held.taskId,
           why: r.why,
         });
       else if (r.state === "refreshed")
-        log.info("Task integration rotated; kubeconfig replaced", { task: held.taskId });
+        log.info("Task integration changed; kubeconfig and MCP grants replaced", {
+          task: held.taskId,
+        });
     } catch (err) {
       log.warn("Could not recheck the task's integrations", {
         task: held.taskId,
@@ -3835,10 +3856,24 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
-  /** Remove every kubeconfig of `taskId`; logged, never fatal. */
+  function integrationTransports() {
+    return {
+      transport: cfg.integrationRoute,
+      mcp: cfg.integrationMcp,
+      sessionMcp: cfg.sessionMcp,
+    };
+  }
+
+  /** Remove every kubeconfig and MCP grant of `taskId`; logged, never fatal. */
   async function dropIntegrations(taskId: string): Promise<void> {
     if (integrationsAttempt?.taskId === taskId) integrationsAttempt = null;
     cfg.integrationRoute?.revoke(taskId);
+    cfg.integrationMcp?.revoke(taskId);
+    try {
+      await cfg.sessionMcp?.set({});
+    } catch (err) {
+      log.error("Could not remove the task's MCP servers", { task: taskId, err: String(err) });
+    }
     try {
       const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
       if (groupDir) await removeTaskIntegrations(groupDir, taskId);
@@ -4708,6 +4743,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       await sweepTaskIntegrations(groupDir).catch((err) =>
         log.error("Could not sweep stale task kubeconfigs", { err: String(err) }),
       );
+    // Grant URLs a previous process wrote point at a broker that no longer holds them.
+    await cfg.sessionMcp
+      ?.set({})
+      .catch((err) => log.error("Could not sweep stale task MCP servers", { err: String(err) }));
     let mayClaim = true;
     let nextVisibility = Date.now() + STARTUP_ADOPTION_VISIBILITY_MS;
     if (cfg.startupReady) {
@@ -5792,6 +5831,28 @@ async function argusGroup(): Promise<{ id: string; name: string; folder: string 
   return (wiring ? await getAgentGroup(wiring.agent_group_id) : undefined) ?? null;
 }
 
+/**
+ * The Argus agent group's MCP config (integrations spec 3.6): its `argus-integration-*`
+ * servers become `servers`, every other server stays. Grant URLs are never logged.
+ */
+const nanoclawSessionMcp: SessionMcp = {
+  async set(servers) {
+    const group = await argusGroup();
+    if (!group) throw new Error("no agent group is wired to the argus channel");
+    const { getContainerConfig, updateContainerConfigJson } = await import(
+      "../db/container-configs.js"
+    );
+    const config = await getContainerConfig(group.id);
+    let existing: unknown = {};
+    try {
+      existing = config?.mcp_servers ? JSON.parse(config.mcp_servers) : {};
+    } catch {}
+    const next = withIntegrationServers(existing, servers);
+    if (JSON.stringify(next) !== JSON.stringify(existing))
+      await updateContainerConfigJson(group.id, "mcp_servers", next);
+  },
+};
+
 /** The image NanoClaw's container runner starts the group's next session in. */
 async function nanoclawSessionImage(): Promise<string> {
   const group = await argusGroup();
@@ -6012,6 +6073,10 @@ export function fromEnv(): ChannelAdapter | null {
     probeRepository: sessionRepositoryProbe(nanoclawPreflightRunner(argusGroup)),
     probeExecutor: (cli) => runExecutorPreflight(nanoclawPreflightRunner(argusGroup), cli),
     integrationRoute: nanoclawKubernetesRoute(process.env),
+    integrationMcp: nanoclawMcpBroker(process.env, (e) =>
+      log.warn("Task MCP integration blocked", { task: e.taskId, name: e.name, why: e.why }),
+    ),
+    sessionMcp: nanoclawSessionMcp,
     sessionImage: nanoclawSessionImage,
     startupReady: nanoclawStartupReady,
     runtime,

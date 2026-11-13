@@ -18,12 +18,14 @@ from argus_api.integrations.delivery import (
     DeliveryRequest,
     IntegrationState,
     KubernetesCredential,
+    McpCredential,
     TaskIntegrations,
 )
 from argus_api.integrations.service import (
     Integration,
     IntegrationCreate,
     IntegrationRotate,
+    IntegrationUpdate,
 )
 
 router = APIRouter(tags=["integrations"])
@@ -75,6 +77,15 @@ async def get_integration(
     slug: str, integration_id: str, db: DbDep, _: AdminDep
 ) -> Integration:
     return await service.get(db, slug, integration_id)
+
+
+@router.patch("/projects/{slug}/integrations/{integration_id}")
+async def update_integration(
+    slug: str, integration_id: str, body: IntegrationUpdate, db: DbDep, caller: AdminDep
+) -> Integration:
+    """Correct the config or access, keeping the credential: pass the `version` you
+    read as `expected_version`. Validation goes back to `unchecked`."""
+    return await service.update(db, slug, integration_id, body, caller.actor)
 
 
 @router.post("/projects/{slug}/integrations/{integration_id}/validate")
@@ -143,10 +154,11 @@ async def revoke_integration(
 async def set_task_integrations(
     task_id: str, body: TaskIntegrations, db: DbDep, caller: AdminDep
 ) -> Task:
-    """Opt a task into Kubernetes integrations of its own project (ids only), or
-    clear the list. Each id must be active and of kind `kubernetes`; not while an
-    attempt runs. Selecting is the only grant: capabilities, titles and pool
-    labels never give a task a credential."""
+    """Opt a task into Kubernetes and MCP integrations of its own project (ids
+    only), or clear the list. Each id must be active, and an MCP one must not be
+    read-only without a tool allowlist; not while an attempt runs. Selecting is
+    the only grant: capabilities, titles and pool labels never give a task a
+    credential."""
     async with db.write() as tx:
         return await delivery.set_selection(tx, task_id, body, caller.actor)
 
@@ -190,7 +202,7 @@ async def deliver_task_integration(
     db: DbDep,
     caller: WorkerDep,
     secrets: SecretsDep,
-) -> KubernetesCredential:
+) -> KubernetesCredential | McpCredential:
     """The credential, to the worker holding this exact attempt (spec 3.6)."""
     assert caller.agent_id is not None
     response.headers["Cache-Control"] = "no-store"

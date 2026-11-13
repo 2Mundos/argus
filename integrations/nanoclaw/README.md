@@ -459,7 +459,7 @@ feature. Activating it on a fleet is an operator step:
 `scripts/task-input-e2e.sh` runs a disposable API and this channel in a
 disposable checkout end to end.
 
-## Task integrations (Kubernetes)
+## Task integrations (Kubernetes and MCP)
 
 When an admin opts a task into Kubernetes integrations, the channel fetches each
 one at preflight, bound to the attempt's lease, and writes a kubeconfig to
@@ -499,8 +499,23 @@ environment block: never edit the `proxy-url`, server or CA, never disable TLS
 verification, unset `HTTPS_PROXY` or set `NO_PROXY`
 ([spec](../../docs/specs/integrations.spec.md) 3.6 "Route").
 
+MCP integrations never put their token in the session.
+`argus-integrations-mcp.ts` runs an MCP broker in the channel on the same bridge
+address (`ARGUS_INTEGRATION_MCP_PORT`, else a free port) that holds the token in
+memory. For each selected MCP integration the session's MCP config (`mcp_servers`
+of the group) gets a server `argus-integration-<name>` whose URL is a random grant
+on that broker, bound to the task, the attempt and the integration. The broker adds
+the bearer token, forwards only to the integration's URL (no redirects, TLS
+verified, internal addresses refused), asks Argus on every request, passes only
+tool discovery and calls, filters `tools/list` to the allowlist and pins it: a
+changed list blocks the grant. Grants last 15 minutes from the last heartbeat
+renewal and end with the attempt, revocation, expiry or a lost lease, cutting
+open streams. Streamable HTTP and legacy HTTP+SSE servers both work
+([spec](../../docs/specs/integrations.spec.md) 3.6 "MCP broker").
+
 Activation and rollback: [worker setup
-runbook](../../docs/runbooks/2026-10-16.nanoclaw-worker-setup.ref.md) section 5.
+runbook](../../docs/runbooks/2026-10-16.nanoclaw-worker-setup.ref.md) sections 5
+and 6.
 
 ## Not done yet
 

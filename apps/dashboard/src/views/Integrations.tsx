@@ -37,6 +37,34 @@ function failure(error: unknown): string {
   return "The request could not be completed. Check the connection and try again.";
 }
 
+/** Fixed messages for an edit, which carries no token. */
+function editFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case "stale_version":
+        return "Someone changed this connection since you opened it. Close, refresh the list and edit again.";
+      case "integration_revoked":
+        return "This connection was revoked. Add a new integration instead.";
+      case "config_invalid":
+        return "Check the HTTPS URL (no credentials, query or fragment), namespace, CA bundle and tool names.";
+    }
+  }
+  return failure(error);
+}
+
+function toolPolicy(connection: Integration): string | undefined {
+  const tools = connection.config.tools;
+  switch (connection.tool_policy) {
+    case "allowlist":
+      return `Tool allowlist: ${Array.isArray(tools) ? tools.length : 0} tools`;
+    case "all":
+      return "Tools: all tools the server lists";
+    case "unknown":
+      return "Tools: unknown coverage; unusable by workers until an allowlist is set";
+  }
+  return undefined;
+}
+
 export function Integrations() {
   const { data: system, error: systemError } = useLiveData(
     (signal) => call(api.GET("/api/system", { signal })),
@@ -68,12 +96,13 @@ export function Integrations() {
       />
       <div className="card">
         <p>
-          Credentials are stored in the encrypted SOPS secret store. MCP connections are not yet
-          injected into task workers. A Kubernetes connection reaches a worker only when a task of
-          the same project selects it: each attempt of that task on a Claude engine gets an
-          ephemeral kubeconfig pinned to the target namespace, removed when the attempt ends or the
-          connection is revoked, rotated or expires. Removing that file does not revoke the token;
-          revoke it at the cluster too.
+          Credentials are stored in the encrypted SOPS secret store. A connection reaches a worker
+          only when a task of the same project selects it, and only on a Claude engine. A Kubernetes
+          connection becomes an ephemeral kubeconfig pinned to the target namespace. An MCP
+          connection becomes a per-attempt server URL on the worker's Argus broker, which adds the
+          token and passes only the allowed tools; the session never sees the token. Either ends
+          when the attempt ends or the connection is revoked, edited, rotated or expires. That does
+          not revoke the token; revoke it at the cluster or MCP server too.
         </p>
         <p className="muted small">
           Encrypted secret store:{" "}
@@ -186,9 +215,9 @@ function ProjectIntegrations({ project }: { project: string }) {
         </div>
       )}
       <p className="muted small">
-        Access records your intent; MCP permissions are enforced by the server, and Kubernetes
-        permissions by its RBAC bindings. Revoked records remain visible. To reconnect, add a new
-        integration with a new token.
+        Argus limits MCP workers to the tool allowlist (read only needs one); what each tool does is
+        up to the server. Kubernetes permissions are enforced by its RBAC bindings. Revoked records
+        remain visible. To reconnect, add a new integration with a new token.
       </p>
       {adding && (
         <CredentialForm
@@ -216,12 +245,13 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
     (saved.state !== "revoked" && item.updated_at > saved.updated_at)
       ? item
       : saved;
-  const [dialog, setDialog] = useState<"rotate" | "revoke">();
+  const [dialog, setDialog] = useState<"edit" | "rotate" | "revoke">();
   const [error, setError] = useState<string>();
   const action = useAction();
   const active = connection.state === "active";
   const target = connection.config[connection.kind === "mcp" ? "url" : "server"];
   const namespace = connection.config.namespace;
+  const policy = toolPolicy(connection);
 
   function changed(result: Integration) {
     setSaved(result);
@@ -260,6 +290,7 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
         {connection.kind === "kubernetes" && typeof namespace === "string" && (
           <div>Target namespace: {namespace}</div>
         )}
+        {policy && <div className="small">{policy}</div>}
       </td>
       <td>{connection.access === "read_only" ? "Read only" : "Read and write"}</td>
       <td>
@@ -301,6 +332,17 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
             <button
               type="button"
               disabled={action.busy}
+              aria-label={`Edit ${connection.name}`}
+              onClick={() => {
+                setError(undefined);
+                setDialog("edit");
+              }}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              disabled={action.busy}
               aria-label={`Rotate ${connection.name}`}
               onClick={() => {
                 setError(undefined);
@@ -326,6 +368,13 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
           <p className="error" role="alert">
             {error}
           </p>
+        )}
+        {active && dialog === "edit" && (
+          <EditForm
+            integration={connection}
+            onCancel={() => setDialog(undefined)}
+            onSaved={changed}
+          />
         )}
         {active && dialog === "rotate" && (
           <CredentialForm
@@ -619,6 +668,167 @@ function CredentialForm({
           disabled={action.busy}
         >
           {integration ? "Rotate token" : "Save integration"}
+        </ActionButton>
+      </div>
+    </FormDialog>
+  );
+}
+
+function EditForm({
+  integration,
+  onCancel,
+  onSaved,
+}: {
+  integration: Integration;
+  onCancel: () => void;
+  onSaved: (connection: Integration) => void;
+}) {
+  const config = integration.config;
+  const text = (key: string) => (typeof config[key] === "string" ? (config[key] as string) : "");
+  const [access, setAccess] = useState(integration.access);
+  const [error, setError] = useState<string>();
+  const action = useAction();
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (action.busy) return;
+    const form = event.currentTarget;
+    const field = (name: string) => (form.elements.namedItem(name) as HTMLInputElement).value;
+    // The config is replaced whole, so every kept key is sent again.
+    let next: IntegrationCreate["config"];
+    if (integration.kind === "mcp") {
+      const tools = field("tools")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      next = { url: field("url"), ...(tools.length ? { tools } : {}) };
+    } else {
+      next = {
+        server: field("server"),
+        namespace: field("namespace"),
+        ...(field("ca_data") ? { ca_data: field("ca_data") } : {}),
+      };
+    }
+    void action.run(async () => {
+      setError(undefined);
+      try {
+        onSaved(
+          await call(
+            api.PATCH("/api/projects/{slug}/integrations/{integration_id}", {
+              params: { path: { slug: integration.project, integration_id: integration.id } },
+              body: { expected_version: integration.version, config: next, access },
+            }),
+          ),
+        );
+      } catch (error) {
+        setError(editFailure(error));
+      }
+    });
+  }
+
+  return (
+    <FormDialog
+      title={`Edit ${integration.name}`}
+      busy={action.busy}
+      onCancel={onCancel}
+      onSubmit={submit}
+    >
+      <p className="muted small">
+        Project: {integration.project}. The stored token is kept and not needed. Saving a change
+        resets validation: validate again before workers can use it.
+      </p>
+      <fieldset className="integration-fields" disabled={action.busy}>
+        <label>
+          Access
+          <select
+            value={access}
+            onChange={(event) => setAccess(event.target.value as Integration["access"])}
+          >
+            <option value="read_only">Read only</option>
+            <option value="read_write">Read and write</option>
+          </select>
+        </label>
+        {integration.kind === "mcp" ? (
+          <>
+            <label>
+              MCP server URL
+              <input
+                name="url"
+                type="url"
+                required
+                maxLength={2048}
+                autoComplete="off"
+                defaultValue={text("url")}
+              />
+            </label>
+            <label>
+              Tool allowlist (one tool name per line)
+              <textarea
+                name="tools"
+                autoComplete="off"
+                spellCheck={false}
+                defaultValue={Array.isArray(config.tools) ? config.tools.join("\n") : ""}
+              />
+            </label>
+            <p className="muted small">
+              Workers may call only the listed tools. Argus does not check what a tool does: list
+              only tools you trust for this access. Without a list, a read-only connection is
+              unusable by workers; a read-and-write one allows every tool.
+            </p>
+          </>
+        ) : (
+          <>
+            <label>
+              API server URL
+              <input
+                name="server"
+                type="url"
+                required
+                maxLength={2048}
+                autoComplete="off"
+                defaultValue={text("server")}
+              />
+            </label>
+            <label>
+              Namespace
+              <input
+                name="namespace"
+                required
+                maxLength={63}
+                pattern="[a-z0-9]([\-a-z0-9]{0,61}[a-z0-9])?"
+                autoComplete="off"
+                defaultValue={text("namespace")}
+              />
+            </label>
+            <label>
+              CA bundle (base64 PEM, optional)
+              <textarea
+                name="ca_data"
+                maxLength={65536}
+                autoComplete="off"
+                spellCheck={false}
+                defaultValue={text("ca_data")}
+              />
+            </label>
+          </>
+        )}
+      </fieldset>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="actions">
+        <button type="button" disabled={action.busy} onClick={onCancel}>
+          Cancel
+        </button>
+        <ActionButton
+          type="submit"
+          className="primary"
+          pending={action.busy}
+          disabled={action.busy}
+        >
+          Save changes
         </ActionButton>
       </div>
     </FormDialog>

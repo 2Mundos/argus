@@ -4,6 +4,7 @@ consistency, and that no worker ever receives a secret. No real MCP server or
 cluster is contacted: a mock transport and resolver stand in for both."""
 
 import asyncio
+import base64
 import json
 import logging
 from collections.abc import Generator
@@ -205,6 +206,7 @@ def test_only_admins_manage(client: TestClient) -> None:
         ("POST", f"/api/projects/alpha/integrations/{item['id']}/validate", None),
         ("POST", f"/api/projects/alpha/integrations/{item['id']}/rotate", {"secret": {"token": "x"}}),
         ("POST", f"/api/projects/alpha/integrations/{item['id']}/revoke", None),
+        ("PATCH", f"/api/projects/alpha/integrations/{item['id']}", {"expected_version": item["version"], "access": "read_write"}),
     ]  # fmt: skip
     for role in ("worker", "orchestrator"):
         headers = register(client, role)
@@ -232,6 +234,8 @@ def test_another_projects_id_is_not_found(client: TestClient) -> None:
         assert act(client, item, action, project="beta", **kw).status_code == 404, (
             action
         )
+    edit = client.patch(path, json={"expected_version": item["version"]})
+    assert edit.status_code == 404
     assert client.get("/api/projects/beta/integrations").json() == []
     assert app.state.secrets.get(f"integration-{item['id']}") == {
         "token": SECRET,
@@ -482,6 +486,160 @@ def test_revoke_deletes_the_secret_and_is_final(
     no_secret_anywhere(client, tmp_path, SECRET, ROTATED)
 
 
+def edit(client: TestClient, item: dict, **body) -> httpx.Response:
+    return client.patch(
+        f"/api/projects/{item['project']}/integrations/{item['id']}",
+        json={"expected_version": item["version"], **body},
+    )
+
+
+def test_edit_corrects_the_config_and_keeps_the_secret(
+    client: TestClient,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    upstream: Upstream,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    item = k8s(client)
+    validated = act(client, item, "validate").json()
+    assert validated["validation"] == "ok" and validated["version"] != item["version"]
+    # Saving what was read changes nothing and records nothing.
+    same = edit(client, validated, config=K8S, access="read_only")
+    assert same.status_code == 200 and same.json() == validated
+    res = edit(
+        client,
+        validated,
+        config={"server": "https://k8s-2.example.test", "namespace": "team-b"},
+        access="read_write",
+    )
+    assert res.status_code == 200, res.text
+    after = res.json()
+    assert after["id"] == item["id"] and after["has_secret"]
+    assert after["config"]["server"] == "https://k8s-2.example.test"
+    assert (after["access"], after["config_version"]) == ("read_write", 2)
+    assert (after["validation"], after["validation_detail"], after["validated_at"]) == (
+        "unchecked",
+        None,
+        None,
+    )
+    assert after["version"] not in (item["version"], validated["version"])
+    assert after["rotated_at"] is None
+    assert app.state.secrets.get(f"integration-{item['id']}") == {
+        "token": SECRET,
+        "version": 1,
+    }
+    # The corrected record validates against the new target with the same token.
+    upstream.requests.clear()
+    upstream.allowed = {"team-b:list::pods:", "team-b:create::pods:"}
+    assert act(client, after, "validate").json()["validation"] == "ok"
+    assert {r.headers["host"] for r in upstream.requests} == {"k8s-2.example.test"}
+    assert {r.headers["authorization"] for r in upstream.requests} == {
+        f"Bearer {SECRET}"
+    }
+    # A CA bundle is public but long: the audit names it by digest.
+    ca = base64.b64encode(b"-----BEGIN CERTIFICATE-----\nx\n").decode()
+    current = client.get(f"/api/projects/alpha/integrations/{item['id']}").json()
+    with_ca = edit(client, current, config={**current["config"], "ca_data": ca})
+    assert with_ca.json()["config_version"] == 3
+    updates = [
+        e["data"]
+        for e in client.get("/api/events", params={"limit": 50}).json()
+        if e["kind"] == "integration.updated"
+    ]
+    by_version = {u["config_version"]: u["changes"] for u in updates}
+    assert by_version[2] == {
+        "server": {"before": K8S["server"], "after": "https://k8s-2.example.test"},
+        "namespace": {"before": "team-a", "after": "team-b"},
+        "access": {"before": "read_only", "after": "read_write"},
+    }
+    assert by_version[3]["ca_data"]["before"] is None
+    assert by_version[3]["ca_data"]["after"].startswith("sha256:")
+    assert ca not in json.dumps(updates)
+    no_secret_anywhere(client, tmp_path, SECRET)
+    assert SECRET not in caplog.text and SECRET not in res.text
+
+
+def test_edit_needs_the_version_read_and_an_active_record(client: TestClient) -> None:
+    item = mcp(client)
+    assert act(client, item, "validate").status_code == 200
+    stale = edit(client, item, access="read_write")
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "stale_version"
+    current = client.get(f"/api/projects/alpha/integrations/{item['id']}").json()
+    assert current["access"] == "read_only" and current["validation"] == "ok"
+    first = edit(client, current, access="read_write")
+    assert first.status_code == 200
+    # A second admin who read the same version loses the race instead of overwriting.
+    assert edit(client, current, access="read_only").status_code == 409
+    assert act(client, item, "revoke").status_code == 200
+    revoked = client.get(f"/api/projects/alpha/integrations/{item['id']}").json()
+    gone = edit(client, revoked, config={"url": "https://other.example.test/mcp"})
+    assert gone.status_code == 409
+    assert gone.json()["detail"]["code"] == "integration_revoked"
+    assert edit(client, {**revoked, "id": "nope"}).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"url": "http://mcp.example.test/mcp"},
+        {"url": "https://user:pw@mcp.example.test/mcp"},
+        {"url": f"{MCP_URL}?token=abc"},
+        {"url": f"{MCP_URL}#frag"},
+        {"url": "https://127.0.0.1/mcp"},
+        {"url": "https://169.254.169.254/latest"},
+        {"url": "https://[::ffff:169.254.169.254]/latest"},
+        {"url": "https://0.0.0.0/mcp"},
+        {"url": "https://localhost/mcp"},
+        {"url": "file:///etc/passwd"},
+        {},
+        {"url": MCP_URL, "headers": {"X": "y"}},
+        {"url": MCP_URL, "tools": []},
+        {"url": MCP_URL, "tools": ["ok", "has space"]},
+        {"url": MCP_URL, "tools": "search"},
+        {"url": MCP_URL, "tools": ["x" * 129]},
+    ],
+)
+def test_edit_checks_the_config_as_create_does(
+    client: TestClient, upstream: Upstream, config: dict
+) -> None:
+    item = mcp(client)
+    res = edit(client, item, config=config)
+    assert res.status_code == 422, res.text
+    assert res.json()["detail"]["code"] == "config_invalid"
+    assert client.get(f"/api/projects/alpha/integrations/{item['id']}").json() == item
+    assert upstream.requests == []
+
+
+def test_mcp_tool_allowlist_decides_what_a_worker_could_use(
+    client: TestClient,
+) -> None:
+    read_only = mcp(client)
+    assert read_only["tool_policy"] == "unknown"
+    assert mcp(client, name="rw", access="read_write")["tool_policy"] == "all"
+    allowed = edit(
+        client,
+        read_only,
+        config={"url": MCP_URL, "tools": ["search", "fetch", "search"]},
+    ).json()
+    assert allowed["config"]["tools"] == ["fetch", "search"]
+    assert allowed["tool_policy"] == "allowlist"
+    # Removing the allowlist from a read_only record makes it unusable again.
+    cleared = edit(client, allowed, config={"url": MCP_URL}).json()
+    assert cleared["tool_policy"] == "unknown" and "tools" not in cleared["config"]
+    assert k8s(client)["tool_policy"] is None
+    created = client.post(
+        "/api/projects/alpha/integrations",
+        json={
+            "kind": "mcp",
+            "name": "listed",
+            "config": {"url": MCP_URL, "tools": ["read_page"]},
+            "secret": {"token": SECRET},
+        },
+    ).json()
+    assert created["tool_policy"] == "allowlist"
+
+
 class FailingStore(MemorySecretStore):
     """Applies the change, then fails: the worst case for SOPS/SQLite consistency."""
 
@@ -580,6 +738,35 @@ async def test_a_rotation_during_validation_voids_its_result(db: Database) -> No
         )
     after = await service.get(db, "alpha", item.id)
     assert after.validation == "unchecked"
+
+
+async def test_a_config_edit_during_validation_voids_its_result(db: Database) -> None:
+    await insert_project(db, "alpha")
+    store = MemorySecretStore()
+    body = service.IntegrationCreate.model_validate(
+        {
+            "kind": "mcp",
+            "name": "docs",
+            "config": {"url": MCP_URL},
+            "secret": {"token": SECRET},
+        }
+    )
+    item = await service.create(db, store, "alpha", body, "admin:test")
+    moved = service.IntegrationUpdate(
+        expected_version=item.version, config={"url": "https://other.example.test/mcp"}
+    )
+
+    async def editing(host: str, port: int) -> list[str]:
+        await service.update(db, "alpha", item.id, moved, "admin:test")
+        return ["203.0.113.10"]
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+    with pytest.raises(service.IntegrationChangedError):
+        await service.validate(
+            db, store, "alpha", item.id, "admin:test", transport, editing
+        )
+    after = await service.get(db, "alpha", item.id)
+    assert (after.validation, after.config_version) == ("unchecked", 2)
 
 
 def _worker(client: TestClient) -> tuple[str, dict[str, str]]:

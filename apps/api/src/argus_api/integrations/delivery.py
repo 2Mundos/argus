@@ -1,4 +1,4 @@
-"""Task opt-in and worker delivery of Kubernetes integrations
+"""Task opt-in and worker delivery of Kubernetes and MCP integrations
 (docs/specs/integrations.spec.md 3.1, 3.6).
 
 A task names integration ids of its own project; the worker that holds the
@@ -23,18 +23,21 @@ from argus_api.integrations import selection
 from argus_api.integrations.service import (
     IntegrationChangedError,
     IntegrationRevokedError,
+    ToolPolicy,
+    tool_policy,
 )
 from argus_api.secrets import SecretStore, SecretStoreError, ref_name
 from argus_api.tasks import service as tasks
 
-# Engines whose sessions Argus can confine to the attempt's kubeconfig: the Claude
-# harness and Claude delegates only (spec 3.6 engine matrix).
+# Engines whose sessions Argus can confine to the attempt's kubeconfig and MCP
+# servers: the Claude harness and Claude delegates only (spec 3.6 engine matrix).
 SUPPORTED_PROVIDERS = frozenset({"anthropic"})
 
 Readiness = Literal[
     "ready",
     "revoked",
     "expired",
+    "tools_unknown",
     "unvalidated",
     "secret_missing",
     "store_unavailable",
@@ -53,6 +56,10 @@ class EngineUnsupportedError(ConflictError):
     code = "integration_engine_unsupported"
 
 
+class IntegrationToolsUnknownError(ConflictError):
+    code = "integration_tools_unknown"
+
+
 class DeliveryRequest(BaseModel):
     attempt: int
     # The version the worker expects (from the status read); a mismatch is 409
@@ -64,9 +71,13 @@ class IntegrationState(BaseModel):
     """Non-secret: what the worker needs to decide to (re)install or remove."""
 
     integration_id: str
+    kind: Literal["kubernetes", "mcp"]
     name: str
-    namespace: str
+    namespace: str | None  # Kubernetes only
+    tool_policy: ToolPolicy | None  # MCP only
     secret_version: int
+    # A config edit raises it (3.4): reinstall, as for a new secret_version.
+    config_version: int
     expires_at: datetime | None
     readiness: Readiness
 
@@ -79,9 +90,11 @@ class TaskIntegrations(BaseModel):
 
 
 class KubernetesCredential(BaseModel):
-    """The only model that carries a token. Returned to the assigned worker's
-    channel by the delivery route and nowhere else; never logged or recorded."""
+    """With McpCredential, the only models that carry a token. Returned to the
+    assigned worker's channel by the delivery route and nowhere else; never logged
+    or recorded."""
 
+    kind: Literal["kubernetes"] = "kubernetes"
     integration_id: str
     name: str
     server: str
@@ -90,6 +103,25 @@ class KubernetesCredential(BaseModel):
     access: Literal["read_only", "read_write"]
     token: str
     secret_version: int
+    config_version: int
+    expires_at: datetime | None
+
+
+class McpCredential(BaseModel):
+    """For the channel's MCP broker only, which keeps the token in memory and
+    hands the session a grant URL instead (3.6, MCP broker)."""
+
+    kind: Literal["mcp"] = "mcp"
+    integration_id: str
+    name: str
+    url: str
+    # The allowlist (`allowlist`), or null with `all`; `unknown` is never delivered.
+    tools: list[str] | None
+    tool_policy: Literal["allowlist", "all"]
+    access: Literal["read_only", "read_write"]
+    token: str
+    secret_version: int
+    config_version: int
     expires_at: datetime | None
 
 
@@ -156,6 +188,8 @@ def _readiness(
         return "revoked"
     if row["expires_at"] is not None and row["expires_at"] <= now:
         return "expired"
+    if _policy(row) == "unknown":
+        return "tools_unknown"
     if row["validation"] != "ok":
         return "unvalidated"
     if not store_available:
@@ -176,6 +210,10 @@ def _readiness(
     return "ready"
 
 
+def _policy(row: aiosqlite.Row) -> ToolPolicy | None:
+    return tool_policy(row["kind"], row["access"], json.loads(row["config"]))
+
+
 async def _held(
     tx: Tx | Snapshot, task_id: str, attempt: int, agent_id: str
 ) -> aiosqlite.Row:
@@ -185,7 +223,7 @@ async def _held(
 
 async def _engine_supported(tx: Tx, agent_id: str) -> None:
     """The worker's engine and any delegated executor must be one whose session
-    Argus can confine to the attempt's kubeconfig."""
+    Argus can confine to the attempt's kubeconfig and MCP servers."""
     async with tx.conn.execute(
         "SELECT l.role, a.provider FROM account_leases l"
         " JOIN accounts a ON a.id = l.account_id"
@@ -197,12 +235,12 @@ async def _engine_supported(tx: Tx, agent_id: str) -> None:
     engine = leases.get("engine")
     if engine not in SUPPORTED_PROVIDERS:
         raise EngineUnsupportedError(
-            f"Kubernetes integrations need a Claude engine; this worker runs"
+            f"Task integrations need a Claude engine; this worker runs"
             f" {engine or 'no leased engine'}"
         )
     if (executor := leases.get("executor")) not in (None, *SUPPORTED_PROVIDERS):
         raise EngineUnsupportedError(
-            f"Kubernetes integrations need a Claude executor; this worker delegates"
+            f"Task integrations need a Claude executor; this worker delegates"
             f" to {executor}"
         )
 
@@ -213,7 +251,7 @@ async def _selected_rows(
     async with tx.conn.execute(
         "SELECT i.* FROM task_integrations s JOIN integrations i"
         " ON i.id = s.integration_id"
-        " WHERE s.task_id = ? AND i.project = ? AND i.kind = 'kubernetes'"
+        " WHERE s.task_id = ? AND i.project = ?"
         " AND (? IS NULL OR i.id = ?) ORDER BY i.name",
         (task["id"], task["project"], integration_id, integration_id),
     ) as cur:
@@ -237,9 +275,12 @@ async def status(
     return [
         IntegrationState(
             integration_id=r["id"],
+            kind=r["kind"],
             name=r["name"],
-            namespace=json.loads(r["config"])["namespace"],
+            namespace=json.loads(r["config"]).get("namespace"),
+            tool_policy=_policy(r),
             secret_version=r["secret_version"],
+            config_version=r["config_version"],
             expires_at=r["expires_at"],
             readiness=_readiness(r, now, store, store_available, exact_version=False),
         )
@@ -257,7 +298,7 @@ async def deliver(
     store: SecretStore,
     *,
     store_available: bool,
-) -> KubernetesCredential:
+) -> KubernetesCredential | McpCredential:
     """The credential for the attempt `agent_id` holds, or a refusal with a code
     the channel turns into an `env_integration_*` block. Runs inside the write
     so it serializes with rotate and revoke."""
@@ -277,6 +318,11 @@ async def deliver(
     if readiness == "expired":
         raise IntegrationExpiredError(
             f"integration {name} expired at {row['expires_at']}; rotate it"
+        )
+    if readiness == "tools_unknown":
+        raise IntegrationToolsUnknownError(
+            f"integration {name} is read-only without a tool allowlist; an admin"
+            " must add one before workers can use it"
         )
     if readiness == "unvalidated":
         raise IntegrationUnvalidatedError(
@@ -309,8 +355,24 @@ async def deliver(
             "integration_id": row["id"],
             "name": name,
             "secret_version": row["secret_version"],
+            "config_version": row["config_version"],
         },
     )
+    if row["kind"] == "mcp":
+        policy = _policy(row)
+        assert policy in ("allowlist", "all")  # `unknown` was refused above
+        return McpCredential(
+            integration_id=row["id"],
+            name=name,
+            url=config["url"],
+            tools=config.get("tools"),
+            tool_policy=policy,
+            access=row["access"],
+            token=stored["token"],
+            secret_version=row["secret_version"],
+            config_version=row["config_version"],
+            expires_at=row["expires_at"],
+        )
     return KubernetesCredential(
         integration_id=row["id"],
         name=name,
@@ -320,5 +382,6 @@ async def deliver(
         access=row["access"],
         token=stored["token"],
         secret_version=row["secret_version"],
+        config_version=row["config_version"],
         expires_at=row["expires_at"],
     )

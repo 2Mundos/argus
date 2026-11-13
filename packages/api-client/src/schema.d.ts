@@ -2179,7 +2179,12 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Integration
+         * @description Correct the config or access, keeping the credential: pass the `version` you
+         *     read as `expected_version`. Validation goes back to `unchecked`.
+         */
+        patch: operations["update_integration_api_projects__slug__integrations__integration_id__patch"];
         trace?: never;
     };
     "/api/projects/{slug}/integrations/{integration_id}/revoke": {
@@ -3306,10 +3311,11 @@ export interface paths {
         get?: never;
         /**
          * Set Task Integrations
-         * @description Opt a task into Kubernetes integrations of its own project (ids only), or
-         *     clear the list. Each id must be active and of kind `kubernetes`; not while an
-         *     attempt runs. Selecting is the only grant: capabilities, titles and pool
-         *     labels never give a task a credential.
+         * @description Opt a task into Kubernetes and MCP integrations of its own project (ids
+         *     only), or clear the list. Each id must be active, and an MCP one must not be
+         *     read-only without a tool allowlist; not while an attempt runs. Selecting is
+         *     the only grant: capabilities, titles and pool labels never give a task a
+         *     credential.
          */
         put: operations["set_task_integrations_api_tasks__task_id__integrations_put"];
         post?: never;
@@ -7487,6 +7493,8 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            /** Config Version */
+            config_version: number;
             /**
              * Created At
              * Format: date-time
@@ -7520,6 +7528,8 @@ export interface components {
              * @enum {string}
              */
             state: "active" | "revoked";
+            /** Tool Policy */
+            tool_policy: ("allowlist" | "all" | "unknown") | null;
             /**
              * Updated At
              * Format: date-time
@@ -7534,6 +7544,8 @@ export interface components {
             validation: "unchecked" | "ok" | "failed";
             /** Validation Detail */
             validation_detail: string | null;
+            /** Version */
+            version: string;
         };
         /** IntegrationCreate */
         IntegrationCreate: {
@@ -7563,6 +7575,20 @@ export interface components {
             /** Expires At */
             expires_at?: string | null;
             secret: components["schemas"]["SecretIn"];
+        };
+        /**
+         * IntegrationUpdate
+         * @description Correct the non-secret fields; the credential and its version are kept.
+         */
+        IntegrationUpdate: {
+            /** Access */
+            access?: ("read_only" | "read_write") | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Expected Version */
+            expected_version: string;
         };
         /**
          * InterruptionAssessment
@@ -16637,6 +16663,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Integration"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_integration_api_projects__slug__integrations__integration_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationUpdate"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

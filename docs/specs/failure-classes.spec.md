@@ -245,11 +245,11 @@ task. No model session starts and no attempt is spent.
 | A required task input is listed, shared and downloadable ([task inputs](task-inputs.spec.md) 3.6) | `env_input_unavailable` |
 | A required task input has a safe name and destination, and its size and SHA-256 match after the retry | `env_input_invalid` |
 | The task inputs stay within the per-input, per-task and file-count limits | `env_input_limit` |
-| Every selected Kubernetes integration is active, unexpired, validated and its credential is in the store ([integrations](integrations.spec.md) 3.6) | `env_integration_unavailable` |
+| Every selected integration is active, unexpired, validated, its credential is in the store, and an MCP one has a usable tool policy ([integrations](integrations.spec.md) 3.6) | `env_integration_unavailable` |
 | The worker's engine and any delegated executor are Claude | `env_integration_unsupported` |
 | The attempt's kubeconfig directory is private, not a link, and the credential matches the selection | `env_integration_invalid` |
-| The worker's Kubernetes route listens where sessions reach it, and opens a tunnel to each selected cluster's exact `host:port` at a non-internal address (integrations 3.6 Route) | `env_integration_route_unavailable` |
-| Through that tunnel, each cluster's TLS handshake verifies against the integration's CA and names its host: nothing in between terminates TLS (integrations 3.6 Route) | `env_integration_gateway_intercepts` |
+| The worker's Kubernetes route listens where sessions reach it, and opens a tunnel to each selected cluster's exact `host:port` at a non-internal address (integrations 3.6 Route); its MCP broker listens there and reaches each selected MCP server, which accepts the token (3.6 MCP broker) | `env_integration_route_unavailable` |
+| Through that tunnel, each cluster's TLS handshake verifies against the integration's CA and names its host: nothing in between terminates TLS (integrations 3.6 Route); each MCP server's certificate verifies against the public roots | `env_integration_gateway_intercepts` |
 | A guarded engine's managed settings register the command guard hook, when the guard is enabled ([command guard](command-guard.spec.md) 3) | `env_guard_missing` |
 
 - The executor probe runs after the repository checks and before the inputs and the

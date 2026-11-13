@@ -4,11 +4,12 @@
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import re
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -17,7 +18,7 @@ from uuid import uuid4
 import aiosqlite
 import anyio
 import httpx2 as httpx
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from argus_api.db import Database, Tx, ts
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
@@ -34,6 +35,10 @@ _NAMESPACE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 _TOKEN = re.compile(r"^[\x21-\x7e]{1,8192}$")  # printable ASCII, no whitespace
 _MAX_URL = 2048
 _MAX_CA = 65536
+# MCP tool names (2025-11-25 server/tools): 1-128 of these characters, case-sensitive.
+_TOOL = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+MAX_TOOLS = 128
+_TICK = timedelta(microseconds=1)
 
 
 class IntegrationRevokedError(ConflictError):
@@ -63,11 +68,24 @@ class IntegrationCreate(BaseModel):
     expires_at: datetime | None = None
 
 
+class IntegrationUpdate(BaseModel):
+    """Correct the non-secret fields; the credential and its version are kept."""
+
+    model_config = ConfigDict(extra="forbid")
+    expected_version: str = Field(min_length=1)  # the integration's `version`
+    # Replaces the whole config, checked as on create; omitted: unchanged.
+    config: dict[str, Any] | None = None
+    access: Access | None = None
+
+
 class IntegrationRotate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     secret: SecretIn
     # Replaces the previous expiry, as `expires_at` on create does.
     expires_at: datetime | None = None
+
+
+ToolPolicy = Literal["allowlist", "all", "unknown"]
 
 
 class Integration(BaseModel):
@@ -89,6 +107,13 @@ class Integration(BaseModel):
     rotated_at: datetime | None
     revoked_at: datetime | None
     revoked_by: str | None
+    version: str  # updated_at; pass it back as expected_version
+    # Raised by every config or access edit, as rotation raises the secret's.
+    config_version: int
+    # MCP only (3.2): `allowlist` when config.tools names the tools a worker may
+    # use; `all` for read_write without one; `unknown` for read_only without one,
+    # which no worker may use: Argus cannot tell which of a server's tools only read.
+    tool_policy: ToolPolicy | None
 
 
 def _https(value: Any, field: str) -> str:
@@ -117,15 +142,35 @@ def _https(value: Any, field: str) -> str:
     return value.strip()
 
 
+def _tools(value: Any) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not 1 <= len(value) <= MAX_TOOLS
+        or not all(isinstance(t, str) and _TOOL.fullmatch(t) for t in value)
+    ):
+        raise ValidationFailedError(
+            f"tools must list 1-{MAX_TOOLS} MCP tool names (letters, digits, _ - .,"
+            " at most 128 characters each); omit it for no allowlist",
+            code="config_invalid",
+        )
+    return sorted(set(value))
+
+
 def check_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
     """The non-secret config, normalised; `422 config_invalid` naming the problem."""
-    allowed = {"mcp": {"url"}, "kubernetes": {"server", "namespace", "ca_data"}}[kind]
+    allowed = {
+        "mcp": {"url", "tools"},
+        "kubernetes": {"server", "namespace", "ca_data"},
+    }[kind]
     if extra := sorted(set(config) - allowed):
         raise ValidationFailedError(
             f"unknown {kind} config keys: {', '.join(extra)}", code="config_invalid"
         )
     if kind == "mcp":
-        return {"url": _https(config.get("url"), "url")}
+        out = {"url": _https(config.get("url"), "url")}
+        if config.get("tools") is not None:
+            out["tools"] = _tools(config["tools"])
+        return out
     namespace = config.get("namespace")
     if not isinstance(namespace, str) or not _NAMESPACE.fullmatch(namespace):
         raise ValidationFailedError(
@@ -195,13 +240,22 @@ def expiry(given: datetime | None, token: str, now: datetime) -> str | None:
     return ts(at)
 
 
+def tool_policy(kind: str, access: str, config: dict[str, Any]) -> ToolPolicy | None:
+    if kind != "mcp":
+        return None
+    if config.get("tools"):
+        return "allowlist"
+    return "all" if access == "read_write" else "unknown"
+
+
 def _model(row: aiosqlite.Row) -> Integration:
+    config = json.loads(row["config"])
     return Integration(
         id=row["id"],
         project=row["project"],
         kind=row["kind"],
         name=row["name"],
-        config=json.loads(row["config"]),
+        config=config,
         access=row["access"],
         state=row["state"],
         has_secret=row["secret_ref"] is not None,
@@ -215,7 +269,15 @@ def _model(row: aiosqlite.Row) -> Integration:
         rotated_at=row["rotated_at"],
         revoked_at=row["revoked_at"],
         revoked_by=row["revoked_by"],
+        version=row["updated_at"],
+        config_version=row["config_version"],
+        tool_policy=tool_policy(row["kind"], row["access"], config),
     )
+
+
+def _stamp(tx: Tx, row: aiosqlite.Row) -> str:
+    """The next `updated_at`: later than the last one, so `version` always moves."""
+    return ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
 
 
 async def _project(conn: aiosqlite.Connection, project: str) -> None:
@@ -475,7 +537,7 @@ async def _swap_secret(
 async def _write_swap(
     tx: Tx, row: aiosqlite.Row, actor: str, revoke: bool, expires_at: str | None
 ) -> None:
-    now = ts(tx.now)
+    now = _stamp(tx, row)
     if revoke:
         await tx.conn.execute(
             "UPDATE integrations SET state = 'revoked', secret_ref = NULL,"
@@ -566,17 +628,22 @@ async def validate(
         resolve,
     )
     async with db.write() as tx:
-        now = ts(tx.now)
-        cur = await tx.conn.execute(
-            "UPDATE integrations SET validation = ?, validation_detail = ?,"
-            " validated_at = ?, updated_at = ?"
-            " WHERE id = ? AND state = 'active' AND secret_version = ?",
-            (status, detail, now, now, integration_id, row["secret_version"]),
-        )
-        if cur.rowcount == 0:
+        current = await _row(tx.conn, project, integration_id)
+        # The result is about the token and config that were checked: a rotation,
+        # revocation or config edit meanwhile voids it.
+        if current["state"] != "active" or any(
+            current[k] != row[k] for k in ("secret_version", "config_version")
+        ):
             raise IntegrationChangedError(
-                "the integration was rotated or revoked during validation; validate again"
+                "the integration was rotated, revoked or edited during validation;"
+                " validate again"
             )
+        now = _stamp(tx, current)
+        await tx.conn.execute(
+            "UPDATE integrations SET validation = ?, validation_detail = ?,"
+            " validated_at = ?, updated_at = ? WHERE id = ?",
+            (status, detail, now, now, integration_id),
+        )
         await record(
             tx,
             actor,
@@ -586,3 +653,65 @@ async def validate(
             {"project": project, "status": status, "detail": detail},
         )
     return await get(db, project, integration_id)
+
+
+def _shown(key: str, value: Any) -> Any:
+    # A CA bundle is public but long: the audit diff names it by digest.
+    if key == "ca_data" and value is not None:
+        return "sha256:" + hashlib.sha256(value.encode()).hexdigest()[:16]
+    return value
+
+
+async def update(
+    db: Database, project: str, integration_id: str, body: IntegrationUpdate, actor: str
+) -> Integration:
+    """Correct the config or access of an active integration without touching its
+    credential (3.4). Checked as on create; a stale `expected_version` is `409
+    stale_version`. A change raises `config_version` and resets validation, so a
+    worker holding the earlier config loses it at its next check (3.6)."""
+    async with db.write() as tx:
+        row = await _row(tx.conn, project, integration_id)
+        if row["state"] != "active":
+            raise IntegrationRevokedError(f"integration {row['name']} is revoked")
+        if body.expected_version != row["updated_at"]:
+            raise ConflictError(
+                f"integration {row['name']} changed since you read it (version"
+                f" {row['updated_at']}); read it again and reapply your change",
+                code="stale_version",
+                details=[row["updated_at"]],
+            )
+        before = json.loads(row["config"])
+        after = (
+            before if body.config is None else check_config(row["kind"], body.config)
+        )
+        access = body.access or row["access"]
+        changes = {
+            k: {"before": _shown(k, before.get(k)), "after": _shown(k, after.get(k))}
+            for k in sorted(set(before) | set(after))
+            if before.get(k) != after.get(k)
+        }
+        if access != row["access"]:
+            changes["access"] = {"before": row["access"], "after": access}
+        if changes:
+            now = _stamp(tx, row)
+            await tx.conn.execute(
+                "UPDATE integrations SET config = ?, access = ?,"
+                " config_version = config_version + 1, validation = 'unchecked',"
+                " validation_detail = NULL, validated_at = NULL, updated_at = ?"
+                " WHERE id = ?",
+                (json.dumps(after), access, now, integration_id),
+            )
+            await record(
+                tx,
+                actor,
+                "integration",
+                integration_id,
+                "integration.updated",
+                {
+                    "project": project,
+                    "name": row["name"],
+                    "config_version": row["config_version"] + 1,
+                    "changes": changes,
+                },
+            )
+        return _model(await _row(tx.conn, project, integration_id))

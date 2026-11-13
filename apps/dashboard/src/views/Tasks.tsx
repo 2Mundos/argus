@@ -482,7 +482,7 @@ function NewTask({ onClose, initialProject }: { onClose: () => void; initialProj
     budget: null as string | null,
     maxAttempts: null as string | null,
     timeoutMinutes: null as string | null,
-    // Kubernetes integration ids, kept with the project they were chosen in.
+    // Integration ids, kept with the project they were chosen in.
     integrations: { project: "", ids: [] as string[] },
   });
   const [error, setError] = useState<string>();
