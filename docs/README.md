@@ -206,6 +206,9 @@ why you are here.
   published in one validated, idempotent transaction (atomic or partial)
 - [Command guard](specs/command-guard.spec.md) — a `PreToolUse` hook that blocks a
   short list of catastrophic shell commands; accident prevention, not a sandbox
+- [Codex hook trust](specs/codex-hook-trust.spec.md) — no hook-trust bypass in the
+  native Codex provider; the guard and memory hooks are trusted before the first
+  thread, or the query is refused
 - [Pool editor](specs/pool-editor.spec.md) — separate host and NanoClaw agent image fields with verified
   choices, version-checked saves, field-level errors
 - [Pool delete](specs/pool-delete.spec.md) — admin DELETE with name confirmation; refuses

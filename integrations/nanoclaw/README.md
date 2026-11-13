@@ -103,6 +103,25 @@ session older than 30 minutes is kept). Only the per-message recovery remains: a
 since is killed and reset. No other global age or heartbeat cap replaces it. The
 patch is idempotent and stops the install if NanoClaw's code moved.
 
+### Codex hook trust (engines overlay)
+
+Upstream's Codex provider starts `codex --dangerously-bypass-hook-trust` and sends
+`bypass_hook_trust` on every thread. `engines/install-engines.sh` copies
+`overlays/codex-hook-trust.ts` into the runner and runs `patch-codex-hook-trust.py`,
+which removes both, adds the command guard to the provider's `hooks.json`, and trusts
+the guard and memory hooks through Codex's own hook trust before the first thread. A
+guard that is missing, disabled or untrusted refuses the query; no model turn runs
+([spec](../../docs/specs/codex-hook-trust.spec.md)).
+
+- **Activation.** It takes effect only after the engines overlay is reapplied to the
+  checkout (`provision.sh` with `ARGUS_NANOCLAW_ENGINES=1`, or
+  `engines/install-engines.sh <checkout>`) and the agent containers are recreated;
+  rebuild the agent image if it predates the command guard
+  (`/usr/local/lib/argus/command_guard.py`). A live Codex turn through the patched
+  provider is unverified.
+- **Rollback.** Revert the change, then reinstall the engines the same way; the
+  upstream bypass returns.
+
 ### Updating an installed copy
 
 Nothing here updates an installed NanoClaw by itself. The channel (`src/channels/`)

@@ -61,6 +61,17 @@ cmp "$nc/security/argus-codex-worker.seccomp.json" "$fx/security/argus-codex-wor
 [ "$(grep -c "killContainer(session.id, 'claim-stuck')" "$fx/src/reconcile-session.ts")" = 1 ] || { echo "FAIL: claim-stuck kill missing" >&2; exit 1; }
 grep -q "const tolerance = Math.max(CLAIM_STUCK_MS, declaredBashMs ?? 0);" "$fx/src/reconcile-session.ts" || { echo "FAIL: Bash claim tolerance missing" >&2; exit 1; }
 echo "no session ceiling; claim-stuck and Bash claim tolerance intact"
+# No Codex hook-trust bypass (patch-codex-hook-trust.py). The provider arrives with the
+# engines overlay, which install.sh does not apply: an UPGRADE_FROM fixture carries it.
+codex_provider="$fx/container/agent-runner/src/providers/codex-app-server.ts"
+if [ -f "$codex_provider" ]; then
+  ! grep -qE -- "--dangerously-bypass-hook-trust|bypass_hook_trust" "$codex_provider" \
+    || { echo "FAIL: Codex hook-trust bypass left in codex-app-server.ts" >&2; exit 1; }
+  grep -q "from './codex-hook-trust.js';" "$codex_provider" || { echo "FAIL: Codex hook trust not wired" >&2; exit 1; }
+  echo "Codex provider: no hook-trust bypass, hook trust wired"
+else
+  echo "Codex provider not installed (no engines overlay): hook-trust check skipped"
+fi
 
 if [ -n "${CONVERGE_WITH:-}" ]; then
   other="$(cd "$CONVERGE_WITH" && find . -path ./node_modules -prune -o -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"

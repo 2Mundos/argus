@@ -149,3 +149,17 @@ Unload AppArmor (step 6) only after no dependent container remains.
 
 **Do not:** arbitrary `security_opt`, `unconfined`, `--privileged`, `SYS_ADMIN`, enable outside the Codex provider,
 or recycle live workers as part of this.
+
+## 8. Codex hook trust (no bypass)
+
+The engines overlay removes Codex's hook-trust bypass and trusts only the guard and memory hooks
+([spec](../../../docs/specs/codex-hook-trust.spec.md)). It is independent of the profile above.
+
+- **Activate:** reapply the engines overlay (`provision.sh` with `ARGUS_NANOCLAW_ENGINES=1`, or
+  `engines/install-engines.sh <checkout>`), rebuild the agent image if it lacks
+  `/usr/local/lib/argus/command_guard.py`, then recreate the agent containers. A live Codex turn is
+  unverified: run one disposable task first. A refusal is logged by the runner as `Codex hook trust: …`.
+- **Check:** `grep -E -- '--dangerously-bypass-hook-trust|bypass_hook_trust'
+  <checkout>/container/agent-runner/src/providers/codex-app-server.ts` prints nothing.
+- **Roll back:** revert the change, then reinstall the engines the same way and recreate the agent
+  containers. Do not hand-edit the installed provider.
