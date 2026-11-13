@@ -12,20 +12,22 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import https from "node:https";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   type IntegrationRoute,
   type IntegrationState,
   type IntegrationsSource,
+  type IntegrationTransport,
   installTaskIntegrations,
   integrationLines,
   KUBECONFIG_FILE,
   type KubernetesCredential,
-  type RouteProbe,
+  type RouteResult,
   recheckTaskIntegrations,
   removeTaskIntegrations,
   renderKubeconfig,
@@ -33,7 +35,12 @@ import {
   TASK_INTEGRATIONS_DIR,
   taskIntegrationsPath,
 } from "./argus-integrations.js";
-import { type GatewayProxy, gatewayRouteProbe } from "./argus-integrations-route.js";
+import {
+  createKubernetesRoute,
+  internalAddress,
+  type KubernetesRoute,
+  nanoclawKubernetesRoute,
+} from "./argus-integrations-route.js";
 
 const SECRET = "fake-token-NEVER-IN-A-PROMPT";
 const dirs: string[] = [];
@@ -116,8 +123,31 @@ function fakeArgus(
 }
 
 const TASK = "0b5a3a6e-8f4c-4d0e-9a51-7c1f2b3d4e5f";
-/** The route probe of a gateway that splices end to end: these tests are about the files. */
-const endToEnd: RouteProbe = async () => null;
+const grantUrl = (id: string) => `http://argus:grant-${id}@172.17.0.1:7000`;
+
+/** A route that records what it is asked; it grants every route unless told otherwise. */
+function fakeRoute(answer?: (routes: readonly IntegrationRoute[]) => RouteResult) {
+  const opened: Array<{ who: { taskId: string; attempt: number }; routes: IntegrationRoute[] }> =
+    [];
+  const revoked: Array<[string, number | undefined]> = [];
+  const transport: IntegrationTransport = {
+    open: async (who, routes) => {
+      opened.push({ who, routes: [...routes] });
+      return answer
+        ? answer(routes)
+        : {
+            ok: true,
+            proxies: Object.fromEntries(
+              routes.map((r) => [r.integration_id, grantUrl(r.integration_id)]),
+            ),
+          };
+    },
+    revoke: (taskId, attempt) => {
+      revoked.push([taskId, attempt]);
+    },
+  };
+  return { opened, revoked, transport };
+}
 
 function install(
   groupDir: string,
@@ -132,7 +162,7 @@ function install(
     engineProvider: "anthropic",
     executorProvider: null,
     source,
-    routeProbe: endToEnd,
+    transport: fakeRoute().transport,
     ...over,
   });
 }
@@ -164,7 +194,12 @@ describe("installTaskIntegrations", () => {
     expect(cfg["current-context"]).toBe("cluster-0");
     expect(cfg.contexts.map((c: any) => c.context.namespace)).toEqual(["team-a", "team-b"]);
     expect(cfg.clusters[0].cluster["certificate-authority-data"]).toBeTruthy();
-    expect(cfg.clusters[1].cluster).toEqual({ server: "https://k8s.example.test:6443" });
+    // Each cluster through its own route grant; the process-wide proxy is not named.
+    expect(cfg.clusters[0].cluster["proxy-url"]).toBe(grantUrl("int-0"));
+    expect(cfg.clusters[1].cluster).toEqual({
+      server: "https://k8s.example.test:6443",
+      "proxy-url": grantUrl("int-1"),
+    });
     expect(readFileSync(file, "utf8")).not.toMatch(/insecure/);
     expect(cfg.users[0].user.token).toBe(`${SECRET}-0`);
     expect(argus.calls).toEqual([
@@ -323,44 +358,72 @@ describe("installTaskIntegrations", () => {
     expect(got).toMatchObject({ ok: false, reason: "env_integration_invalid" });
   });
 
-  it("blocks with the probe's reason and leaves no kubeconfig when the gateway intercepts", async () => {
+  it.each([
+    ["env_integration_gateway_intercepts", "cluster-0: something intercepts TLS"],
+    ["env_integration_route_unavailable", "cluster-0: the route refused the CONNECT (HTTP 502)"],
+  ] as const)("blocks with the route's %s and leaves no kubeconfig", async (reason, error) => {
     const g = group();
     const argus = fakeArgus();
     const stale = await install(g, argus.source);
     if (!stale.ok || !stale.installed) throw new Error("not installed");
-    const seen: Array<{ routes: readonly IntegrationRoute[]; who: unknown }> = [];
-    const routeProbe: RouteProbe = async (routes, who) => {
-      seen.push({ routes, who });
-      return "cluster-0: the gateway intercepts TLS";
-    };
-    const got = await install(g, argus.source, { attempt: 2, routeProbe });
-    expect(got).toEqual({
-      ok: false,
-      reason: "env_integration_gateway_intercepts",
-      error: "cluster-0: the gateway intercepts TLS",
-    });
+    const route = fakeRoute(() => ({ ok: false, reason, error }));
+    const got = await install(g, argus.source, { attempt: 2, transport: route.transport });
+    expect(got).toEqual({ ok: false, reason, error });
     expect(existsSync(taskIntegrationsPath(g, TASK))).toBe(false);
-    // The probe sees where to go and whom it serves, never the token.
-    expect(seen).toEqual([
+    expect(route.revoked).toEqual([[TASK, undefined]]);
+    // The route sees where to go and whom it serves, never the token.
+    expect(route.opened).toEqual([
       {
+        who: { taskId: TASK, attempt: 2 },
         routes: [
           {
+            integration_id: "int-0",
             name: "cluster-0",
             server: "https://k8s.example.test:6443",
             ca_data: Buffer.from("PEM").toString("base64"),
+            authorize: expect.any(Function),
           },
         ],
-        who: { taskId: TASK, attempt: 2 },
       },
     ]);
-    expect(JSON.stringify(seen)).not.toContain(SECRET);
+    expect(JSON.stringify(route.opened)).not.toContain(SECRET);
   });
 
-  it("fails closed without a route probe", async () => {
+  it("fails closed without a route", async () => {
     const g = group();
-    const got = await install(g, fakeArgus().source, { routeProbe: undefined });
-    expect(got).toMatchObject({ ok: false, reason: "env_integration_gateway_intercepts" });
+    const got = await install(g, fakeArgus().source, { transport: undefined });
+    expect(got).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error: "no Kubernetes route is configured",
+    });
     expect(existsSync(taskIntegrationsPath(g, TASK))).toBe(false);
+  });
+
+  it("authorizes each tunnel against Argus: this attempt, ready, the granted version", async () => {
+    const g = group();
+    const argus = fakeArgus([{}, {}]);
+    const route = fakeRoute();
+    const got = await install(g, argus.source, {
+      attempt: 3,
+      selected: ["int-0", "int-1"],
+      transport: route.transport,
+    });
+    expect(got.ok).toBe(true);
+    const [one, two] = route.opened[0]!.routes;
+    argus.calls.splice(0);
+    expect(await one!.authorize()).toBe(true);
+    // The lease check is Argus's: the status read for exactly this task and attempt.
+    expect(argus.calls).toEqual([`status:${TASK}:3`]);
+    argus.rows[0]!.readiness = "revoked";
+    expect(await one!.authorize()).toBe(false);
+    expect(await two!.authorize()).toBe(true);
+    argus.rows[1]!.secret_version = 2;
+    expect(await two!.authorize()).toBe(false);
+    argus.rows.splice(1, 1);
+    expect(await two!.authorize()).toBe(false);
+    argus.failStatus(new ApiError(409, "stale_attempt"));
+    await expect(one!.authorize()).rejects.toThrow();
   });
 
   it("removes a planted symlink in the task directory instead of following it", async () => {
@@ -427,11 +490,11 @@ describe("recheckTaskIntegrations", () => {
     const before = lstatSync(file).ino;
     argus.rows[0].secret_version = 2;
     argus.rows[0].token = `${SECRET}-v2`;
-    const probe = vi.fn(endToEnd);
-    const r = await recheckTaskIntegrations(g, inst, argus.source, probe);
+    const route = fakeRoute();
+    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
     expect(r.state).toBe("refreshed");
-    // The rotated credential was probed before it replaced the file.
-    expect(probe).toHaveBeenCalledOnce();
+    // The rotated credential got a fresh, proven grant before it replaced the file.
+    expect(route.opened.map((o) => o.who)).toEqual([{ taskId: TASK, attempt: 1 }]);
     expect(r.installed?.kubeconfig).toBe(inst.kubeconfig);
     expect(r.installed?.integrations[0].secret_version).toBe(2);
     expect(readFileSync(file, "utf8")).toContain(`${SECRET}-v2`);
@@ -440,14 +503,39 @@ describe("recheckTaskIntegrations", () => {
     expect(readdirSync(path.dirname(file))).toEqual([KUBECONFIG_FILE]);
   });
 
-  it("removes the file when the rotated credential no longer passes the route probe", async () => {
+  it("removes the file and revokes when the rotated credential gets no route", async () => {
     const g = group();
     const argus = fakeArgus();
     const inst = await installed(g, argus);
     argus.rows[0].secret_version = 2;
-    const r = await recheckTaskIntegrations(g, inst, argus.source, async () => "intercepted");
+    const route = fakeRoute(() => ({
+      ok: false,
+      reason: "env_integration_gateway_intercepts",
+      error: "intercepted",
+    }));
+    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
     expect(r).toMatchObject({ state: "removed", installed: null });
     expect(existsSync(taskIntegrationsPath(g, TASK))).toBe(false);
+    expect(route.revoked).toEqual([[TASK, undefined]]);
+  });
+
+  it.each([
+    ["revoked", () => undefined],
+    [
+      "the lease lost",
+      (a: ReturnType<typeof fakeArgus>) => a.failStatus(new ApiError(409, "stale_attempt")),
+    ],
+  ] as const)("revokes the route grants when the integration is %s", async (_what, change) => {
+    const g = group();
+    const argus = fakeArgus();
+    const inst = await installed(g, argus);
+    argus.rows[0].readiness = "revoked";
+    change(argus);
+    const route = fakeRoute();
+    const r = await recheckTaskIntegrations(g, inst, argus.source, route.transport);
+    expect(r.state).toBe("removed");
+    expect(route.revoked).toEqual([[TASK, undefined]]);
+    expect(route.opened).toEqual([]);
   });
 
   it("removes the file when the selection changes under the attempt", async () => {
@@ -483,45 +571,74 @@ describe("cleanup", () => {
   });
 });
 
-it("renderKubeconfig never emits insecure-skip-tls-verify", () => {
-  const text = renderKubeconfig([
-    {
-      integration_id: "i",
-      name: "c",
-      server: "https://x.test",
-      namespace: "ns",
-      ca_data: null,
-      access: "read_only",
-      token: "t",
-      secret_version: 1,
-      expires_at: null,
-    },
-  ]);
+it("renderKubeconfig never emits insecure-skip-tls-verify, nor a cluster without its route", () => {
+  const cred: KubernetesCredential = {
+    integration_id: "i",
+    name: "c",
+    server: "https://x.test",
+    namespace: "ns",
+    ca_data: null,
+    access: "read_only",
+    token: "t",
+    secret_version: 1,
+    expires_at: null,
+  };
+  const text = renderKubeconfig([cred], { i: grantUrl("i") });
   expect(text).not.toMatch(/insecure/i);
   expect(JSON.parse(text).contexts[0].context.namespace).toBe("ns");
+  expect(() => renderKubeconfig([cred], {})).toThrow("a cluster has no route");
 });
 
+it("internalAddress refuses what the API's internal_address refuses", () => {
+  for (const ip of [
+    "127.0.0.1",
+    "::1",
+    "169.254.169.254",
+    "0.0.0.0",
+    "::",
+    "fe80::1",
+    "224.0.0.1",
+    "240.0.0.1",
+    "::ffff:127.0.0.1",
+    "nonsense",
+  ])
+    expect(internalAddress(ip), ip).toBe(true);
+  for (const ip of ["10.0.0.1", "172.17.0.2", "192.168.1.1", "203.0.113.7", "2001:db8::1"])
+    expect(internalAddress(ip), ip).toBe(false);
+});
+
+/** A host address the route may dial (it refuses loopback), or null on a host without one. */
+const HOST_IP =
+  Object.values(os.networkInterfaces())
+    .flat()
+    .find((a) => a && a.family === "IPv4" && !a.internal)?.address ?? null;
+
 /**
- * The route probe against real TLS: a local CONNECT proxy that either splices to the
- * cluster (the upstream prerequisite: an authenticated CONNECT passed through) or
- * terminates TLS with its own CA (what OneCLI v1.42.0 does for every authenticated CONNECT).
+ * The route against real TLS. The cluster (an HTTPS server on loopback) is reached through
+ * a recording TCP relay on a non-loopback address: the relay sees exactly the bytes the
+ * route forwards. An impostor with another CA stands for anything that terminates TLS.
  */
-describe("gatewayRouteProbe", () => {
-  const AGENTS = { "task-a": "agent-token-a", "task-b": "agent-token-b" } as const;
-  type Mode = "splice" | "intercept";
-  let pki: { clusterCa: string; gatewayCa: string };
-  let upstream: tls.Server;
-  let proxy: net.Server;
-  let proxyPort: number;
-  let mode: Mode = "splice";
-  /** What the proxy saw: the CONNECT authority and authorization, and every byte after. */
-  const seen: Array<{ authority: string; authorization: string | null; bytes: Buffer[] }> = [];
+describe.skipIf(!HOST_IP)("createKubernetesRoute (skipped: no non-loopback IPv4 to dial)", () => {
+  const ip = HOST_IP!;
+  const NAME = "k8s.example.test";
+  let pki: { clusterCa: string; impostorCa: string };
+  const servers: net.Server[] = [];
+  let clusterPort = 0;
+  let impostorPort = 0;
+  /** Requests the cluster served, with their bearer. */
+  const served: Array<{ url: string; authorization: string | undefined }> = [];
+  let relay: { port: number; bytes: Buffer[]; accepted: number; to: "cluster" | "impostor" };
+  let routes: KubernetesRoute[] = [];
+  let addresses: Record<string, string[]>;
+  let lookups: string[] = [];
+  let allowed: () => Promise<boolean>;
+  let authorized = 0;
 
   function openssl(dir: string, ...args: string[]) {
     execFileSync("openssl", args, { cwd: dir, stdio: "pipe" });
   }
 
-  /** A CA, and a leaf it signs for k8s.example.test and 127.0.0.1. */
+  /** A CA, and a leaf it signs for k8s.example.test and the host address. */
   function authority(dir: string, name: string) {
     const ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"];
     openssl(
@@ -540,7 +657,7 @@ describe("gatewayRouteProbe", () => {
     );
     writeFileSync(
       path.join(dir, `${name}.ext`),
-      "subjectAltName=DNS:k8s.example.test,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n",
+      `subjectAltName=DNS:${NAME},IP:${ip}\nbasicConstraints=CA:FALSE\n`,
     );
     openssl(dir, "req", ...ec, "-keyout", `${name}.key`, "-out", `${name}.csr`, "-subj", "/CN=k8s");
     openssl(
@@ -565,185 +682,348 @@ describe("gatewayRouteProbe", () => {
     return { ca: read(`${name}-ca.pem`), key: read(`${name}.key`), cert: read(`${name}.pem`) };
   }
 
-  const listening = (server: net.Server) =>
-    new Promise<number>((resolve) =>
-      server.listen(0, "127.0.0.1", () => resolve((server.address() as net.AddressInfo).port)),
+  function listen(server: net.Server, host: string) {
+    servers.push(server);
+    return new Promise<number>((resolve) =>
+      server.listen(0, host, () => resolve((server.address() as net.AddressInfo).port)),
     );
+  }
 
   beforeAll(async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "argus-route-pki-"));
     try {
       const cluster = authority(dir, "cluster");
-      const gateway = authority(dir, "gateway");
-      pki = { clusterCa: cluster.ca, gatewayCa: gateway.ca };
-      upstream = tls.createServer({ key: cluster.key, cert: cluster.cert }, (s) => s.end());
-      const upstreamPort = await listening(upstream);
-      const known = new Set(["k8s.example.test", "wrong.example.test", "127.0.0.1"]);
-      proxy = net.createServer((sock) => {
-        let head = Buffer.alloc(0);
-        const onData = (chunk: Buffer) => {
-          head = Buffer.concat([head, chunk]);
-          const end = head.indexOf("\r\n\r\n");
-          if (end < 0) return;
-          sock.off("data", onData);
-          const lines = head.subarray(0, end).toString("latin1").split("\r\n");
-          const authority = lines[0].split(" ")[1];
-          const authorization =
-            lines.find((l) => /^proxy-authorization:/i.test(l))?.replace(/^[^:]+:\s*/, "") ?? null;
-          const entry = { authority, authorization, bytes: [head.subarray(end + 4)] as Buffer[] };
-          seen.push(entry);
-          const token = authorization
-            ? Buffer.from(authorization.replace(/^Basic /, ""), "base64")
-                .toString()
-                .split(":")[1]
-            : null;
-          if (!Object.values(AGENTS).includes(token as never))
-            return void sock.end("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n");
-          if (!known.has(authority.replace(/:\d+$/, "")))
-            return void sock.end("HTTP/1.1 403 Forbidden\r\n\r\n");
-          sock.on("data", (c: Buffer) => entry.bytes.push(c));
-          sock.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-          if (mode === "intercept") {
-            const t = new tls.TLSSocket(sock, {
-              isServer: true,
-              key: gateway.key,
-              cert: gateway.cert,
-            });
-            t.on("error", () => sock.destroy());
-            return;
-          }
-          const up = net.connect(upstreamPort, "127.0.0.1");
-          sock.on("data", (c: Buffer) => up.write(c));
-          up.pipe(sock);
-          up.on("error", () => sock.destroy());
-          sock.on("error", () => up.destroy());
-          sock.on("close", () => up.destroy());
-        };
-        sock.on("data", onData);
-        sock.on("error", () => undefined);
+      const impostor = authority(dir, "impostor");
+      pki = { clusterCa: cluster.ca, impostorCa: impostor.ca };
+      const serve = (key: string, cert: string) =>
+        https.createServer({ key, cert }, (req, res) => {
+          served.push({ url: req.url ?? "", authorization: req.headers.authorization });
+          res.end("ok");
+        });
+      clusterPort = await listen(serve(cluster.key, cluster.cert), "127.0.0.1");
+      impostorPort = await listen(serve(impostor.key, impostor.cert), "127.0.0.1");
+      relay = { port: 0, bytes: [], accepted: 0, to: "cluster" };
+      const relayServer = net.createServer((sock) => {
+        relay.accepted++;
+        const up = net.connect(relay.to === "cluster" ? clusterPort : impostorPort, "127.0.0.1");
+        sock.on("data", (c: Buffer) => relay.bytes.push(c));
+        up.on("data", (c: Buffer) => relay.bytes.push(c));
+        sock.pipe(up);
+        up.pipe(sock);
+        sock.on("error", () => up.destroy());
+        up.on("error", () => sock.destroy());
+        sock.on("close", () => up.destroy());
+        up.on("close", () => sock.destroy());
       });
-      proxyPort = await listening(proxy);
+      relay.port = await listen(relayServer, ip);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   afterAll(async () => {
-    await new Promise((r) => proxy?.close(r));
-    await new Promise((r) => upstream?.close(r));
+    for (const s of servers) {
+      (s as { closeAllConnections?: () => void }).closeAllConnections?.();
+      await new Promise((r) => s.close(r));
+    }
   });
 
-  afterEach(() => {
-    mode = "splice";
-    seen.splice(0);
+  afterEach(async () => {
+    for (const r of routes.splice(0)) await r.close();
+    relay.bytes.splice(0);
+    relay.accepted = 0;
+    relay.to = "cluster";
+    served.splice(0);
+    lookups = [];
+    authorized = 0;
   });
 
+  function newRoute(over: Partial<Parameters<typeof createKubernetesRoute>[0]> = {}) {
+    addresses = {
+      [NAME]: [ip],
+      "wrong.example.test": [ip],
+      "meta.example.test": ["169.254.169.254"],
+    };
+    allowed = async () => true;
+    const r = createKubernetesRoute({
+      bindHost: async () => "127.0.0.1",
+      lookup: async (host) => {
+        lookups.push(host);
+        const got = addresses[host];
+        if (!got) throw Object.assign(new Error("not found"), { code: "ENOTFOUND" });
+        return got;
+      },
+      ...over,
+    });
+    routes.push(r);
+    return r;
+  }
+
+  const b64 = (pem: string) => Buffer.from(pem).toString("base64");
   const route = (over: Partial<IntegrationRoute> = {}): IntegrationRoute => ({
+    integration_id: "int-0",
     name: "prod",
-    server: "https://k8s.example.test:6443",
-    ca_data: Buffer.from(pki.clusterCa).toString("base64"),
+    server: `https://${NAME}:${relay.port}`,
+    ca_data: b64(pki.clusterCa),
+    authorize: async () => {
+      authorized++;
+      return allowed();
+    },
     ...over,
   });
+  const A1 = { taskId: TASK, attempt: 1 };
 
-  /** A lease per task: each task's session carries its own agent token. */
-  function leases(proxyUrl?: (token: string) => string | null) {
-    const released: string[] = [];
-    const gatewayProxy = vi.fn(async (who: { taskId: string; attempt: number }) => {
-      const token = AGENTS[who.taskId as keyof typeof AGENTS] ?? "agent-token-unknown";
-      return {
-        proxy: proxyUrl ? proxyUrl(token) : `http://x:${token}@127.0.0.1:${proxyPort}`,
-        release: async () => {
-          released.push(who.taskId);
-        },
-      } satisfies GatewayProxy;
-    });
-    return { released, gatewayProxy, probe: gatewayRouteProbe(gatewayProxy) };
+  async function granted(r: KubernetesRoute, over: Partial<IntegrationRoute> = {}, who = A1) {
+    const got = await r.open(who, [route(over)]);
+    if (!got.ok) throw new Error(got.error);
+    return got.proxies["int-0"]!;
   }
-  const A = { taskId: "task-a", attempt: 1 };
 
-  it("passes when the gateway splices the cluster's TLS end to end", async () => {
-    const l = leases();
-    expect(await l.probe([route(), route({ name: "ip", server: "https://127.0.0.1" })], A)).toBe(
-      null,
-    );
-    expect(l.released).toEqual(["task-a"]);
-    expect(seen.map((s) => s.authority)).toEqual(["k8s.example.test:6443", "127.0.0.1:443"]);
-    // A handshake only: no HTTP request and no bearer token crossed the proxy in plaintext.
-    const bytes = Buffer.concat(seen.flatMap((s) => s.bytes)).toString("latin1");
-    expect(bytes).not.toMatch(/Bearer|Authorization|GET |HTTP\/1/);
-    expect(bytes).not.toContain(SECRET);
-  });
-
-  it("refuses a certificate minted by an intercepting gateway", async () => {
-    mode = "intercept";
-    const l = leases();
-    const why = await l.probe([route()], A);
-    expect(why).toMatch(
-      /^prod: .*not trusted by the integration's CA \([A-Z_]+\); the gateway intercepts TLS$/,
-    );
-    expect(l.released).toEqual(["task-a"]);
-  });
-
-  it("refuses a cluster CA mismatch, and never trusts the gateway's CA by default", async () => {
-    const l = leases();
-    const gatewayCa = Buffer.from(pki.gatewayCa).toString("base64");
-    expect(await l.probe([route({ ca_data: gatewayCa })], A)).toMatch(/not trusted/);
-    // No CA: the public roots only, even though the process may trust more.
-    expect(await l.probe([route({ ca_data: null })], A)).toMatch(/not trusted/);
-  });
-
-  it("refuses a certificate that does not name the server", async () => {
-    const l = leases();
-    expect(await l.probe([route({ server: "https://wrong.example.test:6443" })], A)).toMatch(
-      /does not name the server \(ERR_TLS_CERT_ALTNAME_INVALID\)/,
-    );
-  });
-
-  it("fails on a refused CONNECT: unknown identity (407) or host (403)", async () => {
-    const l = leases();
-    expect(await l.probe([route()], { taskId: "task-z", attempt: 1 })).toBe(
-      "prod: the gateway refused the CONNECT (HTTP 407)",
-    );
-    expect(await l.probe([route({ server: "https://elsewhere.test" })], A)).toBe(
-      "prod: the gateway refused the CONNECT (HTTP 403)",
-    );
-    expect(l.released).toEqual(["task-z", "task-a"]);
-  });
-
-  it("carries each task's own identity and never names it in a reason", async () => {
-    const l = leases();
-    expect(await l.probe([route()], A)).toBe(null);
-    expect(await l.probe([route()], { taskId: "task-b", attempt: 3 })).toBe(null);
-    const tokens = seen.map((s) =>
-      Buffer.from(s.authorization!.replace(/^Basic /, ""), "base64").toString(),
-    );
-    expect(tokens).toEqual(["x:agent-token-a", "x:agent-token-b"]);
-    expect(l.gatewayProxy.mock.calls.map((c) => c[0])).toEqual([
-      A,
-      { taskId: "task-b", attempt: 3 },
-    ]);
-    mode = "intercept";
-    expect(await l.probe([route()], A)).not.toContain("agent-token");
-  });
-
-  it("fails closed with no proxy, an unusable proxy, an unreachable one or no lease", async () => {
-    const closed = net.createServer();
-    const deadPort = await listening(closed);
-    await new Promise((r) => closed.close(r));
-    for (const [url, why] of [
-      [null, "no gateway proxy is configured for this worker's sessions"],
-      ["socks5://x:t@127.0.0.1:1080", "the session's gateway proxy is not a plain http URL"],
-      [`http://x:t@127.0.0.1:${deadPort}`, "prod: the gateway proxy is unreachable (ECONNREFUSED)"],
-    ] as const) {
-      const l = leases(() => url);
-      const got = await l.probe([route()], A);
-      expect(got).toBe(why);
-      expect(got).not.toContain(":t@");
-      expect(l.released).toEqual(["task-a"]);
-    }
-    const failing = gatewayRouteProbe(async () => {
-      throw Object.assign(new Error(`lease failed for ${SECRET}`), { code: "ECONNRESET" });
+  /**
+   * What kubectl does with a cluster's `proxy-url`: CONNECT with the userinfo as Basic
+   * proxy authorization, then TLS verified against the cluster CA, then the request.
+   */
+  function viaRoute(
+    proxyUrl: string,
+    opts: { authority?: string; auth?: string | null; method?: string; keepOpen?: boolean } = {},
+  ): Promise<{ connect: number; tls?: string; body?: string; socket?: tls.TLSSocket }> {
+    const u = new URL(proxyUrl);
+    const authority = opts.authority ?? `${NAME}:${relay.port}`;
+    const auth =
+      opts.auth === undefined
+        ? Buffer.from(
+            `${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`,
+          ).toString("base64")
+        : opts.auth;
+    return new Promise((resolve, reject) => {
+      const sock = net.connect(Number(u.port), u.hostname);
+      sock.on("error", reject);
+      sock.on("connect", () =>
+        sock.write(
+          `${opts.method ?? "CONNECT"} ${authority} HTTP/1.1\r\nHost: ${authority}\r\n` +
+            `${auth === null ? "" : `Proxy-Authorization: Basic ${auth}\r\n`}\r\n`,
+        ),
+      );
+      let head = Buffer.alloc(0);
+      const onData = (c: Buffer) => {
+        head = Buffer.concat([head, c]);
+        const end = head.indexOf("\r\n\r\n");
+        if (end < 0) return;
+        sock.off("data", onData);
+        const connect = Number(head.subarray(9, 12).toString());
+        if (connect !== 200) return resolve({ connect });
+        const t = tls.connect({
+          socket: sock,
+          servername: authority.split(":")[0],
+          ca: pki.clusterCa,
+        });
+        t.on("error", (err) => resolve({ connect, tls: (err as NodeJS.ErrnoException).code }));
+        t.on("secureConnect", () => {
+          if (opts.keepOpen) return resolve({ connect, socket: t });
+          t.write(
+            `GET /api/v1/namespaces/team-a/pods HTTP/1.1\r\nHost: ${authority}\r\nAuthorization: Bearer ${SECRET}\r\nConnection: close\r\n\r\n`,
+          );
+          const body: Buffer[] = [];
+          t.on("data", (d: Buffer) => body.push(d));
+          t.on("end", () => resolve({ connect, body: Buffer.concat(body).toString() }));
+        });
+      };
+      sock.on("data", onData);
     });
-    expect(await failing([route()], A)).toBe("the gateway lease for the probe failed (ECONNRESET)");
+  }
+
+  const closed = (s: net.Socket) =>
+    s.destroyed ? Promise.resolve() : new Promise<void>((r) => s.once("close", () => r()));
+
+  it("proves the route, then carries kubectl's TLS end to end with the bearer encrypted", async () => {
+    const r = newRoute();
+    const proxy = await granted(r);
+    expect(proxy).toMatch(/^http:\/\/argus:[A-Za-z0-9_-]{43}@127\.0\.0\.1:\d+$/);
+    // The proof was a CONNECT through the listener (authorized) and a handshake only.
+    expect(authorized).toBe(1);
+    expect(served).toEqual([]);
+    const got = await viaRoute(proxy);
+    expect(got.connect).toBe(200);
+    expect(got.body).toMatch(/^HTTP\/1\.1 200 OK[\s\S]*\r\n\r\nok$/);
+    expect(served).toEqual([
+      { url: "/api/v1/namespaces/team-a/pods", authorization: `Bearer ${SECRET}` },
+    ]);
+    expect(authorized).toBe(2);
+    // The route forwarded ciphertext only: no request line, header or bearer.
+    const wire = Buffer.concat(relay.bytes).toString("latin1");
+    expect(wire.length).toBeGreaterThan(0);
+    expect(wire).not.toMatch(/Bearer|Authorization|GET \/|HTTP\/1|team-a/);
+    expect(wire).not.toContain(SECRET);
+    expect(lookups).toEqual([NAME]);
+  });
+
+  it("answers 407 without a known grant, 405 to anything but CONNECT", async () => {
+    const r = newRoute();
+    const proxy = await granted(r);
+    const forged = new URL(proxy);
+    forged.password = "A".repeat(43);
+    expect((await viaRoute(forged.toString())).connect).toBe(407);
+    expect((await viaRoute(proxy, { auth: null })).connect).toBe(407);
+    expect((await viaRoute(proxy, { auth: Buffer.from("argus").toString("base64") })).connect).toBe(
+      407,
+    );
+    expect((await viaRoute(proxy, { method: "GET" })).connect).toBe(405);
+    expect(relay.accepted).toBe(1); // the proof only
+  });
+
+  it("refuses (403) any destination but the granted host:port, whatever the session asks", async () => {
+    const r = newRoute();
+    const proxy = await granted(r);
+    for (const authority of [
+      `${NAME}:443`,
+      `${NAME}:${relay.port + 1}`,
+      `wrong.example.test:${relay.port}`,
+      `${ip}:${relay.port}`,
+      `127.0.0.1:${clusterPort}`,
+      `169.254.169.254:80`,
+    ])
+      expect((await viaRoute(proxy, { authority })).connect, authority).toBe(403);
+    expect(relay.accepted).toBe(1);
+  });
+
+  it("refuses (403) a tunnel Argus no longer authorizes, or cannot be asked about", async () => {
+    const r = newRoute();
+    const proxy = await granted(r);
+    allowed = async () => false;
+    expect((await viaRoute(proxy)).connect).toBe(403);
+    allowed = async () => {
+      throw new Error("Argus unreachable");
+    };
+    expect((await viaRoute(proxy)).connect).toBe(403);
+    expect(relay.accepted).toBe(1);
+  });
+
+  it("dials only the addresses resolved at grant time", async () => {
+    const r = newRoute();
+    const proxy = await granted(r);
+    // The name now resolves elsewhere (a rebinding): the grant keeps its pinned address.
+    addresses[NAME] = ["127.0.0.1"];
+    expect((await viaRoute(proxy)).body).toMatch(/ok$/);
+    expect(relay.accepted).toBe(2);
+    expect(lookups).toEqual([NAME]);
+    // A new grant resolves again, and refuses loopback.
+    expect(await r.open(A1, [route()])).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error: "prod: the server resolves to a loopback or link-local address",
+    });
+  });
+
+  it.each([
+    [`https://meta.example.test:443`, "resolves to a loopback or link-local address"],
+    [`https://127.0.0.1:443`, "resolves to a loopback or link-local address"],
+    [`https://[::1]:443`, "resolves to a loopback or link-local address"],
+    [`https://nowhere.example.test`, "does not resolve (ENOTFOUND)"],
+  ])("refuses a server at %s before any grant exists", async (server, why) => {
+    const r = newRoute();
+    const got = await r.open(A1, [route({ server })]);
+    expect(got).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error: `prod: the server ${why}`,
+    });
+    expect(relay.accepted).toBe(0);
+  });
+
+  it("revocation closes open tunnels at once and refuses new ones", async () => {
+    const r = newRoute();
+    const proxy = await granted(r);
+    const open = await viaRoute(proxy, { keepOpen: true });
+    expect(open.connect).toBe(200);
+    r.revoke(TASK, 2); // another attempt's: nothing of this one
+    expect(open.socket!.destroyed).toBe(false);
+    r.revoke(TASK);
+    await closed(open.socket!);
+    expect((await viaRoute(proxy)).connect).toBe(407);
+  });
+
+  it("a new attempt's grant fences the previous attempt's, tunnels included", async () => {
+    const r = newRoute();
+    const first = await granted(r);
+    const open = await viaRoute(first, { keepOpen: true });
+    const second = await granted(r, {}, { taskId: TASK, attempt: 2 });
+    await closed(open.socket!);
+    expect(second).not.toBe(first);
+    expect((await viaRoute(first)).connect).toBe(407);
+    expect((await viaRoute(second)).body).toMatch(/ok$/);
+    // Another task's grant is its own: revoking this task leaves it.
+    const other = await granted(r, {}, { taskId: randomUUID(), attempt: 1 });
+    r.revoke(TASK);
+    expect((await viaRoute(other)).body).toMatch(/ok$/);
+  });
+
+  it("closes a tunnel after its maximum lifetime", async () => {
+    const r = newRoute({ tunnelMaxMs: 50 });
+    const open = await viaRoute(await granted(r), { keepOpen: true });
+    expect(open.connect).toBe(200);
+    await closed(open.socket!);
+  });
+
+  it.each([
+    [
+      "a CA that is not the cluster's",
+      () => ({ ca_data: b64(pki.impostorCa) }),
+      "cluster",
+      /not trusted by the integration's CA \([A-Z_]+\); something intercepts TLS/,
+    ],
+    [
+      "no CA: the public roots, never the process's extras",
+      () => ({ ca_data: null }),
+      "cluster",
+      /not trusted/,
+    ],
+    ["a certificate from something that terminates TLS", () => ({}), "impostor", /not trusted/],
+    [
+      "a certificate that does not name the server",
+      () => ({ server: `https://wrong.example.test:${relay.port}` }),
+      "cluster",
+      /does not name the server \(ERR_TLS_CERT_ALTNAME_INVALID\)/,
+    ],
+  ] as const)("refuses %s, and leaves no grant", async (_what, over, to, why) => {
+    const r = newRoute();
+    relay.to = to;
+    const got = await r.open(A1, [route(over())]);
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_gateway_intercepts" });
+    if (got.ok) throw new Error("granted");
+    expect(got.error).toMatch(why);
+    expect(got.error).toMatch(/^prod: /);
+    expect(served).toEqual([]);
+  });
+
+  it("is unavailable without a bridge, on a bad port, or when the cluster is down", async () => {
+    expect(await newRoute({ bindHost: async () => null }).open(A1, [route()])).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error: "this worker has no docker bridge address for the Kubernetes route",
+    });
+    expect(await newRoute({ port: 70000 }).open(A1, [route()])).toMatchObject({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+    });
+    const down = net.createServer();
+    const downPort = await new Promise<number>((res) =>
+      down.listen(0, ip, () => res((down.address() as net.AddressInfo).port)),
+    );
+    await new Promise((res) => down.close(res));
+    expect(await newRoute().open(A1, [route({ server: `https://${NAME}:${downPort}` })])).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error: "prod: the route refused the CONNECT (HTTP 502)",
+    });
+  });
+
+  it("the production factory accepts only a port number from the environment", async () => {
+    const r = nanoclawKubernetesRoute({ ARGUS_INTEGRATION_ROUTE_PORT: "1-2" });
+    routes.push(r);
+    const got = await r.open(A1, [route()]);
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_route_unavailable" });
+    if (got.ok) throw new Error("granted");
+    // No bridge here, or the port is refused: either way, never a grant.
+    expect(got.error).toMatch(/no docker bridge address|not a port number/);
   });
 });

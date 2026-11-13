@@ -455,20 +455,33 @@ removed when the attempt ends, and stale ones are swept at start. Deleting the
 file does not revoke the token: revoke it at the cluster as well
 ([spec](../../docs/specs/integrations.spec.md) 3.6).
 
-Before a kubeconfig is written or replaced, `argus-integrations-route.ts` probes
-each cluster through a short gateway lease of the worker's agent group: a CONNECT
-with the session's `Proxy-Authorization`, then a TLS handshake only, verified
-against the integration's CA. If the gateway intercepts TLS, refuses the CONNECT or
-is missing, the attempt blocks as `env_integration_gateway_intercepts` and no file
-is left. OneCLI v1.42.0 intercepts every authenticated CONNECT, so against it every
-Kubernetes task blocks until OneCLI offers an authenticated per-agent CONNECT
-passthrough (spec 3.6 "Gateway path"); this is unverified against a live gateway.
-An x509 error from kubectl through the gateway is an environment block: never
-disable TLS verification, add the gateway CA, unset `HTTPS_PROXY` or set `NO_PROXY`.
+Kubernetes traffic does not go through the OneCLI gateway, which intercepts every
+authenticated CONNECT. `argus-integrations-route.ts` runs a CONNECT broker in the
+channel on the docker bridge address (`ARGUS_INTEGRATION_ROUTE_PORT`, else a free
+port). Each cluster in the kubeconfig gets its own `proxy-url` carrying a random
+grant bound to the task, the attempt, the integration and the server's exact
+`host:port` (resolved once; internal addresses refused). Each CONNECT is
+authorized against Argus: the attempt must hold the lease and the integration be
+ready at the delivered version. The broker splices bytes and never terminates TLS.
+`HTTPS_PROXY` and `NO_PROXY` stay as they are, so everything else still uses the
+gateway. A new attempt, revocation, expiry, rotation, lost lease or the attempt's
+end revokes the grants and closes their tunnels; a tunnel lasts at most 15
+minutes.
 
-Activation: `install.sh` and `pnpm run build`, rebuild the tools layer
-(`provision.sh`, for `kubectl`), recreate the instances, then add
-`task-integrations` to the pool's capabilities.
+Before a kubeconfig is written or replaced, the channel proves the route: a CONNECT
+with the grant, then a TLS handshake only, verified against the integration's CA
+and host. A missing route, no bridge address, a bad port or a failed tunnel blocks
+the attempt as `env_integration_route_unavailable`; a certificate that does not
+verify or name the host blocks as `env_integration_gateway_intercepts`. Either
+leaves no file. Socket-mode workers run sessions on the outer daemon, which cannot
+reach the bridge, so their Kubernetes tasks block as
+`env_integration_route_unavailable`. A TLS or proxy error from kubectl is an
+environment block: never edit the `proxy-url`, server or CA, never disable TLS
+verification, unset `HTTPS_PROXY` or set `NO_PROXY`
+([spec](../../docs/specs/integrations.spec.md) 3.6 "Route").
+
+Activation and rollback: [worker setup
+runbook](../../docs/runbooks/2026-10-16.nanoclaw-worker-setup.ref.md) section 5.
 
 ## Not done yet
 

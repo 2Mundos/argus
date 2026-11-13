@@ -123,14 +123,14 @@ import {
 import {
   type InstalledIntegrations,
   type IntegrationsSource,
+  type IntegrationTransport,
   installTaskIntegrations,
   integrationLines,
-  type RouteProbe,
   recheckTaskIntegrations,
   removeTaskIntegrations,
   sweepTaskIntegrations,
 } from "./argus-integrations.js";
-import { gatewayRouteProbe, nanoclawGatewayProxy } from "./argus-integrations-route.js";
+import { nanoclawKubernetesRoute } from "./argus-integrations-route.js";
 import { syncLocalStrataForward } from "./argus-local-forward.js";
 import {
   localHarnessFromCredential,
@@ -402,13 +402,13 @@ export interface ArgusConfig {
    */
   probeExecutor?: (executor: string) => Promise<{ reason: string; error: string } | null>;
   /**
-   * The Kubernetes integration gateway route probe (integrations spec 3.6, "Gateway path"),
-   * run before a kubeconfig is installed and again before a rotated one replaces it: a
-   * CONNECT with the session's gateway identity and a TLS handshake verified against the
-   * cluster's CA. Absent: a task with integrations blocks with
-   * `env_integration_gateway_intercepts`. `fromEnv` wires the gateway-lease probe.
+   * The Kubernetes route (integrations spec 3.6, "Route"): grants the attempt a tunnel to
+   * each cluster and proves it end to end before a kubeconfig is installed, and again
+   * before a rotated one replaces it; revoked when the attempt ends. Absent: a task with
+   * integrations blocks with `env_integration_route_unavailable`. `fromEnv` wires the
+   * docker-bridge route.
    */
-  probeIntegrationRoutes?: RouteProbe;
+  integrationRoute?: IntegrationTransport;
   /**
    * Independent exact-agent evidence on whether the gateway injects the repository credential,
    * consulted only for a 404 that proves no authentication. `fromEnv` leaves it absent: the
@@ -2875,6 +2875,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   function finishTask(): void {
     const ended = current?.id;
+    // Every end of the attempt, a lost lease included: no new tunnel, open ones closed.
+    if (ended) cfg.integrationRoute?.revoke(ended);
     if (cfg.runtime) {
       // Exactly this task's test services and declaration; a failure is logged, never fatal.
       void cfg.runtime.cleanup(ended).catch((err) => {
@@ -3776,7 +3778,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       engineProvider: account?.provider ?? null,
       executorProvider: executor?.provider ?? null,
       source: integrationsSource,
-      routeProbe: cfg.probeIntegrationRoutes,
+      transport: cfg.integrationRoute,
     });
     if (!result.ok) return result;
     integrationsAttempt = result.installed;
@@ -3808,9 +3810,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         groupDir,
         held,
         integrationsSource,
-        cfg.probeIntegrationRoutes,
+        cfg.integrationRoute,
       );
-      if (integrationsAttempt !== held) return; // the attempt ended meanwhile
+      if (integrationsAttempt !== held) {
+        // The attempt ended meanwhile: a rotation may have granted it again.
+        cfg.integrationRoute?.revoke(held.taskId, held.attempt);
+        return;
+      }
       integrationsAttempt = r.installed;
       if (r.state === "removed")
         log.warn("Task integration no longer deliverable; kubeconfig removed", {
@@ -3832,6 +3838,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   /** Remove every kubeconfig of `taskId`; logged, never fatal. */
   async function dropIntegrations(taskId: string): Promise<void> {
     if (integrationsAttempt?.taskId === taskId) integrationsAttempt = null;
+    cfg.integrationRoute?.revoke(taskId);
     try {
       const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
       if (groupDir) await removeTaskIntegrations(groupDir, taskId);
@@ -6004,7 +6011,7 @@ export function fromEnv(): ChannelAdapter | null {
     accounts: accountsFromEnv(),
     probeRepository: sessionRepositoryProbe(nanoclawPreflightRunner(argusGroup)),
     probeExecutor: (cli) => runExecutorPreflight(nanoclawPreflightRunner(argusGroup), cli),
-    probeIntegrationRoutes: gatewayRouteProbe(nanoclawGatewayProxy(argusGroup)),
+    integrationRoute: nanoclawKubernetesRoute(process.env),
     sessionImage: nanoclawSessionImage,
     startupReady: nanoclawStartupReady,
     runtime,
