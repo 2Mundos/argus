@@ -5155,6 +5155,51 @@
         "title": "CommandBlockedWrite",
         "type": "object"
       },
+      "CommandBlocks": {
+        "description": "Command guard blocks in the window: observed events, not enforcement state.",
+        "properties": {
+          "by_project": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectBlocks"
+            },
+            "title": "By Project",
+            "type": "array"
+          },
+          "by_task": {
+            "items": {
+              "$ref": "#/components/schemas/TaskBlocks"
+            },
+            "title": "By Task",
+            "type": "array"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_hours",
+          "source",
+          "total",
+          "by_project",
+          "by_task",
+          "truncated"
+        ],
+        "title": "CommandBlocks",
+        "type": "object"
+      },
       "Commit": {
         "properties": {
           "sha": {
@@ -10269,6 +10314,9 @@
             "title": "As Of",
             "type": "string"
           },
+          "command_blocks": {
+            "$ref": "#/components/schemas/CommandBlocks"
+          },
           "dead_session_recovery": {
             "$ref": "#/components/schemas/DeadSessionRecovery"
           },
@@ -10317,6 +10365,7 @@
           "failures",
           "yield",
           "dead_session_recovery",
+          "command_blocks",
           "truncated"
         ],
         "title": "FleetHealth",
@@ -17026,6 +17075,36 @@
         "title": "Project",
         "type": "object"
       },
+      "ProjectBlocks": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "unknown": {
+            "title": "Unknown",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project",
+          "unknown",
+          "count"
+        ],
+        "title": "ProjectBlocks",
+        "type": "object"
+      },
       "ProjectCheckout": {
         "description": "A checkout in progress: a read-only task whose workspace the worker channel\nprepares from the project's repository (project code availability spec).",
         "properties": {
@@ -21800,6 +21879,36 @@
           "attempt"
         ],
         "title": "TaskAttemptSummary",
+        "type": "object"
+      },
+      "TaskBlocks": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "project",
+          "count"
+        ],
+        "title": "TaskBlocks",
         "type": "object"
       },
       "TaskChanges": {

@@ -141,6 +141,14 @@ function health(over: Record<string, unknown> = {}) {
       truncated: false,
       examples: [],
     },
+    command_blocks: {
+      window_hours: 24,
+      source: "events task.command_blocked; tasks.project",
+      total: 0,
+      by_project: [],
+      by_task: [],
+      truncated: false,
+    },
     ...over,
   };
 }
@@ -184,6 +192,40 @@ describe("Fleet", () => {
     expect(outcomes?.textContent).toContain("success no data");
     expect(outcomes?.textContent).toContain("1 succeeded · 1 failed");
     expect(outcomes?.textContent).not.toMatch(/\b0%/);
+  });
+
+  it("lists command guard blocks per project and task with an unknown row", async () => {
+    mock.health = health({
+      command_blocks: {
+        window_hours: 24,
+        source: "events task.command_blocked; tasks.project",
+        total: 3,
+        by_project: [
+          { project: "alpha", unknown: false, count: 2 },
+          { project: null, unknown: true, count: 1 },
+        ],
+        by_task: [
+          { task_id: "t-1", project: "alpha", count: 2 },
+          { task_id: "t-2", project: null, count: 1 },
+        ],
+        truncated: false,
+      },
+    });
+    render(<Fleet />);
+    const card = (await screen.findByRole("heading", { name: "By project · 3 total" }))
+      .parentElement;
+    expect(card?.textContent).toContain("alpha2");
+    expect(card?.textContent).toContain("unknown (no project)1");
+    expect(screen.getByRole("link", { name: "t-2" }).closest("tr")?.textContent).toContain(
+      "unknown",
+    );
+    expect(screen.getByText("24 h · events task.command_blocked; tasks.project")).toBeTruthy();
+  });
+
+  it("says there are no blocks in an empty window", async () => {
+    mock.health = health();
+    render(<Fleet />);
+    expect(await screen.findByText("No blocks in the window.")).toBeTruthy();
   });
 
   it("shows values with window and source captions, and links failures", async () => {

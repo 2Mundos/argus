@@ -18,7 +18,8 @@ orchestrator and admin scopes (never workers). `window` defaults to 24, must be
 It shows pools (status, `live`/`desired`, `running`, last heartbeat), a count per
 `TaskState`, queue and run time (p50, p90, mean), success and failure rate,
 failures grouped by reason with up to 5 recent examples each, yield, and
-dead-session recovery coverage and latency.
+dead-session recovery coverage and latency, and command guard blocks per project
+and per task.
 
 # 2. Non-Goals
 
@@ -213,6 +214,18 @@ dead-session recovery coverage and latency.
   Coverage: a synthetic fixture on one machine; no production numbers, no timing
   assertion, and production event volume per task and disk are unmeasured. The
   query is not constant time.
+- **Command guard blocks.** `command_blocks` counts `task.command_blocked` events
+  ([command guard](command-guard.spec.md) 3) with `at` in the window (same `since`
+  and `until` as every other block), from the events table, never from
+  `task_command_blocks`. Two `GROUP BY` queries in the snapshot, both through
+  `events_kind_at`, joined to `tasks` by primary key: by task and by project. Counts
+  are exact integers; `total` equals the sum of `by_project`. Events whose task has
+  no `project` or whose task row is missing are one explicit entry in `by_project`
+  (`unknown: true`, `project: null`), shown as "unknown" in the UI, never dropped.
+  `by_task` (task id, project, count) is ordered by count, then id, and capped at 100
+  tasks with `truncated`; the per-project list is not capped by it. No command text
+  is returned. An empty window has `total` 0 and empty lists (a count of observed
+  events, not a missing value). Read-only: it changes nothing the guard blocks.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0021_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and

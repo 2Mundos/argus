@@ -5370,6 +5370,24 @@ export interface components {
             /** Tool Use Id */
             tool_use_id: string;
         };
+        /**
+         * CommandBlocks
+         * @description Command guard blocks in the window: observed events, not enforcement state.
+         */
+        CommandBlocks: {
+            /** By Project */
+            by_project: components["schemas"]["ProjectBlocks"][];
+            /** By Task */
+            by_task: components["schemas"]["TaskBlocks"][];
+            /** Source */
+            source: string;
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** Commit */
         Commit: {
             /** Sha */
@@ -7090,6 +7108,7 @@ export interface components {
              * Format: date-time
              */
             as_of: string;
+            command_blocks: components["schemas"]["CommandBlocks"];
             dead_session_recovery: components["schemas"]["DeadSessionRecovery"];
             failures: components["schemas"]["Failures"];
             outcomes: components["schemas"]["Outcomes"];
@@ -9500,6 +9519,15 @@ export interface components {
              */
             updated_at: string;
         };
+        /** ProjectBlocks */
+        ProjectBlocks: {
+            /** Count */
+            count: number;
+            /** Project */
+            project: string | null;
+            /** Unknown */
+            unknown: boolean;
+        };
         /**
          * ProjectCheckout
          * @description A checkout in progress: a read-only task whose workspace the worker channel
@@ -11168,6 +11196,15 @@ export interface components {
              * @default 0
              */
             steer_unknown?: number;
+        };
+        /** TaskBlocks */
+        TaskBlocks: {
+            /** Count */
+            count: number;
+            /** Project */
+            project: string | null;
+            /** Task Id */
+            task_id: string;
         };
         /**
          * TaskChanges
