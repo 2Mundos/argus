@@ -6089,6 +6089,20 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /**
+         * DecisionWait
+         * @description Seconds from `created_at` to `decided_at` of answered decisions of one kind.
+         */
+        DecisionWait: {
+            /** Mean */
+            mean: number | null;
+            /** Median */
+            median: number | null;
+            /** N */
+            n: number;
+            /** Open Count */
+            open_count: number;
+        };
         /** DecisionsOverview */
         DecisionsOverview: {
             /** By State */
@@ -12664,6 +12678,14 @@ export interface components {
             completions: number;
             /** Cost Per Succeeded */
             cost_per_succeeded: number | null;
+            /** Decision Waits */
+            decision_waits: {
+                [key: string]: components["schemas"]["DecisionWait"];
+            };
+            /** Decisions Opened */
+            decisions_opened: number;
+            /** Decisions Per Succeeded Task */
+            decisions_per_succeeded_task: number | null;
             /** Finished Tasks */
             finished_tasks: number;
             /**
@@ -12683,10 +12705,14 @@ export interface components {
             not_reported_attempts?: number;
             /** Source */
             source: string;
+            /** Succeeded Tasks */
+            succeeded_tasks: number;
             /** Tokens Per Failed */
             tokens_per_failed: number | null;
             /** Tokens Per Succeeded */
             tokens_per_succeeded: number | null;
+            /** Truncated */
+            truncated: boolean;
             /** Usage Tasks */
             usage_tasks: number;
             /** Window Hours */

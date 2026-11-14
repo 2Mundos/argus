@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-10-31
+updated: 2026-11-14
 ---
 
 # Fleet health
@@ -76,6 +76,20 @@ dead-session recovery coverage and latency.
   mean needs `MIN_SAMPLES` measured tasks (else `null`). Migration
   `0046` indexes `account_usage.task_id`. The MCP tool `get_fleet_yield(window_hours)`
   (managers) returns this `yield` block.
+- **Decision latency.** `yield` also reports how many decisions the fleet raised
+  and how long they waited. Cohort: decisions with `created_at` in the window,
+  any kind and state (`decisions_opened`, a count, not capped by the fetch).
+  `succeeded_tasks` counts tasks `succeeded` with `updated_at` in the window (a
+  count, not the truncated finished list) and `decisions_per_succeeded_task` is
+  `decisions_opened / succeeded_tasks`, `null` under `MIN_SAMPLES` succeeded
+  tasks. `decision_waits` always has the four kinds `question`, `approval`,
+  `review` and `policy`, each with `n` (answered decisions of that kind with a
+  `decided_at`), `open_count` (still `open`; never in the statistics), and `mean`
+  and `median` in seconds from `created_at` to `decided_at`, both `null` when `n`
+  is under `MIN_SAMPLES` (never 0). Cancelled decisions are in neither `n` nor
+  `open_count`. The fetch is the newest `MAX_ROWS` by `created_at`; `truncated`
+  is true when it was full. Migration `0083` indexes `decisions.created_at`.
+  Read-only reporting: it changes no routing or answering.
 - **Dead-session recovery (P5 measure).** `dead_session_recovery` answers how long
   after a vanished session is *observed* until the task is claimed again. Cohort:
   `task.fail` events in the window with `data.reason = session_lost` (failure class
