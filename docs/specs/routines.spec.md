@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-06
+updated: 2026-11-14
 ---
 
 # Routines
@@ -29,8 +29,9 @@ Readable by any valid token. Managed by orchestrators and admins.
 - No backfill: a missed window is run once, not once per missed slot.
 - No new way to execute work. A run is an ordinary task; leases, accounts, models,
   review and failure classes apply unchanged.
-- No credentials in routines. Access to production logs comes from the pool that
-  has the capability (`required_capabilities`), as for any task.
+- No credentials in routines, only ids: a template may name project integrations
+  an admin granted (3.1); the secrets stay in the store. Other access comes from the
+  pool that has the capability (`required_capabilities`), as for any task.
 
 # 3. Decisions Made
 
@@ -44,10 +45,18 @@ default `UTC`), `template` (json), `findings` (`off` | `approval` | `auto`),
 `template` holds the task fields a creator may set today: `kind`, `title`, `spec`,
 `acceptance`, `input`, `required_capabilities`, `priority`, `review`,
 `deliverable`, `max_attempts`, `timeout_s`, `budget_usd`, difficulty and model
-pins, plus the finding intake's `dedup_window` and `max_findings` (3.3), which stay
-out of the run task. A field the template leaves out takes the
+pins, `integrations` (project integration ids, at most 8; see below), plus the
+finding intake's `dedup_window` and `max_findings` (3.3), which stay out of the
+run task. A field the template leaves out takes the
 [task defaults](task-defaults.spec.md) of the project at each run. It is validated with the task create rules when the routine is
 saved, so a bad template fails on save, not at 3 a.m.
+
+`integrations` is a credential grant, so only an admin may save a template that
+carries it (`403 integration_admin_only`, on create and on replace; a manager may
+still remove it). On save each id is checked against the routine's project as a
+task's are ([integrations](integrations.spec.md) 3.6; `422 integration_invalid`).
+A grant records `routine.integrations_granted {project, slug, integrations}` (ids
+only). Each run is an ordinary task that selects them.
 
 ## 3.2 Scheduler
 

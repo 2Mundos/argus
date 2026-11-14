@@ -12,7 +12,7 @@ from api_support import DONE, FakeClock, insert_agent
 from argus_api.auth import Identity
 from argus_api.db import Database, ts
 from argus_api.decisions import service as decisions
-from argus_api.errors import NotFoundError
+from argus_api.errors import ForbiddenError, NotFoundError, ValidationFailedError
 from argus_api.inbox import inbox
 from argus_api.main import app
 from argus_api.routines import runs, service
@@ -521,3 +521,125 @@ def test_routines_enabled_is_a_registered_global_setting(client: TestClient) -> 
         "/api/settings/routines.enabled", json={"value": False}, headers=ADMIN
     )
     assert res.status_code == 200, res.text
+
+
+# -- integrations (routines spec 3.1, integrations spec 3.6) ---------------------------
+
+
+async def _integration(
+    db: Database, id: str, project: str = "radar", state: str = "active"
+) -> None:
+    """A Kubernetes integration row; the secret store is not involved."""
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO integrations (id, project, kind, name, config, access,"
+            " secret_ref, state, created_at, created_by, updated_at, revoked_at)"
+            " VALUES (?, ?, 'kubernetes', ?, '{}', 'read_only', ?, ?, ?, 'admin:test',"
+            " ?, ?)",
+            (
+                id,
+                project,
+                f"cluster-{id}",
+                f"integration-{id}" if state == "active" else None,
+                state,
+                ts(tx.now),
+                ts(tx.now),
+                ts(tx.now) if state == "revoked" else None,
+            ),
+        )
+
+
+async def _upsert(db: Database, template: dict, *, admin: bool) -> Routine:
+    body = RoutineWrite(title="Error log", schedule="@hourly", template=template)
+    async with db.write() as tx:
+        return await service.upsert(
+            tx, "radar", "error-log", body, "agent:test", admin=admin
+        )
+
+
+async def _integration_rows(db: Database, task_id: str) -> list[str]:
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT integration_id FROM task_integrations WHERE task_id = ?"
+            " ORDER BY integration_id",
+            (task_id,),
+        ) as cur,
+    ):
+        return [r[0] for r in await cur.fetchall()]
+
+
+async def test_routine_run_carries_the_templates_integrations(db: Database) -> None:
+    await _project(db)
+    await _integration(db, "k-two")
+    await _integration(db, "k-one")
+    routine = await _routine(db, template={"integrations": ["k-two", "k-one"]})
+    result = await _run_now(db, routine.id)
+    assert result.task_id is not None
+    task = await _task(db, result.task_id)
+    assert task.integrations == ["k-one", "k-two"]
+    assert await _integration_rows(db, result.task_id) == ["k-one", "k-two"]
+    granted = [e for e in await _events(db, routine.id) if e[1].endswith("granted")]
+    assert granted == [
+        (
+            "admin:test",
+            "routine.integrations_granted",
+            {
+                "project": "radar",
+                "slug": "error-log",
+                "integrations": ["k-one", "k-two"],
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("template", "code"),
+    [
+        ({"integrations": ["nope"]}, "integration_invalid"),
+        ({"integrations": ["other"]}, "integration_invalid"),
+        ({"integrations": ["gone"]}, "integration_invalid"),
+        ({"integrations": "k-one"}, "validation_failed"),
+        ({"integrations": [1]}, "validation_failed"),
+        ({"integrations": [f"k{i}" for i in range(9)]}, "validation_failed"),
+    ],
+)
+async def test_save_refuses_bad_integrations(
+    db: Database, template: dict, code: str
+) -> None:
+    await _project(db)
+    await _project(db, "elsewhere")
+    await _integration(db, "k-one")
+    await _integration(db, "other", project="elsewhere")
+    await _integration(db, "gone", state="revoked")
+    with pytest.raises(ValidationFailedError) as raised:
+        await _upsert(db, template, admin=True)
+    assert raised.value.code == code
+    async with db.read() as conn:
+        assert await service.list_routines(conn, "radar", db.now()) == []
+
+
+async def test_only_an_admin_saves_integrations(db: Database) -> None:
+    await _project(db)
+    await _integration(db, "k-one")
+    with pytest.raises(ForbiddenError) as raised:
+        await _upsert(db, {"integrations": ["k-one"]}, admin=False)
+    assert raised.value.code == "integration_admin_only"
+    plain = await _upsert(db, {"spec": "Read."}, admin=False)
+    granted = await _upsert(db, {"integrations": ["k-one"]}, admin=True)
+    assert granted.id == plain.id
+    with pytest.raises(ForbiddenError):  # replacing a grant is a grant
+        await _upsert(db, {"integrations": ["k-one"], "spec": "x"}, admin=False)
+    removed = await _upsert(db, {"spec": "Read."}, admin=False)
+    assert "integrations" not in removed.template
+
+
+async def test_template_without_integrations_is_unchanged(db: Database) -> None:
+    await _project(db)
+    routine = await _routine(db, template={"spec": "Read.", "priority": 2})
+    assert "integrations" not in routine.template
+    result = await _run_now(db, routine.id)
+    assert result.task_id is not None
+    assert (await _task(db, result.task_id)).integrations == []
+    assert await _integration_rows(db, result.task_id) == []
+    assert not [e for e in await _events(db, routine.id) if e[1].endswith("granted")]
