@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from api_support import DONE, FakeClock
@@ -51,6 +52,20 @@ async def claim_one(db: Database, agent_id: str):
 async def heartbeat(db: Database, agent_id: str, leases=()):
     async with db.write() as tx:
         return await agents.heartbeat(tx, agent_id, list(leases))
+
+
+async def agent_events(db: Database, agent_id: str, kind: str) -> list[dict]:
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT data FROM events WHERE subject_id = ? AND kind = ?",
+            (agent_id, kind),
+        ) as cur,
+    ):
+        rows = await cur.fetchall()
+    return [
+        {k: v for k, v in json.loads(r["data"]).items() if k == "reason"} for r in rows
+    ]
 
 
 # -- registration ------------------------------------------------------------------
@@ -137,6 +152,9 @@ async def test_silent_agent_is_lost_and_everything_is_revoked(
         released = await tasks.get_task(conn, task.id)
     assert agent.state is AgentState.LOST
     assert agent.end_reason == "heartbeat timeout"
+    assert await agent_events(db, reg.agent.id, "agent.lost") == [
+        {"reason": "heartbeat timeout"}
+    ]
     assert released.state is S.READY
     assert released.failures == 1
     with pytest.raises(UnauthorizedError):
@@ -212,6 +230,24 @@ async def test_leave_ends_identity_and_releases_tasks(db: Database) -> None:
         assert (await tasks.get_task(conn, task.id)).state is S.READY
     with pytest.raises(UnauthorizedError):
         await authenticate(db, reg.token)
+
+
+async def test_agent_that_left_after_its_task_is_never_reported_lost(
+    db: Database, clock: FakeClock
+) -> None:
+    reg = await register(db, instance_id="inst-1")
+    task = await claim_one(db, reg.agent.id)
+    async with db.write() as tx:
+        await tasks.complete(tx, reg.agent.id, task.id, task.attempt, DONE)
+    async with db.write() as tx:
+        await agents.leave(tx, reg.agent.id)
+    clock.advance(LOST_AFTER_S + 1)
+    assert (await reap(db)).lost_agents == []
+    async with db.read() as conn:
+        agent = await agents.get_agent(conn, reg.agent.id)
+    assert agent.state is AgentState.GONE
+    assert agent.end_reason == "left"
+    assert await agent_events(db, reg.agent.id, "agent.lost") == []
 
 
 async def test_reaper_loop_runs_passes_and_survives_errors(
