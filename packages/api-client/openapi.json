@@ -7205,6 +7205,49 @@
         "title": "DecisionSummary",
         "type": "object"
       },
+      "DecisionWait": {
+        "description": "Seconds from `created_at` to `decided_at` of answered decisions of one kind.",
+        "properties": {
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "median": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "open_count": {
+            "title": "Open Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "n",
+          "open_count",
+          "mean",
+          "median"
+        ],
+        "title": "DecisionWait",
+        "type": "object"
+      },
       "DecisionsOverview": {
         "properties": {
           "by_state": {
@@ -26609,6 +26652,31 @@
             ],
             "title": "Cost Per Succeeded"
           },
+          "decision_waits": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DecisionWait"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/DecisionKind"
+            },
+            "title": "Decision Waits",
+            "type": "object"
+          },
+          "decisions_opened": {
+            "title": "Decisions Opened",
+            "type": "integer"
+          },
+          "decisions_per_succeeded_task": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decisions Per Succeeded Task"
+          },
           "finished_tasks": {
             "title": "Finished Tasks",
             "type": "integer"
@@ -26632,6 +26700,10 @@
             "title": "Source",
             "type": "string"
           },
+          "succeeded_tasks": {
+            "title": "Succeeded Tasks",
+            "type": "integer"
+          },
           "tokens_per_failed": {
             "anyOf": [
               {
@@ -26654,6 +26726,10 @@
             ],
             "title": "Tokens Per Succeeded"
           },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
           "usage_tasks": {
             "title": "Usage Tasks",
             "type": "integer"
@@ -26674,7 +26750,12 @@
           "usage_tasks",
           "tokens_per_succeeded",
           "tokens_per_failed",
-          "cost_per_succeeded"
+          "cost_per_succeeded",
+          "decisions_opened",
+          "succeeded_tasks",
+          "decisions_per_succeeded_task",
+          "decision_waits",
+          "truncated"
         ],
         "title": "Yield",
         "type": "object"

@@ -10,11 +10,13 @@ from argus_api import fleet_health
 from argus_api.db import Database, ts
 from argus_api.fleet_health import (
     ATTEMPTS_SQL,
+    DECISIONS_SQL,
     FAILURES_SQL,
     FINISHED_SQL,
     HEARTBEAT_SQL,
     MIN_SAMPLES,
     USAGE_SQL,
+    YIELD_COUNTS_SQL,
 )
 from argus_api.main import app
 from argus_core.tasks import TaskState
@@ -277,6 +279,8 @@ async def test_main_queries_use_indexes(db: Database) -> None:
         "heartbeat": (HEARTBEAT_SQL, ()),
         "attempts": (ATTEMPTS_SQL, (since, until)),
         "usage": (USAGE_SQL, ("[]",)),
+        "decisions": (DECISIONS_SQL, (since, until, 10)),
+        "yield_counts": (YIELD_COUNTS_SQL, (since, until, since, until)),
     }
     async with db.read() as conn:
         for name, (sql, params) in queries.items():
@@ -285,7 +289,12 @@ async def test_main_queries_use_indexes(db: Database) -> None:
             for line in plan:
                 assert not (
                     line.startswith("SCAN")
-                    and ("tasks" in line or "events" in line or "account_usage" in line)
+                    and (
+                        "tasks" in line
+                        or "events" in line
+                        or "account_usage" in line
+                        or "decisions" in line
+                    )
                 ), (
                     name,
                     plan,
@@ -383,6 +392,59 @@ async def test_yield_counts_attempts_tokens_per_outcome_and_lost_time(
     (group,) = [g for g in h.failures.groups if g.reason == "lease_expired"]
     assert group.lost_seconds == 20.0 * MIN_SAMPLES
     assert h.model_dump(by_alias=True)["yield"]["attempts"] == 2 * MIN_SAMPLES
+
+
+async def add_decision(
+    db: Database,
+    n: str,
+    kind: str,
+    state: str,
+    hours_ago: float,
+    wait_s: float | None,
+) -> None:
+    """A decision opened `hours_ago`, decided `wait_s` later (None: undecided)."""
+    created = NOW - timedelta(hours=hours_ago)
+    decided = None if wait_s is None else ts(created + timedelta(seconds=wait_s))
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO decisions (id, subject_type, subject_id, kind, question,"
+            " audience, state, requested_by, created_at, decided_at)"
+            " VALUES (?, 'task', 't', ?, 'q', 'any', ?, 'test', ?, ?)",
+            (n, kind, state, ts(created), decided),
+        )
+
+
+async def test_yield_decision_waits_per_kind(db: Database) -> None:
+    for i in range(MIN_SAMPLES):
+        await add_finished(db, f"ok{i}", "succeeded")
+    for i, wait in enumerate((10, 20, 30, 40, 100)):
+        await add_decision(db, f"q{i}", "question", "answered", 2, wait)
+    await add_decision(db, "q-open", "question", "open", 2, None)
+    await add_decision(db, "q-gone", "question", "cancelled", 2, 5000)
+    await add_decision(db, "q-old", "question", "answered", 30, 1)  # outside window
+    for i in range(MIN_SAMPLES - 1):  # too few answered for a statistic
+        await add_decision(db, f"a{i}", "approval", "answered", 3, 60)
+    y = (await health(db)).yield_
+    q = y.decision_waits["question"]
+    assert (q.n, q.open_count, q.mean, q.median) == (5, 1, 40.0, 30.0)
+    a = y.decision_waits["approval"]
+    assert (a.n, a.open_count, a.mean, a.median) == (MIN_SAMPLES - 1, 0, None, None)
+    for kind in ("review", "policy"):
+        assert y.decision_waits[kind].model_dump() == {
+            "n": 0, "open_count": 0, "mean": None, "median": None,
+        }  # fmt: skip
+    assert (y.decisions_opened, y.succeeded_tasks) == (7 + MIN_SAMPLES - 1, MIN_SAMPLES)
+    assert y.decisions_per_succeeded_task == (7 + MIN_SAMPLES - 1) / MIN_SAMPLES
+    assert not y.truncated
+
+
+async def test_yield_decisions_per_succeeded_task_needs_min_samples(
+    db: Database,
+) -> None:
+    await add_decision(db, "d", "review", "open", 1, None)
+    y = (await health(db)).yield_
+    assert (y.decisions_opened, y.succeeded_tasks) == (1, 0)
+    assert y.decisions_per_succeeded_task is None
 
 
 async def test_yield_cost_only_measured_does_not_invent_zero_tokens(
