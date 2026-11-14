@@ -380,9 +380,18 @@ def test_tag_push_fails_when_commit_already_on_remote_main(tmp_path: Path) -> No
     subprocess.run([REAL, "push", "-u", "origin", "main"], cwd=repo, check=True)
     subprocess.run([REAL, "tag", "vbad"], cwd=repo, check=True)
     env = _env()
+    # The exemption is about the destination, not the tag's contents: the same
+    # tag is refused toward a network remote and accepted toward the local bare.
+    subprocess.run(
+        [REAL, "remote", "add", "upstream", "https://example.invalid/argus.git"],
+        cwd=repo,
+        check=True,
+    )
+    net_push = _run_git(repo, env, "push", "upstream", "vbad")
+    assert net_push.returncode != 0
+    assert attribution.PUSH_NON_BRANCH_MESSAGE in net_push.stderr
     tag_push = _run_git(repo, env, "push", "origin", "vbad")
-    assert tag_push.returncode != 0
-    assert "non-branch" in tag_push.stderr.lower() or "tag" in tag_push.stderr.lower()
+    assert tag_push.returncode == 0, tag_push.stderr
 
     subprocess.run([REAL, "checkout", "-b", "feature"], cwd=repo, check=True)
     (repo / "f").write_text("2\n")
@@ -392,9 +401,7 @@ def test_tag_push_fails_when_commit_already_on_remote_main(tmp_path: Path) -> No
     assert branch_push.returncode == 0, branch_push.stderr
 
 
-def test_annotated_tag_push_fails_closed(tmp_path: Path) -> None:
-    if not REAL:
-        pytest.skip("git not installed")
+def _tagged_repo(tmp_path: Path, *tag_args: str) -> tuple[Path, Path]:
     bare = tmp_path / "remote.git"
     subprocess.run([REAL, "init", "--bare", str(bare)], check=True, capture_output=True)
     repo = tmp_path / "repo"
@@ -409,10 +416,46 @@ def test_annotated_tag_push_fails_closed(tmp_path: Path) -> None:
     (repo / "f").write_text("1\n")
     subprocess.run([REAL, "add", "f"], cwd=repo, check=True)
     subprocess.run([REAL, "commit", "-m", "ok"], cwd=repo, check=True)
-    subprocess.run([REAL, "tag", "-a", "vannot", "-m", "release"], cwd=repo, check=True)
-    env = _env()
-    push = _run_git(repo, env, "push", "origin", "vannot")
+    subprocess.run([REAL, "tag", *tag_args], cwd=repo, check=True)
+    subprocess.run(
+        [REAL, "remote", "add", "upstream", "https://example.invalid/argus.git"],
+        cwd=repo,
+        check=True,
+    )
+    return repo, bare
+
+
+def test_atomic_branch_and_tag_push_to_local_bare_succeeds(tmp_path: Path) -> None:
+    if not REAL:
+        pytest.skip("git not installed")
+    repo, bare = _tagged_repo(tmp_path, "v1")
+    push = _run_git(repo, _env(), "push", "--atomic", str(bare), "main", "v1")
+    assert push.returncode == 0, push.stderr
+
+
+@pytest.mark.parametrize("form", ["path", "file-url"])
+def test_annotated_tag_push_to_local_destination_succeeds(
+    tmp_path: Path, form: str
+) -> None:
+    if not REAL:
+        pytest.skip("git not installed")
+    repo, bare = _tagged_repo(tmp_path, "-a", "v1", "-m", "release")
+    dest = str(bare) if form == "path" else bare.as_uri()
+    push = _run_git(repo, _env(), "push", dest, "v1")
+    assert push.returncode == 0, push.stderr
+
+
+@pytest.mark.parametrize("tag_args", [("v1",), ("-a", "v1", "-m", "release")])
+@pytest.mark.parametrize("remote", ["upstream", "https://example.invalid/argus.git"])
+def test_tag_push_to_network_destination_fails_closed(
+    tmp_path: Path, remote: str, tag_args: tuple[str, ...]
+) -> None:
+    if not REAL:
+        pytest.skip("git not installed")
+    repo, _ = _tagged_repo(tmp_path, *tag_args)
+    push = _run_git(repo, _env(), "push", remote, "v1")
     assert push.returncode != 0
+    assert attribution.PUSH_NON_BRANCH_MESSAGE in push.stderr
 
 
 def test_push_follow_tags_fails_closed(tmp_path: Path) -> None:

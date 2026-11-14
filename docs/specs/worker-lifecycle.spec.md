@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -700,12 +700,17 @@ earlier tasks neither inflate its cost nor contaminate its replies
     lines, and refuses a push when any **outgoing** commit (relative to the
     remote ref being updated, or since the merge-base with the remote default
     branch when the remote branch is new) still carries one. `git push --all`,
-    `--tags`, and `--mirror` are rejected (fail closed). Tag refspecs,
-    `--follow-tags`, and other non-branch refspecs are rejected for the same
-    reason (they would skip outgoing branch scans). Git errors while
-    resolving the push range return an actionable error instead of allowing the
-    push. It does not rewrite messages, amend history on its own, or strip
-    trailers from commits that already exist on the remote.
+    `--tags`, `--mirror`, and `--follow-tags` are rejected (fail closed).
+    Tag refspecs and other non-branch refspecs are rejected when the push
+    destination is a network URL (the remote's push URL, or the argument
+    itself when it is not a configured remote: http(s), ssh, scp-style, relative
+    paths, anything not local), because they would skip outgoing branch scans.
+    When the destination is a local path (an absolute path or `file:///`
+    URL), they are accepted, annotated tags included, with no tag-message or
+    history scan; branch refspecs to a local destination keep the outgoing
+    scan. Git errors while resolving the push range return an actionable error
+    instead of allowing the push. It does not rewrite messages, amend history on
+    its own, or strip trailers from commits that already exist on the remote.
     **Open limitation:** if an engine executable is missing, NanoClaw's
     upstream poll loop reports `Executable not found in $PATH` and acks the
     batch as completed; this patch does not change upstream retry semantics, so
