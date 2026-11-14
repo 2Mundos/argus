@@ -568,6 +568,8 @@ export interface ArgusConfig {
   closeSession?: (thread: string | null) => Promise<void>;
   /** Called once, after Argus drained this agent, its work is done, and it left. */
   onDrained?: () => void;
+  /** This host runs exactly one agent for one task (an Argus instance): leave after a clean attempt. */
+  oneTask?: boolean;
   /** Reported on heartbeat as `runtime.worker_version`, e.g. "nanoclaw/1.2.3". */
   workerVersion?: string;
   /** Test seams. */
@@ -2176,6 +2178,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * `lease_expired`. So the task is kept, its lease renewed, and each heartbeat repeats the
    * same report until Argus answers. A repeat is safe: Argus answers 409 once one landed.
    */
+  let attemptCrashed = false; // the session exit was reported during this attempt
   let exitReport: (ExitFacts & { taskId: string; attempt: number }) | null = null;
   let exitReporting: Claim | null = null; // one report in flight, however heartbeats overlap
   let resending = false; // mid-inject / mid-resend: skip session-lost watchdog
@@ -2383,6 +2386,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    */
   async function reportExit(task: Claim, facts: () => Promise<ExitFacts>): Promise<void> {
     exitReporting = task; // before the first await: an overlapping heartbeat skips
+    attemptCrashed = true; // a crashed session stays silent: the server expires it as lost
     try {
       const { error, oomKill } = await facts();
       const report = { taskId: task.id, attempt: task.attempt, error, oomKill };
@@ -2470,8 +2474,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   async function heartbeat(): Promise<void> {
     try {
+      const claim = current;
       await watchSession();
-      if (!current && sessionCarriesTask) return; // watchSession finished the task
+      // Only the beat in which watchSession finished the task: an idle agent still beats.
+      if (claim && !current) return;
       const acks = [...steerAcks];
       const activity_at = current ? await leaseActivityAt() : undefined;
       let observation: LeaseObservation | undefined;
@@ -4823,6 +4829,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         backoff = 1000;
         if (status === 200 && data) {
           const task = data as ArgusTask;
+          attemptCrashed = false;
           try {
             await runTask(task);
           } finally {
@@ -4831,6 +4838,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
               await dropIntegrations(task.id);
             await inputsAfterAttempt(task);
             await checkpointAfterAttempt(task);
+          }
+          if (cfg.oneTask && !attemptCrashed && !recycleOnLease) {
+            // The only task of this instance ended cleanly: leave instead of going silent.
+            draining = true;
+            await completeDrainIfIdle();
           }
         }
       } catch (err) {
@@ -6110,6 +6122,7 @@ export function fromEnv(): ChannelAdapter | null {
     },
     // Under an Argus instance, a drained agent means this host should go: ask
     // NanoClaw to shut down through its own SIGTERM handling.
+    oneTask: Boolean(process.env.ARGUS_INSTANCE_ID),
     onDrained:
       process.env.ARGUS_INSTANCE_ID && process.env.ARGUS_EXIT_ON_DRAIN !== "false"
         ? () => void process.kill(process.pid, "SIGTERM")
