@@ -183,6 +183,86 @@ describe("establishCodexHookTrust", () => {
     expect(calls).toEqual([]);
   });
 
+  it("re-trusts a modified hook only by the hash Codex now reports", async () => {
+    const changed = `sha256:${"c".repeat(64)}`;
+    const { rpc, calls } = fakeCodex([
+      hook({ trustStatus: "modified", currentHash: changed }),
+      { ...memory(), trustStatus: "trusted" },
+    ]);
+
+    await establishCodexHookTrust(rpc, options);
+
+    const written = (calls[1].params.edits as { value: unknown }[])[0].value;
+    expect(written).toEqual({ [guard().key]: { trusted_hash: changed } });
+  });
+
+  it.each([
+    ["truncated", `sha256:${"a".repeat(63)}`],
+    ["uppercase", `sha256:${"A".repeat(64)}`],
+    ["other algorithm", `md5:${"a".repeat(32)}`],
+    ["trailing data", `${HASH_A}\n`],
+    ["empty", ""],
+  ])("refuses a modified hook with a %s hash without writing", async (_name, currentHash) => {
+    const { rpc, calls } = fakeCodex([hook({ trustStatus: "modified", currentHash }), memory()]);
+
+    await expect(establishCodexHookTrust(rpc, options)).rejects.toThrow(/unusable hash/);
+    expect(calls.map((c) => c.method)).toEqual(["hooks/list"]);
+  });
+
+  it.each(["unknown", "", "TRUSTED", "blocked"])(
+    "refuses trust status %p without writing",
+    async (trustStatus) => {
+      const { rpc, calls } = fakeCodex([hook({ trustStatus }), memory()]);
+
+      await expect(establishCodexHookTrust(rpc, options)).rejects.toThrow(/has trust status/);
+      expect(calls.map((c) => c.method)).toEqual(["hooks/list"]);
+    },
+  );
+
+  it("does not trust a guard whose command differs by one character", async () => {
+    const tampered = hook({ command: CODEX_GUARD_HOOK_COMMAND.replace(/\.py$/, ".pz") });
+    const { rpc, calls } = fakeCodex([tampered, memory()]);
+
+    await expect(establishCodexHookTrust(rpc, options)).rejects.toThrow(/is not registered/);
+    expect(calls.some((c) => c.method === "config/batchWrite")).toBe(false);
+  });
+
+  it("does not trust a user hook from another hooks.json running the same command", async () => {
+    const elsewhere = hook({
+      key: "/tmp/elsewhere/.codex/hooks.json:pre_tool_use:0:0",
+      sourcePath: "/tmp/elsewhere/.codex/hooks.json",
+    });
+    const { rpc, calls } = fakeCodex([elsewhere, guard(), memory()]);
+
+    const report = await establishCodexHookTrust(rpc, options);
+
+    const written = (calls[1].params.edits as { value: Record<string, unknown> }[])[0].value;
+    expect(Object.keys(written)).toEqual([guard().key, memory().key]);
+    expect(report.skipped).toEqual([elsewhere.key]);
+  });
+
+  it("a worker-set environment cannot stand in for a missing guard script", async () => {
+    const saved = { ...process.env };
+    Object.assign(process.env, {
+      HOME: "/tmp/elsewhere",
+      CODEX_HOME: "/tmp/elsewhere/.codex",
+      ARGUS_COMMAND_GUARD: "0",
+    });
+    try {
+      const { rpc, calls } = fakeCodex([guard(), memory()]);
+
+      await expect(
+        establishCodexHookTrust(rpc, { ...options, guardScriptExists: () => false }),
+      ).rejects.toThrow(/missing from this image/);
+      expect(calls).toEqual([]);
+    } finally {
+      for (const key of ["HOME", "CODEX_HOME", "ARGUS_COMMAND_GUARD"]) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  });
+
   it("refuses when hooks/list reports errors or fails", async () => {
     const failing: CodexRpc = async () => ({ error: { message: "boom" } });
     await expect(establishCodexHookTrust(failing, options)).rejects.toThrow(

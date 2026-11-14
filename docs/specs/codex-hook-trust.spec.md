@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-13
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 # Codex hook trust
@@ -66,6 +66,10 @@ memory `SessionStart` hooks it registers.
   were probed against the real 0.162.1 app-server; no model turn was run.
 - Activation on a pool: it takes effect only after the agent image is rebuilt or the
   engines are reinstalled; live provider access is unverified.
+- Installed-provider acceptance (`tests/e2e/installed-provider-e2e.ts`) is BLOCKED on
+  the current execution pool: no `bwrap` on PATH, and `unshare -U` is denied. It needs a
+  node that provides the `codex-bwrap` profile and an image digest; until it exits 0
+  there, the installed provider is unproven.
 
 # 5. Constraints
 
@@ -77,6 +81,8 @@ memory `SessionStart` hooks it registers.
 - `integrations/nanoclaw/overlays/codex-hook-trust.ts` (+ `.test.ts`, bun:test)
 - `integrations/nanoclaw/patch-codex-hook-trust.py`,
   `integrations/nanoclaw/tests/test_patch_codex_hook_trust.py`
+- `integrations/nanoclaw/tests/e2e/installed-provider-e2e.ts`,
+  `installed-provider-preflight.ts` (+ `.test.ts`), `mock_responses_provider.py`
 - `integrations/nanoclaw/engines/install-engines.sh` copies the overlay and runs the
   patcher after `patch-codex-cli-path.py`.
 - `integrations/nanoclaw/install.sh` (env allowlist),
@@ -84,12 +90,42 @@ memory `SessionStart` hooks it registers.
 
 ## Verification boundary
 
-- Commands: `pytest integrations/nanoclaw/tests/test_patch_codex_hook_trust.py`;
-  `bun test overlays/codex-hook-trust.test.ts` (from `integrations/nanoclaw`).
+- Commands (from `integrations/nanoclaw`): `bun test overlays/codex-hook-trust.test.ts
+  tests/e2e/installed-provider-preflight.test.ts`; `pytest
+  tests/test_patch_codex_hook_trust.py`.
 - Verified: the patcher on excerpts (pristine, after `patch-codex-cli-path.py`,
   repeated, each changed anchor fails without writing) and on a copy of the real
   installed runner, whose Codex provider tests then pass as before; trust selection
-  and every refusal against a fake app-server; the `hooks.state` write turning a hook
-  `trusted` on a real 0.162.1 app-server.
-- Not verified: a model turn, the guard's deny inside a live Codex session, a rebuilt
-  agent image.
+  and every refusal against a fake app-server, including a `modified` hook re-trusted
+  only by Codex's `currentHash`, an unusable hash, an unknown trust status, a command
+  one character off, a user hook from another `hooks.json`, and a worker environment
+  (`HOME`, `CODEX_HOME`, `ARGUS_COMMAND_GUARD`) that cannot replace a missing guard
+  script; the `hooks.state` write turning a hook `trusted` on a real 0.162.1
+  app-server.
+- `tests/e2e/codex-hook-trust-e2e.ts` spawns `codex app-server` itself and calls the
+  overlay directly. It is evidence about Codex, not about the installed provider.
+- Installed-provider acceptance: `ARGUS_IMAGE_DIGEST=sha256:… bun
+  tests/e2e/installed-provider-e2e.ts <runner-root> [--out receipt.json]`, where
+  `<runner-root>` is `container/agent-runner` of an installed NanoClaw (the live `/app`
+  is refused). It first measures isolation from `/proc/self/status`,
+  `/proc/self/attr/current` and `command -v bwrap`, never from worker environment
+  flags, and exits 3 (`blocked`) before any model work unless `bwrap` is on PATH,
+  `CapEff` is 0 (the profile's `--cap-drop=ALL`), `NoNewPrivs` is 1, a seccomp filter
+  is active, the digest is `sha256:…` and the uid is not 0. It then checks that the
+  installed provider source has no bypass string and imports and calls
+  `establishCodexHookTrust`, and drives that provider module itself (spawn,
+  `initialize` with trust, thread, turn) against `mock_responses_provider.py` on
+  loopback: a benign command must run, and `mkfs --version; touch NEGATIVE_MARKER`
+  (harmless even if run) must be denied by the guard, leaving no marker. The JSON
+  receipt holds no credentials; fields not measured are `null`.
+- BLOCKED, not passed: on the current execution pool the acceptance run exits 3
+  (no `bwrap`; `CapEff` 0 and `unshare -U` denied, so `bwrap` could not start anyway).
+  Not verified: a model turn under the installed provider, the guard's deny inside a
+  live Codex session, a rebuilt agent image.
+- Not claimed: the provider keeps upstream's `CODEX_SANDBOX_MODE =
+  'danger-full-access'` and `CODEX_APPROVAL_POLICY = 'never'`; the patcher test only
+  shows they are retained. They are not protection. The boundary is the container
+  profile ([Codex sandbox profile](codex-sandbox-profile.spec.md): seccomp, AppArmor,
+  dropped capabilities) plus the trusted guard hook.
+- Activation: rebuild the agent image or rerun `install-engines.sh`. Rollback: revert
+  the change and reinstall the engines.

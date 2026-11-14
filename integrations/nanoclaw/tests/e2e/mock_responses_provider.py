@@ -1,6 +1,8 @@
 """Dummy local Responses provider for codex-hook-trust-e2e.ts: replays shell commands, no network.
 
-usage: mock_responses_provider.py '<json list of commands>' <n_commands> <tool name>
+usage: mock_responses_provider.py '<json list of commands>' <n_commands> <tool name> [port]
+
+Port 0 binds a free loopback port; the bound port is printed as "ready <port>" once listening.
 """
 
 import http.server
@@ -10,6 +12,7 @@ import sys
 COMMANDS = json.loads(sys.argv[1])
 LIMIT = int(sys.argv[2])
 TOOL = sys.argv[3]
+PORT = int(sys.argv[4]) if len(sys.argv) > 4 else 18080
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -69,4 +72,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         )
 
 
-http.server.ThreadingHTTPServer(("127.0.0.1", 18080), Handler).serve_forever()
+server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+print(f"ready {server.server_address[1]}", flush=True)
+server.serve_forever()

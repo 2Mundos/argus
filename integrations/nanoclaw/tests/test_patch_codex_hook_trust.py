@@ -133,6 +133,12 @@ def test_idempotent(tmp_path: Path) -> None:
         for n in sorted(p.name for p in providers.iterdir())
     ]
     assert again == once
+    # Retained, not proof: the permissive upstream sandbox and approval constants pass
+    # through unchanged; containment is the container profile (codex-hook-trust spec).
+    text = (providers / "codex-app-server.ts").read_text()
+    assert text.count(SANDBOX) == 1 and text.count(APPROVAL) == 1
+    assert "sandbox: CODEX_SANDBOX_MODE" in text
+    assert "approvalPolicy: CODEX_APPROVAL_POLICY" in text
 
 
 @pytest.mark.parametrize(
