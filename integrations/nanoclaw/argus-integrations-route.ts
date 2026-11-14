@@ -24,6 +24,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
+import { networkInterfaces } from "node:os";
 import tls from "node:tls";
 // Types only: the kubectl e2e test loads these files with node's type stripping.
 import type {
@@ -269,7 +270,7 @@ async function probe(
 }
 
 export interface KubernetesRouteOptions {
-  /** The address sessions reach this process at (the docker bridge); null: no route. */
+  /** The address sessions reach this process at; null: no route. */
   bindHost: () => Promise<string | null>;
   /** A fixed port (for a host firewall rule), or 0 for any free port. */
   port?: number;
@@ -471,16 +472,68 @@ export function createKubernetesRoute(opts: KubernetesRouteOptions): KubernetesR
   };
 }
 
+export type Interfaces = typeof networkInterfaces;
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+const IFNAME = /^[A-Za-z0-9_.@-]{1,15}$/;
+
 /**
- * The production route: listen on the docker bridge, the address the session
- * containers of this process reach it at (as the local Strata forward does), on
- * `ARGUS_INTEGRATION_ROUTE_PORT` or any free port. The operator's process
- * environment sets the port only; nothing turns the checks off.
+ * The operator's `ARGUS_INTEGRATION_ROUTE_BIND` (an IPv4 literal or `if:<interface>`),
+ * resolved against this process's interfaces when the route starts listening: the one
+ * IPv4 address it names on a local non-internal interface, else null. A wildcard,
+ * loopback, link-local, multicast or reserved address, IPv6, a host name, an unknown
+ * interface, an address not assigned here, or an interface with several candidates
+ * is null.
  */
-export function nanoclawKubernetesRoute(env: NodeJS.ProcessEnv): KubernetesRoute {
+export function routeBindAddress(
+  spec: string,
+  interfaces: Interfaces = networkInterfaces,
+): string | null {
+  const ifname = spec.startsWith("if:") ? spec.slice(3) : null;
+  if (ifname === null ? !IPV4.test(spec) || internalAddress(spec) : !IFNAME.test(ifname))
+    return null;
+  const all = interfaces();
+  const found = new Set<string>();
+  for (const [name, addrs] of Object.entries(all)) {
+    if (ifname !== null && name !== ifname) continue;
+    for (const a of addrs ?? [])
+      if (
+        ["IPv4", "4"].includes(String(a.family)) &&
+        !a.internal &&
+        !internalAddress(a.address) &&
+        (ifname !== null || a.address === spec)
+      )
+        found.add(a.address);
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
+/**
+ * The production route, on `ARGUS_INTEGRATION_ROUTE_PORT` or any free port. It listens
+ * at `ARGUS_INTEGRATION_ROUTE_BIND` when the operator's host environment sets it (the
+ * socket-mode topology, where sessions run on the outer daemon), with no fallback;
+ * otherwise on the docker bridge, the address the session containers of this process
+ * reach it at (as the local Strata forward does), or nowhere. Nothing a session or a
+ * worker sends sets either; nothing turns the checks off.
+ */
+export function nanoclawKubernetesRoute(
+  env: NodeJS.ProcessEnv,
+  interfaces: Interfaces = networkInterfaces,
+): KubernetesRoute {
   const raw = env.ARGUS_INTEGRATION_ROUTE_PORT?.trim();
+  const bind = env.ARGUS_INTEGRATION_ROUTE_BIND;
   return createKubernetesRoute({
-    bindHost: async () => (await import("./argus-local-forward.js")).dockerBridgeIpv4(),
+    bindHost:
+      bind === undefined
+        ? async () => (await import("./argus-local-forward.js")).dockerBridgeIpv4(interfaces)
+        : async () => {
+            const host = routeBindAddress(bind.trim(), interfaces);
+            if (host) return host;
+            throw new RouteRefusal(
+              "env_integration_route_unavailable",
+              "ARGUS_INTEGRATION_ROUTE_BIND does not name one IPv4 address of a local non-internal interface",
+            );
+          },
     port: raw ? (/^\d{1,5}$/.test(raw) ? Number(raw) : -1) : 0,
   });
 }

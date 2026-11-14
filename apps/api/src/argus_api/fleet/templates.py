@@ -37,6 +37,7 @@ from argus_api.config import Settings
 from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.fleet import capabilities
 from argus_api.fleet.names import suggest
+from argus_api.fleet.policy import ROUTE_BIND_ENV, ROUTE_TOPOLOGY_ENV
 from argus_api.fleet.targets import TargetError, TargetInfo, TargetRegistry
 
 LABEL = "argus.worker"  # value "plain": the image speaks the Argus API
@@ -699,6 +700,11 @@ def validate_advanced(req: CreateWorkerRequest) -> None:
         if not _ENV_KEY.match(k)
     ]
     errors += [
+        f"env {k!r} is set by the operator's configuration, not a request"
+        for k in (adv.env or {})
+        if k in ROUTE_TOPOLOGY_ENV
+    ]
+    errors += [
         f"extra host {h!r} must be name:address"
         for h in (adv.extra_hosts or [])
         if ":" not in h
@@ -775,6 +781,9 @@ def build_pool(
         # Isolation is the template's own: never read from the request, never
         # substituted when the other mode is the one that is configured.
         sandboxed = tpl.id == NANOCLAW_SANDBOX.id
+        if not sandboxed and settings.nanoclaw_integration_route_bind:
+            # Sessions run on the outer daemon: the route listens where they are.
+            env[ROUTE_BIND_ENV] = settings.nanoclaw_integration_route_bind
         return name, PoolUpsert(
             runtime=RuntimeKind.NANOCLAW,
             image=settings.nanoclaw_host_image,

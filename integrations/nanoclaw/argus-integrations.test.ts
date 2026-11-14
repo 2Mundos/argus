@@ -17,7 +17,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   type IntegrationRoute,
   type IntegrationState,
@@ -46,6 +46,7 @@ import {
   internalAddress,
   type KubernetesRoute,
   nanoclawKubernetesRoute,
+  routeBindAddress,
 } from "./argus-integrations-route.js";
 
 const SECRET = "fake-token-NEVER-IN-A-PROMPT";
@@ -902,6 +903,116 @@ it("internalAddress refuses what the API's internal_address refuses", () => {
     expect(internalAddress(ip), ip).toBe(false);
 });
 
+/** An interface address as `os.networkInterfaces()` lists it. */
+const nic = (address: string, over: Partial<os.NetworkInterfaceInfo> = {}) =>
+  ({
+    address,
+    netmask: "255.255.0.0",
+    family: "IPv4",
+    mac: "02:42:ac:11:00:02",
+    internal: false,
+    cidr: null,
+    ...over,
+  }) as os.NetworkInterfaceInfo;
+
+/** A host container on the session network (eth0) that also has a docker0. */
+const NICS = () => ({
+  lo: [nic("127.0.0.1", { internal: true, netmask: "255.0.0.0" })],
+  eth0: [nic("172.30.0.5"), nic("fe80::42", { family: "IPv6", netmask: "ffff:ffff:ffff:ffff::" })],
+  docker0: [nic("172.17.0.1")],
+  multi: [nic("10.1.0.1"), nic("10.2.0.1")],
+  linklocal: [nic("169.254.10.1")],
+});
+
+describe("routeBindAddress", () => {
+  it.each([
+    ["172.30.0.5", "172.30.0.5"],
+    ["if:eth0", "172.30.0.5"],
+    ["if:docker0", "172.17.0.1"],
+  ])("accepts %s", (spec, address) => {
+    expect(routeBindAddress(spec, NICS)).toBe(address);
+  });
+
+  it.each([
+    "0.0.0.0", // wildcard
+    "::", // IPv6 wildcard
+    "127.0.0.1", // loopback, assigned here but internal
+    "if:lo",
+    "169.254.10.1", // link-local
+    "if:linklocal",
+    "224.0.0.1", // multicast
+    "240.0.0.1", // reserved
+    "255.255.255.255",
+    "fe80::42", // IPv6, assigned here
+    "2001:db8::1",
+    "k8s-route.internal", // a host name
+    "172.30.0.6", // not assigned here
+    "172.030.0.5", // not a canonical literal
+    "172.30.0.5:8080",
+    "if:eth1", // unknown interface
+    "if:multi", // ambiguous
+    "if:",
+    "if:../eth0",
+    "",
+  ])("refuses %j", (spec) => {
+    expect(routeBindAddress(spec, NICS)).toBeNull();
+  });
+});
+
+describe("nanoclawKubernetesRoute topology", () => {
+  const someRoute: IntegrationRoute = {
+    integration_id: "int-0",
+    name: "prod",
+    server: "https://k8s.example.test:6443",
+    ca_data: null,
+    authorize: async () => true,
+  };
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [
+      "a set ARGUS_INTEGRATION_ROUTE_BIND that is not local never falls back to docker0",
+      { ARGUS_INTEGRATION_ROUTE_BIND: "172.30.0.6" },
+      "ARGUS_INTEGRATION_ROUTE_BIND does not name one IPv4 address of a local non-internal interface",
+    ],
+    [
+      "a wildcard ARGUS_INTEGRATION_ROUTE_BIND",
+      { ARGUS_INTEGRATION_ROUTE_BIND: "0.0.0.0" },
+      "ARGUS_INTEGRATION_ROUTE_BIND does not name one IPv4 address of a local non-internal interface",
+    ],
+    [
+      "an empty ARGUS_INTEGRATION_ROUTE_BIND",
+      { ARGUS_INTEGRATION_ROUTE_BIND: "" },
+      "ARGUS_INTEGRATION_ROUTE_BIND does not name one IPv4 address of a local non-internal interface",
+    ],
+  ])("fails closed with no listener: %s", async (_what, env, error) => {
+    const listen = vi.spyOn(net, "createServer");
+    const r = nanoclawKubernetesRoute(env, NICS);
+    expect(await r.open({ taskId: TASK, attempt: 1 }, [someRoute])).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error,
+    });
+    expect(listen).not.toHaveBeenCalled();
+    await r.close();
+  });
+
+  it("socket mode without ARGUS_INTEGRATION_ROUTE_BIND and no docker0 fails closed", async () => {
+    const listen = vi.spyOn(net, "createServer");
+    const { docker0: _, ...noBridge } = NICS();
+    const r = nanoclawKubernetesRoute({}, () => noBridge);
+    expect(await r.open({ taskId: TASK, attempt: 1 }, [someRoute])).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error: "this worker has no docker bridge address for the Kubernetes route",
+    });
+    expect(listen).not.toHaveBeenCalled();
+    await r.close();
+  });
+});
+
 /** A host address the route may dial (it refuses loopback), or null on a host without one. */
 const HOST_IP =
   Object.values(os.networkInterfaces())
@@ -1310,6 +1421,39 @@ describe.skipIf(!HOST_IP)("createKubernetesRoute (skipped: no non-loopback IPv4 
       reason: "env_integration_route_unavailable",
       error: "prod: the route refused the CONNECT (HTTP 502)",
     });
+  });
+
+  it("listens only at the verified ARGUS_INTEGRATION_ROUTE_BIND and hands kubectl that address", async () => {
+    const nics = () => ({ docker0: [nic("172.17.0.1")], session0: [nic(ip)] });
+    const r = nanoclawKubernetesRoute({ ARGUS_INTEGRATION_ROUTE_BIND: "if:session0" }, nics);
+    routes.push(r);
+    // An IP server needs no lookup; the probe verified the CA through the listener.
+    const got = await r.open(A1, [route({ server: `https://${ip}:${relay.port}` })]);
+    if (!got.ok) throw new Error(got.error);
+    expect(new URL(got.proxies["int-0"]!).hostname).toBe(ip);
+    expect(relay.accepted).toBe(1);
+  });
+
+  it("one integration's grant never opens another integration's server (403)", async () => {
+    const r = newRoute();
+    const got = await r.open(A1, [
+      route(),
+      route({ integration_id: "int-1", name: "other", server: `https://${ip}:${relay.port}` }),
+    ]);
+    if (!got.ok) throw new Error(got.error);
+    const authority = `${ip}:${relay.port}`;
+    expect((await viaRoute(got.proxies["int-0"]!, { authority })).connect).toBe(403);
+    expect(relay.accepted).toBe(2); // the two proofs only
+  });
+
+  it("close stops listening and closes every tunnel", async () => {
+    const r = newRoute();
+    const proxy = await granted(r);
+    const open = await viaRoute(proxy, { keepOpen: true });
+    expect(open.connect).toBe(200);
+    await r.close();
+    await closed(open.socket!);
+    await expect(viaRoute(proxy)).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 
   it("the production factory accepts only a port number from the environment", async () => {

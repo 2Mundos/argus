@@ -65,6 +65,9 @@ ARGUS_NANOCLAW_ALLOW_DOCKER_SOCKET=true
 ARGUS_NANOCLAW_DOCKER_SOCKET=$DOCKER_SOCKET
 ARGUS_NANOCLAW_USER=$(id -u):$(id -g)
 ARGUS_NANOCLAW_GROUP_ADD=$gid
+#    optional: where its Kubernetes route listens, on the network its sessions
+#    share (runbook section 5); unset, socket-mode Kubernetes tasks block
+# ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND=if:<interface> or <IPv4>
 # -- nanoclaw-sandbox (needs the sysbox-runc runtime on the Docker host)
 ARGUS_NANOCLAW_DOCKER_RUNTIME=sysbox-runc
 ARGUS_NANOCLAW_AGENT_IMAGE_ARCHIVE=$ARCHIVE

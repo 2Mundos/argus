@@ -190,6 +190,9 @@ async def patch_pool(
     if settings is not None:
         policy.enforce_nanoclaw_image_roles(upsert, settings)
         policy.enforce_nanoclaw_socket_policy(upsert, settings)
+        policy.enforce_route_bind(
+            upsert, settings, previous=pool.env.get(policy.ROUTE_BIND_ENV)
+        )
     await upsert_pool(tx, name, upsert, actor)
     await record(
         tx,

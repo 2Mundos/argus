@@ -108,6 +108,7 @@ async def create_worker(
     name, upsert = templates.build_pool(settings, cat, body, pools)
     policy.enforce_nanoclaw_image_roles(upsert, settings)
     policy.enforce_nanoclaw_socket_policy(upsert, settings)
+    policy.enforce_route_bind(upsert, settings)
     async with db.read() as conn:
         await require_not_internal_orchestrator(conn, caller, action="create_worker")
     async with db.write() as tx:
@@ -154,6 +155,7 @@ async def upsert_pool(
     service.require_not_inprocess(body)
     policy.enforce_nanoclaw_image_roles(body, settings)
     policy.enforce_nanoclaw_socket_policy(body, settings)
+    policy.enforce_route_bind(body, settings)
     from argus_api.errors import NotFoundError
 
     async with db.read() as conn:
