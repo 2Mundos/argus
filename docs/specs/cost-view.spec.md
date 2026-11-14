@@ -158,8 +158,12 @@ manager scope. The window is `(now − window, now]`. Response:
   `pricing_file` / `ARGUS_PRICING_FILE`.
 - Account usage 2 ("No price table") is narrowed: *that* view still shows only
   reported cost; estimates live here, labelled.
-<<<<<<< HEAD
-- Dashboard `views/Cost.tsx`, pure helpers in `cost.ts`.
+- Dashboard `views/Cost.tsx`, pure helpers in `cost.ts` (`coverageLabel`,
+  `isLowerBound`).
+- Coverage is computed in `accounts/figures.py` `Acc.figures()` from the counts
+  it already keeps; the fields live on `CostFigures`, so `GET
+  /api/tasks/{id}/cost` carries them too ([task cost](task-cost.spec.md) 3.2).
+  The orchestrator group counts its measured turns as reported rows.
 
 ## Verification boundary
 
@@ -171,11 +175,3 @@ manager scope. The window is `(now − window, now]`. Response:
   grouping, windows and the daily series run against an in-memory database; the Cost tab runs under jsdom.
 - Not verified: the price table against current provider prices; totals against a
   real provider bill; the dashboard in a real browser; any production node.
-=======
-- Dashboard `views/Cost.tsx`, pure helpers in `cost.ts` (`coverageLabel`,
-  `isLowerBound`).
-- Coverage is computed in `accounts/figures.py` `Acc.figures()` from the counts
-  it already keeps; the fields live on `CostFigures`, so `GET
-  /api/tasks/{id}/cost` carries them too ([task cost](task-cost.spec.md) 3.2).
-  The orchestrator group counts its measured turns as reported rows.
->>>>>>> origin/main
