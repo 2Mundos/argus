@@ -271,6 +271,31 @@ def _validate_branch_refspec(
     return None
 
 
+def _push_destination(
+    cwd: str,
+    remote: str,
+    *,
+    git_dir: str | None = None,
+    work_tree: str | None = None,
+) -> str:
+    """Push URL of a configured remote; any other argument is itself the URL."""
+    r = _git(
+        cwd,
+        "remote",
+        "get-url",
+        "--push",
+        remote,
+        git_dir=git_dir,
+        work_tree=work_tree,
+    )
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else remote
+
+
+def _is_local_destination(destination: str) -> bool:
+    """Absolute paths and file:/// URLs only; relative paths and unknown forms are network."""
+    return destination.startswith(("/", "file:///"))
+
+
 def parse_git_argv(argv: list[str], default_cwd: str) -> GitInvocation | None:
     """Parse `git` argv (with or without leading `git`) into cwd and subcommand."""
     args = list(argv)
@@ -682,6 +707,10 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
         if refspecs == ["--follow-tags"]:
             return PUSH_FOLLOW_TAGS_MESSAGE
         return PUSH_WIDE_MESSAGE
+    local = _is_local_destination(
+        _push_destination(inv.cwd, remote, git_dir=inv.git_dir, work_tree=inv.work_tree)
+    )
+    scanned: list[str] = []
     for spec in refspecs:
         branch_err = _validate_branch_refspec(
             inv.cwd,
@@ -689,10 +718,12 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
             git_dir=inv.git_dir,
             work_tree=inv.work_tree,
         )
-        if branch_err:
+        if branch_err and not local:
             return branch_err
+        if not branch_err:
+            scanned.append(spec)
     seen: set[str] = set()
-    for spec in refspecs:
+    for spec in scanned:
         shas, err = outgoing_shas_for_refspec(
             inv.cwd,
             remote,
