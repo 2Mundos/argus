@@ -84,6 +84,7 @@ export function Fleet() {
 function Body({ h }: { h: FleetHealth }) {
   const { queue_time: q, run_time: r, outcomes: o, failures: f, yield: y } = h;
   const d = h.dead_session_recovery;
+  const b = h.command_blocks;
   return (
     <>
       <h3>Pools</h3>
@@ -259,6 +260,45 @@ function Body({ h }: { h: FleetHealth }) {
         </table>
       )}
       <Caption window={f.window_hours} source={f.source} />
+
+      <h3>Command guard blocks</h3>
+      {b.total === 0 ? (
+        <p className="muted">No blocks in the window.</p>
+      ) : (
+        <div className="home-groups">
+          <Card title={`By project · ${b.total} total`}>
+            <table>
+              <tbody>
+                {b.by_project.map((p) => (
+                  <tr key={p.unknown ? "\0unknown" : p.project}>
+                    <td>{p.unknown ? "unknown (no project)" : p.project}</td>
+                    <td>{p.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+          <Card title="By task">
+            <table>
+              <tbody>
+                {b.by_task.map((t) => (
+                  <tr key={t.task_id}>
+                    <td>
+                      <a href={`#tasks/${t.task_id}`}>{t.task_id}</a>
+                    </td>
+                    <td>{t.project ?? "unknown"}</td>
+                    <td>{t.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {b.truncated && (
+              <p className="muted small">Showing the {b.by_task.length} tasks with most blocks.</p>
+            )}
+          </Card>
+        </div>
+      )}
+      <Caption window={b.window_hours} source={b.source} />
       {(f.truncated || h.truncated || d.truncated) && (
         <p className="muted small">Showing the newest 5000 rows only.</p>
       )}

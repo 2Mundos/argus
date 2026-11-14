@@ -10,6 +10,8 @@ from argus_api import fleet_health
 from argus_api.db import Database, ts
 from argus_api.fleet_health import (
     ATTEMPTS_SQL,
+    BLOCKS_BY_PROJECT_SQL,
+    BLOCKS_BY_TASK_SQL,
     DECISIONS_SQL,
     FAILURES_SQL,
     FINISHED_SQL,
@@ -19,6 +21,7 @@ from argus_api.fleet_health import (
     YIELD_COUNTS_SQL,
 )
 from argus_api.main import app
+from argus_core.events import TASK_COMMAND_BLOCKED
 from argus_core.tasks import TaskState
 from fastapi.testclient import TestClient
 
@@ -281,6 +284,14 @@ async def test_main_queries_use_indexes(db: Database) -> None:
         "usage": (USAGE_SQL, ("[]",)),
         "decisions": (DECISIONS_SQL, (since, until, 10)),
         "yield_counts": (YIELD_COUNTS_SQL, (since, until, since, until)),
+        "blocks_by_task": (
+            BLOCKS_BY_TASK_SQL,
+            (TASK_COMMAND_BLOCKED, since, until, 10),
+        ),
+        "blocks_by_project": (
+            BLOCKS_BY_PROJECT_SQL,
+            (TASK_COMMAND_BLOCKED, since, until),
+        ),
     }
     async with db.read() as conn:
         for name, (sql, params) in queries.items():
@@ -623,3 +634,62 @@ async def test_command_blocked_is_not_a_failure(db: Database) -> None:
         )
     f = (await health(db)).failures
     assert (f.total, f.groups) == (0, [])
+
+
+async def test_command_blocks_count_events_per_task_and_project(db: Database) -> None:
+    async with db.write() as tx:
+        for slug in ("alpha", "beta"):
+            await tx.conn.execute(
+                "INSERT INTO projects (slug, name, description, created_at, updated_at)"
+                " VALUES (?, ?, '', ?, ?)",
+                (slug, slug, ts(NOW), ts(NOW)),
+            )
+    for n, project in (("a1", "alpha"), ("a2", "alpha"), ("b1", "beta"), ("np", None)):
+        await add_finished(db, n)
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE tasks SET project = ? WHERE id = ?", (project, n)
+            )
+    blocks = {  # task -> hours ago of each block; "gone" has no task row
+        "a1": [1, 2, 3],
+        "a2": [4],
+        "b1": [5, 24],  # 24 h is exactly `since`: inside
+        "np": [6, 7],
+        "gone": [8],
+    }
+    async with db.write() as tx:
+        for task, hours in blocks.items():
+            for h in hours:
+                await event(
+                    tx.conn,
+                    task,
+                    TASK_COMMAND_BLOCKED,
+                    NOW - timedelta(hours=h),
+                    tool="Bash",
+                    rule="rm_root",
+                    reason="x",
+                    attempt=1,
+                    command="rm",
+                )
+        await event(  # outside the window
+            tx.conn, "a1", TASK_COMMAND_BLOCKED, NOW - timedelta(hours=24, seconds=1)
+        )
+        await event(tx.conn, "a1", "task.progress", NOW - timedelta(hours=1))
+    c = (await health(db)).command_blocks
+    assert [(t.task_id, t.project, t.count) for t in c.by_task] == [
+        ("a1", "alpha", 3),
+        ("b1", "beta", 2),
+        ("np", None, 2),
+        ("a2", "alpha", 1),
+        ("gone", None, 1),
+    ]
+    assert [(p.project, p.unknown, p.count) for p in c.by_project] == [
+        ("alpha", False, 4),
+        (None, True, 3),
+        ("beta", False, 2),
+    ]
+    assert (c.total, c.truncated, c.window_hours) == (9, False, 24)
+    assert c.total == sum(p.count for p in c.by_project)
+    later = NOW + timedelta(hours=100)
+    empty = (await fleet_health.fleet_health(db, 1, now=later)).command_blocks
+    assert (empty.total, empty.by_project, empty.by_task) == (0, [], [])

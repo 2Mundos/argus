@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-01
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 # Command guard
@@ -116,7 +116,10 @@ bypass. Background: draft (removed; in git history),
   informational. Fleet activity (Home, Events, the status bar and the task feed share
   one event list) shows the rule id and reason only, never command text. Readers see
   it through the existing event read model and its task read scope; no failure, retry
-  or inbox count includes it (tested).
+  or inbox count includes it (tested). Fleet health counts the events per task and
+  per project for the selected window ([fleet health](fleet-health.spec.md) 3):
+  read-only, from the events (never `task_command_blocks`), ids, projects and counts
+  only, and no enforcement change.
 - **Opt-out (intended).** On by default; a `command_guard.enabled` setting
   disables it for new attempts. The hook already honours the delivery mechanism:
   the environment variable `ARGUS_COMMAND_GUARD=0|off` turns it off. The setting
@@ -130,7 +133,6 @@ bypass. Background: draft (removed; in git history),
 
 ## Open items
 
-- Counts of blocks per task or project in Fleet.
 - Codex: that a live 0.162.1 turn calls the hook with tool name `Bash` and honours
   the deny ([Codex hook trust](codex-hook-trust.spec.md) open items), and block
   events for Codex.
