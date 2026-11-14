@@ -6,6 +6,7 @@ import re
 import tempfile
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -425,6 +426,54 @@ def test_guided_nanoclaw_worker_inherits_the_gateway_and_ignores_retired_provide
     assert pool["docker"]["network"] == "onecli-control"
     # The isolation is still the template's own.
     assert pool["docker"]["runtime"] is None
+
+
+ROUTE_BIND = pytest.mark.parametrize(
+    "extra_env",
+    [lambda d: nanoclaw_env(d) | {"ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND": "if:br-s"}],
+    indirect=True,
+)
+
+
+@ROUTE_BIND
+def test_only_socket_hosts_get_the_route_bind_and_no_request_or_edit_moves_it(
+    client: TestClient,
+    target: FakeTarget,
+    extra_env: dict,
+    passes: Callable[[int], None],
+) -> None:
+    ready_node(target)
+    key = "ARGUS_INTEGRATION_ROUTE_BIND"
+    for topology in (key, "ARGUS_INTEGRATION_ROUTE_PORT", "ARGUS_INTEGRATION_MCP_PORT"):
+        asked = create(
+            client,
+            template="nanoclaw-socket",
+            name="asks",
+            advanced={"env": {topology: "10.9.9.9"}},
+        )
+        assert asked.status_code == 422 and topology in asked.text, asked.text
+    sock = create(client, template="nanoclaw-socket", name="sock").json()["pool"]
+    create(client, template="nanoclaw-sandbox", name="box")
+    passes(2)
+    envs = {s.env["ARGUS_POOL"]: s.env for s in target.specs.values()}
+    assert envs["sock"][key] == "if:br-s" and key not in envs["box"]
+
+    def patch(name: str, version: int, body: dict) -> Response:
+        body = {"expected_version": version, **body}
+        return client.patch(f"/api/pools/{name}", json=body, headers=ADMIN)
+
+    moved = patch("sock", sock["version"], {"env": {key: "10.9.9.9"}})
+    assert moved.status_code == 422 and moved.json()["detail"]["code"] == "invalid_pool"
+    box = {p["name"]: p for p in pools(client)}["box"]
+    onto_box = patch("box", box["version"], {"env": {key: "if:br-s"}})
+    assert onto_box.status_code == 422, onto_box.text
+    # Unrelated edits keep the stored value even once the setting changes.
+    state = client.app.state
+    state.settings = replace(state.settings, nanoclaw_integration_route_bind=None)
+    kept = patch("sock", sock["version"], {"desired_replicas": 0})
+    assert kept.status_code == 200, kept.text
+    removed = patch("sock", kept.json()["version"], {"env": {key: None}})
+    assert removed.status_code == 200 and key not in removed.json()["env"]
 
 
 @BOTH

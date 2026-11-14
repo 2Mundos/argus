@@ -1,5 +1,7 @@
+import ipaddress
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -60,6 +62,9 @@ class Settings:
     # and account policy; unset keeps the pool defaults (no accounts, default URL).
     nanoclaw_onecli_url: str | None = None
     nanoclaw_network: str | None = None  # Docker network that reaches the gateway
+    # Where a socket-mode host's Kubernetes route listens (integrations 3.6 Route):
+    # an IPv4 literal or `if:<interface>` on the network its sessions share.
+    nanoclaw_integration_route_bind: str | None = None
     worker_images: tuple[str, ...] = ()  # trusted `argus-worker` images
     # Project runtime images (project runtime spec): derived per project, built on
     # this node's Docker daemon. Off: workers are told so and run on their base image.
@@ -220,6 +225,9 @@ class Settings:
             nanoclaw_onecli_url=os.environ.get("ARGUS_NANOCLAW_ONECLI_URL") or None,
             launcher=os.environ.get("ARGUS_LAUNCHER") == "1",
             nanoclaw_network=os.environ.get("ARGUS_NANOCLAW_NETWORK") or None,
+            nanoclaw_integration_route_bind=_route_bind(
+                "ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND"
+            ),
             worker_images=_csv("ARGUS_WORKER_IMAGES"),
             project_runtime=os.environ.get("ARGUS_PROJECT_RUNTIME", "on") != "off",
             runtime_image_repo=os.environ.get("ARGUS_RUNTIME_IMAGE_REPO")
@@ -423,6 +431,45 @@ def _difficulty_executors() -> dict[str, tuple[str, ...]]:
         return parse_difficulty_executors(json.loads(raw))
     except ValueError as exc:
         raise ValueError(f"ARGUS_DIFFICULTY_EXECUTORS: {exc}") from exc
+
+
+_IFNAME = re.compile(r"[A-Za-z0-9_.@-]{1,15}")
+_THIS_NETWORK = ipaddress.ip_network("0.0.0.0/8")
+
+
+def route_bind(value: str) -> str:
+    """The Kubernetes route's bind as the channel accepts it: `if:<interface>`, or
+    an IPv4 literal that is not a wildcard, loopback, link-local, multicast or
+    reserved address. The channel also checks the address is its own."""
+    if value.startswith("if:"):
+        if _IFNAME.fullmatch(value[3:]):
+            return value
+        raise ValueError(f"interface name {value[3:]!r} is not valid")
+    try:
+        ip = ipaddress.IPv4Address(value)
+    except ValueError:
+        raise ValueError(
+            f"{value!r} is neither an IPv4 address nor if:<interface>"
+        ) from None
+    if (
+        ip in _THIS_NETWORK
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+    ):
+        raise ValueError(f"{value!r} is a wildcard, loopback or non-routable address")
+    return value
+
+
+def _route_bind(name: str) -> str | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return route_bind(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name}: {exc}") from None
 
 
 def _csv(name: str) -> tuple[str, ...]:

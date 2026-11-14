@@ -476,8 +476,10 @@ file does not revoke the token: revoke it at the cluster as well
 
 Kubernetes traffic does not go through the OneCLI gateway, which intercepts every
 authenticated CONNECT. `argus-integrations-route.ts` runs a CONNECT broker in the
-channel on the docker bridge address (`ARGUS_INTEGRATION_ROUTE_PORT`, else a free
-port). Each cluster in the kubeconfig gets its own `proxy-url` carrying a random
+channel (`ARGUS_INTEGRATION_ROUTE_PORT`, else a free port). It listens on the
+docker bridge address, or, when `ARGUS_INTEGRATION_ROUTE_BIND` is set (an IPv4
+literal or `if:<interface>`), only on that address. The channel checks that the
+value names exactly one IPv4 address the host holds, and there is no fallback. Each cluster in the kubeconfig gets its own `proxy-url` carrying a random
 grant bound to the task, the attempt, the integration and the server's exact
 `host:port` (resolved once; internal addresses refused). Each CONNECT is
 authorized against Argus: the attempt must hold the lease and the integration be
@@ -493,8 +495,12 @@ and host. A missing route, no bridge address, a bad port or a failed tunnel bloc
 the attempt as `env_integration_route_unavailable`; a certificate that does not
 verify or name the host blocks as `env_integration_gateway_intercepts`. Either
 leaves no file. Socket-mode workers run sessions on the outer daemon, which cannot
-reach the bridge, so their Kubernetes tasks block as
-`env_integration_route_unavailable`. A TLS or proxy error from kubectl is an
+reach the host's bridge. Their Kubernetes tasks block as
+`env_integration_route_unavailable` unless the operator puts the host and its
+sessions on a dedicated network and sets `ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND`.
+The guided factory copies that into `nanoclaw-socket` pools as
+`ARGUS_INTEGRATION_ROUTE_BIND` ([runbook](../../docs/runbooks/2026-10-16.nanoclaw-worker-setup.ref.md)
+section 5). The MCP broker does not use it. A TLS or proxy error from kubectl is an
 environment block: never edit the `proxy-url`, server or CA, never disable TLS
 verification, unset `HTTPS_PROXY` or set `NO_PROXY`
 ([spec](../../docs/specs/integrations.spec.md) 3.6 "Route").

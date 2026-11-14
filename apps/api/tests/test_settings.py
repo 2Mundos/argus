@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from argus_api import model_policy
-from argus_api.config import refuse_preview_data
+from argus_api.config import Settings, refuse_preview_data, route_bind
 from argus_api.errors import ValidationFailedError
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
@@ -815,3 +815,48 @@ def test_preview_data_dir_is_refused_outside_the_preview_checkout(
         refuse_preview_data(link, worktree, preview)
     refuse_preview_data(preview / "data", preview, preview)  # the service itself
     refuse_preview_data(worktree / ".argus", worktree, preview)
+
+
+@pytest.mark.parametrize("value", ["172.30.0.5", "10.0.0.1", "if:eth0", "if:br-1a2b"])
+def test_route_bind_accepts_an_address_or_an_interface(value: str) -> None:
+    assert route_bind(value) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0.0.0.0",
+        "0.1.2.3",
+        "127.0.0.1",
+        "169.254.1.1",
+        "224.0.0.1",
+        "240.0.0.1",
+        "255.255.255.255",
+        "::",
+        "fe80::1",
+        "2001:db8::1",
+        "host.docker.internal",
+        "172.030.0.5",
+        "172.30.0.5:8080",
+        "if:",
+        "if:../eth0",
+        "if:eth0\n",
+        "if:sixteen-chars-xx",
+    ],
+)
+def test_route_bind_refuses_what_the_channel_refuses(value: str) -> None:
+    with pytest.raises(ValueError):
+        route_bind(value)
+
+
+def test_route_bind_env_is_optional_and_refused_at_startup_when_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = "ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND"
+    monkeypatch.setenv(name, " ")
+    assert Settings.from_env().nanoclaw_integration_route_bind is None
+    monkeypatch.setenv(name, "if:br-s")
+    assert Settings.from_env().nanoclaw_integration_route_bind == "if:br-s"
+    monkeypatch.setenv(name, "0.0.0.0")
+    with pytest.raises(ValueError, match=name):
+        Settings.from_env()

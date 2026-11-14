@@ -15,8 +15,8 @@ export interface LocalForwardSpec {
 }
 
 /** IPv4 address of docker0 (the bridge gateway containers use as host.docker.internal). */
-export function dockerBridgeIpv4(): string | null {
-  const addrs = networkInterfaces().docker0;
+export function dockerBridgeIpv4(interfaces = networkInterfaces): string | null {
+  const addrs = interfaces().docker0;
   if (!addrs) return null;
   for (const a of addrs) {
     if (a.family === "IPv4" && !a.internal) return a.address;

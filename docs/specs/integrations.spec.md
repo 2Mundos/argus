@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-12
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 # Integrations: MCP connections and Kubernetes clusters
@@ -363,12 +363,30 @@ anonymous tunnel each give up what the integration promises, so none is used.
 Kubernetes traffic therefore does not use the gateway. The NanoClaw channel runs
 its own CONNECT broker (`argus-integrations-route.ts`) that never terminates TLS:
 
-- **Listener.** It binds the worker's docker bridge IPv4, the address sessions
-  already reach the host on, at `ARGUS_INTEGRATION_ROUTE_PORT` or a free port. It is
-  not configured in pool env or in the session's environment: each cluster in the
-  attempt's kubeconfig carries its own `proxy-url`, which kubectl uses for that
-  cluster only, so `HTTPS_PROXY` and `NO_PROXY` are unchanged and every other host
-  still goes through the gateway.
+- **Listener.** It binds one IPv4 address that sessions reach the host on, at
+  `ARGUS_INTEGRATION_ROUTE_PORT` or a free port. Where that address comes from
+  depends on the topology:
+  - *Sandbox* (sessions on the host's own inner daemon): the host's `docker0`
+    address. Without one, no listener opens.
+  - *Socket* (sessions on the outer daemon): `ARGUS_INTEGRATION_ROUTE_BIND`, which
+    the guided factory copies into a `nanoclaw-socket` pool's env from the
+    operator's `ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND`. Its value is an IPv4
+    literal or `if:<interface>`. It is checked when the listener opens, against the
+    host's own interfaces, and must name exactly one assigned, non-internal IPv4
+    address. A wildcard, loopback, link-local, multicast, reserved or IPv6 address,
+    a hostname, an unknown interface, an interface with several addresses, or an
+    address the host does not hold is refused with
+    `env_integration_route_unavailable` and a fixed message, and no listener opens.
+    When the variable is set it is the only source: there is no `docker0` fallback.
+    Argus refuses an invalid value at startup. It also refuses a pool write that
+    puts another value in pool env or puts the key on any other kind of pool, and
+    a `create_worker` request whose advanced env names the route or MCP broker
+    keys.
+
+  The address the listener bound is the one written into `proxy-url`. The session's
+  environment does not change: each cluster in the attempt's kubeconfig carries its
+  own `proxy-url`, which kubectl uses for that cluster only, so `HTTPS_PROXY` and
+  `NO_PROXY` are unchanged and every other host still goes through the gateway.
 - **Grants.** For each selected integration the channel opens a grant bound to the
   task, the attempt, the integration and the API server's exact `host:port`. The
   grant is 32 random bytes sent as the `proxy-url` password; the broker keeps only
@@ -395,8 +413,8 @@ Before writing a kubeconfig, and again before a rotation replaces one, the chann
 proves the route: a CONNECT through the listener with the grant, then a TLS
 handshake only, verified against the integration's `ca_data` (the bundled public
 roots when null, never the process's extra CAs) with hostname checking. No token
-and no HTTP request is sent. No route configured, no bridge address, an invalid
-port, an internal or unresolvable server, a refused CONNECT or a failed dial blocks
+and no HTTP request is sent. No route configured, no bridge address, a refused
+`ARGUS_INTEGRATION_ROUTE_BIND`, an invalid port, an internal or unresolvable server, a refused CONNECT or a failed dial blocks
 the task with `env_integration_route_unavailable`; an untrusted certificate or a
 host mismatch blocks with `env_integration_gateway_intercepts`. Either leaves no
 kubeconfig and no grant. Reasons name the integration and a fixed code, never the
@@ -408,18 +426,25 @@ edit the kubeconfig's server, CA or `proxy-url`, never pass `--server`,
 `HTTPS_PROXY` or `NO_PROXY`; stop and reply `FAIL:`.
 
 **Limits of the route.** The broker is reachable from every container on the
-bridge, so a grant is a capability: whoever holds the attempt's kubeconfig can open
-tunnels to those clusters only, only while the attempt holds its lease. It sees only
-TLS ciphertext. Workers in socket mode run sessions on the outer daemon, where the
-bridge is not reachable; their Kubernetes tasks block with
-`env_integration_route_unavailable`. A host firewall must let the bridge reach the
-port (see the [worker setup runbook](../runbooks/2026-10-16.nanoclaw-worker-setup.ref.md)).
+network it listens on, so a grant is a capability: whoever holds the attempt's
+kubeconfig can open tunnels to those clusters only, and only while the attempt holds
+its lease. The broker sees only TLS ciphertext.
+
+In socket mode, sessions run on the outer daemon, where the host's `docker0` is not
+reachable. The route works there only if the operator puts the host and its sessions
+on a dedicated Docker network and names the host's address on it in
+`ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND`. Argus cannot check from its side that the
+sessions are on that network; this is an operator requirement. A host firewall must
+let the sessions' network reach the port (see the
+[worker setup runbook](../runbooks/2026-10-16.nanoclaw-worker-setup.ref.md)).
 
 **MCP broker.** An MCP token never enters a session: no environment variable, file,
 prompt, task text, log or artifact holds it. The channel keeps it in the memory of
-its MCP broker (`argus-integrations-mcp.ts`), a plain-HTTP listener on the same
-docker bridge address as the route, at `ARGUS_INTEGRATION_MCP_PORT` or a free port,
-and gives the session a server URL instead:
+its MCP broker (`argus-integrations-mcp.ts`), a plain-HTTP listener on the host's
+`docker0` address, at `ARGUS_INTEGRATION_MCP_PORT` or a free port, and gives the
+session a server URL instead. It does not read `ARGUS_INTEGRATION_ROUTE_BIND`: its
+grant URLs name `host.docker.internal`, so a socket-mode worker still has no broker,
+and its MCP tasks block with `env_integration_route_unavailable` (Open items):
 
 - **Grants.** For each selected MCP integration the channel opens a grant bound to
   the task, the attempt and the integration: 32 random bytes in the path of
@@ -541,7 +566,13 @@ project's active integrations, none chosen by default, and sends the choice as
 
 - MCP OAuth sign-in (3.2).
 - Kubernetes and MCP delivery for engines other than Claude (3.6 engine matrix).
-- Kubernetes and MCP routing for socket-mode workers (3.6 Route, MCP broker).
+- MCP routing for socket-mode workers (3.6 MCP broker): the broker would need the
+  bind address and a grant URL host that sessions on the operator's network
+  resolve.
+- Verify the socket-mode Kubernetes route on an installed socket host: a sibling
+  session on the dedicated network running kubectl through it against a fake API
+  with a private CA. No such receipt exists yet (it needs a container daemon). The
+  source is ready; that is not live activation.
 - Verify the route live on a worker against a real cluster, after the operator
   enables it there.
 - Verify the MCP broker live on a worker, after the operator enables it: that the
@@ -625,7 +656,9 @@ project's active integrations, none chosen by default, and sends the choice as
   config edit, and the broker over real TLS: splice with
   ciphertext only, `407`/`405`/`403`, refused authorization, DNS pinning, internal
   addresses, revocation closing tunnels, attempt fencing, tunnel lifetime, CA and
-  hostname mismatch, no bridge, bad port, cluster down) and
+  hostname mismatch, no bridge, bad port, cluster down; `ARGUS_INTEGRATION_ROUTE_BIND`
+accepted and refused forms, failing closed with no listener and no `docker0`
+fallback, and a listener bound only at that address with it in `proxy-url`) and
   `argus-integrations-channel.test.ts` (preflight blocks for both route reasons and a
   missing route or MCP broker, re-granting on rotation, revocation on completion,
   revocation and lease loss, cleanup on every path, delegate passthrough, the MCP
@@ -641,6 +674,10 @@ project's active integrations, none chosen by default, and sends the choice as
   fails with x509 and the gateway never reads the bearer. Through the channel's
   broker, authorized by the real API, kubectl succeeds while a relay in front of the
   cluster sees ciphertext only; a `--server` override, a stale attempt, revocation,
-  a CA mismatch and a hostname mismatch are refused. Skipped without a kubectl.
+  a CA mismatch and a hostname mismatch are refused. Skipped without a kubectl or
+  a dedicated non-loopback IPv4; test servers never bind a wildcard.
+- Socket topology: `test_settings.py` (the `ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND`
+  rules) and `test_templates.py` (injected into socket pools only, refused in
+  advanced env and in pool edits that move or misplace it).
 - No real MCP server, MCP client, Kubernetes cluster, credential or model run is
   exercised by these checks.

@@ -5,6 +5,15 @@ from argus_core.fleet import PoolUpsert, RuntimeKind
 from argus_api.config import Settings
 from argus_api.errors import ForbiddenError, ValidationFailedError
 
+ROUTE_BIND_ENV = "ARGUS_INTEGRATION_ROUTE_BIND"
+# The channel's route and MCP broker listeners (integrations 3.6): set by the
+# operator, never by a create_worker request.
+ROUTE_TOPOLOGY_ENV = (
+    ROUTE_BIND_ENV,
+    "ARGUS_INTEGRATION_ROUTE_PORT",
+    "ARGUS_INTEGRATION_MCP_PORT",
+)
+
 
 def enforce_nanoclaw_image_roles(body: PoolUpsert, settings: Settings) -> None:
     """Refuse a NanoClaw pool whose host/agent images are swapped vs settings.
@@ -66,4 +75,28 @@ def enforce_nanoclaw_socket_policy(body: PoolUpsert, settings: Settings) -> None
         " on the Argus process (root-equivalent on that Docker host);"
         " use docker.runtime for the sandboxed NanoClaw host instead",
         code="docker_socket_not_allowed",
+    )
+
+
+def enforce_route_bind(
+    body: PoolUpsert, settings: Settings, previous: str | None = None
+) -> None:
+    """Refuse `ARGUS_INTEGRATION_ROUTE_BIND` in pool env unless it is the
+    operator's `ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND` (or, on a PATCH, the
+    pool's unchanged `previous` value) on a socket-mode NanoClaw pool, where the
+    guided factory puts it. Every pool write calls this, so an edit cannot point
+    a host's Kubernetes route at another address."""
+    value = body.env.get(ROUTE_BIND_ENV)
+    if value is None:
+        return
+    if (
+        body.runtime is RuntimeKind.NANOCLAW
+        and body.docker.runtime is None
+        and value in (settings.nanoclaw_integration_route_bind, previous)
+    ):
+        return
+    raise ValidationFailedError(
+        f"{ROUTE_BIND_ENV} in pool env must equal ARGUS_NANOCLAW_INTEGRATION_ROUTE_BIND"
+        " on a socket-mode NanoClaw pool; remove it from this pool",
+        code="invalid_pool",
     )

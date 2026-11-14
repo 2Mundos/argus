@@ -76,15 +76,32 @@ def _host_ipv4() -> str | None:
 
 
 HOST_IP = _host_ipv4()
-pytestmark = [
-    pytest.mark.skipif(
-        KUBECTL is None, reason="no kubectl (set ARGUS_TEST_KUBECTL or put it on PATH)"
-    ),
-    pytest.mark.skipif(NODE is None, reason="node runs the channel and its route"),
-    pytest.mark.skipif(
-        HOST_IP is None, reason="the route refuses loopback; no other IPv4 to relay on"
-    ),
+_MISSING = [
+    why
+    for why, missing in (
+        ("no kubectl (set ARGUS_TEST_KUBECTL or put it on PATH)", KUBECTL is None),
+        ("node runs the channel and its route", NODE is None),
+        ("the route refuses loopback; no other IPv4 to relay on", HOST_IP is None),
+    )
+    if missing
 ]
+E2E = pytest.mark.skipif(bool(_MISSING), reason="; ".join(_MISSING))
+
+
+def _dedicated_ipv4(ip: str | None) -> str:
+    """The address a test server binds: never a wildcard, loopback or link-local."""
+    if ip is not None:
+        addr = IPv4Address(ip)
+        if not (addr.is_unspecified or addr.is_loopback or addr.is_link_local):
+            return ip
+    raise RuntimeError("no dedicated non-loopback IPv4: refusing to bind a wildcard")
+
+
+@pytest.mark.parametrize("ip", [None, "0.0.0.0", "127.0.0.1", "169.254.1.1"])
+def test_servers_never_bind_without_a_dedicated_address(ip: str | None) -> None:
+    with pytest.raises(RuntimeError, match="refusing to bind a wildcard"):
+        _dedicated_ipv4(ip)
+
 
 NAMESPACE = "team-a"
 OTHER_TOKEN = "k8s-sentinel-rotated-Zp7Lw2-never-shown"
@@ -270,7 +287,7 @@ class Relay(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
     def __init__(self, upstream: int) -> None:
-        super().__init__((HOST_IP or "", 0), RelayHandler)
+        super().__init__((_dedicated_ipv4(HOST_IP), 0), RelayHandler)
         self.upstream = upstream
         self.connections = 0
         self.sent = bytearray()  # route to cluster, as forwarded
@@ -656,6 +673,7 @@ def _with(kubeconfig: Path, target: Path, **cluster: str) -> Path:
     return target
 
 
+@E2E
 async def test_kubectl_reads_through_the_route_and_is_refused_elsewhere(
     db: Database, clock: FakeClock, tmp_path: Path, cluster: Cluster
 ) -> None:
@@ -757,6 +775,7 @@ async def test_kubectl_reads_through_the_route_and_is_refused_elsewhere(
         assert "Proxy Authentication Required" in err, err
 
 
+@E2E
 async def test_the_gateway_intercepts_and_the_route_does_not(
     db: Database, clock: FakeClock, tmp_path: Path, cluster: Cluster, gateway: Gateway
 ) -> None:
@@ -791,6 +810,7 @@ async def test_the_gateway_intercepts_and_the_route_does_not(
         assert TOKEN.encode() not in cluster.relay.sent
 
 
+@E2E
 async def test_grants_follow_rotation_attempts_and_revocation(
     db: Database, clock: FakeClock, tmp_path: Path, cluster: Cluster
 ) -> None:
@@ -846,6 +866,7 @@ async def test_grants_follow_rotation_attempts_and_revocation(
     assert OTHER_TOKEN.encode() not in cluster.relay.sent
 
 
+@E2E
 async def test_one_workers_grant_never_reaches_another_tenants_cluster(
     db: Database, clock: FakeClock, tmp_path: Path, cluster: Cluster
 ) -> None:
@@ -882,6 +903,7 @@ async def test_one_workers_grant_never_reaches_another_tenants_cluster(
         assert "Proxy Authentication Required" in err, err
 
 
+@E2E
 @pytest.mark.parametrize(
     ("change", "reason", "detail"),
     [
@@ -907,7 +929,7 @@ async def test_the_route_refuses_before_any_kubeconfig(
     task_id = await make_task(db, iid)
     await start(db, store, "agent-a")
     with socket.socket() as closed:  # a port nothing listens on
-        closed.bind((HOST_IP or "", 0))
+        closed.bind((_dedicated_ipv4(HOST_IP), 0))
         closed_port = closed.getsockname()[1]
     other_ca = base64.b64encode(_server_tls(tmp_path / "other", "other")[1]).decode()
     override = {
