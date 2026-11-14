@@ -47,6 +47,7 @@ const pool = {
   docker: {
     host: null,
     network: "br0",
+    extra_networks: [],
     extra_hosts: ["h:host-gateway"],
     runtime: "sysbox-runc",
   },
@@ -182,7 +183,7 @@ describe("PoolEditor images", () => {
       runtime: "plain",
       nanoclaw: null,
       kubernetes: { context: "c", namespace: "default" },
-      docker: { host: null, network: null, extra_hosts: [], runtime: null },
+      docker: { host: null, network: null, extra_networks: [], extra_hosts: [], runtime: null },
     } as unknown as Pool;
     serve(nanoclawCatalog());
     open(k8s);

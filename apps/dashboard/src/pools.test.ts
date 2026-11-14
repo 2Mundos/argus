@@ -76,7 +76,13 @@ const nanoclawPool = {
   cpus: null,
   memory_mb: null,
   allow_mutable_images: false,
-  docker: { host: null, network: "br0", extra_hosts: ["h:host-gateway"], runtime: "sysbox-runc" },
+  docker: {
+    host: null,
+    network: "br0",
+    extra_networks: [],
+    extra_hosts: ["h:host-gateway"],
+    runtime: "sysbox-runc",
+  },
   kubernetes: null,
   nanoclaw: {
     install_dir: "/opt/nc",
@@ -115,7 +121,13 @@ describe("buildPool (edit)", () => {
   it("keeps docker.runtime and network when another docker field changes", () => {
     const { body } = buildPool(nanoclawPool, { ...toForm(nanoclawPool), extraHosts: "a:b" });
     expect(body).toEqual({
-      docker: { host: null, network: "br0", extra_hosts: ["a:b"], runtime: "sysbox-runc" },
+      docker: {
+        host: null,
+        network: "br0",
+        extra_networks: [],
+        extra_hosts: ["a:b"],
+        runtime: "sysbox-runc",
+      },
     });
   });
 

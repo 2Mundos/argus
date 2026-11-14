@@ -1007,3 +1007,17 @@ async def test_delete_pool_removes_terminated_instances(db: Database) -> None:
             "SELECT kind FROM events WHERE subject_id = 'web' AND kind = 'pool.deleted'"
         ) as cur:
             assert (await cur.fetchone())[0] == "pool.deleted"
+
+
+def test_container_spec_carries_the_pools_extra_networks() -> None:
+    from argus_api.fleet.runtimes import container_spec
+    from argus_core.fleet import DockerOptions
+
+    upsert = _sandboxed_pool(agent_image_archive="/srv/agent.tar")
+    upsert.docker = DockerOptions(
+        runtime="sysbox-runc", network="onecli", extra_networks=["bridge"]
+    )
+    spec = container_spec(
+        _pool_from_upsert("sbx", upsert), "i-1", ["argus_boot_x"], "http://argus"
+    )
+    assert (spec.network, spec.extra_networks) == ("onecli", ["bridge"])

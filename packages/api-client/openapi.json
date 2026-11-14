@@ -7952,6 +7952,14 @@
             "title": "Extra Hosts",
             "type": "array"
           },
+          "extra_networks": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Extra Networks",
+            "type": "array"
+          },
           "host": {
             "anyOf": [
               {
@@ -8000,6 +8008,14 @@
             "title": "Extra Hosts",
             "type": "array"
           },
+          "extra_networks": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Extra Networks",
+            "type": "array"
+          },
           "host": {
             "anyOf": [
               {
@@ -8038,6 +8054,7 @@
         "required": [
           "host",
           "network",
+          "extra_networks",
           "extra_hosts",
           "runtime"
         ],
@@ -15100,7 +15117,8 @@
           "docker": {
             "$ref": "#/components/schemas/DockerOptions-Output",
             "default": {
-              "extra_hosts": []
+              "extra_hosts": [],
+              "extra_networks": []
             }
           },
           "env": {
@@ -15660,7 +15678,8 @@
           "docker": {
             "$ref": "#/components/schemas/DockerOptions-Input",
             "default": {
-              "extra_hosts": []
+              "extra_hosts": [],
+              "extra_networks": []
             }
           },
           "env": {

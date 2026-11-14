@@ -8,6 +8,7 @@ creating a second one.
 
 import asyncio
 import builtins
+import contextlib
 import json
 import logging
 import os
@@ -84,6 +85,8 @@ class ContainerSpec:
     cpus: float | None = None
     memory_mb: int | None = None
     network: str | None = None
+    # Docker target: further networks the container joins after it is created.
+    extra_networks: list[str] = field(default_factory=list)
     extra_hosts: list[str] = field(default_factory=list)
     # Published ports, Docker target only: "<port>/tcp" -> (host address, host port).
     # Host address HOST_GATEWAY means the daemon's default bridge gateway (what
@@ -326,8 +329,12 @@ class DockerTarget:
             existing = client.containers.get(spec.name)
         except NotFound:
             existing = None
+        # Resolve every extra network first: an unknown name fails the start before
+        # anything is created or started.
+        extra = self._resolve_networks(client, spec.extra_networks)
         if existing is not None:  # a retried or ambiguous start: never a second one
             if existing.status == "created":
+                self._connect_networks(existing, extra)
                 existing.start()
             return spec.name
         self._ensure_image(client, spec)
@@ -335,7 +342,7 @@ class DockerTarget:
             if m.create_owner:
                 self._prepare_dir(client, spec.image, m)
         try:
-            client.containers.run(
+            container = client.containers.run(
                 spec.image,
                 name=spec.name,
                 detach=True,
@@ -362,7 +369,41 @@ class DockerTarget:
         except APIError as exc:
             if exc.status_code != 409:  # 409: created concurrently under our name
                 raise
+            return spec.name
+        try:
+            self._connect_networks(container, extra)
+        except BaseException:
+            # Never leave a half-configured container running.
+            with contextlib.suppress(Exception):
+                container.remove(force=True)
+            raise
         return spec.name
+
+    @staticmethod
+    def _resolve_networks(client: Any, names: builtins.list[str]) -> builtins.list[Any]:
+        from docker.errors import NotFound
+
+        networks = []
+        for name in names:
+            try:
+                networks.append(client.networks.get(name))
+            except NotFound as exc:
+                raise TargetError(
+                    f"docker network {name!r} (docker.extra_networks) does not exist"
+                ) from exc
+        return networks
+
+    @staticmethod
+    def _connect_networks(container: Any, networks: builtins.list[Any]) -> None:
+        """Attach the container to each network; already attached is fine."""
+        from docker.errors import APIError
+
+        for network in networks:
+            try:
+                network.connect(container)
+            except APIError as exc:
+                if "already exists" not in str(exc).lower():
+                    raise
 
     @staticmethod
     def _ensure_image(client: Any, spec: ContainerSpec) -> None:

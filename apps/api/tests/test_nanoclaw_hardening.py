@@ -601,3 +601,22 @@ def test_socket_nanoclaw_host_user_owns_its_workdir() -> None:
     assert (workdir.container, workdir.mode) == ("/srv/nc-i/i-1", "rw")
     assert workdir.create_owner == spec.user == "1000:1000"
     assert spec.group_add == ["999"]
+
+
+def test_extra_networks_round_trip_through_pool_put_and_get(client: TestClient) -> None:
+    body = {
+        "image": "img:1",
+        "desired_replicas": 0,
+        "max_replicas": 1,
+        "docker": {"network": "onecli", "extra_networks": ["bridge"]},
+    }
+    res = client.put("/api/pools/xnet", json=body, headers=ADMIN)
+    assert res.status_code == 200, res.text
+    assert res.json()["docker"]["extra_networks"] == ["bridge"]
+    assert client.get("/api/pools/xnet", headers=ADMIN).json()["docker"][
+        "extra_networks"
+    ] == ["bridge"]
+
+    body["docker"]["extra_networks"] = ["onecli"]
+    res = client.put("/api/pools/xnet", json=body, headers=ADMIN)
+    assert res.status_code == 422, res.text
