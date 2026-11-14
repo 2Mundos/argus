@@ -56,6 +56,8 @@ class FakeTarget:
         self.shares_filesystem = False
         self.labeled: dict[str, dict[str, str]] = {}  # image tag -> labels
         self.images: set[str] | None = None  # None: presence cannot be told
+        # (image, path) -> contents; a missing key is a missing file. None: cannot tell
+        self.image_files: dict[tuple[str, str], str] | None = None
         self.fail_start = False
         self.ambiguous_start = False  # creates the container, then reports failure
         self.fail_stop = False
@@ -105,6 +107,12 @@ class FakeTarget:
     async def image_present(self, image):
         self._check()
         return image in self.images if self.images is not None else None
+
+    async def read_image_file(self, image, path):
+        self._check()
+        if self.image_files is None:
+            return None
+        return self.image_files.get((image, path), "")
 
     async def start(self, spec):
         from argus_api.fleet.targets import TargetError

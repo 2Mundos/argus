@@ -40,7 +40,7 @@ from argus_api.agents import service as agents
 from argus_api.db import Database, Tx, ts
 from argus_api.errors import ValidationFailedError
 from argus_api.events import record
-from argus_api.fleet import runtimes
+from argus_api.fleet import capabilities, runtimes
 from argus_api.fleet import service as fleet
 from argus_api.fleet.names import suggest, taken_worker_names
 from argus_api.fleet.targets import (
@@ -75,6 +75,8 @@ class FleetSettings:
     max_starts_in_flight: int = field(default_factory=default_start_cap)
     # Started by the host launcher: name its command in status reasons.
     launcher: bool = False
+    # Project runtimes are on: their builds are part of the start gate.
+    project_runtime: bool = True
 
 
 @dataclass(frozen=True)
@@ -463,6 +465,23 @@ async def _act(
             (ts(tx.now), pool.image, action.instance_id),
         )
         identity = await settings_service.global_value(tx.conn, "git.identity")
+    # Fail closed on a known-broken environment (worker launch 3): a worker
+    # started into it would only block the tasks it claims. Counted as an
+    # attempt above, so the start backoff paces the re-checks.
+    async with db.read() as conn:
+        env = await capabilities.load_environment(
+            conn, project_runtime=settings.project_runtime
+        )
+    _, blocking = await capabilities.environment_checks(pool, env, target)
+    if blocking:
+        reason = "; ".join(c.detail for c in blocking)
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE instances SET last_error = ? WHERE id = ?",
+                (reason, action.instance_id),
+            )
+            await _set_status(tx, pool_name, "failing", reason)
+        return
     argus_url = (
         runtimes.BUILTIN_URL if pool.target == "inprocess" else settings.argus_url
     )

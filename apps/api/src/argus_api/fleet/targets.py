@@ -179,6 +179,12 @@ class Target(Protocol):
         """Installed images carrying label `key` (one entry per tag)."""
         ...
 
+    async def read_image_file(self, image: str, path: str) -> str | None:
+        """`path` inside `image`, printed by a throwaway container that never pulls
+        and has no network; "" when the file is not in it. None: cannot tell (the
+        image is not on the target, or the target cannot run one)."""
+        ...
+
     async def start(self, spec: ContainerSpec) -> str: ...
     async def stop(self, ref: str, *, grace: timedelta) -> None: ...
     async def list(self, labels: Mapping[str, str]) -> list[ProviderInstance]: ...
@@ -275,6 +281,33 @@ class DockerTarget:
         return await self._call(
             self._labeled_images, key, deadline=PROVIDER_OP_TIMEOUT_S
         )
+
+    async def read_image_file(self, image: str, path: str) -> str | None:
+        return await self._call(
+            self._read_image_file, image, path, deadline=PROVIDER_OP_TIMEOUT_S
+        )
+
+    def _read_image_file(self, image: str, path: str) -> str | None:
+        from docker.errors import ContainerError, ImageNotFound
+
+        client = self._docker()
+        try:
+            client.images.get(image)  # `containers.run` would pull a missing one
+        except ImageNotFound:
+            return None
+        try:
+            out = client.containers.run(
+                image,
+                [path],
+                entrypoint="cat",
+                network_mode="none",
+                remove=True,
+                stdout=True,
+                stderr=False,
+            )
+        except ContainerError:  # `cat` failed: the file is not in the image
+            return ""
+        return out.decode("utf-8", "replace") if isinstance(out, bytes) else ""
 
     def _labeled_images(self, key: str) -> builtins.list[LabeledImage]:
         found = self._docker().images.list(filters={"label": [key]})
@@ -720,6 +753,9 @@ class KubernetesTarget:
     async def labeled_images(self, key: str) -> builtins.list[LabeledImage]:
         return []
 
+    async def read_image_file(self, image: str, path: str) -> str | None:
+        return None  # no throwaway pod just to read a file
+
     async def _list_pods(self, selector: str) -> Any:
         try:
             result = await self._call(
@@ -1006,6 +1042,9 @@ class InProcessTarget:
 
     async def labeled_images(self, key: str) -> builtins.list[LabeledImage]:
         return []
+
+    async def read_image_file(self, image: str, path: str) -> str | None:
+        return None
 
 
 class TargetRegistry:
