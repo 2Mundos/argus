@@ -257,6 +257,12 @@ task_not_editable`): a running attempt keeps the selection it started with. A ch
 records `task.integrations_changed` (`{added, removed}`). Clearing the list is the
 way back. The orchestrator has no selection tool and no MCP tool selects (section 2).
 
+**Routines.** A [routine](routines.spec.md) template may carry `integrations` only
+when an admin saves it (`403 integration_admin_only`), with the same checks against
+the routine's project, and the save records `routine.integrations_granted
+{project, slug, integrations}` (ids only). The scheduled run is then an ordinary
+task that selects those ids; delivery checks apply unchanged at each attempt.
+
 **Delivery binding.** Both worker routes require the caller to hold the task's
 current lease for exactly that `attempt` ([worker lifecycle](worker-lifecycle.spec.md)
 3.3); a stale attempt or another worker gets the lease error. The credential route

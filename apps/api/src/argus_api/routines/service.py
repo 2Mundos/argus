@@ -22,6 +22,7 @@ from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.errors import ForbiddenError, NotFoundError, ValidationFailedError
 from argus_api.events import record
+from argus_api.integrations import selection
 from argus_api.knowledge import service as knowledge
 from argus_api.routines.schedule import (
     ScheduleError,
@@ -122,7 +123,9 @@ async def upsert(
     )
     schedule = body.schedule.strip()
     timezone, first_slot = _check_schedule(schedule, body.timezone, tx.now)
-    template = await _check_template(tx.conn, project, body.title, body.template)
+    template = await _check_template(
+        tx.conn, project, body.title, body.template, admin=admin
+    )
     values = {
         "title": body.title,
         "schedule": schedule,
@@ -171,6 +174,19 @@ async def upsert(
             "enabled": body.enabled,
         },
     )
+    if integrations := template.get("integrations"):
+        await record(
+            tx,
+            actor,
+            "routine",
+            routine_id,
+            "routine.integrations_granted",
+            {
+                "project": project,
+                "slug": slug,
+                "integrations": sorted(set(integrations)),
+            },
+        )
     if existing is not None and existing["enabled"] and not body.enabled:
         await _record_disabled(tx, actor, routine_id)
     if body.enabled:
@@ -273,15 +289,27 @@ def _check_schedule(
 
 
 async def _check_template(
-    conn: aiosqlite.Connection, project: str, title: str, template: dict[str, Any]
+    conn: aiosqlite.Connection,
+    project: str,
+    title: str,
+    template: dict[str, Any],
+    *,
+    admin: bool,
 ) -> dict[str, Any]:
     """The template, normalised, after the task create rules (routines spec 3.1).
-    Its title defaults to the routine's for the check; only given keys are kept."""
+    Its title defaults to the routine's for the check; only given keys are kept.
+    Integrations are a credential grant: only an admin may save a template that
+    carries them, and the ids are checked as a task's are."""
     if unknown := sorted(set(template) - TEMPLATE_FIELDS):
         raise ValidationFailedError(
             "unknown template fields: " + ", ".join(unknown),
             code="unknown_template_field",
             details=[f"template.{key}: not a template field" for key in unknown],
+        )
+    if template.get("integrations") and not admin:
+        raise ForbiddenError(
+            "a routine may carry integrations only when an admin saves it",
+            code="integration_admin_only",
         )
     task_fields = {k: v for k, v in template.items() if k not in INTAKE_FIELDS}
     try:
@@ -298,6 +326,7 @@ async def _check_template(
             "invalid template: " + "; ".join(errors), details=errors
         ) from exc
     await tasks.check_create(conn, body)
+    await selection.check_selection(conn, project, body.integrations)
     return body.model_dump(mode="json", include=set(task_fields)) | intake.model_dump(
         include=set(template) & INTAKE_FIELDS
     )

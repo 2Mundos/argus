@@ -29,6 +29,7 @@ TEMPLATE_FIELDS = INTAKE_FIELDS | frozenset(
         "timeout_s",
         "harness_model",
         "executor_model",
+        "integrations",
     }
 )
 
