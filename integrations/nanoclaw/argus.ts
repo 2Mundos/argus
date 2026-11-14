@@ -2474,8 +2474,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   async function heartbeat(): Promise<void> {
     try {
+      const claim = current;
       await watchSession();
-      if (!current && sessionCarriesTask) return; // watchSession finished the task
+      // Only the beat in which watchSession finished the task: an idle agent still beats.
+      if (claim && !current) return;
       const acks = [...steerAcks];
       const activity_at = current ? await leaseActivityAt() : undefined;
       let observation: LeaseObservation | undefined;
