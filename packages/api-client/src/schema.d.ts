@@ -3785,6 +3785,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -3814,8 +3816,12 @@ export interface components {
             quota_status: components["schemas"]["QuotaStatus"];
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -4601,6 +4607,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -4626,8 +4634,12 @@ export interface components {
             provisional?: components["schemas"]["ProvisionalCost"] | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -5571,6 +5583,9 @@ export interface components {
          *     field is null when no measured run carried it, never 0 (cost view 3.1).
          *     Attempt coverage counts distinct (task, attempt) pairs among the group's rows
          *     (account usage 3.10); rows with no attempt count only in `runs`.
+         *     Coverage (cost view 3.1): `reported_rows` = `measured_runs` (the rows that carry a
+         *     reported value), `total_rows` = `runs`, `coverage_percent` = their share to one
+         *     decimal, null when `total_rows` is 0. One coverage covers the token and cost totals.
          */
         CostFigures: {
             /**
@@ -5580,6 +5595,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -5602,8 +5619,12 @@ export interface components {
             output_tokens: number | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -5767,6 +5788,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -5789,6 +5812,8 @@ export interface components {
             output_tokens: number | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
             /**
@@ -5796,6 +5821,8 @@ export interface components {
              * Format: date-time
              */
             start: string;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -9502,6 +9529,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -9526,8 +9555,12 @@ export interface components {
             project: string | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };

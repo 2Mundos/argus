@@ -14,11 +14,17 @@ class CostFigures(BaseModel):
     """What one group spent. `runs = measured_runs + not_reported_runs`. A token
     field is null when no measured run carried it, never 0 (cost view 3.1).
     Attempt coverage counts distinct (task, attempt) pairs among the group's rows
-    (account usage 3.10); rows with no attempt count only in `runs`."""
+    (account usage 3.10); rows with no attempt count only in `runs`.
+    Coverage (cost view 3.1): `reported_rows` = `measured_runs` (the rows that carry a
+    reported value), `total_rows` = `runs`, `coverage_percent` = their share to one
+    decimal, null when `total_rows` is 0. One coverage covers the token and cost totals."""
 
     runs: int
     measured_runs: int
     not_reported_runs: int
+    reported_rows: int
+    total_rows: int
+    coverage_percent: float | None
     attempts: int = 0
     measured_attempts: int = 0
     not_reported_attempts: int = 0

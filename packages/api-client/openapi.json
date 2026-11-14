@@ -236,6 +236,17 @@
             ],
             "title": "Cached Input Tokens"
           },
+          "coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Percent"
+          },
           "estimated_cost_usd": {
             "anyOf": [
               {
@@ -316,8 +327,16 @@
             ],
             "title": "Reported Cost Usd"
           },
+          "reported_rows": {
+            "title": "Reported Rows",
+            "type": "integer"
+          },
           "runs": {
             "title": "Runs",
+            "type": "integer"
+          },
+          "total_rows": {
+            "title": "Total Rows",
             "type": "integer"
           },
           "unpriced_runs": {
@@ -329,6 +348,9 @@
           "runs",
           "measured_runs",
           "not_reported_runs",
+          "reported_rows",
+          "total_rows",
+          "coverage_percent",
           "input_tokens",
           "output_tokens",
           "cached_input_tokens",
@@ -2807,6 +2829,17 @@
             ],
             "title": "Cached Input Tokens"
           },
+          "coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Percent"
+          },
           "estimated_cost_usd": {
             "anyOf": [
               {
@@ -2886,8 +2919,16 @@
             ],
             "title": "Reported Cost Usd"
           },
+          "reported_rows": {
+            "title": "Reported Rows",
+            "type": "integer"
+          },
           "runs": {
             "title": "Runs",
+            "type": "integer"
+          },
+          "total_rows": {
+            "title": "Total Rows",
             "type": "integer"
           },
           "unpriced_runs": {
@@ -2899,6 +2940,9 @@
           "runs",
           "measured_runs",
           "not_reported_runs",
+          "reported_rows",
+          "total_rows",
+          "coverage_percent",
           "input_tokens",
           "output_tokens",
           "cached_input_tokens",
@@ -5678,7 +5722,7 @@
         "type": "object"
       },
       "CostFigures": {
-        "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).\nAttempt coverage counts distinct (task, attempt) pairs among the group's rows\n(account usage 3.10); rows with no attempt count only in `runs`.",
+        "description": "What one group spent. `runs = measured_runs + not_reported_runs`. A token\nfield is null when no measured run carried it, never 0 (cost view 3.1).\nAttempt coverage counts distinct (task, attempt) pairs among the group's rows\n(account usage 3.10); rows with no attempt count only in `runs`.\nCoverage (cost view 3.1): `reported_rows` = `measured_runs` (the rows that carry a\nreported value), `total_rows` = `runs`, `coverage_percent` = their share to one\ndecimal, null when `total_rows` is 0. One coverage covers the token and cost totals.",
         "properties": {
           "attempts": {
             "default": 0,
@@ -5695,6 +5739,17 @@
               }
             ],
             "title": "Cached Input Tokens"
+          },
+          "coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Percent"
           },
           "estimated_cost_usd": {
             "anyOf": [
@@ -5758,8 +5813,16 @@
             ],
             "title": "Reported Cost Usd"
           },
+          "reported_rows": {
+            "title": "Reported Rows",
+            "type": "integer"
+          },
           "runs": {
             "title": "Runs",
+            "type": "integer"
+          },
+          "total_rows": {
+            "title": "Total Rows",
             "type": "integer"
           },
           "unpriced_runs": {
@@ -5771,6 +5834,9 @@
           "runs",
           "measured_runs",
           "not_reported_runs",
+          "reported_rows",
+          "total_rows",
+          "coverage_percent",
           "input_tokens",
           "output_tokens",
           "cached_input_tokens",
@@ -6177,6 +6243,17 @@
             ],
             "title": "Cached Input Tokens"
           },
+          "coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Percent"
+          },
           "estimated_cost_usd": {
             "anyOf": [
               {
@@ -6239,6 +6316,10 @@
             ],
             "title": "Reported Cost Usd"
           },
+          "reported_rows": {
+            "title": "Reported Rows",
+            "type": "integer"
+          },
           "runs": {
             "title": "Runs",
             "type": "integer"
@@ -6247,6 +6328,10 @@
             "format": "date-time",
             "title": "Start",
             "type": "string"
+          },
+          "total_rows": {
+            "title": "Total Rows",
+            "type": "integer"
           },
           "unpriced_runs": {
             "title": "Unpriced Runs",
@@ -6257,6 +6342,9 @@
           "runs",
           "measured_runs",
           "not_reported_runs",
+          "reported_rows",
+          "total_rows",
+          "coverage_percent",
           "input_tokens",
           "output_tokens",
           "cached_input_tokens",
@@ -16983,6 +17071,17 @@
             ],
             "title": "Cached Input Tokens"
           },
+          "coverage_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Percent"
+          },
           "estimated_cost_usd": {
             "anyOf": [
               {
@@ -17056,8 +17155,16 @@
             ],
             "title": "Reported Cost Usd"
           },
+          "reported_rows": {
+            "title": "Reported Rows",
+            "type": "integer"
+          },
           "runs": {
             "title": "Runs",
+            "type": "integer"
+          },
+          "total_rows": {
+            "title": "Total Rows",
             "type": "integer"
           },
           "unpriced_runs": {
@@ -17069,6 +17176,9 @@
           "runs",
           "measured_runs",
           "not_reported_runs",
+          "reported_rows",
+          "total_rows",
+          "coverage_percent",
           "input_tokens",
           "output_tokens",
           "cached_input_tokens",
