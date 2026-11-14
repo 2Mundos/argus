@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-11
+updated: 2026-11-14
 ---
 
 # Cost view
@@ -41,6 +41,16 @@ task that produced the run) and a cross-account **window** with a daily series.
 - Every group states `runs`, `measured_runs` and `not_reported_runs`;
   `runs = measured_runs + not_reported_runs`. An account with `runs = 0` had no
   activity in the window, which is different from a measured zero.
+- **Coverage.** Every group states how much of its activity carries a reported
+  value: `reported_rows` (its measured runs, the rows with `measurement =
+  'measured'`), `total_rows` (all its runs, measured plus not reported) and
+  `coverage_percent = 100 × reported_rows / total_rows`, rounded to one decimal.
+  `coverage_percent` is `null` when `total_rows = 0`: no activity is unknown, not
+  0%. A group with runs but no measured one has `coverage_percent = 0.0` and
+  `null` tokens. One coverage covers the token and the cost totals as a group:
+  the same rows feed both, so `reported_rows` is not split per figure. Below
+  100% a total is a **lower bound**: runs without a reported value add nothing
+  to it, and the true figure may be higher.
 - Every group also states attempt coverage ([account usage](account-usage.spec.md)
   3.10): `attempts`, `measured_attempts` and `not_reported_attempts`, over the
   distinct task attempts among its rows (an attempt is measured when any of its
@@ -87,7 +97,8 @@ manager scope. The window is `(now − window, now]`. Response:
   unpriced_models}`; `source` is the file path in force or
   `argus_api/accounts/pricing.json` for the shipped one;
 - `totals`, `unattributed`, and `by_account`, `by_project`, `daily`: all carry
-  the figures of 3.1 (`runs`, `measured_runs`, `not_reported_runs`, the attempt
+  the figures of 3.1 (`runs`, `measured_runs`, `not_reported_runs`, the
+  coverage `reported_rows`, `total_rows`, `coverage_percent`, the attempt
   counts, the three token fields, `estimated_cost_usd`, `reported_cost_usd`,
   `unpriced_runs`);
 - `unattributed` is the attempt placeholders with no account (account usage
@@ -103,7 +114,7 @@ manager scope. The window is `(now − window, now]`. Response:
   first five entries with `measured_runs > 0`;
 - `daily` has one point per calendar day of `tz` overlapping the window
   (first and last are partial), empty days included with `runs = 0` and
-  `null` tokens.
+  `null` tokens and `null` `coverage_percent`.
 
 ## 3.4 Dashboard
 
@@ -113,6 +124,12 @@ manager scope. The window is `(now − window, now]`. Response:
   measured of attempts; per-account and
   per-project tables with a bar and the top five; a daily bar chart; each
   account's quota status through the Accounts screen's component.
+- **Coverage.** Beside every token and cost total (tiles, each table row, each
+  day's tooltip) the dashboard shows "coverage 41% (12 of 29 runs)" from
+  `coverage_percent`, `reported_rows` and `total_rows`. When coverage is below
+  100% the total is labelled a lower bound ("lower bound" in the tile labels and
+  the row). A group with `coverage_percent = null` shows no coverage, and one
+  at 0% shows "coverage 0%" with "—" figures, never a zero total.
 - A group with `null` tokens renders "—", never 0. An unpriced group renders
   "unpriced". The footer shows the pricing source, currency, `as_of`,
   version and the unpriced models.
@@ -141,6 +158,7 @@ manager scope. The window is `(now − window, now]`. Response:
   `pricing_file` / `ARGUS_PRICING_FILE`.
 - Account usage 2 ("No price table") is narrowed: *that* view still shows only
   reported cost; estimates live here, labelled.
+<<<<<<< HEAD
 - Dashboard `views/Cost.tsx`, pure helpers in `cost.ts`.
 
 ## Verification boundary
@@ -153,3 +171,11 @@ manager scope. The window is `(now − window, now]`. Response:
   grouping, windows and the daily series run against an in-memory database; the Cost tab runs under jsdom.
 - Not verified: the price table against current provider prices; totals against a
   real provider bill; the dashboard in a real browser; any production node.
+=======
+- Dashboard `views/Cost.tsx`, pure helpers in `cost.ts` (`coverageLabel`,
+  `isLowerBound`).
+- Coverage is computed in `accounts/figures.py` `Acc.figures()` from the counts
+  it already keeps; the fields live on `CostFigures`, so `GET
+  /api/tasks/{id}/cost` carries them too ([task cost](task-cost.spec.md) 3.2).
+  The orchestrator group counts its measured turns as reported rows.
+>>>>>>> origin/main

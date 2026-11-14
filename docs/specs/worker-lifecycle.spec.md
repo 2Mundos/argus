@@ -348,6 +348,10 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   agent that leaves holding a task, and an instance of a pool that is not
   draining ending for any other reason (crash, vanished container, a lost
   sibling, no registration).
+- A one-task instance agent (the NanoClaw runtime runs one agent per instance)
+  whose attempt ends cleanly leaves with `POST /agents/me/leave` (`gone`, reason
+  `left`), so it is never reported `lost`; a crashed session stays silent and
+  still expires as `lost`.
 - Defaults: heartbeat every 30 s, `lost` after 90 s of silence, reaper pass
   every 10 s.
 

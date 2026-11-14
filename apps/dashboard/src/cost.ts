@@ -33,6 +33,20 @@ export function costLabel(f: CostFigures, currency: string): string {
   return money(f.estimated_cost_usd, currency) + (f.unpriced_runs > 0 ? " (partial)" : "");
 }
 
+/** Coverage of a group's totals: "coverage 41% (12 of 29 runs)"; null when it had no runs
+ * (unknown, not 0%). One coverage covers the token and cost totals (cost view 3.1). */
+export function coverageLabel(
+  f: Pick<CostFigures, "reported_rows" | "total_rows" | "coverage_percent">,
+): string | null {
+  if (f.coverage_percent == null) return null;
+  return `coverage ${Number(f.coverage_percent.toFixed(1))}% (${f.reported_rows} of ${f.total_rows} runs)`;
+}
+
+/** True when some of the group's runs carry no reported value, so its totals are a lower bound. */
+export function isLowerBound(f: Pick<CostFigures, "coverage_percent">): boolean {
+  return f.coverage_percent != null && f.coverage_percent < 100;
+}
+
 /** Runs the engine did not measure, as a badge text; null when there are none. */
 export function notReportedLabel(f: Pick<CostFigures, "not_reported_runs">): string | null {
   return f.not_reported_runs > 0 ? `${f.not_reported_runs} not reported` : null;

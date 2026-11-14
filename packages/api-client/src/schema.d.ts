@@ -3785,6 +3785,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -3814,8 +3816,12 @@ export interface components {
             quota_status: components["schemas"]["QuotaStatus"];
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -4601,6 +4607,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -4626,8 +4634,12 @@ export interface components {
             provisional?: components["schemas"]["ProvisionalCost"] | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -5358,6 +5370,24 @@ export interface components {
             /** Tool Use Id */
             tool_use_id: string;
         };
+        /**
+         * CommandBlocks
+         * @description Command guard blocks in the window: observed events, not enforcement state.
+         */
+        CommandBlocks: {
+            /** By Project */
+            by_project: components["schemas"]["ProjectBlocks"][];
+            /** By Task */
+            by_task: components["schemas"]["TaskBlocks"][];
+            /** Source */
+            source: string;
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Window Hours */
+            window_hours: number;
+        };
         /** Commit */
         Commit: {
             /** Sha */
@@ -5571,6 +5601,9 @@ export interface components {
          *     field is null when no measured run carried it, never 0 (cost view 3.1).
          *     Attempt coverage counts distinct (task, attempt) pairs among the group's rows
          *     (account usage 3.10); rows with no attempt count only in `runs`.
+         *     Coverage (cost view 3.1): `reported_rows` = `measured_runs` (the rows that carry a
+         *     reported value), `total_rows` = `runs`, `coverage_percent` = their share to one
+         *     decimal, null when `total_rows` is 0. One coverage covers the token and cost totals.
          */
         CostFigures: {
             /**
@@ -5580,6 +5613,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -5602,8 +5637,12 @@ export interface components {
             output_tokens: number | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -5767,6 +5806,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -5789,6 +5830,8 @@ export interface components {
             output_tokens: number | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
             /**
@@ -5796,6 +5839,8 @@ export interface components {
              * Format: date-time
              */
             start: string;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -6061,6 +6106,20 @@ export interface components {
             truncated?: {
                 [key: string]: number;
             };
+        };
+        /**
+         * DecisionWait
+         * @description Seconds from `created_at` to `decided_at` of answered decisions of one kind.
+         */
+        DecisionWait: {
+            /** Mean */
+            mean: number | null;
+            /** Median */
+            median: number | null;
+            /** N */
+            n: number;
+            /** Open Count */
+            open_count: number;
         };
         /** DecisionsOverview */
         DecisionsOverview: {
@@ -7049,6 +7108,7 @@ export interface components {
              * Format: date-time
              */
             as_of: string;
+            command_blocks: components["schemas"]["CommandBlocks"];
             dead_session_recovery: components["schemas"]["DeadSessionRecovery"];
             failures: components["schemas"]["Failures"];
             outcomes: components["schemas"]["Outcomes"];
@@ -9459,6 +9519,15 @@ export interface components {
              */
             updated_at: string;
         };
+        /** ProjectBlocks */
+        ProjectBlocks: {
+            /** Count */
+            count: number;
+            /** Project */
+            project: string | null;
+            /** Unknown */
+            unknown: boolean;
+        };
         /**
          * ProjectCheckout
          * @description A checkout in progress: a read-only task whose workspace the worker channel
@@ -9502,6 +9571,8 @@ export interface components {
             attempts?: number;
             /** Cached Input Tokens */
             cached_input_tokens: number | null;
+            /** Coverage Percent */
+            coverage_percent: number | null;
             /** Estimated Cost Usd */
             estimated_cost_usd: number | null;
             /** Input Tokens */
@@ -9526,8 +9597,12 @@ export interface components {
             project: string | null;
             /** Reported Cost Usd */
             reported_cost_usd: number | null;
+            /** Reported Rows */
+            reported_rows: number;
             /** Runs */
             runs: number;
+            /** Total Rows */
+            total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
         };
@@ -11122,6 +11197,15 @@ export interface components {
              */
             steer_unknown?: number;
         };
+        /** TaskBlocks */
+        TaskBlocks: {
+            /** Count */
+            count: number;
+            /** Project */
+            project: string | null;
+            /** Task Id */
+            task_id: string;
+        };
         /**
          * TaskChanges
          * @description A partial patch: a field left out is preserved, `null` clears (3.2).
@@ -12631,6 +12715,14 @@ export interface components {
             completions: number;
             /** Cost Per Succeeded */
             cost_per_succeeded: number | null;
+            /** Decision Waits */
+            decision_waits: {
+                [key: string]: components["schemas"]["DecisionWait"];
+            };
+            /** Decisions Opened */
+            decisions_opened: number;
+            /** Decisions Per Succeeded Task */
+            decisions_per_succeeded_task: number | null;
             /** Finished Tasks */
             finished_tasks: number;
             /**
@@ -12650,10 +12742,14 @@ export interface components {
             not_reported_attempts?: number;
             /** Source */
             source: string;
+            /** Succeeded Tasks */
+            succeeded_tasks: number;
             /** Tokens Per Failed */
             tokens_per_failed: number | null;
             /** Tokens Per Succeeded */
             tokens_per_succeeded: number | null;
+            /** Truncated */
+            truncated: boolean;
             /** Usage Tasks */
             usage_tasks: number;
             /** Window Hours */

@@ -1,9 +1,10 @@
 """Fleet health for the dashboard Fleet view (docs/specs/fleet-health.spec.md).
 
 Read-only, one snapshot. Every query is bounded by the window through an index
-(`tasks_finished`, `events_kind_at`, `events_subject`, `tasks_state`); none scans
-the tasks or events history. No metric is ever 0 for "no data": `None` means
-unknown, and a statistic with fewer than `MIN_SAMPLES` samples is `None`.
+(`tasks_finished`, `events_kind_at`, `events_subject`, `tasks_state`,
+`decisions_created`); none scans the tasks, events or decisions history. No metric
+is ever 0 for "no data": `None` means unknown, and a statistic with fewer than
+`MIN_SAMPLES` samples is `None`.
 """
 
 import json
@@ -11,6 +12,8 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from argus_core.decisions import DecisionKind
+from argus_core.events import TASK_COMMAND_BLOCKED
 from argus_core.fleet import InstanceState
 from argus_core.tasks import TERMINAL, RetryClass, TaskState, retry_class
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,6 +25,14 @@ MIN_SAMPLES = 5
 DEFAULT_WINDOW_HOURS = 24
 MAX_WINDOW_HOURS = 720  # 30 days
 MAX_ROWS = 5000  # newest rows per bounded fetch; `truncated` says when it bit
+# Decision kinds the waits report; knowledge proposals are not waited on.
+WAIT_KINDS = (
+    DecisionKind.QUESTION,
+    DecisionKind.APPROVAL,
+    DecisionKind.REVIEW,
+    DecisionKind.POLICY,
+)
+MAX_BLOCK_TASKS = 100  # tasks listed in `command_blocks`; `truncated` says when it bit
 EXAMPLES = 5
 EXCERPT_CHARS = 200
 # P5 draft target: median session_lost → next claim under 5 minutes. Samples at or
@@ -57,6 +68,18 @@ FINISHED_SQL = (
     " FROM tasks t WHERE t.state IN ('succeeded', 'failed')"
     " AND t.updated_at >= ? AND t.updated_at <= ?"
     " ORDER BY t.updated_at DESC LIMIT ?"
+)
+# Decisions opened in the window, newest first (the wait cohort), and the two
+# window counts that must not be capped by that fetch.
+DECISIONS_SQL = (
+    "SELECT kind, state, created_at, decided_at FROM decisions"
+    " WHERE created_at >= ? AND created_at <= ?"
+    " ORDER BY created_at DESC LIMIT ?"
+)
+YIELD_COUNTS_SQL = (
+    "SELECT (SELECT count(*) FROM decisions WHERE created_at >= ? AND created_at <= ?),"
+    " (SELECT count(*) FROM tasks WHERE state = 'succeeded'"
+    "  AND updated_at >= ? AND updated_at <= ?)"
 )
 FAILURES_SQL = (
     "SELECT e.id, e.at, e.subject_id, e.data, t.title,"
@@ -102,6 +125,21 @@ USAGE_SQL = (
     " count(CASE WHEN u.measurement <> 'measured' THEN 1 END) AS unmeasured"
     " FROM account_usage u"
     " WHERE u.task_id IN (SELECT value FROM json_each(?)) GROUP BY u.task_id"
+)
+# Command guard blocks (docs/specs/command-guard.spec.md 3) in the window, by task and
+# by project. Counts come from the events, never from `task_command_blocks`. A task
+# row that is gone or has no project groups under NULL, which is the unknown bucket.
+BLOCKS_BY_TASK_SQL = (
+    "SELECT e.subject_id, t.project, count(*) AS n FROM events e"
+    " LEFT JOIN tasks t ON t.id = e.subject_id"
+    " WHERE e.kind = ? AND e.subject_type = 'task' AND e.at >= ? AND e.at <= ?"
+    " GROUP BY e.subject_id ORDER BY n DESC, e.subject_id LIMIT ?"
+)
+BLOCKS_BY_PROJECT_SQL = (
+    "SELECT t.project, count(*) AS n FROM events e"
+    " LEFT JOIN tasks t ON t.id = e.subject_id"
+    " WHERE e.kind = ? AND e.subject_type = 'task' AND e.at >= ? AND e.at <= ?"
+    " GROUP BY t.project"
 )
 HEARTBEAT_SQL = (
     "SELECT i.pool, max(a.last_heartbeat_at) FROM agents a"
@@ -194,6 +232,15 @@ class Failures(Provenance):
     truncated: bool
 
 
+class DecisionWait(BaseModel):
+    """Seconds from `created_at` to `decided_at` of answered decisions of one kind."""
+
+    n: int  # answered decisions opened in the window
+    open_count: int  # still open; never in the statistics
+    mean: float | None
+    median: float | None
+
+
 class Yield(Provenance):
     """What the fleet got for what it spent (worker efficiency draft, P8)."""
 
@@ -213,6 +260,11 @@ class Yield(Provenance):
     tokens_per_succeeded: float | None
     tokens_per_failed: float | None
     cost_per_succeeded: float | None
+    decisions_opened: int  # decisions created in the window, any state
+    succeeded_tasks: int  # counted, not taken from the truncated finished list
+    decisions_per_succeeded_task: float | None
+    decision_waits: dict[DecisionKind, DecisionWait]
+    truncated: bool  # the decisions fetch hit MAX_ROWS (waits cover the newest)
 
 
 class RecoveryExample(BaseModel):
@@ -258,6 +310,27 @@ class DeadSessionRecovery(Provenance):
     examples: list[RecoveryExample]
 
 
+class ProjectBlocks(BaseModel):
+    project: str | None  # None only for the unknown bucket
+    unknown: bool  # tasks with no project, or whose task row is missing
+    count: int
+
+
+class TaskBlocks(BaseModel):
+    task_id: str
+    project: str | None  # None: no project or no task row
+    count: int
+
+
+class CommandBlocks(Provenance):
+    """Command guard blocks in the window: observed events, not enforcement state."""
+
+    total: int  # == sum of `by_project` counts
+    by_project: list[ProjectBlocks]  # exact; count desc, unknown bucket included
+    by_task: list[TaskBlocks]  # count desc, at most MAX_BLOCK_TASKS
+    truncated: bool  # more tasks had blocks than `by_task` lists
+
+
 class TasksByState(BaseModel):
     source: str
     counts: Counts
@@ -276,6 +349,7 @@ class FleetHealth(BaseModel):
     failures: Failures
     yield_: Yield = Field(alias="yield")
     dead_session_recovery: DeadSessionRecovery
+    command_blocks: CommandBlocks
     truncated: bool  # the finished-task fetch hit MAX_ROWS (samples are the newest)
 
 
@@ -361,6 +435,15 @@ async def fleet_health(
             failures = await rows(FAILURES_SQL, since, until, MAX_ROWS)
             session_lost = await rows(SESSION_LOST_SQL, since, until, MAX_ROWS)
             attempt_counts = dict(await rows(ATTEMPTS_SQL, since, until))
+            decisions = await rows(DECISIONS_SQL, since, until, MAX_ROWS)
+            ((decisions_opened, succeeded_tasks),) = await rows(
+                YIELD_COUNTS_SQL, since, until, since, until
+            )
+            block_args = (TASK_COMMAND_BLOCKED, since, until)
+            blocks_by_task = await rows(
+                BLOCKS_BY_TASK_SQL, *block_args, MAX_BLOCK_TASKS + 1
+            )
+            blocks_by_project = await rows(BLOCKS_BY_PROJECT_SQL, *block_args)
             usage = {
                 r[0]: (r[1], r[2], r[3], r[4], r[5])
                 for r in await rows(USAGE_SQL, json.dumps([r["id"] for r in finished]))
@@ -416,9 +499,41 @@ async def fleet_health(
             failure_rate=_rate(total - succeeded, total),
         ),
         failures=_group_failures(failures, window),
-        yield_=_yield(window, attempt_counts, finished, usage),
+        yield_=_yield(
+            window,
+            attempt_counts,
+            finished,
+            usage,
+            decisions,
+            decisions_opened,
+            succeeded_tasks,
+        ),
         dead_session_recovery=_dead_session_recovery(session_lost, window, now),
+        command_blocks=_command_blocks(window, blocks_by_task, blocks_by_project),
         truncated=total >= MAX_ROWS,
+    )
+
+
+def _command_blocks(
+    window: int, by_task: list[Any], by_project: list[Any]
+) -> CommandBlocks:
+    projects = sorted(
+        (
+            ProjectBlocks(project=r[0], unknown=r[0] is None, count=r[1])
+            for r in by_project
+        ),
+        key=lambda p: (-p.count, p.unknown, p.project or ""),
+    )
+    return CommandBlocks(
+        window_hours=window,
+        source=f"events {TASK_COMMAND_BLOCKED}; tasks.project",
+        total=sum(p.count for p in projects),
+        by_project=projects,
+        by_task=[
+            TaskBlocks(task_id=r[0], project=r[1], count=r[2])
+            for r in by_task[:MAX_BLOCK_TASKS]
+        ],
+        truncated=len(by_task) > MAX_BLOCK_TASKS,
     )
 
 
@@ -439,6 +554,9 @@ def _yield(
     counts: dict[str, int],
     finished: list[Any],
     usage: dict[str, tuple[int | None, float | None, int, int, int]],
+    decisions: list[Any],
+    decisions_opened: int,
+    succeeded_tasks: int,
 ) -> Yield:
     attempts, completions = counts.get("task.claim", 0), counts.get("task.complete", 0)
     # Means only over fully measured tasks (never count an unreported attempt as 0).
@@ -458,6 +576,21 @@ def _yield(
     ]
     measured_attempts = sum(u[3] for u in usage.values())
     attempt_rows = sum(u[2] for u in usage.values())
+    waits = {}
+    for kind in WAIT_KINDS:
+        mine = [r for r in decisions if r["kind"] == kind]
+        secs = [
+            _seconds(r["created_at"], r["decided_at"])
+            for r in mine
+            if r["state"] == "answered" and r["decided_at"]
+        ]
+        stats = _durations(secs, window, "")
+        waits[kind] = DecisionWait(
+            n=stats.n,
+            open_count=sum(1 for r in mine if r["state"] == "open"),
+            mean=stats.mean,
+            median=stats.p50,
+        )
     return Yield(
         window_hours=window,
         source="events task.claim, task.complete; tasks; account_usage",
@@ -475,6 +608,15 @@ def _yield(
         tokens_per_succeeded=_mean([float(t) for t, _, _, _, _ in ok if t is not None]),
         tokens_per_failed=_mean([float(t) for t, _, _, _, _ in bad if t is not None]),
         cost_per_succeeded=_mean([c for _, c, _, _, _ in ok if c is not None]),
+        decisions_opened=decisions_opened,
+        succeeded_tasks=succeeded_tasks,
+        decisions_per_succeeded_task=(
+            decisions_opened / succeeded_tasks
+            if succeeded_tasks >= MIN_SAMPLES
+            else None
+        ),
+        decision_waits=waits,
+        truncated=len(decisions) >= MAX_ROWS,
     )
 
 

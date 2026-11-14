@@ -822,6 +822,7 @@ describe("Argus channel", () => {
       { ...fake, fetchImpl },
       {
         fetch: fetchImpl,
+        oneTask: true,
         runtime: {
           host: async () => ({
             host_id: "h",
@@ -864,6 +865,9 @@ describe("Argus channel", () => {
     expect(fail.body.reason).toBe("session_lost");
     expect(fail.body.error).toMatch(/ctr-alive/);
     expect(fail.body.error).toMatch(/137|killed/);
+    // A crashed one-task session stays silent: the server expires it as lost.
+    await heartbeats(fake);
+    expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(false);
   });
 
   it("stops claiming once Argus reports the agent as draining", async () => {
@@ -924,6 +928,23 @@ describe("Argus channel", () => {
     await until(() => onDrained.mock.calls.length === 1);
     expect(fake.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(true);
     expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(true);
+  });
+
+  it("a one-task agent leaves once its task ends cleanly", async () => {
+    const fake = fakeArgus({ tasks: [task()] });
+    const onDrained = vi.fn();
+    const h = harness(fake, { onDrained, oneTask: true });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", h.thread(), { kind: "chat", content: "COMPLETE: done" });
+    await until(() => onDrained.mock.calls.length === 1);
+    expect(fake.calls.filter((c) => c.path === "/agents/me/leave")).toHaveLength(1);
+    expect(h.adapter.isConnected()).toBe(false);
+    const claims = fake.calls.filter((c) => c.path === "/tasks/claim").length;
+    await heartbeats(fake);
+    expect(fake.calls.filter((c) => c.path === "/tasks/claim").length).toBe(claims);
+    expect(onDrained).toHaveBeenCalledTimes(1);
   });
 
   it("a released claim stops the run: nothing is reported and it claims again", async () => {

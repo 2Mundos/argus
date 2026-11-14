@@ -546,6 +546,14 @@ and whether the model's or the work's own output can forge it.
   agent). The host-side interface (`InjectionEvidenceSource`) and the bounded re-arm exist and
   are tested, but production wires no source, so that 404 stays fail-closed
   (`injection_unverifiable`). The spec moves to `implemented` when such a source is wired.
+- Read-surface check (2026-11-14, read-only GETs against the deployed gateway and the public
+  OneCLI API reference): no source is wired, because no supported read exists here. The
+  documented `GET /agents/{agentId}/effective-credentials` and `GET /org/policy/rules` (and
+  `GET /org/policy/last-publish`) answer `404 Unrecognized request URL` on the deployed
+  gateway, even for a real agent id. The workspace `GET /policy/effective-app-permissions`
+  is not served either. The organization rule and publish reads are not per-agent and need
+  an org key. The public reference lists no request-log or audit read. The task did not
+  scrape the database or try guessed endpoints.
 
 ## Questions
 

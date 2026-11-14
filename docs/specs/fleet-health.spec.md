@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-10-31
+updated: 2026-11-14
 ---
 
 # Fleet health
@@ -18,7 +18,8 @@ orchestrator and admin scopes (never workers). `window` defaults to 24, must be
 It shows pools (status, `live`/`desired`, `running`, last heartbeat), a count per
 `TaskState`, queue and run time (p50, p90, mean), success and failure rate,
 failures grouped by reason with up to 5 recent examples each, yield, and
-dead-session recovery coverage and latency.
+dead-session recovery coverage and latency, and command guard blocks per project
+and per task.
 
 # 2. Non-Goals
 
@@ -76,6 +77,20 @@ dead-session recovery coverage and latency.
   mean needs `MIN_SAMPLES` measured tasks (else `null`). Migration
   `0046` indexes `account_usage.task_id`. The MCP tool `get_fleet_yield(window_hours)`
   (managers) returns this `yield` block.
+- **Decision latency.** `yield` also reports how many decisions the fleet raised
+  and how long they waited. Cohort: decisions with `created_at` in the window,
+  any kind and state (`decisions_opened`, a count, not capped by the fetch).
+  `succeeded_tasks` counts tasks `succeeded` with `updated_at` in the window (a
+  count, not the truncated finished list) and `decisions_per_succeeded_task` is
+  `decisions_opened / succeeded_tasks`, `null` under `MIN_SAMPLES` succeeded
+  tasks. `decision_waits` always has the four kinds `question`, `approval`,
+  `review` and `policy`, each with `n` (answered decisions of that kind with a
+  `decided_at`), `open_count` (still `open`; never in the statistics), and `mean`
+  and `median` in seconds from `created_at` to `decided_at`, both `null` when `n`
+  is under `MIN_SAMPLES` (never 0). Cancelled decisions are in neither `n` nor
+  `open_count`. The fetch is the newest `MAX_ROWS` by `created_at`; `truncated`
+  is true when it was full. Migration `0083` indexes `decisions.created_at`.
+  Read-only reporting: it changes no routing or answering.
 - **Dead-session recovery (P5 measure).** `dead_session_recovery` answers how long
   after a vanished session is *observed* until the task is claimed again. Cohort:
   `task.fail` events in the window with `data.reason = session_lost` (failure class
@@ -199,6 +214,18 @@ dead-session recovery coverage and latency.
   Coverage: a synthetic fixture on one machine; no production numbers, no timing
   assertion, and production event volume per task and disk are unmeasured. The
   query is not constant time.
+- **Command guard blocks.** `command_blocks` counts `task.command_blocked` events
+  ([command guard](command-guard.spec.md) 3) with `at` in the window (same `since`
+  and `until` as every other block), from the events table, never from
+  `task_command_blocks`. Two `GROUP BY` queries in the snapshot, both through
+  `events_kind_at`, joined to `tasks` by primary key: by task and by project. Counts
+  are exact integers; `total` equals the sum of `by_project`. Events whose task has
+  no `project` or whose task row is missing are one explicit entry in `by_project`
+  (`unknown: true`, `project: null`), shown as "unknown" in the UI, never dropped.
+  `by_task` (task id, project, count) is ordered by count, then id, and capped at 100
+  tasks with `truncated`; the per-project list is not capped by it. No command text
+  is returned. An empty window has `total` 0 and empty lists (a count of observed
+  events, not a missing value). Read-only: it changes nothing the guard blocks.
 - **Bounded reads.** No full scan of `tasks` or `events`: migration
   `0021_fleet_health_indexes.sql` adds `tasks_finished` and `events_kind_at`; per-task
   claim lookups use `events_subject`. Each fetch keeps at most 5000 newest rows and

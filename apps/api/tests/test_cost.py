@@ -253,6 +253,43 @@ async def test_not_reported_runs_are_counted_not_summed(db: Database) -> None:
     assert day.not_reported_runs == 3
 
 
+async def test_coverage_per_layer(db: Database) -> None:
+    a = await add_account(db, "cov-a")
+    b = await add_account(db, "cov-b")
+    await add_account(db, "cov-idle")
+    await add_task(db, "t1", "alpha")
+    await add_task(db, "t2", "beta")
+    day1 = NOW - timedelta(days=2)
+    day2 = NOW - timedelta(hours=1)
+    await usage_row(db, a, day1, i=10, o=5, task="t1")
+    await usage_row(db, a, day1, measurement="not_reported", task="t1")
+    await usage_row(db, a, day2, i=1, o=1, task="t1")
+    await usage_row(db, b, day2, measurement="not_reported", task="t2")
+    await usage_row(db, b, day2, measurement="not_reported", task="t2")
+
+    r = await run(db)
+
+    def cov(f) -> tuple:
+        return (f.reported_rows, f.total_rows, f.coverage_percent)
+
+    assert cov(r.totals) == (2, 5, 40.0)
+    by = {x.name: x for x in r.by_account}
+    assert cov(by["cov-a"]) == (2, 3, 66.7)
+    assert cov(by["cov-idle"]) == (0, 0, None)  # no activity: unknown, not 0
+    # Only not_reported rows: coverage 0.0, figures null, never 0.
+    assert cov(by["cov-b"]) == (0, 2, 0.0)
+    assert by["cov-b"].input_tokens is None
+    assert by["cov-b"].estimated_cost_usd is None
+    projects = {x.project: x for x in r.by_project}
+    assert cov(projects["alpha"]) == (2, 3, 66.7)
+    assert cov(projects["beta"]) == (0, 2, 0.0)
+    assert projects["beta"].output_tokens is None
+    assert cov(r.unattributed) == (0, 0, None)
+    days = [cov(d) for d in r.daily if d.total_rows]
+    assert days == [(1, 2, 50.0), (1, 3, 33.3)]
+    assert cov(next(d for d in r.daily if not d.total_rows)) == (0, 0, None)
+
+
 async def test_unpriced_models_are_surfaced_never_zero(db: Database) -> None:
     a = await add_account(db, "a")
     t = NOW - timedelta(hours=1)
