@@ -763,3 +763,13 @@ and adds tests for its part of the following:
 - `stale_version`;
 - redaction;
 - REST/MCP parity.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_mcp.py apps/api/tests/test_mcp_fleet_journey.py`
+  - `make bench` runs the MCP inbox journey benchmark.
+  - `make tool-tokens` prints the tool text token count per role.
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: the MCP tools, scopes and REST/MCP parity through a test client against an in-memory database. The benchmark is synthetic (TestClient, no network) and measures server work only.
+- Not verified: MCP tools driven by a real orchestrator or worker model; calls over the network with real auth; any deployed or production node.

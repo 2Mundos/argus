@@ -230,3 +230,12 @@ would read as "nothing is known".
   decisions call into it for proposals and saved answers.
 - The dashboard renders Markdown with `react-markdown` + `remark-gfm`, never raw
   HTML, for pages, proposals, task specs, and results.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_knowledge.py apps/api/tests/test_project_repository.py`
+  - `pnpm --dir apps/dashboard test` (includes `Markdown.test.tsx`)
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: the knowledge service and routes against an in-memory database and a test client; the Markdown rendering in a jsdom test.
+- Not verified: the orchestrator's use of proposals and saved answers with a real model; the dashboard pages in a real browser; any deployed or production node.

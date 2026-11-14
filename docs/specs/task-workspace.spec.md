@@ -206,3 +206,9 @@ and its status.
 - `packages/core/src/argus_core/tasks.py`: the six reasons join
   `ENV_BLOCK_REASONS`. The dashboard inbox has a label for each.
 - [Failure classes](failure-classes.spec.md) 3.3 lists the workspace check.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_project_repository.py`; `make test` also runs `integrations/nanoclaw/argus-workspace.test.ts` (real git, no network) and `argus-task-signals.test.ts`.
+- Verified: unit and fixture level; the workspace preparation runs against real git on a local temporary repository.
+- Not verified: remote forges and real clones over the network, a full worker image on a disposable node, real harness CLIs, and production.

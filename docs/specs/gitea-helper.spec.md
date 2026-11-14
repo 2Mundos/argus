@@ -205,3 +205,12 @@ matches the head, or the matching comment has no count, `finding_count` is `null
      `issue-list --limit 1`, and `review-findings --pr <open PR>`. Check the exit codes and
      that there is no credential in stdout or stderr.
   3. Recreate the remaining worker instances. Roll back by redeploying the previous image.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider integrations/nanoclaw/tests/test_gitea_api_install.py`
+  - `pnpm test` runs `integrations/nanoclaw/gitea-api.test.mjs` among others.
+  - `make test` runs the whole Python and Node suite.
+- Verified: fixture level only: `gitea-api.test.mjs` uses a mocked fetch or a local proxy with recorded fixtures, and the installer pytest runs the real `install.sh` against a disposable NanoClaw stub with fake `docker`/`podman`.
+- Not verified: the helper against a real Gitea server and real credentials; the rollout in the spec (rebuilt agent image, recreated workers) on a real node; production.

@@ -229,3 +229,9 @@ blocked-task edit ([task edit](task-edit.spec.md) 3.4).
    fallback on exhausted, disabled and offline, pin kept on any usable account,
    `awaiting_quota` only when all allowed providers are spent, the event on
    every fallback, executor pin unchanged.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_models.py apps/api/tests/test_task_account_pins.py apps/api/tests/test_task_harness_fallback.py`.
+- Verified: unit and fake-API level; fallback and pin logic run against a test database with fake account state.
+- Not verified: real harness CLIs, real inference or quota notices, and any deployed node or production.

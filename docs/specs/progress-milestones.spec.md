@@ -164,3 +164,13 @@ Model executions and selections publish `task.model_execution` and
 One PR: this spec and its index link; migration `0019`, API, MCP and core model;
 `milestones.mjs` and its wiring in `argus-delegate`; dashboard card and activity; tests
 for each; regenerated `openapi.json` and `schema.d.ts`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_kinds_progress.py`
+  - `pnpm --dir apps/dashboard test` (includes `milestones.test.tsx`)
+  - `node --test integrations/nanoclaw/engines/milestones.test.mjs`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: the milestone API and model against an in-memory database, `milestones.mjs` through `node --test`, and the dashboard card and activity in jsdom tests.
+- Not verified: milestones reported by a real worker through `argus-delegate` on a real harness CLI; the NanoClaw relay (`argus-milestone-relay.ts`), whose vitest suite runs only through `integrations/nanoclaw/provision.sh check` against a NanoClaw checkout; the dashboard in a real browser; production.

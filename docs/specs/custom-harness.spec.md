@@ -169,3 +169,18 @@ account's configured `base_url` with the leased API key held only in host memory
   passes `custom` provider into `classifyFailure`.
 - [engines.spec.md](engines.spec.md) and [custom-accounts.spec.md](custom-accounts.spec.md)
   NanoClaw harness sections updated to match.
+
+## Verification boundary
+
+- Commands:
+  - `node --test integrations/nanoclaw/engines/anthropic-openai-bridge.test.mjs integrations/nanoclaw/engines/argus-delegate.test.mjs`
+  - `make test-docker` (real-Docker bridge reachability; needs a Docker daemon)
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit level for the message translation and the delegate, and one
+  real-Docker integration test (`apps/api/tests/test_docker_integration.py`) that an
+  agent-network container reaches the host bridge with the key and is refused without
+  it. `integrations/nanoclaw/argus-custom-bridge.test.ts` and `argus-custom-harness.test.ts` run only
+  in a provisioned NanoClaw checkout.
+- Not verified: Claude Code through the bridge against the real OpenRouter or Google AI
+  Studio API, and the translation of real tool-use traffic; the inner-dockerd
+  topology; any production node.

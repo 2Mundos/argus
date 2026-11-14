@@ -1327,3 +1327,9 @@ Build order, each step shippable and testable on its own:
 
 `argus_core` holds the state enums, transition table, and Pydantic models shared
 by the API, the MCP layer, and any Python worker SDK.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider packages/core/tests/test_transitions.py apps/api/tests/test_task_release.py apps/api/tests/test_reaper_resilience.py apps/api/tests/test_stderr_tail_read_scope.py`; `make test` runs the rest, including `integrations/nanoclaw/argus-stderr-tail.test.ts`.
+- Verified: unit and fake-API level for the state machine, release, reaper and stderr-tail read rule; the stderr-tail channel is tested with a fake Docker runner and a scripted Argus.
+- Not verified: the full lifecycle against a real Docker daemon (`make test-docker`) and live NanoClaw sessions, real harness CLIs, and production. Stderr-tail capture from a real container is not yet verified live.

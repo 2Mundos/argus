@@ -72,3 +72,11 @@ aggregate, stays fully readable, and can be brought back. See
 - `tasks.views.list_tasks` filters on `archived_at`; `overview` and `ops`
   filter their task counts the same way.
 - New aggregates over `tasks` must exclude `archived_at IS NOT NULL`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_archive.py`
+  - `pnpm --filter @argus/dashboard test` runs the dashboard suite, including `apps/dashboard/src/archive.test.ts` and `apps/dashboard/src/views/ArchiveTasks.test.tsx`.
+- Verified: unit and fake-API level; the REST routes run through a test client against an in-memory database, and the dashboard under vitest with a mocked API.
+- Not verified: the archive and restore flow in a real browser, behaviour on a large production database, and any production node.

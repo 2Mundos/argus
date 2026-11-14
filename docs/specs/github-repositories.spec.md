@@ -206,3 +206,12 @@ holds.
   `argus-github-api --help`, `repo-get`, `status --pr N` on one worker, then recreate the
   rest. Register the `github` account and point the `argus` project's repository at
   `https://github.com/2Mundos/argus` in the pool config.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider integrations/nanoclaw/tests/test_gitea_api_install.py apps/api/tests/test_project_repository.py`
+  - `pnpm test` runs `integrations/nanoclaw/github-api.test.mjs` among others.
+  - `make test` runs the whole Python and Node suite.
+- Verified: fixture and fake-API level only: `github-api.test.mjs` with a mocked fetch, the installer pytest for the helper binaries, and API tests for repository validation and leasing.
+- Not verified: calls to the real GitHub API with a real token; the worker rollout in the spec (recreated instances, registered `github` account) on a real node; the dashboard form in a real browser; production.

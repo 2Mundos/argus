@@ -535,3 +535,18 @@ usage row of the same run, `null` when none ([spec](model-observability.spec.md)
   wired by `install.sh` and the context keys pinned by `argus.ts` (§3.9).
 - Follow-ups:
   - NanoClaw executors report Cursor pool exhaustion.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_account_usage.py apps/api/tests/test_quota_sources.py apps/api/tests/test_attempt_usage.py apps/api/tests/test_attempt_usage_api.py`
+  - `pnpm --filter @argus/dashboard exec vitest run src/usage.test.ts src/views/AccountsUsage.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only. The usage rows, windows, quota sources and
+  routes run against an in-memory database and stubbed provider responses; the
+  dashboard pieces run under jsdom.
+- Not verified: reads of the real Codex, Claude, Cursor and OpenRouter quota
+  endpoints and their current response shapes; the NanoClaw usage relays
+  (`integrations/nanoclaw/argus-usage-relay.test.ts` and `argus-provisional-usage-relay.test.ts` run
+  only inside a provisioned NanoClaw checkout, not by `make test`); the dashboard in a
+  real browser; any production node.

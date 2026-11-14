@@ -283,3 +283,11 @@ and offers no write action.
   `integrations/nanoclaw/argus-continuation.test.ts` (renders those claims through
   the real channel against a scripted Argus). Not exercised: real Git, Gitea,
   providers or browsers.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_continuation.py` (regenerates the claim fixtures in `integrations/nanoclaw/fixtures/continuation/`).
+  - `integrations/nanoclaw/provision.sh check` runs `argus-continuation.test.ts`, `argus-continuation-observe.test.ts` and `argus-claim-isolation.test.ts` in a NanoClaw checkout.
+- Verified: fixture level. The API tests use real services and SQLite; the channel tests render the recorded claims against a scripted Argus.
+- Not verified: real Git, Gitea, providers or browsers (as 3.5 states), real harness CLIs following the prompt rules, real inference, and any production node.

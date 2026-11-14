@@ -308,3 +308,11 @@ task's checkpoint directory in the store unblocks it.
 - `packages/core/src/argus_core/tasks.py`: five reasons join `ENV_BLOCK_REASONS`;
   the dashboard inbox labels them; [failure classes](failure-classes.spec.md) 3.3
   lists them.
+
+## Verification boundary
+
+- Commands:
+  - `integrations/nanoclaw/provision.sh check` runs `argus-checkpoint.test.ts` and `argus-accounts.test.ts` in a NanoClaw checkout.
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_resumability_preflight.py apps/api/tests/test_task_finalization.py`
+- Verified: fixture level. `argus-checkpoint.test.ts` uses real git with disposable fixtures and two group directories sharing only the store (see 3.8); the API tests use an in-memory database.
+- Not verified: checkpoint and restore across real nodes with real harness CLIs, the real store at production size, and any production node.

@@ -226,3 +226,12 @@ dead-session recovery coverage and latency.
 - Frontend: `views/Fleet.tsx`, Fleet tab (`#fleet`) in `App.tsx`; `#tasks/<id>` opens that
   task's detail in the Tasks tab.
 - Regenerate with `make openapi`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_fleet_health.py apps/api/tests/test_dead_session_recovery.py`
+  - `pnpm --dir apps/dashboard test` (includes `views/Fleet.test.tsx`)
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: the fleet health and dead-session recovery logic and its routes against an in-memory database and a test client; the Fleet view in a jsdom test.
+- Not verified: dead-session recovery against real harness CLIs and real containers; the Fleet tab in a real browser; any deployed or production node.

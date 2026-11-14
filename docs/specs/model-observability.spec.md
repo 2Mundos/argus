@@ -232,3 +232,11 @@ best effort (a refused or failed report never fails the task).
   drawer timeline and the agent drawer models. Regenerated `openapi.json` and
   `schema.d.ts`. The channel change needs a NanoClaw reinstall; the delegate
   change a new agent image.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider packages/core/tests/test_model_trace.py apps/api/tests/test_model_trace.py`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: model trace parsing and the models summary against recorded fixtures and an in-memory database.
+- Not verified: traces from real harness CLIs and real inference, and the NanoClaw channel and delegate changes on a real node (they need a reinstall and a new agent image); the dashboard drawer in a real browser; production.

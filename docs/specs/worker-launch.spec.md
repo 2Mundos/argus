@@ -309,3 +309,9 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   launch success and each refusal, MCP, and the view's pure state logic.
 - Live Docker confirmation of session `--cpus`/`--memory` and OOM classification
   signals: [session quota smoke](../runbooks/2026-10-30.session-quota-smoke.ref.md).
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_launch.py apps/api/tests/test_docker_target_probe.py apps/api/tests/test_templates.py packages/core/tests/test_docker_extra_networks.py`; `make test` also runs `apps/dashboard/src/launch.test.ts`.
+- Verified: unit and fake-API level; launch success and refusals against a fake runtime and probe.
+- Not verified: launches on a real Docker daemon (`make test-docker` is not part of the commands above), Kubernetes, and production. Live Docker `--cpus`/`--memory` and OOM signals: [session quota smoke](../runbooks/2026-10-30.session-quota-smoke.ref.md).

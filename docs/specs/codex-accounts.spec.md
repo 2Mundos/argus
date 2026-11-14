@@ -175,3 +175,17 @@ equal paths that end in the same record, and let the pool choose the engine:
 - Dashboard: the Accounts view gets the Codex wizard: import a file, or
   generate a login (code and link on the page), with the resulting account
   shown by id and name only.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_codex_accounts.py apps/api/tests/test_codex_failover.py packages/core/tests/test_codex_auth.py`
+  - `pnpm --filter @argus/dashboard exec vitest run src/codexAuth.test.ts src/views/CodexAccount.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only. Import validation, the device-code login
+  flow, engine selection and failover run against an in-memory database, a fake
+  secret store and a fake login app-server script rather than the real Codex client.
+- Not verified: a real ChatGPT device-code login; applying the sentinel `auth.json`
+  and the token swap in a real worker through the OneCLI vault
+  (`integrations/nanoclaw/argus-codex-stub.test.ts` runs only in a provisioned NanoClaw checkout);
+  the dashboard in a real browser; any production node.

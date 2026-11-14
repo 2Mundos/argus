@@ -163,3 +163,17 @@ let the operator **renew** an existing one without recreating it:
 - Dashboard: **Add Claude account** (three paths: import file/paste, token with a
   type, dedicated login) and a **Renew** action on each `anthropic` row, which
   opens the same wizard prefilled with that account.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_claude_accounts.py packages/core/tests/test_claude_auth.py`
+  - `pnpm --filter @argus/dashboard exec vitest run src/claudeAuth.test.ts src/views/ClaudeAccount.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level. Import, renewal and the dedicated login run against
+  an in-memory database and secret store; the login replays recorded `claude setup-token`
+  transcripts (`apps/api/tests/fixtures/claude-2.1.296-setup-token-*.bin`) instead of
+  starting the real client.
+- Not verified: a live `claude setup-token` login against Anthropic and any client
+  version other than the recorded one; leasing and applying a renewed token in a real
+  worker through the OneCLI vault; the dashboard in a real browser; any production node.

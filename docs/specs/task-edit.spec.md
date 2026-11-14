@@ -224,3 +224,9 @@ One PR:
    permissions and immutables on both surfaces, snapshots, audit, and
    dashboard component tests. Browser screenshots under `docs/evidence/` need
    Playwright, which this repo does not have; they are not part of this PR.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_edit.py apps/api/tests/test_task_edit_api.py`; `make test` also runs `apps/dashboard/src/taskEdit.test.ts` and `apps/dashboard/src/views/TaskEditForm.test.tsx`.
+- Verified: unit and fake-API level (REST and MCP parity, validation, audit) plus dashboard component tests under jsdom.
+- Not verified: the edit form in a real browser (the spec notes Playwright screenshots are not part of this repository), and any real node or production.

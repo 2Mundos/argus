@@ -227,3 +227,9 @@ two writes. The per-key `source` of the stored values stays in `GET
 - Dashboard: `taskDefaults.ts` (fields, parsing, labels), `TaskDefaultsEditor`
   (Settings and the project tab), the `Projects` workspace, the New task form in
   `Tasks.tsx`, and `unsaved.ts` for the leave guard.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_defaults.py`; `make test` also runs the dashboard tests (`apps/dashboard/src/views/ProjectRepository.test.tsx`).
+- Verified: unit and fake-API level (service and routes against a test database; dashboard component tests under jsdom).
+- Not verified: the dashboard in a real browser; behaviour on a real node or production.

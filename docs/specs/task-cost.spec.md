@@ -231,3 +231,11 @@ figure, which its final row replaces.
 - Negentropy: two task columns, one usage column, one route, one event, one block
   reason. It adds no new loop or stored total and reuses the price table, the steer
   and the block path.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_cost.py`
+  - `pnpm --filter @argus/dashboard test` runs the dashboard suite (`apps/dashboard/src/cost.test.ts`, `apps/dashboard/src/views/TaskCost.test.tsx`).
+- Verified: unit and fake-API level (partial figures, the once-per-attempt steer, the block and its unblock, idempotency) against an in-memory database; the dashboard under vitest.
+- Not verified: cost figures from real provider usage reports and real inference, the price table against live provider pricing, the dashboard in a real browser, and any production node.

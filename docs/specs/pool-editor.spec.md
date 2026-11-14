@@ -130,3 +130,12 @@ Create is for plain pools and builds the full PUT body from the same fields.
 - Dashboard: `pools.ts` (form model, validation, `buildPool`, `imageChoices`,
   `poolErrors`), `views/PoolEditor.tsx`, `api.ts` (FastAPI 422 detail arrays).
 - Tests: `pools.test.ts`, `views/PoolEditor.test.tsx`, `test_templates.py`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_templates.py`
+  - `pnpm --dir apps/dashboard test` (includes `pools.test.ts` and `views/PoolEditor.test.tsx`)
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: pool validation in the API against a test client, and the form model and editor in jsdom tests.
+- Not verified: the editor in a real browser from 390 px; a saved pool launching real instances on a node; production.
