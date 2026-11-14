@@ -846,6 +846,7 @@ describe("Argus channel", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length === 1);
+    const claims = count(fake, "/tasks/claim");
     // Heartbeat saw the container.
     await until(() => fake.calls.some((c) => c.path === "/agents/me/heartbeat"), 2500);
     const beatsBefore = fake.calls.filter((c) => c.path === "/agents/me/heartbeat").length;
@@ -865,8 +866,9 @@ describe("Argus channel", () => {
     expect(fail.body.reason).toBe("session_lost");
     expect(fail.body.error).toMatch(/ctr-alive/);
     expect(fail.body.error).toMatch(/137|killed/);
-    // A crashed one-task session stays silent: the server expires it as lost.
-    await heartbeats(fake);
+    // A crashed one-task session stays silent: the server expires it as lost. It sends no
+    // heartbeat after the exit, so the next claim marks that the post-attempt check ran.
+    await until(() => count(fake, "/tasks/claim") > claims || count(fake, "/agents/me/leave") > 0);
     expect(fake.calls.some((c) => c.path === "/agents/me/leave")).toBe(false);
   });
 
@@ -942,7 +944,8 @@ describe("Argus channel", () => {
     expect(fake.calls.filter((c) => c.path === "/agents/me/leave")).toHaveLength(1);
     expect(h.adapter.isConnected()).toBe(false);
     const claims = fake.calls.filter((c) => c.path === "/tasks/claim").length;
-    await heartbeats(fake);
+    // check-tests: allow sleep — a left agent has no heartbeat or claim left to count
+    await new Promise((r) => setTimeout(r, 300));
     expect(fake.calls.filter((c) => c.path === "/tasks/claim").length).toBe(claims);
     expect(onDrained).toHaveBeenCalledTimes(1);
   });
