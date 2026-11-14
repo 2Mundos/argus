@@ -27,7 +27,11 @@ describe("engine transcripts", () => {
 
   it.each(cases)("%s derives what expected.json says", (_label, engine, name) => {
     const dir = join(ROOT, engine, name);
-    const events = readEvents(join(dir, "events.jsonl"));
+    // A case with no engine output (the engine was killed before it wrote an event) has
+    // stderr.txt instead of events.jsonl and derives from zero events.
+    const eventsFile = join(dir, "events.jsonl");
+    const events =
+      existsSync(eventsFile) || !existsSync(join(dir, "stderr.txt")) ? readEvents(eventsFile) : [];
     const expected = JSON.parse(readFileSync(join(dir, "expected.json"), "utf8"));
     const derived = DERIVE[engine](events as never) as Record<string, unknown>;
     for (const key of Object.keys(expected)) expect(derived[key]).toEqual(expected[key]);

@@ -3,19 +3,24 @@
 Real engine output, recorded once and replayed in tests without Docker, a model
 or the network. Design: [engine transcript replay](../../../../docs/drafts/2026-11-04.engine-transcript-replay.draft.md).
 
-**Status:** two Claude recordings are committed: `claude/success-stream` (a full
-`claude -p` stream-json run, Claude Code 2.1.296) and `claude/success-result` (a lone
-result event). `cursor/success-stream` (Cursor agent CLI stream-json, success) is
-committed. `transcripts.test.ts` replays these. Session-limit and auth-failure
-cases are still to record.
-Custom and local bridge-error cases (OpenRouter 402/429, Strata unavailable) are
-also not recorded yet: no raw evidence exists on the worker.
+**Status:** `claude/success-stream` (a full `claude -p` stream-json run, Claude Code
+2.1.296) and `claude/success-result` (a lone result event) are committed, with
+`cursor/success-stream` (Cursor agent CLI stream-json, success). Three Claude failures
+are recorded from disposable runs of the candidate image (not Argus task attempts):
+`claude/failure-auth` (invalid key, 401), `claude/failure-network` (no network: `api_retry`
+events until the timeout, no terminal event; a connection failure, not a mid-stream
+drop) and `claude/failure-oom` (container memory-cap kill at startup: no events, so
+no `events.jsonl`, only `stderr.txt`; not an in-session OOM of a long run).
+`transcripts.test.ts` replays these. A case without `events.jsonl` derives from zero
+events and must have `stderr.txt`. Still to record: Claude session limit, Codex
+usage limit and success, Copilot, and the custom and local bridge errors (OpenRouter
+402/429, Strata unavailable): no raw evidence exists on the worker.
 
 ## Layout
 
 ```
 transcripts/<engine>/<case>/
-  events.jsonl   required
+  events.jsonl   required, except a case where the engine wrote nothing (failure-oom)
   stderr.txt     only when the case depends on stderr
   expected.json  required
   source.md      required
@@ -46,10 +51,8 @@ they must come from real engine output, not hand-written strings.
   for repository names and anything else.
 - **Stderr:** `--stderr PATH` takes the stderr tail (the last 16 KiB, redacted
   like the events). `stderr.txt` is written only when that input is authentic and
-  non-empty; a re-record without it removes a stale one. No committed case depends
-  on stderr yet, because no authentic stderr capture is available on this host:
-  the server stderr-tail artifact lives on the server volume, and the delegate
-  `.err` files are not retained.
+  non-empty; a re-record without it removes a stale one. The three Claude failure cases carry the
+  `.err` files of their disposable runs (`exit=<code>`, `Killed`); `failure-oom` has nothing else.
 - **expected.json** is drafted by `transcripts-derive.ts` (needs `bun`).
 - **Review:** a person checks the redaction and the expected values before
   committing.

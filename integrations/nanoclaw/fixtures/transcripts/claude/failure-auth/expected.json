@@ -1,0 +1,14 @@
+{
+  "result": {
+    "is_error": true,
+    "subtype": "success",
+    "terminal_reason": "api_error"
+  },
+  "rateLimitError": null,
+  "rateLimitFailure": null,
+  "authExpiredError": "authentication_failed",
+  "authExpiredFailure": {
+    "provider": "claude",
+    "kind": "auth_expired"
+  }
+}
