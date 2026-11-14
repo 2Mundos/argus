@@ -6354,6 +6354,11 @@ export interface components {
              * @default []
              */
             extra_hosts?: string[];
+            /**
+             * Extra Networks
+             * @default []
+             */
+            extra_networks?: string[];
             /** Host */
             host?: string | null;
             /** Network */
@@ -6368,6 +6373,11 @@ export interface components {
              * @default []
              */
             extra_hosts: string[];
+            /**
+             * Extra Networks
+             * @default []
+             */
+            extra_networks: string[];
             /** Host */
             host: string | null;
             /** Network */
@@ -8825,7 +8835,8 @@ export interface components {
             desired_replicas: number;
             /**
              * @default {
-             *       "extra_hosts": []
+             *       "extra_hosts": [],
+             *       "extra_networks": []
              *     }
              */
             docker: components["schemas"]["DockerOptions-Output"];
@@ -9005,7 +9016,8 @@ export interface components {
             desired_replicas?: number;
             /**
              * @default {
-             *       "extra_hosts": []
+             *       "extra_hosts": [],
+             *       "extra_networks": []
              *     }
              */
             docker?: components["schemas"]["DockerOptions-Input"];

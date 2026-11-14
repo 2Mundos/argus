@@ -206,6 +206,7 @@ def container_spec(
         cpus=pool.cpus,
         memory_mb=pool.memory_mb,
         network=pool.docker.network,
+        extra_networks=list(pool.docker.extra_networks),
         extra_hosts=pool.docker.extra_hosts,
         ports=ports,
         mounts=mounts,

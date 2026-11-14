@@ -70,6 +70,9 @@ class DockerOptions(BaseModel):
 
     host: str | None = None  # None: the Argus process's DOCKER_HOST / local socket
     network: str | None = None
+    # Further existing networks the container joins after it starts (the NanoClaw
+    # host needs an address on the default bridge where its sessions run).
+    extra_networks: list[str] = []
     extra_hosts: list[str] = []  # e.g. "host.docker.internal:host-gateway"
     # OCI runtime for the container, e.g. "sysbox-runc". For the nanoclaw runtime
     # it replaces the shared Docker socket with a daemon inside the instance.
@@ -86,6 +89,22 @@ class DockerOptions(BaseModel):
                 " ?tls=true (plain tcp:// is refused)"
             )
         return value
+
+    @field_validator("extra_networks")
+    @classmethod
+    def extra_networks_valid(cls, value: list[str]) -> list[str]:
+        names = [name.strip() for name in value]
+        if any(not name for name in names):
+            raise ValueError("docker.extra_networks entries must not be empty")
+        if len(set(names)) != len(names):
+            raise ValueError("docker.extra_networks must not repeat a network")
+        return names
+
+    @model_validator(mode="after")
+    def extra_networks_not_primary(self) -> "DockerOptions":
+        if self.network and self.network.strip() in self.extra_networks:
+            raise ValueError("docker.extra_networks must not repeat docker.network")
+        return self
 
 
 IN_CLUSTER = "in-cluster"

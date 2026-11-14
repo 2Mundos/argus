@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-03
+updated: 2026-11-14
 ---
 
 # Worker launch and node capabilities
@@ -248,9 +248,18 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
 - A template fixes its isolation: `nanoclaw-sandbox` always sets `docker.runtime`
   and never mounts the socket; `nanoclaw-socket` never sets `docker.runtime`.
   There is no request field, fallback, or global mode that changes it.
+- `docker.extra_networks` lists further existing Docker networks the instance
+  container joins in addition to `docker.network` (a NanoClaw host needs an address
+  on the default bridge, where its session containers run). Entries are non-empty,
+  unique and not the primary network. The Docker target resolves every network
+  before it creates the container, so an unknown name fails the start with a clear
+  error in the instance's `last_error` and creates nothing; it connects each
+  network after `containers.run` (or before starting a container left in the
+  `created` state), tolerates an already attached network, and removes a container
+  it could not connect. Argus never creates or edits a network.
 - Pools record the `template` they came from (a field in the pool's config JSON,
   no migration). The pool editor preserves every field it does not show,
-  including `docker.runtime`, `docker.network`, and `nanoclaw`.
+  including `docker.runtime`, `docker.network`, `docker.extra_networks`, and `nanoclaw`.
 
 # 4. Open Questions
 
