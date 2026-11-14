@@ -81,6 +81,11 @@ class Acc:
             runs=self.runs,
             measured_runs=self.measured,
             not_reported_runs=self.not_reported,
+            reported_rows=self.measured,
+            total_rows=self.runs,
+            coverage_percent=(
+                round(100 * self.measured / self.runs, 1) if self.runs else None
+            ),
             attempts=self.attempts,
             measured_attempts=self.measured_attempts,
             not_reported_attempts=self.not_reported_attempts,

@@ -2,12 +2,15 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CostFigures, CostReport } from "../cost";
-import { Cost } from "./Cost";
+import { Cost, Report } from "./Cost";
 
 const none: CostFigures = {
   runs: 0,
   measured_runs: 0,
   not_reported_runs: 0,
+  reported_rows: 0,
+  total_rows: 0,
+  coverage_percent: null,
   attempts: 0,
   measured_attempts: 0,
   not_reported_attempts: 0,
@@ -23,6 +26,9 @@ const used: CostFigures = {
   runs: 3,
   measured_runs: 2,
   not_reported_runs: 1,
+  reported_rows: 2,
+  total_rows: 3,
+  coverage_percent: 66.7,
   input_tokens: 2_000,
   output_tokens: 1_000,
   cached_input_tokens: 500,
@@ -47,7 +53,15 @@ const REPORT: CostReport = {
     estimate: true,
     unpriced_models: ["mystery-1"],
   },
-  totals: { ...used, runs: 6, not_reported_runs: 4, attempts: 3, measured_attempts: 2 },
+  totals: {
+    ...used,
+    runs: 6,
+    not_reported_runs: 4,
+    total_rows: 6,
+    coverage_percent: 33.3,
+    attempts: 3,
+    measured_attempts: 2,
+  },
   unattributed: { ...none },
   by_account: [
     {
@@ -72,6 +86,8 @@ const REPORT: CostReport = {
       ...none,
       runs: 4,
       not_reported_runs: 4,
+      total_rows: 4,
+      coverage_percent: 0,
       account_id: "a2",
       name: "nr-only",
       provider: "openai",
@@ -99,12 +115,25 @@ const REPORT: CostReport = {
   ],
   by_project: [
     { ...used, project: "alpha" },
-    { ...none, runs: 1, measured_runs: 1, input_tokens: 0, output_tokens: 0, project: null },
+    {
+      ...none,
+      runs: 1,
+      measured_runs: 1,
+      reported_rows: 1,
+      total_rows: 1,
+      coverage_percent: 100,
+      input_tokens: 0,
+      output_tokens: 0,
+      project: null,
+    },
   ],
   orchestrator: {
     ...none,
     runs: 2,
     measured_runs: 2,
+    reported_rows: 2,
+    total_rows: 2,
+    coverage_percent: 100,
     input_tokens: 400,
     output_tokens: 100,
     estimated_cost_usd: 0.05,
@@ -149,7 +178,7 @@ const row = (name: string) => screen.getByText(name).closest("tr") as HTMLElemen
 describe("Cost view", () => {
   it("shows tiles labelled as an estimate with the currency", async () => {
     render(<Cost />);
-    await screen.findByText("Cost (estimate, USD)");
+    await screen.findByText("Cost (lower bound, estimate, USD)");
     expect(screen.getAllByText("1.50 USD").length).toBeGreaterThan(0);
     expect(mock.queries[0]).toMatchObject({ window: "7d" });
   });
@@ -194,6 +223,39 @@ describe("Cost view", () => {
     expect(note).toContain("argus_api/accounts/pricing.json");
     expect(note).toContain("2026-10-20");
     expect(note).toContain("mystery-1");
+  });
+
+  it("labels totals a lower bound and shows coverage when it is below 100%", async () => {
+    render(<Cost />);
+    await screen.findByText("codex-main");
+    const totals = screen.getByTestId("totals-coverage").textContent ?? "";
+    expect(totals).toContain("coverage 33.3% (2 of 6 runs)");
+    expect(totals).toContain("lower bound");
+    expect(screen.getByText("Input (lower bound)")).toBeTruthy();
+    expect(within(row("codex-main")).getByText(/coverage 66.7% \(2 of 3 runs\)/)).toBeTruthy();
+    expect(within(row("codex-main")).getByText(/lower bound/)).toBeTruthy();
+  });
+
+  it("shows no lower-bound label at full coverage", () => {
+    const totals = { ...used, runs: 2, not_reported_runs: 0, total_rows: 2, coverage_percent: 100 };
+    const full = { ...REPORT, totals };
+    render(<Report report={full} tz="UTC" />);
+    expect(screen.getByTestId("totals-coverage").textContent).toBe("coverage 100% (2 of 2 runs)");
+    // Only the totals are checked: the fixture's table rows still have partial coverage.
+    expect(screen.queryByText(/totals are a lower bound/)).toBeNull();
+    expect(screen.getByText("Cost (estimate, USD)")).toBeTruthy();
+    expect(screen.queryByText("Input (lower bound)")).toBeNull();
+  });
+
+  it("shows 0% coverage and no zero total for a layer with no reported rows", async () => {
+    render(<Cost />);
+    await screen.findByText("nr-only");
+    const nr = within(row("nr-only"));
+    expect(nr.getByText(/coverage 0% \(0 of 4 runs\)/)).toBeTruthy();
+    expect(nr.queryByText("0")).toBeNull();
+    expect(nr.queryByText(/^0\.00/)).toBeNull();
+    // A layer with no runs has unknown coverage, not 0%.
+    expect(within(row("idle")).queryByText(/coverage/)).toBeNull();
   });
 
   it("reloads for another period", async () => {

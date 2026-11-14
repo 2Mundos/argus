@@ -6,6 +6,8 @@ import {
   type CostReport,
   type CostWindow,
   costLabel,
+  coverageLabel,
+  isLowerBound,
   notReportedLabel,
   pricingNote,
   projectName,
@@ -54,13 +56,27 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
   const { totals, pricing } = report;
   const currency = pricing.currency;
   const missed = notReportedLabel(totals);
+  const bound = isLowerBound(totals);
+  const coverage = coverageLabel(totals);
   return (
     <>
       <div className="stats">
-        <Stat label="Input" value={tokensOrDash(totals.input_tokens)} />
-        <Stat label="Output" value={tokensOrDash(totals.output_tokens)} />
-        <Stat label="Cache" value={tokensOrDash(totals.cached_input_tokens)} />
-        <Stat label={`Cost (estimate, ${currency})`} value={costLabel(totals, currency)} />
+        <Stat
+          label={bound ? "Input (lower bound)" : "Input"}
+          value={tokensOrDash(totals.input_tokens)}
+        />
+        <Stat
+          label={bound ? "Output (lower bound)" : "Output"}
+          value={tokensOrDash(totals.output_tokens)}
+        />
+        <Stat
+          label={bound ? "Cache (lower bound)" : "Cache"}
+          value={tokensOrDash(totals.cached_input_tokens)}
+        />
+        <Stat
+          label={`Cost (${bound ? "lower bound, " : ""}estimate, ${currency})`}
+          value={costLabel(totals, currency)}
+        />
         <Stat label="Measured runs" value={String(totals.measured_runs)} />
         {missed && <Stat label="Runs without figures" value={missed} />}
         {(totals.attempts ?? 0) > 0 && (
@@ -70,6 +86,12 @@ export function Report({ report, tz }: { report: CostReport; tz: string }) {
           />
         )}
       </div>
+      {coverage && (
+        <p className="muted small" data-testid="totals-coverage">
+          {coverage}
+          {bound && " — totals are a lower bound: runs without a reported value add nothing."}
+        </p>
+      )}
       {totals.reported_cost_usd != null && (
         <p className="muted small">
           Cost reported by engines (not added to the estimate):{" "}
@@ -143,6 +165,7 @@ function Table(props: { rows: Row[]; currency: string; label: string; extraLabel
           <th>Output</th>
           <th>Cache</th>
           <th>Cost (estimate)</th>
+          <th>Coverage</th>
           <th>Runs</th>
           {props.extraLabel && <th>{props.extraLabel}</th>}
         </tr>
@@ -167,6 +190,14 @@ function Table(props: { rows: Row[]; currency: string; label: string; extraLabel
             <td>{tokensOrDash(f.cached_input_tokens)}</td>
             <td>{costLabel(f, currency)}</td>
             <td>
+              {coverageLabel(f) && (
+                <span className="muted small" data-testid="row-coverage">
+                  {coverageLabel(f)}
+                  {isLowerBound(f) && " · lower bound"}
+                </span>
+              )}
+            </td>
+            <td>
               {f.runs === 0 ? "no usage" : f.measured_runs > 0 ? f.measured_runs : "—"}
               {notReportedLabel(f) && <span className="badge"> {notReportedLabel(f)}</span>}
             </td>
@@ -175,7 +206,7 @@ function Table(props: { rows: Row[]; currency: string; label: string; extraLabel
         ))}
         {rows.length === 0 && (
           <tr>
-            <td colSpan={7} className="muted">
+            <td colSpan={8} className="muted">
               No usage in this window.
             </td>
           </tr>
@@ -215,7 +246,7 @@ function DailyBars({ report, tz }: { report: CostReport; tz: string }) {
                   ? `${label}: no usage`
                   : `${label}: ${tokensOrDash(d.input_tokens)} input, ${tokensOrDash(d.output_tokens)} output${
                       d.not_reported_runs ? `, ${d.not_reported_runs} not reported` : ""
-                    }`}
+                    }, ${coverageLabel(d)}${isLowerBound(d) ? " (lower bound)" : ""}`}
               </title>
               {parts.map(([cls, v]) => {
                 const bar = ((v ?? 0) / max) * h;

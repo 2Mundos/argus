@@ -3,6 +3,8 @@ import {
   budgetLevel,
   budgetShare,
   costLabel,
+  coverageLabel,
+  isLowerBound,
   money,
   notReportedLabel,
   pricingNote,
@@ -16,6 +18,9 @@ const f = (o: Partial<Parameters<typeof costLabel>[0]> = {}) => ({
   runs: 1,
   measured_runs: 1,
   not_reported_runs: 0,
+  reported_rows: 1,
+  total_rows: 1,
+  coverage_percent: 100,
   attempts: 1,
   measured_attempts: 1,
   not_reported_attempts: 0,
@@ -49,6 +54,20 @@ describe("cost helpers", () => {
   it("labels not_reported runs only when there are some", () => {
     expect(notReportedLabel(f())).toBeNull();
     expect(notReportedLabel(f({ not_reported_runs: 3 }))).toBe("3 not reported");
+  });
+
+  it("states coverage and a lower bound only below 100%, unknown without runs", () => {
+    const part = f({ reported_rows: 12, total_rows: 29, coverage_percent: 41.4 });
+    expect(coverageLabel(part)).toBe("coverage 41.4% (12 of 29 runs)");
+    expect(isLowerBound(part)).toBe(true);
+    expect(coverageLabel(f())).toBe("coverage 100% (1 of 1 runs)");
+    expect(isLowerBound(f())).toBe(false);
+    const zero = f({ reported_rows: 0, total_rows: 4, coverage_percent: 0 });
+    expect(coverageLabel(zero)).toBe("coverage 0% (0 of 4 runs)");
+    expect(isLowerBound(zero)).toBe(true);
+    const idle = f({ reported_rows: 0, total_rows: 0, coverage_percent: null });
+    expect(coverageLabel(idle)).toBeNull();
+    expect(isLowerBound(idle)).toBe(false);
   });
 
   it("takes the top five among groups with measured runs", () => {

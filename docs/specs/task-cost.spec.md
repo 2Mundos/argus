@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-29
-updated: 2026-11-11
+updated: 2026-11-14
 ---
 
 # Task cost and budget
@@ -57,7 +57,10 @@ This spec adds two things:
 
 - `GET /api/tasks/{id}/cost`: `{pricing, totals, by_attempt: [{attempt, …figures}],
   budget_usd, budget_state}`. `pricing` is the cost view's block. Read scope is the
-  task's (managers all, workers only tasks they have leased).
+  task's (managers all, workers only tasks they have leased). Every figures block
+  (`totals`, each attempt) also carries `reported_rows`, `total_rows` and
+  `coverage_percent` as defined in [cost view](cost-view.spec.md) 3.1; the task cost
+  panel does not render them yet.
 - `budget_state`: `none` (no budget), `ok`, `warning` (≥ 80% of the budget),
   `exhausted` (≥ 100%). It is computed on `known_cost_usd` (3.8) and is `partial_ok` /
   `partial_warning` when the task is partial, because the true figure may be higher.
