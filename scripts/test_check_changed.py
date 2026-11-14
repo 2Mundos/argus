@@ -148,15 +148,13 @@ def test_merge_base_missing_in_repo_without_origin_main(
     tmp_path: Path, monkeypatch
 ) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    with (tmp_path / ".git" / "config").open("a") as f:
+        f.write("[user]\n\tname = t\n\temail = t@t\n")
     subprocess.run(
         [
             "git",
             "-C",
             str(tmp_path),
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
             "commit",
             "-q",
             "--allow-empty",

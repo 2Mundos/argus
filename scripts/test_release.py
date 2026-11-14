@@ -97,9 +97,10 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     remote, work = tmp_path / "remote.git", tmp_path / "work"
     _git(tmp_path, "init", "--quiet", "--bare", "-b", "main", str(remote))
     _git(tmp_path, "init", "--quiet", "-b", "main", str(work))
-    for k, v in [("user.name", "t"), ("user.email", "t@t"), ("tag.gpgSign", "false"),
-                 ("commit.gpgSign", "false")]:  # fmt: skip
+    for k, v in [("tag.gpgSign", "false"), ("commit.gpgSign", "false")]:
         _git(work, "config", k, v)
+    with (work / ".git" / "config").open("a") as f:
+        f.write("[user]\n\tname = t\n\temail = t@t\n")
     _git(work, "remote", "add", "origin", str(remote))
     _git(work, "commit", "--quiet", "--allow-empty", "-m", "feat: first")
     _git(work, "push", "--quiet", "-u", "origin", "main")

@@ -24,9 +24,10 @@ def test_checks_see_no_git_location_variables(tmp_path: Path) -> None:
     work = tmp_path / "work"
     work.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=work, check=True, env=clean)
+    with (work / ".git" / "config").open("a") as f:
+        f.write("[user]\n\tname = t\n\temail = t@t\n")
     subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
-         "--allow-empty", "-m", "first"],
+        ["git", "commit", "-q", "--allow-empty", "-m", "first"],
         cwd=work, check=True, env=clean,
     )  # fmt: skip
     head = _git(work, "rev-parse", "HEAD")
