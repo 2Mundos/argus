@@ -55,8 +55,12 @@ NO_URL = FleetSettings(argus_url=None, max_starts_in_flight=8)
 async def test_model_http_client_routes_local_hosts_around_environment_proxies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8888")
-    monkeypatch.setenv("HTTPS_PROXY", "http://tls-proxy.invalid:9999")
+    # Lowercase names win over uppercase in urllib, so a worker session that
+    # injects its own `https_proxy` would otherwise shadow these.
+    for name in ("HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(name, "http://proxy.invalid:8888")
+    for name in ("HTTPS_PROXY", "https_proxy"):
+        monkeypatch.setenv(name, "http://tls-proxy.invalid:9999")
     monkeypatch.setenv("NO_PROXY", "")
     monkeypatch.setenv("no_proxy", "")
     for name in ("ALL_PROXY", "all_proxy"):

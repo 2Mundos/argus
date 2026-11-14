@@ -47,26 +47,48 @@ async def settle() -> None:
         await asyncio.sleep(0)
 
 
+def _set_identity(repo: Path) -> None:
+    """Write a commit identity into the repo config from Python (fixtures must not
+    pass identity `-c` keys to git)."""
+    dot = repo / ".git"
+    if dot.is_file():
+        gitdir = Path(dot.read_text().strip().removeprefix("gitdir:").strip())
+        config = (repo / gitdir) / "config"
+    elif dot.is_dir():
+        config = dot / "config"
+    else:
+        config = repo / "config"
+    with config.open("a") as f:
+        f.write("[user]\n\tname = t\n\temail = t@example.com\n")
+
+
 def git(cwd: Path, *args: str) -> str:
     # Strip GIT_* so a parent git hook (pre-push sets GIT_DIR) cannot redirect
     # these fixture repos into the caller's worktree.
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     out = subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "init.defaultBranch=main",
-            *args,
-        ],
+        ["git", "-c", "init.defaultBranch=main", *args],
         cwd=cwd,
         check=True,
         capture_output=True,
         env=env,
     )
+    if args and args[0] in ("init", "clone"):
+        # `-b` takes a value; the target is the last bare positional, else cwd.
+        positional: list[str] = []
+        skip = False
+        for a in args[1:]:
+            if skip:
+                skip = False
+            elif a in ("-b", "--branch", "--depth"):
+                skip = True
+            elif not a.startswith("-"):
+                positional.append(a)
+        if args[0] == "init":
+            target = cwd / positional[-1] if positional else cwd
+        else:
+            target = cwd / positional[-1]
+        _set_identity(target)
     return out.stdout.decode()
 
 
@@ -951,6 +973,7 @@ def test_submodule_gitfile_is_resolved_inside_the_instance(tmp_path: Path) -> No
     git(parent, "init", "-q")
     git(parent, "-c", "protocol.file.allow=always", "submodule", "add", "-q",
         str(origin), "sub")  # fmt: skip
+    _set_identity(parent / "sub")
     git(parent, "commit", "-q", "-m", "add sub")
     sub = parent / "sub"
     assert (sub / ".git").read_text().startswith("gitdir: ../.git/modules/sub")
