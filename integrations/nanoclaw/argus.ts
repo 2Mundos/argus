@@ -5364,10 +5364,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         } else if (d.kind === "complete") {
           const result = completionPayload(d.text);
           // Advisory only: the PR body is not held locally, so the worker may report it as data.pr_body.
-          const advisory = issueClosureAdvisory(
-            task,
-            typeof result.data?.pr_body === "string" ? result.data.pr_body : null,
-          );
+          const claim = currentClaim?.id === task.id ? currentClaim : null;
+          const advisory = claim
+            ? issueClosureAdvisory(
+                claim,
+                typeof result.data?.pr_body === "string" ? result.data.pr_body : null,
+              )
+            : null;
           if (advisory) {
             resends += 1;
             await injectTask(task.id, task.attempt, advisory);
