@@ -1669,6 +1669,7 @@ describe("runExecutorPreflight: argus-delegate --auth-probe in the same bounded 
 
   it.each([
     [78, /no credential reached the session.*auth_missing/],
+    [79, /provider rejected the credential with 401 or 403.*auth_rejected/],
     [127, /CLI is not installed.*not_installed/],
   ])(
     "exit %i blocks env_executor_auth with fixed, bounded text from the host only",
@@ -1691,8 +1692,25 @@ describe("runExecutorPreflight: argus-delegate --auth-probe in the same bounded 
     },
   );
 
+  it.each([...PROBED_EXECUTORS])(
+    "%s: a provider that accepts the credential proceeds, one that rejects it (exit 79) blocks",
+    async (executor) => {
+      child = () => ({ code: 0, verdict: { ok: true, provider: "accepted" } });
+      expect(await exec(executor)).toBeNull();
+      child = () => ({ code: 79, verdict: { blocked: "auth_rejected", provider_status: 401 } });
+      const block = await exec(executor);
+      expect(block?.reason).toBe("env_executor_auth");
+      expect(block?.error).toMatch(new RegExp(`^executor ${executor}: the provider rejected`));
+    },
+  );
+
+  it("probes exactly claude, codex, agent and copilot", () => {
+    expect([...PROBED_EXECUTORS].sort()).toEqual(["agent", "claude", "codex", "copilot"]);
+  });
+
   it("an executor the session cannot see is not probed: no container, no lease", async () => {
-    for (const executor of ["opencode", "copilot"]) expect(await exec(executor)).toBeNull();
+    for (const executor of ["opencode", "dsh", "custom", "local"])
+      expect(await exec(executor)).toBeNull();
     expect([ensured, released]).toEqual([0, 0]);
     expect(cli.started).toHaveLength(0);
   });

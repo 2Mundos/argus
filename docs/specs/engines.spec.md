@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 # Engines, executors and the local model
@@ -162,10 +162,11 @@ In scope:
 - **No silent fallback.** `argus-delegate` for an executor without
   credentials exits `78` and prints `{"blocked":"auth_missing"}`. It never
   substitutes another executor or provider. `argus-delegate EXECUTOR --auth-probe`
-  runs only those credential-presence and CLI-install gates (exit `0`, `78`, `127`; `124`
-  when `--version` hangs, which is inconclusive and never `ok`; it never asks the
-  provider whether the credential is accepted) for the
-  [executor probe](failure-classes.spec.md). A route passes over an engine without
+  runs those credential-presence and CLI-install gates, then one authenticated model-list
+  request to the provider (exit `0`, `78`, `127`; `79` when the provider answers 401 or
+  403; `124` when `--version` hangs, which is inconclusive and never `ok`; any other
+  answer, an error, or an executor with no safe request is `provider: "unproven"` with
+  exit `0`) for the [executor probe](failure-classes.spec.md). A route passes over an engine without
   an available account explicitly: the decision names that engine and why
   ([codex accounts](codex-accounts.spec.md)); with nothing usable it is
   `blocked`.
