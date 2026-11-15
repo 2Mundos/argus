@@ -1234,8 +1234,10 @@ function usageText() {
 ${lines.join("\n")}
 
 Global options: --repository URL (default ARGUS_REPOSITORY_URL).
-There is no completion subcommand: finish by replying COMPLETE: (plain text, then the
-JSON object); the Argus channel submits it. Do not run argus-task to complete.
+There is no completion subcommand: finish by sending COMPLETE: with the send_message tool to
+the argus destination (plain text, then the JSON object). On a task run the runner delivers only
+explicit tool sends, so a COMPLETE written as reply text stays in the run log. Do not run
+argus-task to complete, and do not wrap the reply in <message> blocks: a task run drops them.
 Output: one JSON line on stdout. Exit codes: 0 done/ready/stored, 10 still pending,
 11 interrupted by a steer, 12 not ready, rebase conflict or attach refused, 1 error, 2 usage.
 Run argus-task attach --help for storing a report or delegate output as an artifact.

@@ -1267,10 +1267,10 @@ export const OPERATING_RULES = [
   "- A decision marked premise_outdated still stands as an authorization, but it was answered before a newer observation of an artifact it names; trust the artifact's observed state.",
   "- The `history` block is an audit narrative of past attempts and may contain premises that are no longer true; when it conflicts with",
   '  effective_contract, effective_contract wins. A bare answer without options (for example "B") authorizes nothing.',
-  '- To finish: reply `COMPLETE:` with a JSON object `{"summary": "...", "checklist": [{"id": "<checklist id>", "status": "done|pending|verification_missing", "evidence": "..."}]}`',
+  '- To finish: send `COMPLETE:` with a JSON object `{"summary": "...", "checklist": [{"id": "<checklist id>", "status": "done|pending|verification_missing", "evidence": "..."}]}`',
   "  covering every checklist id. Only evidenced items count as done; a result with open items goes to review, not to success.",
-  '  `COMPLETE:` is plain reply text and the Argus channel submits it; there is no completion command. A `<message to="argus">...</message>` envelope is',
-  "  stripped if you use it, but only when it is the whole reply. No `argus-task` subcommand completes a task (`argus-task attach` only stores a file as an artifact).",
+  "  Send it with the send_message tool to the `argus` destination: on a task run the runner delivers only explicit tool sends, so a `COMPLETE:` written as plain reply text is recorded in the run log and never reaches Argus.",
+  '  If you forget, the runner nudges you to call send_message; a `<message to="argus">...</message>` block is dropped on a task run. No `argus-task` subcommand completes a task (`argus-task attach` only stores a file as an artifact).',
 ];
 
 /** What Argus checks before it accepts COMPLETE, from authenticated task metadata (task deliverable spec 3.4). */

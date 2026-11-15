@@ -289,9 +289,13 @@ shell timeout. Images built before this change have no `argus-task`, so the line
 check `command -v argus-task` first.
 
 `argus-task` has no completion subcommand (only `wait`, `pr-ready`, `ci-digest`, `deliver`, `attach`).
-A worker completes by replying `COMPLETE:` as plain text followed by the JSON object; the
-Argus channel submits it to `/tasks/{id}/complete` and strips a `<message to="argus">`
-envelope if the reply is exactly that.
+A worker completes by sending `COMPLETE:` followed by the JSON object with the send_message tool to
+the `argus` destination; the Argus channel submits it to `/tasks/{id}/complete`. On a task run the
+runner delivers only explicit tool sends, so a `COMPLETE:` written as plain reply text stays in the
+run log and never reaches Argus, and a `<message to="argus">` block in the final text is dropped
+(`dispatchResultText`, the `routing.taskRun` branch). An unwrapped final reply gets a nudge that
+names `send_message` and quotes the reply (`patch-task-unwrapped-nudge.py`), so a worker that
+replied in plain text can still send the completion in the same attempt.
 
 ## 3.10 `attach`: store a report or delegate output as an artifact
 
