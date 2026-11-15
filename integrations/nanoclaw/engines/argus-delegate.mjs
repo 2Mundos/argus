@@ -1223,12 +1223,16 @@ export function httpStatus(url, headers, e = process.env, timeoutMs = PROVIDER_T
     connect.on("connect", (res, socket) => {
       live.push(socket);
       if (res.statusCode !== 200) return done(new Error("proxy_refused"));
+      // No agent here: an Agent opens its own connection and ignores `createConnection`, so
+      // the GET would dial the provider directly instead of speaking TLS inside the tunnel.
+      // Without one Node assumes port 80; `defaultPort` keeps `:443` out of the Host header.
       get({
+        agent: undefined,
+        defaultPort: 443,
         hostname: u.hostname,
         port,
         path: `${u.pathname}${u.search}`,
         headers,
-        ca: gatewayCa(e),
         createConnection: () => tls.connect({ socket, servername: u.hostname, ca: gatewayCa(e) }),
       });
     });
