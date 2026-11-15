@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -988,6 +988,15 @@ Consequences for Argus:
      reply instructions, repository delivery/merge rules when applicable, and
      the mandatory `argus-delegate` implementation contract from `renderTask`)
      as an inbound message, waking the agent container.
+     With a structured checklist, each acceptance criterion is rendered with its
+     `ac-*` id inside the untrusted task-data frame, and one trusted line states
+     the completion contract: the `COMPLETE` payload carries
+     `checklist: [{id, status, evidence}]`, one entry per listed id and no others;
+     `status: done` needs non-empty `evidence` naming the command and its real
+     output; prose in the summary is not evidence. Without a structured checklist
+     no ids are invented. A `COMPLETE` the server rejects as `acceptance_unmet` gets an
+     `[Argus]` message listing the ids still open (all ids when none is known) and
+     the same shape, to complete again in the same attempt.
   4. Turns replies into Argus calls: a plain reply is a progress note;
      `COMPLETE:`/`FAIL:`/`ASK:` prefixes complete, fail, or ask. The directive
      is read at the start of the first non-blank line (a reply that is exactly

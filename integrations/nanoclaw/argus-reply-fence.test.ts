@@ -250,6 +250,38 @@ describe("B's own replies after the switch", () => {
   });
 });
 
+describe("a rejected COMPLETE nudges the worker", () => {
+  async function rejected(code: string) {
+    const fake = fakeArgus([A], {
+      routes: {
+        "/tasks/task-a/complete": () =>
+          new Response(JSON.stringify({ detail: { code, message: "refused" } }), { status: 422 }),
+      },
+    });
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", h.thread(), reply('COMPLETE: {"summary":"x"}'));
+    expect(paths(fake)).not.toContain("/tasks/task-a/fail");
+    return h.inbound.at(-1).content.text as string;
+  }
+
+  it("acceptance_unmet names the open ids and the checklist shape", async () => {
+    const text = await rejected("acceptance_unmet");
+    expect(text).toContain("[Argus] Your COMPLETE was rejected: refused.");
+    expect(text).toContain("ac-a1");
+    expect(text).toContain("checklist: [{id, status, evidence}]");
+    expect(text).toContain("same attempt");
+  });
+
+  it("checklist_mismatch keeps its wording", async () => {
+    expect(await rejected("checklist_mismatch")).toBe(
+      "[Argus] Your COMPLETE was rejected: refused. Report only the checklist ids of this task.",
+    );
+  });
+});
+
 describe("a task switch by release", () => {
   it("fences the next claim after Argus ended the previous one", async () => {
     let lost: string | null = null;

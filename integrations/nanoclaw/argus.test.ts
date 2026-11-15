@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../log.js";
 import type { ChannelSetup } from "./adapter.js";
@@ -288,6 +289,31 @@ describe("deliverableLines", () => {
 });
 
 describe("renderTask", () => {
+  it("renders acceptance with its ac-* ids inside the untrusted frame and states the contract outside", () => {
+    const cont = JSON.parse(
+      fs.readFileSync(
+        fileURLToPath(new URL("./fixtures/continuation/ca2-resume.json", import.meta.url)),
+        "utf8",
+      ),
+    );
+    const t = { ...task(), ...cont, acceptance: cont.acceptance } as any;
+    const text = renderTask(t, new Map());
+    const data = parseFramedUntrustedTaskData(text) as any;
+    const items = t.continuation.checklist as Array<{ id: string; text: string }>;
+    expect(items.length).toBeGreaterThan(0);
+    expect(data.acceptance).toEqual(items.map((i) => ({ id: i.id, text: i.text })));
+    const beginAt = text.indexOf("-----BEGIN ARGUS_UNTRUSTED_TASK_DATA-----");
+    const endAt = text.indexOf("-----END ARGUS_UNTRUSTED_TASK_DATA-----");
+    const outside = text.slice(0, beginAt) + text.slice(endAt);
+    for (const i of items) {
+      expect(text).toContain(i.id);
+      expect(outside).not.toContain(i.text);
+    }
+    expect(outside).toContain("checklist: [{id, status, evidence}]");
+    // Without a structured checklist the plain acceptance strings stay and no ids are invented.
+    const plain = parseFramedUntrustedTaskData(renderTask(task() as any, new Map())) as any;
+    expect(plain.acceptance).toEqual(["smoke tests pass"]);
+  });
   it("names Cursor for a trivial task only when Cursor is the leased executor", () => {
     const standard = renderTask(task() as any, new Map(), "agent");
     expect(standard).toContain("Preferred EXECUTOR for this task: agent");
