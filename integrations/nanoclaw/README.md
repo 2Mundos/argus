@@ -56,7 +56,7 @@ Operator `docker exec` Git probes do not substitute for a full native worker che
 Codex; see [worker lifecycle spec 3.8](../../docs/specs/worker-lifecycle.spec.md).
 
 Workers reach the forge REST API only through a credential-free helper (OneCLI injects
-auth), limited to the allowlisted repository and with no merge command:
+auth), limited to the allowlisted repository; merge is gated by the channel's merge authorization:
 `/usr/local/bin/argus-gitea-api` (`gitea-api.mjs`) for Gitea and
 `/usr/local/bin/argus-github-api` (`github-api.mjs`, built on `gitea-api.mjs`) for
 github.com repositories. Both cover PRs, issues, labels, comments, reviews, statuses (on
