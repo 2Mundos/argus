@@ -7,6 +7,7 @@ import aiosqlite
 from argus_core.auth import Scope
 from argus_core.continuation import clean
 from argus_core.decisions import REVIEW_OPTIONS, Audience, DecisionKind
+from argus_core.task_edit import RetryOverrides, TaskChanges
 from argus_core.tasks import ENV_OOM, Action, Review, Task
 
 from argus_api.db import Tx, ts
@@ -16,6 +17,7 @@ from argus_api.events import record
 from argus_api.tasks import cost as task_cost
 from argus_api.tasks import deliverable, steers
 from argus_api.tasks.cost import BUDGET_EXHAUSTED
+from argus_api.tasks.edit import _diff, checked_changes, column_sets
 from argus_api.tasks.exits import reset_oom_streak
 from argus_api.tasks.reads import _TICK, S, _row, get_task
 from argus_api.tasks.transitions import (
@@ -52,8 +54,15 @@ async def unblock(tx: Tx, task_id: str, actor: str) -> Task:
 _RETRY_ERROR_MAX = 500
 
 
-async def retry(tx: Tx, task_id: str, actor: str) -> Task:
+async def retry(
+    tx: Tx, task_id: str, actor: str, overrides: RetryOverrides | None = None
+) -> Task:
     """Give a `failed` task a fresh window of attempts (`max_attempts` is kept).
+
+    `overrides` change the route, difficulty, deliverable, priority or budget in
+    the same transaction (task edit spec 3.11): they are checked with the edit
+    rules before the first write, so a refused override leaves the task failed
+    and a claim never sees it `ready` with the old values.
 
     Not a state-machine action: `failed` is terminal for the workers' transitions,
     and only an operator may leave it. `failures` is reset with `attempt` because
@@ -64,6 +73,19 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
         raise ConflictError(
             f"task is {row['state']}, not failed", code="task_not_failed"
         )
+    given = overrides.changes() if overrides else TaskChanges()
+    if overrides and (unknown := overrides.unknown()):
+        raise ValidationFailedError(
+            "these fields cannot be changed by a retry: " + ", ".join(unknown),
+            code="immutable_field",
+            details=unknown,
+        )
+    changed: dict[str, Any] = {}
+    applied: dict[str, Any] = {}  # the audit of what the overrides changed
+    if given.given():
+        current = await get_task(tx.conn, task_id)
+        changed = await checked_changes(tx.conn, row, current, given.given())
+        applied = {f: _diff(f, getattr(current, f), v) for f, v in changed.items()}
     await tx.conn.execute(
         "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"
         " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
@@ -73,6 +95,12 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
         " WHERE id = ?",
         (S.READY, ts(tx.now), task_id),
     )
+    if sets := column_sets(changed):
+        assignments = ", ".join(f"{k} = ?" for k in sets)
+        await tx.conn.execute(
+            f"UPDATE tasks SET {assignments} WHERE id = ?",  # noqa: S608 - keys are code-controlled
+            (*sets.values(), task_id),
+        )
     await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
     await tx.conn.execute("DELETE FROM task_changes WHERE task_id = ?", (task_id,))
     await tx.conn.execute(
@@ -94,7 +122,8 @@ async def retry(tx: Tx, task_id: str, actor: str) -> Task:
             "max_attempts": row["max_attempts"],
             "previous_error": error[:_RETRY_ERROR_MAX]
             + ("…" if len(error) > _RETRY_ERROR_MAX else ""),
-        },
+        }
+        | ({"overrides": applied} if applied else {}),
     )
     return await get_task(tx.conn, task_id)
 

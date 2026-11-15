@@ -17,7 +17,12 @@ from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountCreate
 from argus_core.decisions import Ask, DecisionState
 from argus_core.knowledge import PageCreate, ProjectUpsert
-from argus_core.task_edit import EDITABLE, EDITABLE_BY_STATE, TaskChanges
+from argus_core.task_edit import (
+    EDITABLE,
+    EDITABLE_BY_STATE,
+    RetryOverrides,
+    TaskChanges,
+)
 from argus_core.tasks import ExecutorModel, HarnessModel, TaskCreate
 from argus_core.tasks import TaskState as S
 
@@ -559,3 +564,107 @@ async def test_the_audit_records_who_when_and_what_without_the_text(
     dumped = json.dumps(event)
     assert "secret-token" not in dumped
     assert [e["data"] for e in await events(db, task.id, "task.dependencies_changed")]
+
+
+# -- retry overrides (3.11) -------------------------------------------------------------
+
+
+async def failed(db: Database, **kw):
+    task = await create(db, max_attempts=1, **kw)
+    claimed = await claim(db)
+    assert claimed is not None
+    async with db.write() as tx:
+        return await tasks.fail(tx, A, task.id, claimed.attempt, "quota")
+
+
+async def retry(db: Database, task_id: str, **overrides):
+    async with db.write() as tx:
+        return await tasks.retry(tx, task_id, WHO, RetryOverrides(**overrides))
+
+
+OVERRIDES = {
+    "harness_model": HarnessModel(engine="claude", model="claude-haiku-4-5"),
+    "executor_model": ExecutorModel(executor="agent", model="auto"),
+    "account_providers": ["anthropic"],
+    "difficulty": "hard",
+    "priority": 7,
+    "budget_usd": 3.5,
+}
+
+
+async def test_retry_applies_its_overrides_with_the_state_change(db: Database) -> None:
+    task = await failed(db)
+    retried = await retry(db, task.id, **OVERRIDES)
+    assert retried.state is S.READY and (retried.attempt, retried.failures) == (0, 0)
+    assert retried.harness_model == OVERRIDES["harness_model"]
+    assert retried.executor_model == OVERRIDES["executor_model"]
+    assert retried.account_providers == ["anthropic"]
+    assert (retried.difficulty, retried.difficulty_source) == ("hard", "declared")
+    assert (retried.priority, retried.budget_usd) == (7, 3.5)
+    assert await get(db, task.id) == retried
+    [event] = await events(db, task.id, "task.retried")
+    assert set(event["data"]["overrides"]) == set(OVERRIDES)
+    assert event["data"]["overrides"]["priority"] == {"from": 0, "to": 7}
+
+
+async def test_retry_without_overrides_is_as_before(db: Database) -> None:
+    task = await failed(db)
+    retried = await retry(db, task.id)
+    assert retried.state is S.READY and retried.priority == task.priority
+    [event] = await events(db, task.id, "task.retried")
+    assert "overrides" not in event["data"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {
+            "priority": 9,
+            "harness_model": HarnessModel(engine="codex", model="gpt-5"),
+            "account_providers": ["anthropic"],
+        },
+        {"priority": 9, "account_providers": ["nope"]},
+        {"priority": 9, "spec": "new"},
+    ],
+    ids=["engine-vs-providers", "unknown-provider", "immutable"],
+)
+async def test_an_invalid_override_leaves_the_failed_task_untouched(
+    db: Database, overrides: dict
+) -> None:
+    task = await failed(db)
+    with pytest.raises(ValidationFailedError) as exc:
+        await retry(db, task.id, **overrides)
+    assert exc.value.code == (
+        "immutable_field" if "spec" in overrides else "validation_failed"
+    )
+    after = await get(db, task.id)
+    assert after == task and after.state is S.FAILED
+    assert (after.attempt, after.failures, after.error) == (
+        task.attempt,
+        task.failures,
+        "quota",
+    )
+    assert await events(db, task.id, "task.retried") == []
+
+
+async def test_retry_of_a_task_that_is_not_failed_changes_nothing(db: Database) -> None:
+    task = await create(db)
+    with pytest.raises(ConflictError) as exc:
+        await retry(db, task.id, priority=9)
+    assert exc.value.code == "task_not_failed"
+    assert await get(db, task.id) == task
+
+
+async def test_a_claim_never_sees_the_retried_task_with_the_old_pins(
+    db: Database,
+) -> None:
+    task = await failed(db)
+    async with db.write() as tx:
+        await tasks.retry(tx, task.id, WHO, RetryOverrides(priority=7))
+        racer = asyncio.create_task(claim(db))  # queues on the writer lock
+        async with db.read() as conn:  # another connection: the committed state
+            seen = await tasks.get_task(conn, task.id)
+        assert (seen.state, seen.priority) == (S.FAILED, task.priority)
+    claimed = await racer
+    assert claimed is not None and claimed.id == task.id
+    assert claimed.priority == 7 and claimed.attempt == 1

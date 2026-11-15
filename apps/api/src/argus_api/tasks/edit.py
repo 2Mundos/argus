@@ -112,36 +112,9 @@ async def edit_task(
             ],
         )
     current = await get_task(tx.conn, task_id)
-    new = _normalized_edit(row, given)
-    if new.get("harness_account") is not None:  # a name is stored as its id
-        new["harness_account"] = await _account_id(tx.conn, new["harness_account"])
-    changed = {f: v for f, v in new.items() if v != getattr(current, f)}
+    changed = await checked_changes(tx.conn, row, current, given)
     if not changed:
         return current  # nothing differs: no write, same version
-    if why := check_harness_providers(
-        new.get("harness_model", current.harness_model),
-        new.get("account_providers", current.account_providers),
-    ):
-        raise ValidationFailedError(
-            f"invalid values: harness_model: {why}",
-            details=[f"harness_model: {why}"],
-        )
-    if changed.keys() & {"deliverable", "required_capabilities"}:
-        await deliverable.check_creatable(
-            tx.conn,
-            row["project"],
-            new.get("required_capabilities", current.required_capabilities),
-            new.get("deliverable", current.deliverable),
-        )
-    if changed.keys() & set(_ACCOUNT_PIN_RULES):
-        await _resolve_harness_account(
-            tx.conn,
-            new.get("harness_account", current.harness_account),
-            account_providers=new.get("account_providers", current.account_providers),
-            harness_model=new.get("harness_model", current.harness_model),
-            executor_model=new.get("executor_model", current.executor_model),
-        )
-
     deps = changed.get("depends_on")
     dep_states: dict[str, TaskState] = {}
     if deps is not None:
@@ -151,18 +124,7 @@ async def edit_task(
             tx.conn, row["project"], [p for p in pins if p not in current.knowledge]
         )
 
-    sets: dict[str, Any] = {
-        f: json.dumps(v) if f in _JSON_FIELDS else v
-        for f, v in changed.items()
-        if f not in ("knowledge", "depends_on", "account_providers", *_PIN_FIELDS)
-    }
-    if "difficulty" in sets:
-        sets["difficulty_source"] = DifficultySource.DECLARED
-    if "account_providers" in changed:
-        sets["account_providers"] = _providers_json(changed["account_providers"])
-    for f in _PIN_FIELDS:
-        if f in changed:
-            sets[f] = _pin_json(changed[f])
+    sets = column_sets(changed)
     if sets:
         assignments = ", ".join(f"{k} = ?" for k in sets)
         await tx.conn.execute(
@@ -229,6 +191,61 @@ async def edit_task(
         },
     )
     return await get_task(tx.conn, task_id)
+
+
+async def checked_changes(
+    conn: aiosqlite.Connection, row: aiosqlite.Row, current: Task, given: dict[str, Any]
+) -> dict[str, Any]:
+    """The values of `given` that differ from `current`, after
+    the creation rules ran on the merged task. Raises before anything is written;
+    shared by `edit_task` and a retry's overrides."""
+    new = _normalized_edit(row, given)
+    if new.get("harness_account") is not None:  # a name is stored as its id
+        new["harness_account"] = await _account_id(conn, new["harness_account"])
+    changed = {f: v for f, v in new.items() if v != getattr(current, f)}
+    if not changed:
+        return changed
+    if why := check_harness_providers(
+        new.get("harness_model", current.harness_model),
+        new.get("account_providers", current.account_providers),
+    ):
+        raise ValidationFailedError(
+            f"invalid values: harness_model: {why}",
+            details=[f"harness_model: {why}"],
+        )
+    if changed.keys() & {"deliverable", "required_capabilities"}:
+        await deliverable.check_creatable(
+            conn,
+            row["project"],
+            new.get("required_capabilities", current.required_capabilities),
+            new.get("deliverable", current.deliverable),
+        )
+    if changed.keys() & set(_ACCOUNT_PIN_RULES):
+        await _resolve_harness_account(
+            conn,
+            new.get("harness_account", current.harness_account),
+            account_providers=new.get("account_providers", current.account_providers),
+            harness_model=new.get("harness_model", current.harness_model),
+            executor_model=new.get("executor_model", current.executor_model),
+        )
+    return changed
+
+
+def column_sets(changed: dict[str, Any]) -> dict[str, Any]:
+    """The `tasks` columns that store the scalar fields of `changed`."""
+    sets: dict[str, Any] = {
+        f: json.dumps(v) if f in _JSON_FIELDS else v
+        for f, v in changed.items()
+        if f not in ("knowledge", "depends_on", "account_providers", *_PIN_FIELDS)
+    }
+    if "difficulty" in sets:
+        sets["difficulty_source"] = DifficultySource.DECLARED
+    if "account_providers" in changed:
+        sets["account_providers"] = _providers_json(changed["account_providers"])
+    for f in _PIN_FIELDS:
+        if f in changed:
+            sets[f] = _pin_json(changed[f])
+    return sets
 
 
 def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any]:
