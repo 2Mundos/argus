@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 # Project runtime images
@@ -104,6 +104,12 @@ gaps for `pnpm`, `sops-age`, `minio`, and `elasticsearch` until provisioned.
   immediately voided by the hold above, so no attempt is spent. `runtime.ready`
   (`release_runtime_holds`) returns the held tasks to `ready`; nothing polls. `failed` → task blocked with `runtime_failed` and the
   build reason.
+- **Readiness at pool start.** Pool discovery, launch and the reconciler's start
+  report each claimable project's latest build for the current recipe on the
+  pool's agent image (`project_runtime:<project>`: `runtime_preparing`,
+  `runtime_failed`, or `null` when not built or not current) and refuse to start a
+  worker when every project it could serve is not ready ([worker
+  launch](worker-launch.spec.md)). The claim gate above is unchanged.
 - **Used image.** After the session starts, `POST /runtime/used` compares the
   container's image id to the selected id; mismatch → `409 runtime_image_mismatch`
   and hold. Labels and config are not trusted.
@@ -178,6 +184,7 @@ are declared but not yet running locally.
   app state, builder task in `main.py` lifespan.
 - `argus_api.tasks.service`: claim gate, `runtime_preparing` / `runtime_failed`
   holds, wake on build ready.
+- `argus_api.fleet.capabilities.runtime_check`: readiness at pool start.
 - `argus_api.config`: `project_runtime`, `runtime_image_repo`,
   `runtime_build_timeout_s`.
 - `integrations/nanoclaw/argus.ts`: `RuntimeHooks`, `ensureRuntime`,

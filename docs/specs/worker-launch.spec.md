@@ -59,6 +59,41 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   pool's target (outside any write transaction) and refuses with `409
   not_launchable` and the blocking reasons when the pool cannot start an
   instance now. A refused launch changes nothing.
+- **Fail closed on a known-broken environment.** A worker started into an
+  environment that blocks every task it claims only turns ready tasks into
+  blocked ones. So launch also refuses on the environment checks below, and the
+  reconciler applies the same checks before each start: a blocking result leaves
+  the instance `reserved` with the reasons in `last_error`, marks the pool
+  `failing` with them, and starts nothing; the start backoff paces the re-check.
+  Only `ok: false` blocks; `ok: null` (not verifiable) never does, and the claim
+  keeps its own gates either way. The checks apply to NanoClaw worker pools
+  (not system pools):
+  - `command_guard`: when the guard is on (the global `command_guard.enabled`,
+    or a project override that turns it on) and the pool does not set
+    `ARGUS_COMMAND_GUARD=0|off`, the agent image's
+    `/etc/claude-code/managed-settings.json` must register `command_guard.py` as
+    a `PreToolUse` `Bash` hook, read as the claim reads it ([command
+    guard](command-guard.spec.md), Missing guard). Missing or malformed is
+    `false` (`env_guard_missing`); an image not on the daemon, a target that
+    cannot run a throwaway container (Kubernetes), or a failed read is `null`;
+    omitted when the guard is off.
+  - `project_runtime:<project>`, for each project with `ready` tasks the pool
+    can claim (their capabilities within the pool's) and a declared runtime:
+    the latest build for the current recipe on the pool's agent image. `ready`
+    is `true`; `preparing`, `building` or `verifying` is `false`
+    (`runtime_preparing`); `failed`, or a declaration that no longer resolves,
+    is `false` (`runtime_failed`). No build, or only builds of an older recipe,
+    is `null`: the first claim prepares it ([project
+    runtime](project-runtime.spec.md)).
+  - `project_repository:<project>`, for each such project with a ready task that
+    needs `repository:write`: the claim must name a repository (the project's,
+    the URL every pool's allowlist agrees on, else this pool's
+    `nanoclaw.repositories`); none is `false` (`env_repository_unconfigured`).
+
+  `command_guard` blocks whenever it is `false`. A project check blocks only
+  when every project with work the pool can claim has a `false` one: a pool that
+  can still serve other projects starts, and the failing project checks stay
+  visible in `checks`.
 - **Scopes.** `admin` and `orchestrator` may read capabilities and launch;
   `worker` gets `403`. Launch is bounded by `max_replicas` for both (`409
   pool_at_capacity`); unlike `scale`, an admin does not raise the cap implicitly.
@@ -120,7 +155,8 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   NanoClaw or requests no quota). This check is static composition evidence,
   not a live `docker inspect` of a spawned session — that remains the
   [session quota smoke](../runbooks/2026-10-30.session-quota-smoke.ref.md)
-  runbook. And, for NanoClaw on the local daemon only, its host paths.
+  runbook. The environment checks above. And, for NanoClaw on the local daemon
+  only, its host paths.
   Anything about a remote daemon's filesystem is `null`, not guessed. An image
   that is absent but pullable is `null` ("will be pulled on start"), since a
   registry is not probed.
@@ -300,12 +336,20 @@ pools is not stranded. The dashboard form (Agents view) and the MCP tools
   `CONTAINER_MEMORY_LIMIT` so agent sessions inherit the same quota.
 - `fleet/capabilities.session_quota_check`: the `session_quota` readiness check
   for NanoClaw pools that request a quota.
+- `fleet/capabilities.load_environment` / `environment_checks`: the environment
+  checks, shared by discovery, launch and the reconciler's `_act` start gate;
+  `registers_command_guard` mirrors `registersCommandGuard` in
+  `integrations/nanoclaw/argus-guard.ts`. `Target.read_image_file` (Docker: a
+  `--pull=never --network=none` throwaway `cat`; Kubernetes and in-process:
+  not verifiable).
 - `fleet/templates.py`, `POST /fleet/workers`, `GET /fleet/templates`, MCP
   `list_worker_templates` / `create_worker`; `Target.probe` reports whether the
   daemon shares this filesystem; `Target.labeled_images`; `PoolUpsert.template`.
 - Dashboard: `views/Agents.tsx` (guided form, advanced foldout) and `Pools.tsx`
   (editor preserves hidden settings).
 - Tests: scopes, discovery available/unavailable, `session_quota` evidence,
-  launch success and each refusal, MCP, and the view's pure state logic.
+  launch success and each refusal (including each environment check, the
+  per-project blocking rule, and the reconciler not starting), MCP, and the
+  view's pure state logic.
 - Live Docker confirmation of session `--cpus`/`--memory` and OOM classification
   signals: [session quota smoke](../runbooks/2026-10-30.session-quota-smoke.ref.md).
