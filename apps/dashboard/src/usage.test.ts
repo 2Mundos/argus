@@ -158,6 +158,12 @@ describe("telemetry honesty helpers", () => {
     }
   });
 
+  it("gives the scope gap the exact remedy text", () => {
+    expect(quotaUnknownLabel({ reason: "oauth_scope_missing" })).toBe(
+      "token lacks the usage-read scope; a full login is required",
+    );
+  });
+
   it("writes credit as money and an uncapped key without inventing a remainder", () => {
     const base = { unit: "usd", observed_at: "2026-10-23T00:00:00Z", source: "polled" } as const;
     expect(

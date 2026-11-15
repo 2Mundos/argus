@@ -491,7 +491,7 @@ QuotaStatusReason = Literal[
     "credential_invalid",
     "credential_expired",  # Argus never refreshes a login to read quota
     "credential_rejected",  # the provider answered 401
-    "oauth_scope_missing",  # the token lacks the scope the usage source needs
+    "oauth_scope_missing",  # the token serves models but cannot read usage
     "admin_key_required",  # an API key reads usage only through the team Admin API
     "no_provider_source",  # no read-only quota source exists for this account
     "local_no_quota",  # the node's own model has no provider quota
@@ -502,6 +502,11 @@ QuotaStatusReason = Literal[
     "no_usage_window_for_login",  # the login answered; no numeric usage or grant
     "window_locked",  # the provider locked the window: no usage figure to show
 ]
+
+
+# A dead credential, told apart from spent quota: the last probe was answered 401, or
+# a lease run was rejected. Lifted by a successful probe or a renewed credential.
+LeaseBlock = Literal["credential_rejected", "auth_rejected"]
 
 
 class QuotaProbe(BaseModel):
@@ -581,6 +586,8 @@ class Account(BaseModel):
     # Past evidence only (account-usage.spec.md 3.5); never a healthy verdict.
     last_accepted_at: datetime | None = None
     last_rejected_at: datetime | None = None
+    # Why a leasable-looking account is not leased; null when nothing blocks it.
+    lease_block: LeaseBlock | None = None
     # Derived on read from the secret store; null where no store was consulted.
     credential: CredentialState | None = None
     # `custom` accounts: where and how to call. Never contains the key.

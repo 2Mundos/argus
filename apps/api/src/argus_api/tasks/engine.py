@@ -10,7 +10,7 @@ from argus_core.custom_accounts import CustomConfig, serves_role
 from argus_core.difficulty import Difficulty
 from argus_core.tasks import ExecutorModel, HarnessModel
 
-from argus_api.accounts.eligibility import engine_pool
+from argus_api.accounts.eligibility import LEASE_BLOCK_SQL, engine_pool
 from argus_api.db import Tx, ts
 from argus_api.engine_choice import EngineAccount, EngineChoice
 from argus_api.errors import ConflictError
@@ -239,7 +239,7 @@ async def _restriction_met(
     if not wanted:
         return False
     async with tx.conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM account_leases l JOIN accounts a"
+        "SELECT EXISTS (SELECT 1 FROM account_leases l JOIN accounts a"  # noqa: S608
         "  ON a.id = l.account_id WHERE l.agent_id = ? AND l.role = 'engine'"
         "  AND l.released_at IS NULL"
         "  AND a.provider IN (SELECT value FROM json_each(?))"
@@ -249,6 +249,7 @@ async def _restriction_met(
         "  AND (? IS NULL OR a.id = ?)"
         "  AND (a.state = 'available'"
         "   OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
+        f"  AND {LEASE_BLOCK_SQL} IS NULL"
         "  AND (a.max_leases IS NULL OR a.max_leases >"
         "   (SELECT count(*) FROM account_leases l"
         "    WHERE l.account_id = a.id AND l.released_at IS NULL)))",
@@ -319,15 +320,16 @@ async def engine_capacity(tx: Tx) -> list[list[Any]]:
     worker runs is no capacity)."""
     served = await _served_providers(tx.conn)
     async with tx.conn.execute(
-        "SELECT a.id, a.provider, a.max_leases,"
+        "SELECT a.id, a.provider, a.max_leases,"  # noqa: S608
         " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
         "  AND l.released_at IS NULL) AS active,"
         " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
         "  AND l.released_at IS NULL AND l.role = 'engine' AND NOT EXISTS ("
         "   SELECT 1 FROM tasks t WHERE t.state = 'claimed'"
         "   AND t.assignee_agent_id = l.agent_id)) AS idle"
-        " FROM accounts a WHERE a.state = 'available'"
-        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?)"
+        " FROM accounts a WHERE (a.state = 'available'"
+        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
+        f" AND {LEASE_BLOCK_SQL} IS NULL"
         " ORDER BY a.priority DESC, a.id",
         (ts(tx.now),),
     ) as cur:

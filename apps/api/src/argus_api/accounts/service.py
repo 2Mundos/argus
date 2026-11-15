@@ -50,7 +50,7 @@ from argus_core.tasks import HarnessModel, ModelId, Task
 from pydantic import TypeAdapter
 
 from argus_api.accounts import usage
-from argus_api.accounts.eligibility import engine_pool
+from argus_api.accounts.eligibility import LEASE_BLOCK_SQL, engine_pool
 from argus_api.accounts.local_health import HEALTH_REASONS
 from argus_api.db import Tx, ts
 from argus_api.disk_guard import DiskGuard
@@ -1226,6 +1226,10 @@ async def credential_renewed(
         "UPDATE accounts SET kind = ?, updated_at = ? WHERE id = ?",
         (kind, ts(tx.now), account_id),
     )
+    # The old credential's probe outcome says nothing about the new one.
+    await tx.conn.execute(
+        "DELETE FROM account_quota_probe WHERE account_id = ?", (account_id,)
+    )
     await record(
         tx,
         actor,
@@ -1473,12 +1477,13 @@ async def _ranked(
     model, or the reverse with `prefer_local`, then priority, least leased, then provider/name/id). An exhausted
     account past its reset is usable."""
     async with tx.conn.execute(
-        "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
+        "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"  # noqa: S608
         "  AND l.released_at IS NULL) AS active,"
         " (SELECT id FROM account_leases l WHERE l.account_id = a.id"
         "  AND l.agent_id = ? AND l.role = 'engine' AND l.released_at IS NULL) AS mine"
-        " FROM accounts a WHERE a.state = 'available'"
-        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?)",
+        " FROM accounts a WHERE (a.state = 'available'"
+        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
+        f" AND {LEASE_BLOCK_SQL} IS NULL",
         (agent_id, ts(tx.now)),
     ) as cur:
         rows = await cur.fetchall()
@@ -1599,7 +1604,8 @@ _SELECT = (  # constant fragments only
     "  FROM (SELECT * FROM account_quota WHERE account_id = a.id"
     "   ORDER BY window_minutes IS NULL, window_minutes, window) q) AS quota,"
     " " + LAST_ACCEPTED_SQL + " AS last_accepted_at,"
-    " " + LAST_REJECTED_SQL + " AS last_rejected_at"
+    " " + LAST_REJECTED_SQL + " AS last_rejected_at,"
+    " " + LEASE_BLOCK_SQL + " AS lease_block"
     " FROM accounts a"
 )
 

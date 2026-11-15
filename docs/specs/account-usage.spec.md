@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-11
+updated: 2026-11-15
 ---
 
 # Account usage
@@ -185,6 +185,16 @@ account lease and must preserve the document structure and JSON value types.
   `bad_response`, `no_windows`, `no_usage_window_for_login`, `window_locked`. A probe that never ran reads `not_yet_probed`.
   `skipped` means nothing was asked; `failed` means it was asked and did not
   answer well. Neither erases figures nor fails a worker task.
+- **Lease block.** A dead credential is not a spent quota. An available account
+  is not leased while its last probe is `credential_rejected`, or a lease run
+  reported `account.auth_rejected` after the last accepted run, credential
+  renewal and successful probe. The account read model carries it as
+  `lease_block` (`credential_rejected | auth_rejected | null`; the probe code is
+  in `quota_status.last_probe`). A successful probe lifts it, and so does
+  renewing the credential (which also forgets the old probe); the account is
+  never disabled. A sweep re-probes a `credential_rejected` account at most
+  every 6 hours; "Refresh quota" always probes. `oauth_scope_missing` never
+  blocks. `engine_pool` counts a blocked account as neither usable nor exhausted.
 - **Codex.** The probe runs `ARGUS_CODEX_BIN app-server` (or the client a Codex
   sign-in downloaded, [login clients](login-clients.spec.md) 3.4) in a throwaway
   `CODEX_HOME` holding only that account's `auth.json`, calls the read-only
@@ -238,14 +248,18 @@ account lease and must preserve the document structure and JSON value types.
   2. `token_limits` is set: `known`, with `windows` computed from the local
      rolling sums of measured rows (`estimated`);
   3. the account has no usage rows: `unknown`, `no_usage_records`;
-  4. provider snapshots or credit exist but are stale: `stale` (shown with their
+  4. the last probe was `oauth_scope_missing` (the token serves model calls but
+     cannot read usage): `unknown`, `oauth_scope_missing`, whatever snapshots
+     exist; the remedy is "token lacks the usage-read scope; a full login is
+     required". It never blocks leasing and is never `stale`;
+  5. provider snapshots or credit exist but are stale: `stale` (shown with their
      age; never dropped);
-  5. no readable source for the account: `unknown` with the reason for it
+  6. no readable source for the account: `unknown` with the reason for it
      (`api_key_account` for an OpenAI/Anthropic key, `admin_key_required` for
      a Cursor API key, `local_no_quota`, else `no_provider_source`);
-  6. a readable source, last probe not updated: `unknown` with the probe's
+  7. a readable source, last probe not updated: `unknown` with the probe's
      `code` (§3.3), or `probe_failed | probe_skipped` without one;
-  7. otherwise `unknown`, `not_yet_probed`.
+  8. otherwise `unknown`, `not_yet_probed`.
   The status also carries `credit`, `observed_at`, `collector`
   (`codex_rate_limits | claude_oauth_usage | cursor_dashboard | openrouter_key |
   worker_report`) and
@@ -299,7 +313,8 @@ account lease and must preserve the document structure and JSON value types.
   - an Auth cell: the credential state, the last accepted and the last rejected
     time as three separate facts ("never" / "none" when absent), and a note when
     the rejection is newer than the acceptance. No reason is shown: the event
-    records only its source.
+    records only its source. A `lease_block` badge says when the account is
+    available but not leased (below).
 - **The detail panel:**
   - the time-window filter (Today, 24h, 7 days, 30 days, All time, in the
     browser's timezone; hourly buckets up to 24h, daily beyond);

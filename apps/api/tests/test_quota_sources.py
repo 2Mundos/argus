@@ -16,11 +16,14 @@ import pytest
 from api_support import FakeClock
 from argus_api.accounts import quota_probe, quota_readers
 from argus_api.accounts import service as accounts
+from argus_api.accounts.eligibility import engine_pool
 from argus_api.accounts.quota_probe import QuotaProber
 from argus_api.config import Settings
 from argus_api.db import Database
+from argus_api.events import record
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
+from argus_api.tasks.engine import _restriction_met, engine_capacity
 from argus_core.accounts import AccountCreate
 from fastapi.testclient import TestClient
 
@@ -317,7 +320,10 @@ async def test_claude_failures_are_distinct_and_keep_the_last_good_figures(
     assert account.quota_status.state == "known"  # still fresh, not zeroed
     assert account.quota_status.last_probe.code == code
     clock.advance(2 * 3600)  # and stale once they age, never erased
-    assert (await account_of(db, clock, c)).quota_status.state == "stale"
+    aged = (await account_of(db, clock, c)).quota_status
+    # A scope gap is its own state, never "stale".
+    assert aged.state == ("unknown" if code == "oauth_scope_missing" else "stale")
+    assert aged.reason == ("oauth_scope_missing" if aged.state == "unknown" else None)
 
 
 async def test_a_network_error_is_a_fetch_failure_without_its_text(
@@ -793,3 +799,132 @@ async def test_cursor_api_key_and_expired_login_make_no_request(
     assert provider.requests == []
     status = (await account_of(db, clock, key)).quota_status
     assert status.reason == "admin_key_required"
+
+
+# -- lease admission (a dead credential is not a spent quota) -------------------------
+
+
+async def leasable(db) -> list[str]:
+    """The engine accounts a claim could lease now, in lease order, and whether the
+    claim gate and the pool agree with the capacity list."""
+    async with db.write() as tx:
+        ids = [c[2] for c in await engine_capacity(tx)]
+        gate = await _restriction_met(tx, ["anthropic"], ["anthropic"])
+    async with db.read() as conn:
+        pool = await engine_pool(conn, None)
+    assert gate is bool(ids)
+    assert pool.usable == len(ids) and pool.exhausted == 0
+    return ids
+
+
+async def two_logins(db, store, tmp_path, provider, clock):
+    dead = await add(db, store, "dead", "anthropic", full_login(), "subscription")
+    good = await add(db, store, "good", "anthropic", full_login(), "subscription")
+    return dead, good, prober(db, store, tmp_path, provider, clock)
+
+
+async def test_a_rejected_probe_blocks_leasing_until_a_probe_reads(
+    db, store, tmp_path, provider, clock
+) -> None:
+    dead, good, p = await two_logins(db, store, tmp_path, provider, clock)
+    assert set(await leasable(db)) == {dead, good}
+    provider.status, provider.body = 401, {}
+    assert (await p.refresh(dead)).code == "credential_rejected"
+    assert await leasable(db) == [good]
+    view = await account_of(db, clock, dead)
+    assert (view.state, view.lease_block) == ("available", "credential_rejected")
+    assert view.quota_status.last_probe.code == "credential_rejected"
+    assert (await account_of(db, clock, good)).lease_block is None
+
+    clock.advance(10 * 60)
+    p._last.clear()
+    provider.status, provider.body = 200, CLAUDE_FLAT
+    assert (await p.refresh(dead)).status == "updated"
+    assert set(await leasable(db)) == {dead, good}
+    assert (await account_of(db, clock, dead)).lease_block is None
+
+
+async def test_a_rejected_lease_run_blocks_leasing_until_accepted_or_renewed(
+    db, store, tmp_path, provider, clock
+) -> None:
+    dead, good, p = await two_logins(db, store, tmp_path, provider, clock)
+
+    async def rejected() -> None:
+        clock.advance(60)
+        async with db.write() as tx:
+            await record(
+                tx,
+                "agent:a",
+                "account",
+                dead,
+                "account.auth_rejected",
+                {"role": "engine"},
+            )
+
+    await rejected()
+    assert await leasable(db) == [good]
+    assert (await account_of(db, clock, dead)).lease_block == "auth_rejected"
+
+    clock.advance(60)  # a successful probe after the rejection lifts it
+    assert (await p.refresh(dead)).status == "updated"
+    assert set(await leasable(db)) == {dead, good}
+
+    await rejected()
+    assert await leasable(db) == [good]
+    clock.advance(60)  # so does an operator renewing the credential
+    async with db.write() as tx:
+        await accounts.credential_renewed(
+            tx, dead, "subscription", "oauth", "admin:test"
+        )
+    assert set(await leasable(db)) == {dead, good}
+
+
+async def test_a_scope_gap_never_blocks_leasing_and_is_not_stale(
+    db, store, tmp_path, provider, clock
+) -> None:
+    c = await add(db, store, "cl", "anthropic", full_login(), "subscription")
+    p = prober(db, store, tmp_path, provider, clock)
+    assert (await p.refresh(c)).status == "updated"  # figures exist, then age
+    clock.advance(2 * 3600)
+    p._last.clear()
+    provider.status, provider.body = 403, {}
+    assert (await p.refresh(c)).code == "oauth_scope_missing"
+    assert await leasable(db) == [c]
+    view = await account_of(db, clock, c)
+    assert view.lease_block is None
+    assert len(view.quota) == 3  # the old snapshots are still there
+    assert (view.quota_status.state, view.quota_status.reason) == (
+        "unknown",
+        "oauth_scope_missing",
+    )
+    assert view.quota_status.last_probe.code == "oauth_scope_missing"
+
+
+async def test_a_credential_blocked_account_is_neither_usable_nor_exhausted(
+    db, store, tmp_path, provider, clock
+) -> None:
+    dead, good, p = await two_logins(db, store, tmp_path, provider, clock)
+    provider.status, provider.body = 401, {}
+    await p.refresh(dead)
+    until = clock.now + timedelta(hours=1)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE accounts SET state = 'exhausted', exhausted_until = ? WHERE id = ?",
+            (until.isoformat(), good),
+        )
+    async with db.read() as conn:
+        pool = await engine_pool(conn, clock.now)
+    # Only the spent quota waits for a refill; the dead credential adds nothing.
+    assert (pool.usable, pool.exhausted, pool.awaiting_quota) == (0, 1, True)
+
+
+async def test_a_sweep_leaves_a_rejected_login_alone_for_the_backoff(
+    db, store, tmp_path, provider, clock
+) -> None:
+    dead, _, p = await two_logins(db, store, tmp_path, provider, clock)
+    provider.status, provider.body = 401, {}
+    await p.refresh(dead)
+    clock.advance(quota_probe.REFRESH_AFTER.total_seconds() + 60)
+    assert dead not in await p.sweep()
+    clock.advance(quota_probe.REJECTED_BACKOFF.total_seconds())
+    assert dead in await p.sweep()

@@ -351,7 +351,10 @@ describe("accounts usage", () => {
     expect(within(stale).getByText("60% left")).toBeTruthy();
     expect(within(stale).getByText(/stale, observed/)).toBeTruthy();
     const claude = screen.getByText("claude-sub").closest("tr") as HTMLElement;
-    expect(within(claude).getByText(/not setup-token/)).toBeTruthy();
+    expect(
+      within(claude).getByText("token lacks the usage-read scope; a full login is required"),
+    ).toBeTruthy();
+    expect(within(claude).queryByText(/stale/)).toBeNull();
     expect(within(claude).queryByText(/does not expose/)).toBeNull();
     const failed = screen.getByText("codex-failed").closest("tr") as HTMLElement;
     const why = within(failed).getByText("The last quota read failed");

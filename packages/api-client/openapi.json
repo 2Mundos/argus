@@ -115,6 +115,21 @@
             ],
             "title": "Last Rejected At"
           },
+          "lease_block": {
+            "anyOf": [
+              {
+                "enum": [
+                  "credential_rejected",
+                  "auth_rejected"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Block"
+          },
           "local": {
             "anyOf": [
               {

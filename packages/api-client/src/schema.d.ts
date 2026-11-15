@@ -3744,6 +3744,8 @@ export interface components {
             last_accepted_at?: string | null;
             /** Last Rejected At */
             last_rejected_at?: string | null;
+            /** Lease Block */
+            lease_block?: ("credential_rejected" | "auth_rejected") | null;
             local?: components["schemas"]["LocalAccountView"] | null;
             /** Max Leases */
             max_leases: number | null;

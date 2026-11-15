@@ -798,6 +798,10 @@ async def quota_status(
                 )
             )
         return status("known", windows=windows)
+    if probe is not None and probe.code == "oauth_scope_missing":
+        # The token serves model calls but cannot read usage: old figures are not
+        # "stale", the fix is a full login.
+        return status("unknown", "oauth_scope_missing")
     if snapshots or credit:
         return status("stale")
     config = json.loads(account["config"]) if account.get("config") else None
