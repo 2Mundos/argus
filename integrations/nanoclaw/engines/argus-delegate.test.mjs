@@ -2574,9 +2574,10 @@ test("--auth-probe claude: a redirected base URL (local harness) is unproven; th
   assert.equal(called, false);
 });
 
-function listen(t, handler) {
+function listen(t, handler, onConnect) {
   return new Promise((resolve) => {
     const server = http.createServer(handler);
+    if (onConnect) server.on("connect", onConnect);
     server.listen(0, "127.0.0.1", () => {
       t.after(() => {
         server.closeAllConnections();
@@ -2640,6 +2641,76 @@ test("httpStatus: an http request goes through the named proxy unless NO_PROXY l
   const bypass = { ...e, NO_PROXY: "127.0.0.1" };
   assert.equal(await httpStatus(`http://127.0.0.1:${direct}/v1/models`, {}, bypass), 401);
   assert.equal(proxied.length, 1);
+});
+
+const basic = (userPass) => `Basic ${Buffer.from(userPass).toString("base64")}`;
+
+// The gateway injects the credential only into an authenticated CONNECT; an anonymous one is
+// spliced as a plain tunnel and the provider sees the placeholder.
+test("httpStatus: the proxy URL's userinfo is sent, decoded, as Basic Proxy-Authorization on the CONNECT and the proxied GET", async (t) => {
+  const seen = [];
+  const port = await listen(
+    t,
+    (req, res) => {
+      seen.push(["GET", req.headers["proxy-authorization"]]);
+      res.writeHead(200).end();
+    },
+    (req, socket) => {
+      seen.push(["CONNECT", req.headers["proxy-authorization"]]);
+      socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+    },
+  );
+  for (const [userinfo, expected] of [
+    ["agent:proxy-pass-SECRET@", basic("agent:proxy-pass-SECRET")],
+    ["agent:p%40ss%3Aw%2Frd%25@", basic("agent:p@ss:w/rd%")],
+    ["ag%20ent@", basic("ag ent:")],
+    ["", undefined],
+  ]) {
+    seen.length = 0;
+    const proxy = `http://${userinfo}127.0.0.1:${port}`;
+    await assert.rejects(
+      httpStatus("https://api.anthropic.com/v1/models", {}, { HTTPS_PROXY: proxy }),
+      (err) => err.message === "proxy_refused",
+    );
+    assert.equal(
+      await httpStatus("http://llm.example.test/v1/models", {}, { HTTP_PROXY: proxy }),
+      200,
+    );
+    assert.deepEqual(seen, [
+      ["CONNECT", expected],
+      ["GET", expected],
+    ]);
+  }
+});
+
+test("--auth-probe through an authenticated gateway proxy: 200 is accepted, a genuine 401 is still exit 79", async (t) => {
+  let provider = 200;
+  const port = await listen(t, (req, res) => {
+    const injected = req.headers["proxy-authorization"] === basic("agent:p@ss");
+    res.writeHead(injected ? provider : 401).end();
+  });
+  const s = sandbox(t);
+  s.fake("opencode", 'echo "1.0.0"');
+  const env = {
+    ...s.env,
+    ARGUS_ACCOUNT_SETTINGS: JSON.stringify({
+      base_url: "http://llm.example.test/v1",
+      label: "custom",
+    }),
+    [CUSTOM_KEY_ENV]: SECRET,
+    HTTP_PROXY: `http://agent:p%40ss@127.0.0.1:${port}`,
+  };
+  const accepted = await authProbeWithProvider("opencode", env);
+  assert.deepEqual([accepted.code, accepted.report.provider], [0, "accepted"]);
+  provider = 401;
+  const rejected = await authProbeWithProvider("opencode", env);
+  assert.equal(rejected.code, 79);
+  assert.deepEqual(
+    [rejected.report.blocked, rejected.report.provider, rejected.report.provider_status],
+    ["auth_rejected", "rejected", 401],
+  );
+  const reports = JSON.stringify([accepted, rejected]);
+  assert.equal(reports.includes("p@ss") || reports.includes("p%40ss"), false);
 });
 
 test("--auth-probe end to end: a local account's real GET maps 200 to accepted and 401 to exit 79", async (t) => {
