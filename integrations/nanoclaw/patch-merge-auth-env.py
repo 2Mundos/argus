@@ -29,7 +29,9 @@ if not p.is_file():
 s = p.read_text()
 if "ARGUS_MERGE_AUTHORIZED" in s:
     sys.exit(0)
-pattern = re.compile(r"(for \(const key of \[[^\]]*'ARGUS_COMMAND_GUARD'[^\]]*?)(,?\s*\]\))")
+pattern = re.compile(
+    r"(for \(const key of \[[^\]]*'ARGUS_COMMAND_GUARD'[^\]]*?)(,?\s*\]\))"
+)
 if len(pattern.findall(s)) != 1:
     sys.exit("container-runner.ts: forwarded-env list changed upstream")
 extra = ", ".join(f"'{n}'" for n in NAMES)

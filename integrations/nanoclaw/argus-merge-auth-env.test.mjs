@@ -8,7 +8,11 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { mergeAuthorizationToken, scopeMergeAuthorization, taskMayMerge } from "./argus-merge-auth.ts";
+import {
+  mergeAuthorizationToken,
+  scopeMergeAuthorization,
+  taskMayMerge,
+} from "./argus-merge-auth.ts";
 import { main } from "./github-api.mjs";
 
 const NAMES = [
@@ -70,7 +74,10 @@ describe("merge authorization reaches the session env", () => {
     scope(host, task({ auto_merge: true }));
     const session = forwardedBy(host);
     assert.deepEqual(Object.keys(session).sort(), [...NAMES].sort());
-    assert.equal(session.ARGUS_MERGE_AUTHORIZED, mergeAuthorizationToken(session.ARGUS_MERGE_AUTH_KEY, "t1", 3));
+    assert.equal(
+      session.ARGUS_MERGE_AUTHORIZED,
+      mergeAuthorizationToken(session.ARGUS_MERGE_AUTH_KEY, "t1", 3),
+    );
     assert.equal(
       session.ARGUS_MERGE_AUTHORIZED,
       createHmac("sha256", session.ARGUS_MERGE_AUTH_KEY).update("merge:t1:3").digest("hex"),

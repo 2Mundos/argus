@@ -30,7 +30,10 @@ STATES = [
 
 def _run(root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), str(root)], capture_output=True, text=True, timeout=30
+        [sys.executable, str(SCRIPT), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
 
