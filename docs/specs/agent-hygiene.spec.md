@@ -159,3 +159,16 @@ cleanup: this is read-only reporting plus an explicit admin archive.
   Vitest coverage next to each.
 - After `make openapi`, `packages/api-client/src/schema.d.ts` carries the new
   routes and models; `make openapi-check` must pass.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_agent_hygiene.py apps/api/tests/test_overview.py`
+  - `pnpm --filter @argus/dashboard exec vitest run src/overview.test.ts src/views/Agents.test.tsx src/views/Home.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only. Aggregates, bounded archiving and the two
+  alert signals run against an in-memory database and a clock through the
+  service and the HTTP routes; the Home and Agents views run under jsdom.
+- Not verified: archiving or alerting against a long-lived production `agents` table;
+  the MCP parity beyond what the orchestrator tests exercise
+  (`apps/api/tests/test_builtin_orchestrator.py`); the dashboard in a real browser.

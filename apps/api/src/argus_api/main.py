@@ -155,6 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             argus_url=settings.public_url,
             model_policy_path=settings.model_policy_path,
             launcher=settings.launcher,
+            project_runtime=settings.project_runtime,
         )
         app.state.secrets_ok = secrets_error is None
         app.state.started_at = time.monotonic()

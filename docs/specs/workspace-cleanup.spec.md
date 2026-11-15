@@ -529,3 +529,9 @@ directory it accepts can still fail at delete time (`permission_denied`).
   `apps/dashboard/src/views/Fleet.test.tsx`.
 - **Operator guide:**
   [runbooks/2026-10-24.workspace-cleanup.ref.md](../runbooks/2026-10-24.workspace-cleanup.ref.md).
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_workspace_cleanup.py`; `make test` also runs `apps/dashboard/src/views/Fleet.test.tsx`.
+- Verified: unit and fake-API level against temporary directories and a test database; dashboard tests under jsdom.
+- Not verified: cleanup on a real node's disks and live worktrees, the Fleet view in a real browser, and production. Operator steps: [workspace cleanup runbook](../runbooks/2026-10-24.workspace-cleanup.ref.md).

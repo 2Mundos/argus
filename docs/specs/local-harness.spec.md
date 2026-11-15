@@ -339,3 +339,12 @@ account one endpoint per runtime.
   `argus-local-forward.ts` (engine or executor lease), `anthropic-redirect.mjs`,
   `argus-delegate.mjs` guard and OpenCode settings, `argus.ts` harness/settings
   sync (under NanoClaw `DATA_DIR`), `install.sh` OneCLI wrap.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_local_health.py apps/api/tests/test_local_context.py apps/api/tests/test_local_harness_routing.py packages/core/tests/test_local_accounts.py integrations/nanoclaw/tests/test_nanoclaw_js.py`
+  - `pnpm --dir apps/dashboard test` (includes `views/LocalEndpoints.test.tsx` and `views/LocalAccount.test.tsx`)
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: endpoint discovery, health, failure classes and lease delivery against fake local endpoints; the redirect allowlist and OpenAI bridge through `node --test`; the dialog in jsdom tests.
+- Not verified: a real local inference server (Ollama, llama.cpp or similar) and real inference or tool calls; the OpenCode harness and the NanoClaw channel files (`argus-local-forward.ts`, `argus-local-harness.ts`) on a real node, whose vitest suites run only through `integrations/nanoclaw/provision.sh check` against a NanoClaw checkout; production.

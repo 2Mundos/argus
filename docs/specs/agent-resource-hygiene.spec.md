@@ -137,3 +137,16 @@ and changing pool requests. Where the quota comes from is set by
   the `NODE_OPTIONS` append and its log line, the sitecustomize override, and the
   patch's idempotence and upstream-shape guard.
 - [Docs README](../README.md) links this spec.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider integrations/nanoclaw/tests/test_agent_resource_hygiene_shims.py integrations/nanoclaw/tests/test_patch_agent_resource_hygiene.py`
+  - `make test` runs the whole Python and Node suite.
+- Verified: fixture level only. The shims run as shell and Node processes against
+  fake `cpu.max` and `oom_score_adj` files, and the patch runs against copies of the
+  NanoClaw sources, including its idempotence and upstream-shape guard.
+- Not verified: the live check in section 4 (a disposable container with
+  `--memory 512m --cpus 2`) has not been run; whether Claude Code and Codex shells read
+  `BASH_ENV` and `CLAUDE_ENV_FILE`; `oom_score_adj` writes under the AppArmor profile;
+  any agent image built by the tools layer; any production node.

@@ -160,3 +160,15 @@ Make an OpenAI-compatible endpoint (presets: OpenRouter,
   `apps/api/tests/test_custom_accounts.py` (in-process fake provider),
   `apps/api/tests/test_builtin_orchestrator_parts.py`,
   `integrations/nanoclaw/engines/anthropic-openai-bridge.test.mjs`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_custom_accounts.py packages/core/tests/test_custom_accounts.py`
+  - `pnpm --filter @argus/dashboard exec vitest run src/customAccount.test.ts src/views/CustomAccount.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only. Registration, validation, the secret store
+  and the dashboard presets run against an in-memory database; no provider is called.
+- Not verified: a request to the real OpenRouter or Google AI Studio endpoint; quota
+  or credit reads from either; leasing the account into a real worker; the dashboard in
+  a real browser; any production node.

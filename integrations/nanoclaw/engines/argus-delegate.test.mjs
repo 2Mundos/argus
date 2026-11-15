@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   authorizedCwd,
+  authProbeWithProvider,
   authStatus,
   buildCommand,
   COMMIT_ATTRIBUTION_RULE,
@@ -18,6 +19,7 @@ import {
   cursorConfigDirAllowsCliWrites,
   dshOutcome,
   executorJsonFailure,
+  httpStatus,
   localHarnessRefusal,
   materializePrivateCursorConfig,
   parseAccountSettings,
@@ -95,6 +97,9 @@ test("a successful run reports engine and executor identity and keeps artifacts"
   assert.ok(report.artifacts[0].startsWith(fs.realpathSync(s.work)));
 });
 
+// A proxy that refuses connections: the provider request of a probe fails open, offline.
+const DEAD_PROXY = "http://127.0.0.1:1";
+
 test("--auth-probe: 0 with a credential and the CLI, 78 without a credential, 127 without the CLI; nothing runs", async (t) => {
   const s = sandbox(t);
   const ran = path.join(s.dir, "ran");
@@ -104,9 +109,12 @@ test("--auth-probe: 0 with a credential and the CLI, 78 without a credential, 12
   );
   const resultFile = path.join(s.dir, "result.json");
   const args = ["claude", "--auth-probe", "--result-file", resultFile];
-  const ok = await run(args, { env: { ...s.env, ANTHROPIC_API_KEY: "placeholder" } });
+  const ok = await run(args, {
+    env: { ...s.env, ANTHROPIC_API_KEY: "placeholder", HTTPS_PROXY: DEAD_PROXY },
+  });
   assert.equal(ok.code, 0);
   assert.deepEqual([ok.report.ok, ok.report.probe], [true, "auth_present"]);
+  assert.deepEqual([ok.report.provider, ok.report.provider_reason], ["unproven", "request_failed"]);
   assert.deepEqual(JSON.parse(fs.readFileSync(resultFile, "utf8")), ok.report);
   assert.equal(JSON.stringify(ok.report).includes("placeholder"), false);
 
@@ -2383,4 +2391,285 @@ test("integrations: only the claude executor gets the attempt's kubeconfig; othe
   assert.equal(codex.code, 78);
   assert.equal(codex.report.blocked, "integration_engine_unsupported");
   assert.equal(fs.existsSync(seen), false, "codex never ran");
+});
+
+// ---------------------------------------------------------------------------
+// --auth-probe provider acceptance (failure classes 3.3.1). The provider is a mock:
+// no test here reaches a real network.
+// ---------------------------------------------------------------------------
+
+const SECRET = "sk-test-SECRET-never-reported";
+const ACCOUNT_SETTINGS = (label) =>
+  JSON.stringify({ base_url: "https://llm.example.test/api/v1", label });
+
+/** Executors that have a credential in the probe session, with the env that gives it. */
+const PROBE_CASES = {
+  claude: { env: () => ({ ANTHROPIC_API_KEY: SECRET }), host: "api.anthropic.com" },
+  codex: { env: () => ({ OPENAI_API_KEY: SECRET }), host: "api.openai.com" },
+  copilot: {
+    env: () => ({ COPILOT_GITHUB_TOKEN: COPILOT_SENTINEL_TOKEN }),
+    host: "api.individual.githubcopilot.com",
+  },
+  "opencode (custom account)": {
+    executor: "opencode",
+    env: () => ({ ARGUS_ACCOUNT_SETTINGS: ACCOUNT_SETTINGS("custom"), [CUSTOM_KEY_ENV]: SECRET }),
+    host: "llm.example.test",
+  },
+  "codex (custom account)": {
+    executor: "codex",
+    env: () => ({ ARGUS_ACCOUNT_SETTINGS: ACCOUNT_SETTINGS("custom"), [CUSTOM_KEY_ENV]: SECRET }),
+    host: "llm.example.test",
+  },
+  "opencode (local account)": {
+    executor: "opencode",
+    env: () => ({ ARGUS_ACCOUNT_SETTINGS: ACCOUNT_SETTINGS("local") }),
+    host: "llm.example.test",
+  },
+};
+
+function probeWith(t, name, status) {
+  const c = PROBE_CASES[name];
+  const executor = c.executor ?? name;
+  const s = sandbox(t);
+  s.fake(executor, 'echo "1.0.0"');
+  const calls = [];
+  const request = async (url, headers) => {
+    calls.push({ url, headers });
+    if (status === "network") throw new Error(`connect ECONNREFUSED ${SECRET}`);
+    return status;
+  };
+  return authProbeWithProvider(executor, { ...s.env, ...c.env() }, { request }).then((probed) => ({
+    probed,
+    calls,
+  }));
+}
+
+for (const name of Object.keys(PROBE_CASES)) {
+  test(`--auth-probe ${name}: a 200 from the provider is accepted (exit 0), via one metadata GET`, async (t) => {
+    const { probed, calls } = await probeWith(t, name, 200);
+    assert.equal(probed.code, 0);
+    assert.deepEqual(
+      [probed.report.ok, probed.report.provider, probed.report.provider_status],
+      [true, "accepted", 200],
+    );
+    assert.equal(probed.report.probe, "provider_accepted");
+    assert.equal(calls.length, 1);
+    const url = new URL(calls[0].url);
+    assert.equal(url.hostname, PROBE_CASES[name].host);
+    assert.match(url.pathname, /\/models$/);
+    assert.equal(JSON.stringify(probed).includes(SECRET), false, "no credential in the report");
+  });
+
+  for (const status of [401, 403]) {
+    test(`--auth-probe ${name}: a ${status} from the provider is rejected (exit 79, auth_rejected)`, async (t) => {
+      const { probed } = await probeWith(t, name, status);
+      assert.equal(probed.code, 79);
+      assert.equal(probed.report.blocked, "auth_rejected");
+      assert.equal(probed.report.provider, "rejected");
+      assert.equal(probed.report.provider_status, status);
+      assert.equal(probed.report.ok, undefined);
+      assert.equal(JSON.stringify(probed).includes(SECRET), false);
+    });
+  }
+
+  for (const status of [500, 429, 404, "network"]) {
+    test(`--auth-probe ${name}: ${status === "network" ? "a network error" : `a ${status}`} is unproven and fails open (exit 0)`, async (t) => {
+      const { probed } = await probeWith(t, name, status);
+      assert.equal(probed.code, 0);
+      assert.equal(probed.report.ok, true);
+      assert.equal(probed.report.provider, "unproven");
+      assert.equal(probed.report.probe, "auth_present");
+      assert.equal(JSON.stringify(probed).includes(SECRET), false);
+    });
+  }
+}
+
+test("--auth-probe: credentials go only into the provider request's headers", async (t) => {
+  const seen = {};
+  for (const name of Object.keys(PROBE_CASES)) {
+    const { calls } = await probeWith(t, name, 200);
+    seen[name] = calls[0].headers;
+  }
+  assert.equal(seen.claude["x-api-key"], SECRET);
+  assert.equal(seen.codex.authorization, `Bearer ${SECRET}`);
+  assert.equal(seen.copilot.authorization, `Bearer ${COPILOT_SENTINEL_TOKEN}`);
+  assert.equal(seen["opencode (custom account)"].authorization, `Bearer ${SECRET}`);
+  // Local Strata ignores the token: the placeholder the run uses is sent.
+  assert.equal(seen["opencode (local account)"].authorization, "Bearer argus-local-harness");
+});
+
+test("--auth-probe agent (Cursor): no read-only endpoint is safe, so no request is made and it is unproven", async (t) => {
+  const s = sandbox(t);
+  s.fake("agent", 'echo "1.0.0"');
+  const cursor = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(cursor, { recursive: true });
+  fs.writeFileSync(path.join(cursor, "auth.json"), '{"accessToken":"sentinel"}');
+  let called = false;
+  const request = async () => {
+    called = true;
+    return 401;
+  };
+  const probed = await authProbeWithProvider(
+    "agent",
+    { ...s.env, XDG_CONFIG_HOME: path.join(s.home, ".config") },
+    { request },
+  );
+  assert.equal(probed.code, 0);
+  assert.deepEqual(
+    [probed.report.provider, probed.report.provider_reason],
+    ["unproven", "no_read_only_endpoint"],
+  );
+  assert.equal(called, false);
+});
+
+test("--auth-probe: a credential that lives only in a file is never read, so it is unproven without a request", async (t) => {
+  const s = sandbox(t);
+  s.fake("codex", 'echo "1.0.0"');
+  fs.mkdirSync(path.join(s.home, ".codex"));
+  fs.writeFileSync(path.join(s.home, ".codex", "auth.json"), '{"tokens":{"access_token":"x"}}');
+  s.env.CODEX_HOME = path.join(s.home, ".codex");
+  let called = false;
+  const request = async () => {
+    called = true;
+    return 401;
+  };
+  const probed = await authProbeWithProvider("codex", s.env, { request });
+  assert.equal(probed.code, 0);
+  assert.equal(probed.report.provider_reason, "credential_not_in_env");
+  assert.equal(called, false);
+});
+
+test("--auth-probe: the gates still run first: no credential (78) and no CLI (127) never reach the provider", async (t) => {
+  const s = sandbox(t);
+  let called = false;
+  const request = async () => {
+    called = true;
+    return 200;
+  };
+  assert.equal((await authProbeWithProvider("claude", s.env, { request })).code, 78);
+  s.fake("claude", 'echo "1.0.0"');
+  fs.rmSync(path.join(s.bin, "claude"));
+  const env = { ...s.env, PATH: "/nonexistent", ANTHROPIC_API_KEY: SECRET };
+  assert.equal((await authProbeWithProvider("claude", env, { request })).code, 127);
+  assert.equal(called, false);
+});
+
+test("--auth-probe claude: a redirected base URL (local harness) is unproven; the key is never sent there", async (t) => {
+  const s = sandbox(t);
+  s.fake("claude", 'echo "1.0.0"');
+  let called = false;
+  const request = async () => {
+    called = true;
+    return 401;
+  };
+  const base = "http://127.0.0.1:9";
+  const env = {
+    ...s.env,
+    ANTHROPIC_AUTH_TOKEN: "argus-local-harness",
+    ANTHROPIC_BASE_URL: base,
+    ARGUS_ALLOWED_ANTHROPIC_BASE_URL: base,
+  };
+  const probed = await authProbeWithProvider("claude", env, { request });
+  assert.equal(probed.report.provider_reason, "base_url_redirected");
+  assert.equal(called, false);
+});
+
+function listen(t, handler) {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    server.listen(0, "127.0.0.1", () => {
+      t.after(() => {
+        server.closeAllConnections();
+        server.close();
+      });
+      resolve(server.address().port);
+    });
+  });
+}
+
+test("httpStatus: reads the status of a direct GET, sends the headers, follows no redirect", async (t) => {
+  const seen = [];
+  const port = await listen(t, (req, res) => {
+    seen.push([req.method, req.url, req.headers.authorization]);
+    if (req.url === "/ok") res.writeHead(200).end("{}");
+    else if (req.url === "/denied") res.writeHead(401).end();
+    else res.writeHead(302, { location: "/ok" }).end();
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const headers = { authorization: "Bearer x" };
+  assert.equal(await httpStatus(`${base}/ok`, headers, {}), 200);
+  assert.equal(await httpStatus(`${base}/denied`, headers, {}), 401);
+  assert.equal(await httpStatus(`${base}/moved`, headers, {}), 302);
+  assert.deepEqual(
+    seen.map((r) => r[0]),
+    ["GET", "GET", "GET"],
+  );
+  assert.equal(seen.length, 3);
+});
+
+test("httpStatus: a provider that never answers times out; a refusing proxy rejects; both are unproven upstream", async (t) => {
+  const port = await listen(t, () => {});
+  await assert.rejects(httpStatus(`http://127.0.0.1:${port}/x`, {}, {}, 100), /timeout/);
+  const refusing = await listen(t, (_req, res) => res.writeHead(500).end());
+  const connect = http.createServer();
+  connect.on("connect", (_req, socket) => socket.end("HTTP/1.1 403 Forbidden\r\n\r\n"));
+  await new Promise((r) => connect.listen(0, "127.0.0.1", r));
+  t.after(() => connect.close());
+  await assert.rejects(
+    httpStatus(
+      "https://api.anthropic.com/v1/models",
+      {},
+      { HTTPS_PROXY: `http://127.0.0.1:${connect.address().port}` },
+      2000,
+    ),
+    /proxy_refused/,
+  );
+  assert.ok(refusing);
+});
+
+test("httpStatus: an http request goes through the named proxy unless NO_PROXY lists the host", async (t) => {
+  const proxied = [];
+  const proxy = await listen(t, (req, res) => {
+    proxied.push(req.url);
+    res.writeHead(200).end();
+  });
+  const direct = await listen(t, (_req, res) => res.writeHead(401).end());
+  const e = { HTTP_PROXY: `http://127.0.0.1:${proxy}` };
+  assert.equal(await httpStatus("http://llm.example.test/v1/models", {}, e), 200);
+  assert.deepEqual(proxied, ["http://llm.example.test/v1/models"]);
+  const bypass = { ...e, NO_PROXY: "127.0.0.1" };
+  assert.equal(await httpStatus(`http://127.0.0.1:${direct}/v1/models`, {}, bypass), 401);
+  assert.equal(proxied.length, 1);
+});
+
+test("--auth-probe end to end: a local account's real GET maps 200 to accepted and 401 to exit 79", async (t) => {
+  let status = 200;
+  const seen = [];
+  const port = await listen(t, (req, res) => {
+    seen.push([req.url, req.headers.authorization]);
+    res.writeHead(status).end("{}");
+  });
+  const s = sandbox(t);
+  s.fake("opencode", 'echo "1.0.0"');
+  const env = {
+    ...s.env,
+    ARGUS_ACCOUNT_SETTINGS: JSON.stringify({
+      base_url: `http://127.0.0.1:${port}/v1`,
+      label: "custom",
+    }),
+    [CUSTOM_KEY_ENV]: SECRET,
+    NO_PROXY: "127.0.0.1",
+  };
+  const accepted = await run(["opencode", "--auth-probe"], { env });
+  assert.equal(accepted.code, 0);
+  assert.equal(accepted.report.provider, "accepted");
+  status = 401;
+  const rejected = await run(["opencode", "--auth-probe"], { env });
+  assert.equal(rejected.code, 79);
+  assert.equal(rejected.report.blocked, "auth_rejected");
+  assert.deepEqual(seen, [
+    ["/v1/models", `Bearer ${SECRET}`],
+    ["/v1/models", `Bearer ${SECRET}`],
+  ]);
+  assert.equal(JSON.stringify(rejected.report).includes(SECRET), false);
 });

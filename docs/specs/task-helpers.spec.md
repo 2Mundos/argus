@@ -427,3 +427,9 @@ does not create an artifact.
   `ci-digest` against an open PR, a `wait ci` that a steer interrupts, the `waiting`
   milestone on the task card), then recreating the remaining workers. Roll back by
   redeploying the previous image.
+
+## Verification boundary
+
+- Commands: `make test` (runs `integrations/nanoclaw/argus-task.test.mjs`, `argus-task-attach.test.mjs` and `argus-task-signals.test.ts`); `uv run pytest -q -p no:cacheprovider integrations/nanoclaw/tests/test_attach_packaging.py`.
+- Verified: unit and fixture level with a fake forge, an injected clock and a fake store; the attach CLI runs against the real bridge with a fake store.
+- Not verified: a real forge or CI provider, the helpers inside a deployed worker image, real harness CLIs, and production.

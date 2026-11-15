@@ -113,3 +113,13 @@ Install the shared policy module into both host and agent image, rebuild both
 through the existing provisioning flow, and recreate instances to change pool
 env. Attempt artifacts remain available through existing task artifact APIs.
 See [operator instructions](../runbooks/2026-10-17.model-selection.ref.md).
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_model_policy.py`
+  - `pnpm --dir apps/dashboard test` (includes `views/ModelPreferences.test.tsx`)
+  - `node --test integrations/nanoclaw/argus-models.test.mjs integrations/nanoclaw/engines/model-policy.test.mjs`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fixture level only: the policy service and routes against an in-memory database, and `model-policy.mjs` against the shared `model-policy.fixture.json`.
+- Not verified: model selection by real harness CLIs and real inference; the provisioning flow and recreated instances in [operator instructions](../runbooks/2026-10-17.model-selection.ref.md) on a real node; production.

@@ -200,3 +200,20 @@ byte-identical to the pristine install):
 
 Next, each its own PR: the operator reloads AppArmor v2 and attaches a passing probe log as a
 dated report; narrow the `/**` mount rules; keep `off` only where architecture requires it.
+
+## Verification boundary
+
+- Commands:
+  - `integrations/nanoclaw/security/scripts/verify-install.sh <nanoclaw-git-checkout>` (offline: installs twice into a disposable
+    pristine checkout, `tsc --noEmit`, runs the driver and composition tests)
+  - `integrations/nanoclaw/security/scripts/validate-offline.sh`
+  - `integrations/nanoclaw/security/scripts/probe.sh` is the runtime probe; see
+    [RUNBOOK](../../integrations/nanoclaw/security/RUNBOOK.md).
+- Verified: offline only. The profile switch, the patches and the generated Docker
+  options are tested with a recording Docker CLI
+  (`integrations/nanoclaw/argus-codex-sandbox.test.ts`, `argus-codex-sandbox-composition.test.ts`).
+- Not verified: Bubblewrap under the profiles. v1 failed the first real probe and v2
+  has not been loaded or run; whether a real Docker daemon accepts every generated
+  option; the spawn path in `container-runner.ts` through `spawnContainer`; the first
+  real task under the default-on profile. The contract is not met until a passing
+  probe log is attached as a dated report.

@@ -63,11 +63,15 @@ async def fleet_capabilities(
     """What this node can run right now, measured from its targets (read-only)."""
     async with db.read() as conn:
         pools = await service.list_pools(conn)
+        env = await capabilities.load_environment(
+            conn, project_runtime=settings.project_runtime
+        )
     return await capabilities.discover(
         pools,
         request.app.state.targets,
         settings.public_url,
         launcher=settings.launcher,
+        env=env,
     )
 
 
@@ -245,14 +249,16 @@ async def launch_worker(
     async with db.read() as conn:
         await require_not_internal_orchestrator(conn, caller, action="launch_worker")
         pool = await service.get_pool(conn, name)
+        env = await capabilities.load_environment(
+            conn, project_runtime=settings.project_runtime
+        )
     # Probed before the write: no target call inside a write transaction.
     verdict = await capabilities.discover_pool(
-        pool, request.app.state.targets, settings.public_url
+        pool, request.app.state.targets, settings.public_url, env
     )
     # A full pool is reported by the write below as `pool_at_capacity`.
-    blockers = [
-        c.detail for c in verdict.checks if c.ok is False and c.name != "capacity"
-    ]
+    full = {c.detail for c in verdict.checks if c.name == "capacity"}
+    blockers = [b for b in verdict.blockers if b not in full]
     if blockers:
         raise NotLaunchableError(
             f"pool {name!r} cannot start a worker now", details=blockers

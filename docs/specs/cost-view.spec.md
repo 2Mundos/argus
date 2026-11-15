@@ -164,3 +164,14 @@ manager scope. The window is `(now − window, now]`. Response:
   it already keeps; the fields live on `CostFigures`, so `GET
   /api/tasks/{id}/cost` carries them too ([task cost](task-cost.spec.md) 3.2).
   The orchestrator group counts its measured turns as reported rows.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_cost.py`
+  - `pnpm --filter @argus/dashboard exec vitest run src/cost.test.ts src/views/Cost.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only. Price lookup, project and account
+  grouping, windows and the daily series run against an in-memory database; the Cost tab runs under jsdom.
+- Not verified: the price table against current provider prices; totals against a
+  real provider bill; the dashboard in a real browser; any production node.

@@ -404,24 +404,38 @@ export function sessionRepositoryProbe(
 // ---------------------------------------------------------------------------
 
 /**
- * Executors whose credential the preflight session can see: the gateway contribution
- * alone supplies it. Opencode, Copilot and custom or local accounts depend on policy
- * context or an env the worker path adds, so a probe there would block falsely: not probed.
+ * Executors whose credential the preflight session can see. The session gets the gateway
+ * contribution (onecli.ts `ensureSession`, keyed by the agent group): the Claude and Cursor
+ * stubs, the Codex stub, and the Copilot sentinel, so `claude`, `codex`, `agent` and
+ * `copilot` are probed. `opencode` is not: its credential is an `auth.json`, an attached
+ * server (`ARGUS_OPENCODE_ATTACH`), or a custom or local account whose base URL and key
+ * come from the task's `executor_settings` in the policy context and from the worker's own
+ * env (`ARGUS_ACCOUNT_API_KEY`), none of which a probe session has; a probe would block a
+ * working account falsely. The probe is addressed by executor name only, so custom and
+ * local accounts (which run on `opencode`, `codex` or `dsh`) are not probed here either;
+ * the delegate checks them when `ARGUS_ACCOUNT_SETTINGS` and the key are in its env.
  */
-export const PROBED_EXECUTORS: ReadonlySet<string> = new Set(["claude", "codex", "agent"]);
+export const PROBED_EXECUTORS: ReadonlySet<string> = new Set([
+  "claude",
+  "codex",
+  "agent",
+  "copilot",
+]);
 
 /** Exit codes of `argus-delegate` (engines spec) and the fixed text each blocks with. */
 const EXECUTOR_PROBE_FAILURES: Readonly<Record<number, string>> = {
   78: "no credential reached the session (argus-delegate exit 78, auth_missing): check the executor account lease and its gateway stub",
+  79: "the provider rejected the credential with 401 or 403 (argus-delegate exit 79, auth_rejected): the account's credential is revoked, expired or not injected for the provider's host",
   127: "the executor CLI is not installed in the session image (argus-delegate exit 127, not_installed)",
 };
 
 /**
- * Checks, before any model session, that the leased executor has a credential and an
- * installed CLI. Returns the `env_executor_auth` block, or null to proceed. It proves only
- * what `argus-delegate` gates a run on (see failure classes 3.3.1), and it fails open: a
- * probe session that cannot finish, or an image whose delegate lacks `--auth-probe`, is
- * inconclusive, not an authentication failure, and the delegate's own gate still applies.
+ * Checks, before any model session, that the leased executor has a credential, an installed
+ * CLI, and (where a safe request exists) that the provider does not reject the credential.
+ * Returns the `env_executor_auth` block, or null to proceed. See failure classes 3.3.1. It
+ * fails open: a provider answer other than 401 or 403, a probe session that cannot finish,
+ * or an image whose delegate lacks `--auth-probe`, is inconclusive, not an authentication
+ * failure, and the delegate's own gate still applies.
  * The text is fixed and host-derived: nothing the container wrote is copied.
  */
 export async function runExecutorPreflight(

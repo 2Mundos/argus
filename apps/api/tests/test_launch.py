@@ -438,3 +438,251 @@ def test_mcp_discovery_and_launch(client: TestClient) -> None:
         ("get_fleet_capabilities", {}),
     ):
         assert tool(client, worker, name, **args)["error"].startswith("403 forbidden")
+
+
+# -- the environment a worker would claim into (worker launch 3) ---------------------
+
+GUARD = "/etc/claude-code/managed-settings.json"
+SHIPPED_GUARD = (
+    Path(__file__).parents[3]
+    / "integrations/nanoclaw/engines/claude-managed-settings.json"
+).read_text()
+
+
+def nanoclaw_pool(client: TestClient, **kw) -> None:
+    from dataclasses import replace
+
+    client.app.state.settings = replace(
+        client.app.state.settings, nanoclaw_allow_docker_socket=True
+    )
+    nc = {  # instances_root is length-limited: keep these short
+        "install_dir": "/nc",
+        "instances_root": "/nc/i",
+        "agent_image": "nc-agent:1",
+        "docker_socket": "/nc.sock",
+        **kw.pop("nanoclaw", {}),
+    }
+    make_pool(client, "nc", runtime="nanoclaw", nanoclaw=nc, **kw)
+
+
+def nc_caps(client: TestClient) -> dict:
+    [pool] = client.get("/api/fleet/capabilities", headers=ADMIN).json()["pools"]
+    return pool
+
+
+def check(pool: dict, name: str) -> dict:
+    """The named check; {} when it is not reported."""
+    return next((c for c in pool["checks"] if c["name"] == name), {})
+
+
+def launch_nc(client: TestClient):
+    return client.post("/api/pools/nc/launch", json=FIRST, headers=ADMIN)
+
+
+def ready_task(client: TestClient, project: str, caps: list[str]) -> None:
+    res = client.put(f"/api/projects/{project}", json={"name": project}, headers=ADMIN)
+    assert res.status_code == 200, res.text
+    body = {"project": project, "title": "t", "required_capabilities": caps}
+    res = client.post("/api/tasks", json=body, headers=ADMIN)
+    assert res.status_code in (200, 201) and res.json()["state"] == "ready", res.text
+
+
+def test_missing_command_guard_blocks_launch(
+    client: TestClient, target: FakeTarget
+) -> None:
+    nanoclaw_pool(client)
+    for files in (
+        {},
+        {("nc-agent:1", GUARD): "{not json"},
+        {("nc-agent:1", GUARD): "{}"},
+    ):
+        target.image_files = files
+        pool = nc_caps(client)
+        guard = check(pool, "command_guard")
+        assert guard["ok"] is False and guard["detail"].startswith("env_guard_missing:")
+        assert not pool["launchable"] and guard["detail"] in pool["blockers"]
+        res = launch_nc(client)
+        assert res.status_code == 409, res.text
+        assert any("env_guard_missing" in d for d in res.json()["detail"]["details"])
+    assert client.get("/api/pools/nc", headers=ADMIN).json()["desired_replicas"] == 0
+
+
+def test_registered_command_guard_is_ok(client: TestClient, target: FakeTarget) -> None:
+    nanoclaw_pool(client)
+    target.image_files = {("nc-agent:1", GUARD): SHIPPED_GUARD}
+    pool = nc_caps(client)
+    assert check(pool, "command_guard")["ok"] is True and pool["launchable"]
+    assert launch_nc(client).status_code == 200
+
+
+def test_unverifiable_command_guard_does_not_block(
+    client: TestClient, target: FakeTarget
+) -> None:
+    nanoclaw_pool(client)  # image_files None: the target cannot read the image
+    pool = nc_caps(client)
+    assert check(pool, "command_guard")["ok"] is None and pool["launchable"]
+    from argus_api.fleet.targets import TargetError
+
+    async def failing(image, path):
+        raise TargetError("daemon went away")
+
+    target.read_image_file = failing  # the read fails: unverified, not missing
+    pool = nc_caps(client)
+    guard = check(pool, "command_guard")
+    assert guard["ok"] is None and "daemon went away" in guard["detail"]
+    assert pool["launchable"]
+
+
+def test_command_guard_off_skips_the_check(
+    client: TestClient, target: FakeTarget
+) -> None:
+    target.image_files = {}  # would be missing
+    nanoclaw_pool(client, env={"ARGUS_COMMAND_GUARD": "off"})
+    assert check(nc_caps(client), "command_guard") == {}
+    nanoclaw_pool(client)
+    assert check(nc_caps(client), "command_guard")["ok"] is False
+    res = client.put(
+        "/api/settings/command_guard.enabled", json={"value": False}, headers=ADMIN
+    )
+    assert res.status_code == 200, res.text
+    pool = nc_caps(client)
+    assert check(pool, "command_guard") == {} and pool["launchable"]
+    ready_task(client, "demo", [])  # a project turning it back on is checked again
+    res = client.put(
+        "/api/projects/demo/settings/command_guard.enabled",
+        json={"value": True},
+        headers=ADMIN,
+    )
+    assert res.status_code == 200, res.text
+    assert check(nc_caps(client), "command_guard")["ok"] is False
+
+
+def declare_runtime(client: TestClient, project: str, state: str | None) -> None:
+    """Declare a runtime for `project` and record its current build in `state`."""
+    from argus_api.db import ts
+    from argus_api.fleet import capabilities
+
+    res = client.put(
+        f"/api/projects/{project}/runtime",
+        json={"components": [{"id": "psql"}]},
+        headers=ADMIN,
+    )
+    assert res.status_code == 200, res.text
+    if state is None:
+        return
+    db = client.app.state.db
+
+    async def record() -> None:
+        async with db.read() as conn:
+            env = await capabilities.load_environment(conn, project_runtime=True)
+        async with db.write() as tx:
+            now = ts(tx.now)
+            await tx.conn.execute(
+                "INSERT INTO runtime_builds (project, build_key, host_id, run_as,"
+                " recipe_digest, state, reason, recipe, base_ref, base_id, platform,"
+                " image_ref, image_id, created_at, updated_at, finished_at)"
+                " VALUES (?, 'k', 'h', 'u', ?, ?, ?, '{}', 'nc-agent:1', 'b',"
+                " 'linux/amd64', 'img', ?, ?, ?, ?)",
+                (
+                    project,
+                    env.runtimes[project].digest,
+                    state,
+                    "psql did not install" if state == "failed" else None,
+                    "sha256:1" if state == "ready" else None,
+                    now,
+                    now,
+                    now if state in ("ready", "failed") else None,
+                ),
+            )
+
+    client.portal.call(record)
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [("building", "runtime_preparing"), ("preparing", "runtime_preparing"), ("failed", "runtime_failed")],
+)  # fmt: skip
+def test_project_runtime_not_ready_blocks_launch(
+    client: TestClient, state: str, reason: str
+) -> None:
+    nanoclaw_pool(client)
+    ready_task(client, "demo", [])
+    declare_runtime(client, "demo", state)
+    pool = nc_caps(client)
+    rt = check(pool, "project_runtime:demo")
+    assert rt["ok"] is False and rt["detail"].startswith(f"{reason}: demo")
+    assert pool["blockers"] == [rt["detail"]]
+    res = launch_nc(client)
+    assert res.status_code == 409 and res.json()["detail"]["details"] == [rt["detail"]]
+
+
+def test_unbuilt_runtime_is_reported_not_blocking(client: TestClient) -> None:
+    nanoclaw_pool(client)
+    ready_task(client, "demo", [])
+    declare_runtime(client, "demo", None)
+    pool = nc_caps(client)
+    assert check(pool, "project_runtime:demo")["ok"] is None and pool["launchable"]
+
+
+def test_unconfigured_repository_blocks_launch(client: TestClient) -> None:
+    nanoclaw_pool(client, capabilities=["repository:write"])
+    ready_task(client, "demo", ["repository:write"])
+    pool = nc_caps(client)
+    repo = check(pool, "project_repository:demo")
+    assert repo["ok"] is False
+    assert repo["detail"].startswith("env_repository_unconfigured:")
+    assert pool["blockers"] == [repo["detail"]] and launch_nc(client).status_code == 409
+    # The pool's own map names it: the claim would too.
+    nanoclaw_pool(
+        client,
+        capabilities=["repository:write"],
+        nanoclaw={"repositories": {"demo": "https://github.com/acme/demo"}},
+    )
+    assert check(nc_caps(client), "project_repository:demo")["ok"] is True
+
+
+def test_one_broken_project_does_not_stop_a_pool_serving_others(
+    client: TestClient,
+) -> None:
+    nanoclaw_pool(client, capabilities=["repository:write"])
+    ready_task(client, "demo", ["repository:write"])
+    ready_task(client, "other", [])
+    pool = nc_caps(client)
+    assert check(pool, "project_repository:demo")["ok"] is False
+    assert pool["launchable"] and pool["blockers"] == []
+    # Work the pool cannot claim is not its environment.
+    ready_task(client, "gpu", ["gpu", "repository:write"])
+    assert check(nc_caps(client), "project_repository:gpu") == {}
+
+
+def test_ready_environment_is_launchable_with_every_check_ok(
+    client: TestClient, target: FakeTarget
+) -> None:
+    target.images = {"worker:1", "nc-agent:1"}
+    target.image_files = {("nc-agent:1", GUARD): SHIPPED_GUARD}
+    nanoclaw_pool(
+        client,
+        image="worker:1",
+        capabilities=["repository:write"],
+        nanoclaw={"repositories": {"demo": "https://github.com/acme/demo"}},
+    )
+    ready_task(client, "demo", ["repository:write"])
+    declare_runtime(client, "demo", "ready")
+    pool = nc_caps(client)
+    names = ("command_guard", "project_runtime:demo", "project_repository:demo")
+    assert all(check(pool, n)["ok"] is True for n in names)
+    assert pool["launchable"] and launch_nc(client).status_code == 200
+
+
+def test_reconciler_does_not_start_into_a_broken_environment(
+    client: TestClient, target: FakeTarget, passes: Callable[[int], None]
+) -> None:
+    target.image_files = {}
+    nanoclaw_pool(client, desired_replicas=1)
+    passes(2)
+    assert target.started == []
+    pool = client.get("/api/pools/nc", headers=ADMIN).json()
+    assert pool["status"] == "failing"
+    assert pool["last_error"].startswith("env_guard_missing:")
+    [inst] = client.get("/api/instances", headers=ADMIN).json()
+    assert inst["state"] == "reserved" and "env_guard_missing" in inst["last_error"]

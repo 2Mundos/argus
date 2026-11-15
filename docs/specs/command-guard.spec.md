@@ -78,7 +78,12 @@ bypass. Background: draft (removed; in git history),
   which has no managed settings. An image that cannot be resolved or is not on the
   daemon, a missing, unreadable or malformed file, or a missing hook blocks the task.
   Skipped only when the guard is off (`ARGUS_COMMAND_GUARD=0|off`) and for engines
-  without a hook. A test adapter without a session image reads the channel's
+  without a hook. The same read runs before a worker exists: pool discovery,
+  launch and the reconciler's start check the pool's agent image and refuse to
+  start a worker into it while the hook is missing ([worker
+  launch](worker-launch.spec.md), `command_guard` check). That check is a
+  preflight, not a replacement: the claim still checks the image the session
+  will actually run. A test adapter without a session image reads the channel's
   `managedSettingsPath`, else `ARGUS_CLAUDE_MANAGED_SETTINGS`, else that path, on
   its own filesystem. The agent image sets `ARGUS_CLAUDE_MANAGED_SETTINGS` to that
   path, and its build smoke (`engines/probe-managed-settings.sh`) fails if the file
@@ -174,7 +179,9 @@ bypass. Background: draft (removed; in git history),
   unchanged) and the transcript detection and posting
   (`integrations/nanoclaw/argus-command-blocked.test.ts`) on synthetic transcripts; the claim-time presence
   check against a stubbed session image (`argus-guard.test.ts`,
-  `argus-single-layer.test.ts`).
+  `argus-single-layer.test.ts`); the pool-start check against a fake target
+  (`apps/api/tests/test_launch.py`: missing, malformed, registered with the
+  shipped settings, unverifiable, guard off).
 - Not verified: the image build, that Claude Code loads the managed settings and
   honours the deny, that a real denial is written to the transcript in the shape
   the detection expects (`tool_result` with `is_error`), a blocked `rm -rf ~` on a disposable worker, a

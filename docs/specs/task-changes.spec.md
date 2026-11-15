@@ -211,3 +211,12 @@ read scope](worker-read-scope.spec.md).
 - Negentropy: one table, one event, two routes, one producer module. It reuses the
   live log's fencing, redaction, transient-event and relay patterns rather than
   adding a channel.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_changes.py`
+  - `integrations/nanoclaw/argus-changes-relay.test.ts` covers the channel relay; it runs through `integrations/nanoclaw/provision.sh check` in a NanoClaw checkout.
+  - `pnpm --filter @argus/dashboard test` runs the dashboard suite (`apps/dashboard/src/taskChanges.test.ts`, `apps/dashboard/src/views/TaskChanges.test.tsx`).
+- Verified: unit and fake-API level (fencing, size limits, REST permissions, relay) with fixtures.
+- Not verified: snapshots from real workers running real harness CLIs, the dashboard in a real browser, and any production node.

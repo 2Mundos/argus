@@ -301,3 +301,9 @@ line. Tests cover a lost heartbeat answer, a lost ack, every exit from `claimed`
 delayed ack, the previous-attempt count (not older attempts, not other tasks, across
 a retry), REST/MCP/OpenAPI, the upgrade, and the installed channel end to end
 (`scripts/steer-unknown-e2e.sh`).
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_steers.py`; `make test` also runs `integrations/nanoclaw/argus-steer-unknown.e2e.test.ts` and the dashboard steer tests (`TaskSteers.test.tsx`, `TaskDetailSteer.test.tsx`).
+- Verified: unit and fake-API level, plus channel tests with a scripted Argus. `scripts/steer-unknown-e2e.sh` exists for the installed-channel end-to-end case; it is not part of the commands above.
+- Not verified: delivery to real harness CLIs and a live NanoClaw install (unless `scripts/steer-unknown-e2e.sh` is run), the dashboard in a real browser, and production.

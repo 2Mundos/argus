@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 # Project runtime images
@@ -104,6 +104,12 @@ gaps for `pnpm`, `sops-age`, `minio`, and `elasticsearch` until provisioned.
   immediately voided by the hold above, so no attempt is spent. `runtime.ready`
   (`release_runtime_holds`) returns the held tasks to `ready`; nothing polls. `failed` → task blocked with `runtime_failed` and the
   build reason.
+- **Readiness at pool start.** Pool discovery, launch and the reconciler's start
+  report each claimable project's latest build for the current recipe on the
+  pool's agent image (`project_runtime:<project>`: `runtime_preparing`,
+  `runtime_failed`, or `null` when not built or not current) and refuse to start a
+  worker when every project it could serve is not ready ([worker
+  launch](worker-launch.spec.md)). The claim gate above is unchanged.
 - **Used image.** After the session starts, `POST /runtime/used` compares the
   container's image id to the selected id; mismatch → `409 runtime_image_mismatch`
   and hold. Labels and config are not trusted.
@@ -178,6 +184,7 @@ are declared but not yet running locally.
   app state, builder task in `main.py` lifespan.
 - `argus_api.tasks.service`: claim gate, `runtime_preparing` / `runtime_failed`
   holds, wake on build ready.
+- `argus_api.fleet.capabilities.runtime_check`: readiness at pool start.
 - `argus_api.config`: `project_runtime`, `runtime_image_repo`,
   `runtime_build_timeout_s`.
 - `integrations/nanoclaw/argus.ts`: `RuntimeHooks`, `ensureRuntime`,
@@ -191,3 +198,11 @@ are declared but not yet running locally.
   `test_project_runtime_api.py`, `test_mcp.py`; opt-in real Docker
   `test_runtime_docker.py` (`ARGUS_DOCKER_TESTS=1`,
   `ARGUS_RUNTIME_TEST_BASE=<local tools-layer agent image>`).
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider packages/core/tests/test_runtime.py packages/core/tests/test_test_services.py apps/api/tests/test_project_runtime.py apps/api/tests/test_project_runtime_api.py apps/api/tests/test_mcp.py`
+  - `make test-docker` runs the real-Docker integration tests (needs a Docker daemon); `apps/api/tests/test_runtime_docker.py` also needs `ARGUS_DOCKER_TESTS=1` and `ARGUS_RUNTIME_TEST_BASE=<local tools-layer agent image>`.
+- Verified: unit and fake-API level (recipe rendering, build gate, REST routes, MCP tools, test-service lifecycle) in the commands above. The opt-in Docker test is a real-Docker check on a local daemon; it has not been run as part of writing this section.
+- Not verified: image builds and smoke runs against real project recipes and registries, the shipped worker images with real harness CLIs, and any deployed or production node.

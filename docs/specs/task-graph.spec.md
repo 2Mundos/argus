@@ -100,3 +100,9 @@ Built in one PR:
    dangling edge, ordering, the done-task cutoff, `include_done` and archive,
    cross-project stubs without leaks, worker scope, MCP forwarding, and the
    layering helper. The look is checked with a screenshot.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_graph.py`; `make test` also runs `apps/dashboard/src/taskGraph.test.ts` and `apps/dashboard/src/views/ProjectGraph.test.tsx`.
+- Verified: unit and fake-API level against a test database, plus dashboard helper and component tests under jsdom.
+- Not verified: the graph's layout and look in a real browser (the spec says it is checked by screenshot, which this repository does not automate), and production.

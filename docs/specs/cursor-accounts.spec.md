@@ -127,3 +127,17 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   exact controlled nonce echoed in the CLI JSON result—not merely Argus task
   completion. Record outcomes in a dated ref when verified; see
   [2026-10-18 cursor fleet smoke](../runbooks/2026-10-18.cursor-fleet-smoke.ref.md).
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_cursor_accounts.py packages/core/tests/test_cursor_auth.py`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level. Import validation and the `executor` lease run
+  against an in-memory database and store; the channel stub and delegate run with fake
+  credentials (`integrations/nanoclaw/argus-cursor-stub.test.ts` only in a provisioned NanoClaw
+  checkout, `integrations/nanoclaw/engines/argus-delegate.test.mjs` under `node --test`).
+- Not verified: a live Cursor model call (none runs in CI); the fleet acceptance (native
+  CLI exit code 0 and a controlled nonce echo), recorded in
+  [the Cursor fleet smoke](../runbooks/2026-10-18.cursor-fleet-smoke.ref.md); any
+  production node.

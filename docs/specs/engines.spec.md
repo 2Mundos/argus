@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-12
+updated: 2026-11-14
 ---
 
 # Engines, executors and the local model
@@ -162,10 +162,11 @@ In scope:
 - **No silent fallback.** `argus-delegate` for an executor without
   credentials exits `78` and prints `{"blocked":"auth_missing"}`. It never
   substitutes another executor or provider. `argus-delegate EXECUTOR --auth-probe`
-  runs only those credential-presence and CLI-install gates (exit `0`, `78`, `127`; `124`
-  when `--version` hangs, which is inconclusive and never `ok`; it never asks the
-  provider whether the credential is accepted) for the
-  [executor probe](failure-classes.spec.md). A route passes over an engine without
+  runs those credential-presence and CLI-install gates, then one authenticated model-list
+  request to the provider (exit `0`, `78`, `127`; `79` when the provider answers 401 or
+  403; `124` when `--version` hangs, which is inconclusive and never `ok`; any other
+  answer, an error, or an executor with no safe request is `provider: "unproven"` with
+  exit `0`) for the [executor probe](failure-classes.spec.md). A route passes over an engine without
   an available account explicitly: the decision names that engine and why
   ([codex accounts](codex-accounts.spec.md)); with nothing usable it is
   `blocked`.
@@ -303,3 +304,18 @@ In scope:
   real Dockerfile states (`integrations/nanoclaw/fixtures/engines-dockerfile/`).
 - The dashboard combo reads `GET /api/engines` (a later increment); the
   catalogue already carries everything it needs.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_engines.py apps/api/tests/test_local_harness_routing.py`
+  - `node --test integrations/nanoclaw/engines/argus-delegate.test.mjs`
+  - `pnpm --filter @argus/dashboard exec vitest run src/views/Engines.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level. Engine and executor status, readiness records and
+  local routing run against an in-memory database and recorded readiness files; the
+  delegate runs with fake CLIs.
+- Not verified: the real harness and executor CLIs (Claude, Codex, opencode, Cursor
+  `agent`, `dsh`) and `integrations/nanoclaw/engines/smoke.sh` against a real agent image; local
+  validation runs against a real local model; the dashboard in a real browser; any
+  production node.
