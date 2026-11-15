@@ -13,15 +13,20 @@ import { spawn, spawnSync } from "node:child_process";
 // the artifacts, and the run's token usage (`usage`, `run_key`, `usage_report`; see
 // usage.mjs). Exit codes: 0 ok, 1 executor failed, 64 usage, 77 cwd not
 // allowed, 78 no credentials (nothing was run, nothing else was tried), 124
-// timeout, 127 executor not installed. `--auth-probe` runs only the credential and install
-// gates (no prompt, no model, no CLI call beyond `--version`) and uses the same 0/78/127.
+// timeout, 127 executor not installed. `--auth-probe` runs the credential and install
+// gates (no prompt, no model, no CLI call beyond `--version`), then one authenticated
+// metadata request to the provider (`GET .../models`, no model run). It uses the same
+// 0/78/127 and adds 79 (the provider answered 401 or 403: credential rejected).
 //
 // Model retries follow a pinned policy; it never switches executor or provider, and it never reads the
 // content of a credential: it only checks that one is present.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
+import tls from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CUSTOM_KEY_ENV,
@@ -987,14 +992,36 @@ export function executorJsonFailure(executor, stdoutText) {
 }
 
 /**
+ * The settings a probe session carries, or null. Only `ARGUS_ACCOUNT_SETTINGS` in the
+ * environment counts: the pinned task's `executor_settings` live in the policy context,
+ * which a probe session does not see. A malformed document or an executor that cannot
+ * take settings is ignored here (the run itself still refuses it).
+ */
+function probeSettings(executor, e) {
+  if (!settingsSupport(executor).length) return null;
+  try {
+    const settings = parseAccountSettings(e.ARGUS_ACCOUNT_SETTINGS);
+    if (settings?.label === "local" && !env(e, CUSTOM_KEY_ENV))
+      e = { ...e, [CUSTOM_KEY_ENV]: "argus-local-harness" };
+    return settings && { settings, env: e };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The credential and install gates of a run, without running anything: what `main` checks
  * before it reads the prompt. Presence of a credential and an installed CLI only; it never
- * contacts the provider, so a revoked or exhausted credential still passes. A CLI whose
- * `--version` does not answer in time is inconclusive (124, `inconclusive`), never `ok`.
+ * contacts the provider (`authProbeWithProvider` adds that). A CLI whose `--version` does
+ * not answer in time is inconclusive (124, `inconclusive`), never `ok`.
  */
-export function authProbe(
+export function authProbe(executor, e = process.env, opts = {}) {
+  return probeGates(executor, e, opts).result;
+}
+
+function probeGates(
   executor,
-  e = process.env,
+  e,
   { claudeStub = CLAUDE_GATEWAY_STUB, versionTimeoutMs = 15000 } = {},
 ) {
   let identity = { engine: e.ARGUS_ENGINE || "unknown", executor, probe: "auth_present" };
@@ -1005,9 +1032,13 @@ export function authProbe(
   }
   e = prepareExecutorEnv(executor, e, path.join(os.tmpdir(), "argus-auth-probe"));
   e = withCliToolsPath(e);
-  const auth = authStatus(executor, e, os.homedir(), null);
+  const withSettings = probeSettings(executor, e);
+  const settings = withSettings?.settings ?? null;
+  if (withSettings) e = withSettings.env;
+  const done = (result) => ({ result, env: e, identity, settings });
+  const auth = authStatus(executor, e, os.homedir(), settings);
   if (!auth.ok)
-    return {
+    return done({
       code: 78,
       report: {
         ...identity,
@@ -1015,20 +1046,229 @@ export function authProbe(
         need: auth.need,
         ...(auth.code ? { code: auth.code } : {}),
       },
-    };
+    });
   const cli = cliState(executor, e, versionTimeoutMs);
   if (cli === "timeout")
-    return { code: 124, report: { ...identity, inconclusive: "version_timeout" } };
+    return done({ code: 124, report: { ...identity, inconclusive: "version_timeout" } });
   if (cli === "missing")
-    return {
+    return done({
       code: 127,
       report: {
         ...identity,
         blocked: "not_installed",
         ...(executor === "dsh" ? { code: "dsh_not_installed" } : {}),
       },
+    });
+  return done({ code: 0, report: { ...identity, ok: true } });
+}
+
+const PROVIDER_TIMEOUT_MS = 10_000;
+
+/**
+ * The one metadata request that asks a provider whether it accepts this executor's
+ * credential, or `{ unproven }` with a fixed reason code when no safe request exists.
+ * Audit (docs/specs/failure-classes.spec.md 3.3.1):
+ *   claude   GET api.anthropic.com/v1/models; the credential comes from an env var
+ *            (API key, or the gateway sentinel). A `.credentials.json` login is never read.
+ *   codex    GET api.openai.com/v1/models with OPENAI_API_KEY. A ChatGPT login lives only in
+ *            auth.json (never read) and its host differs: unproven. With account settings,
+ *            GET <base_url>/models with the account key.
+ *   agent    unproven: the gateway injects only on the gRPC paths /agent.v1.* and
+ *            /aiserver.v1.*; there is no read-only call there that is safe to make.
+ *   opencode with account settings, GET <base_url>/models; otherwise the credential is in
+ *            auth.json or an attached server (never read): unproven.
+ *   copilot  GET api.individual.githubcopilot.com/models, a path the gateway injects on,
+ *            with the sentinel the host placed in COPILOT_GITHUB_TOKEN.
+ *   dsh      with account settings, GET <base_url>/models.
+ * The credential value goes only into the header of the request to the provider's own host
+ * (or the account's base URL); it is never printed, logged or reported.
+ */
+export function providerRequest(executor, e, settings) {
+  const key = (e[CUSTOM_KEY_ENV] ?? "").trim();
+  if (settings) {
+    if (!key) return { unproven: "no_env_credential" };
+    return {
+      url: `${settings.base_url}/models`,
+      headers: { authorization: `Bearer ${key}`, accept: "application/json" },
     };
-  return { code: 0, report: { ...identity, ok: true } };
+  }
+  switch (executor) {
+    case "claude": {
+      if ((e.ANTHROPIC_BASE_URL ?? "").trim()) return { unproven: "base_url_redirected" };
+      const headers = { "anthropic-version": "2023-06-01", accept: "application/json" };
+      const apiKey = (e.ANTHROPIC_API_KEY ?? "").trim();
+      const bearer = (e.ANTHROPIC_AUTH_TOKEN ?? e.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim();
+      if (apiKey) headers["x-api-key"] = apiKey;
+      else if (bearer) {
+        headers.authorization = `Bearer ${bearer}`;
+        headers["anthropic-beta"] = "oauth-2025-04-20";
+      } else return { unproven: "credential_not_in_env" };
+      return { url: "https://api.anthropic.com/v1/models?limit=1", headers };
+    }
+    case "codex": {
+      const apiKey = (e.OPENAI_API_KEY ?? "").trim();
+      if (!apiKey) return { unproven: "credential_not_in_env" };
+      return {
+        url: "https://api.openai.com/v1/models",
+        headers: { authorization: `Bearer ${apiKey}`, accept: "application/json" },
+      };
+    }
+    case "copilot":
+      return {
+        url: "https://api.individual.githubcopilot.com/models",
+        headers: {
+          authorization: `Bearer ${e.COPILOT_GITHUB_TOKEN}`,
+          "copilot-integration-id": "copilot-developer-cli",
+          accept: "application/json",
+        },
+      };
+    case "agent":
+      return { unproven: "no_read_only_endpoint" };
+    default:
+      return { unproven: "credential_not_in_env" };
+  }
+}
+
+const noProxy = (u, e) =>
+  (e.NO_PROXY ?? e.no_proxy ?? "")
+    .split(",")
+    .map((h) =>
+      h
+        .trim()
+        .toLowerCase()
+        .replace(/^\*?\./, ""),
+    )
+    .some((h) => h && (u.hostname === h || u.hostname.endsWith(`.${h}`) || h === "*"));
+
+/** Trust the gateway CA: NODE_EXTRA_CA_CERTS is merged by Node; a lone SSL_CERT_FILE is passed in. */
+function gatewayCa(e) {
+  if (e.NODE_EXTRA_CA_CERTS || !e.SSL_CERT_FILE) return undefined;
+  try {
+    return fs.readFileSync(e.SSL_CERT_FILE);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * GET `url` through the gateway proxy the session environment names (HTTPS via CONNECT, the
+ * gateway terminates TLS with its CA and injects the credential), directly for a NO_PROXY
+ * host. Resolves the HTTP status; the body is discarded unread, redirects are not followed.
+ * Rejects on a network error or `timeoutMs`.
+ */
+export function httpStatus(url, headers, e = process.env, timeoutMs = PROVIDER_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const secure = u.protocol === "https:";
+    let proxy = null;
+    try {
+      const raw = secure ? (e.HTTPS_PROXY ?? e.https_proxy) : (e.HTTP_PROXY ?? e.http_proxy);
+      if (raw && !noProxy(u, e)) proxy = new URL(raw);
+    } catch {
+      proxy = null;
+    }
+    const timer = setTimeout(() => done(new Error("timeout")), timeoutMs);
+    let live = [];
+    const done = (err, status) => {
+      clearTimeout(timer);
+      for (const x of live) x.destroy();
+      if (err) reject(err);
+      else resolve(status);
+    };
+    // `agent: false` keeps Node's own env-proxy support (NODE_USE_ENV_PROXY) out of the way:
+    // this function decides the route.
+    const get = (options) => {
+      const req = (secure ? https : http).request({ agent: false, ...options }, (res) => {
+        res.resume();
+        done(null, res.statusCode);
+      });
+      live.push(req);
+      req.on("error", done);
+      req.end();
+    };
+    const port = Number(u.port) || (secure ? 443 : 80);
+    if (!proxy)
+      return get({ hostname: u.hostname, port, path: `${u.pathname}${u.search}`, headers });
+    const proxyPort = Number(proxy.port) || (proxy.protocol === "https:" ? 443 : 80);
+    if (!secure)
+      return get({
+        hostname: proxy.hostname,
+        port: proxyPort,
+        path: url,
+        headers: { ...headers, host: u.host },
+      });
+    const connect = http.request({
+      hostname: proxy.hostname,
+      port: proxyPort,
+      method: "CONNECT",
+      path: `${u.hostname}:${port}`,
+      agent: false,
+    });
+    live.push(connect);
+    connect.on("error", done);
+    connect.on("connect", (res, socket) => {
+      live.push(socket);
+      if (res.statusCode !== 200) return done(new Error("proxy_refused"));
+      get({
+        hostname: u.hostname,
+        port,
+        path: `${u.pathname}${u.search}`,
+        headers,
+        ca: gatewayCa(e),
+        createConnection: () => tls.connect({ socket, servername: u.hostname, ca: gatewayCa(e) }),
+      });
+    });
+    connect.end();
+  });
+}
+
+/**
+ * Ask the provider whether it accepts the credential: 2xx accepted, 401/403 rejected, anything
+ * else (another status, a network error, a timeout, no safe endpoint) unproven.
+ */
+export async function providerAcceptance(
+  executor,
+  e,
+  settings,
+  { request = httpStatus, timeoutMs = PROVIDER_TIMEOUT_MS } = {},
+) {
+  const req = providerRequest(executor, e, settings);
+  if (req.unproven) return { state: "unproven", reason: req.unproven };
+  let status;
+  try {
+    status = await request(req.url, req.headers, e, timeoutMs);
+  } catch {
+    return { state: "unproven", reason: "request_failed" };
+  }
+  if (status >= 200 && status < 300) return { state: "accepted", status };
+  if (status === 401 || status === 403) return { state: "rejected", status };
+  return { state: "unproven", reason: "unexpected_status", status };
+}
+
+/**
+ * `authProbe` plus the provider's answer when the gates pass: accepted keeps exit 0 and says
+ * so, rejected is exit 79 (`blocked: "auth_rejected"`), unproven stays exit 0 with the reason.
+ */
+export async function authProbeWithProvider(executor, e = process.env, opts = {}) {
+  const gates = probeGates(executor, e, opts);
+  if (gates.result.code !== 0) return gates.result;
+  const answer = await providerAcceptance(executor, gates.env, gates.settings, opts);
+  const provider = {
+    provider: answer.state,
+    ...(answer.status ? { provider_status: answer.status } : {}),
+    ...(answer.reason ? { provider_reason: answer.reason } : {}),
+  };
+  if (answer.state === "rejected")
+    return { code: 79, report: { ...gates.identity, blocked: "auth_rejected", ...provider } };
+  return {
+    code: 0,
+    report: {
+      ...gates.identity,
+      ...(answer.state === "accepted" ? { probe: "provider_accepted" } : {}),
+      ok: true,
+      ...provider,
+    },
+  };
 }
 
 export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_STUB } = {}) {
@@ -1043,7 +1283,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   if (!EXECUTORS.includes(executor))
     finish(64, { ...identity, error: "usage", detail: "unknown executor", executors: EXECUTORS });
   if (opts.authProbe) {
-    const probed = authProbe(executor, e, { claudeStub });
+    const probed = await authProbeWithProvider(executor, e, { claudeStub });
     finish(probed.code, probed.report, opts.resultFile);
   }
 

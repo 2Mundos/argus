@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 
 # Failure classes
@@ -230,7 +230,7 @@ task. No model session starts and no attempt is spent.
 | The task's project has no repository URL in the pool map but the task needs write or a configured project checkout | `env_repository_unconfigured` |
 | The repository lease is taken and applied, and its OneCLI assignments are confirmed for the preflight's agent (3.3.1) | `env_repository_unavailable` |
 | A preflight session (3.3.1) proves read or write access for exactly this repository (see [project code availability](project-code-availability.spec.md)), within its deadline, and is torn down | `env_repository_unreachable` |
-| The leased executor has a credential and an installed CLI in a preflight session (3.3.1, "Executor probe"), for a task that delegates to a probed executor | `env_executor_auth` |
+| The leased executor has a credential and an installed CLI in a preflight session, and its provider does not answer 401 or 403 to a model-list request (3.3.1, "Executor probe"), for a task that delegates to a probed executor | `env_executor_auth` |
 | The task workspace has a place: the agent group dir is known and the task has a repository URL | `env_workspace_unconfigured` |
 | The task workspace can be created and read (no `EACCES`, `EPERM` or `EROFS`) | `env_workspace_permission` |
 | The task workspace is a real directory under the workspaces root and a git repository | `env_workspace_invalid` |
@@ -480,34 +480,59 @@ therefore runs in a bounded, ephemeral, model-free session:
 **Executor probe.** The same session machinery runs `argus-delegate EXECUTOR
 --auth-probe` as PID 1 for the leased (or pinned) executor, before any model session,
 with the same deadline, teardown and gateway lease. It runs the delegate's own pre-run
-gates (credential present for that executor, CLI installed: `--version`) and nothing else.
-Exit 0 proceeds; 78 (no credentials) and 127 (not installed) block `env_executor_auth`
-with fixed host-written text (at most 1,500 characters, scrubbed): nothing the container
-wrote is copied. No attempt is spent and no model runs. It probes `claude`, `codex` and
-`agent` (Cursor), whose credential the session sees from the gateway alone; `opencode`,
-`copilot` and custom or local accounts depend on policy context or env the worker path
-adds, so they are not probed. A task with no delegated executor is not probed.
+gates (credential present for that executor, CLI installed: `--version`), then asks the
+provider once whether it accepts the credential: one authenticated `GET .../models`
+(a metadata list, no prompt, no model run), sent through the gateway proxy the session
+names (`HTTPS_PROXY`, CONNECT, the gateway's CA; a `NO_PROXY` host goes direct), 10 s
+limit, no redirect followed, body discarded unread. The credential goes only into that
+request's header; it is never printed, logged or reported, and no `auth.json` is read.
+Exit 0 proceeds; 78 (no credentials), 79 (the provider answered 401 or 403) and 127 (not
+installed) block `env_executor_auth` with fixed host-written text (at most 1,500
+characters, scrubbed): nothing the container wrote is copied. No attempt is spent and no
+model runs. A task with no delegated executor is not probed.
 
-The probe keeps four states apart, and only the first two can block:
+Per executor (audit; the delegate's `providerRequest` is the code):
 
-1. **Credential present** in the session (exit 78 when absent). Presence only: the
-   delegate never reads a credential's content, so a revoked, expired or exhausted one
-   passes.
+| Executor | In the preflight session | Provider request | Without a request |
+| --- | --- | --- | --- |
+| `claude` | probed; the Claude stub restores the gateway sentinel | `GET api.anthropic.com/v1/models` with the env credential (API key, or the sentinel as a bearer token) | a `.credentials.json` login is not read: unproven; a redirected `ANTHROPIC_BASE_URL` (local harness) is unproven and gets no key |
+| `codex` | probed; the Codex stub | `GET api.openai.com/v1/models` with `OPENAI_API_KEY` when it is in the env | a ChatGPT login lives only in `auth.json` (never read) and is served from another host: unproven |
+| `agent` (Cursor) | probed; the Cursor stub | none | unproven: the gateway injects only on `/agent.v1.*` and `/aiserver.v1.*`, so there is no read-only call that is safe to make |
+| `copilot` | probed; the gateway contribution sets the sentinel for the agent group | `GET api.individual.githubcopilot.com/models`, a path the vault injects on, with the sentinel | none |
+| `opencode` | not probed | with `ARGUS_ACCOUNT_SETTINGS` and the account key in the delegate's env: `GET <base_url>/models` | an `auth.json` or an attached server: unproven |
+| custom account (on `opencode`, `codex`, `dsh`) | not probed | as above | the base URL and key come from the task's `executor_settings` in the policy context and from the worker's env, which a probe session does not have |
+| local account (on `opencode`) | not probed | as above; the server ignores the token, so it sends the run's placeholder | same reason as custom |
+
+`opencode`, custom and local are not in `PROBED_EXECUTORS` because a probe in the
+preflight session would see no credential and block a working account falsely: the
+preflight addresses the probe by executor name only, with no policy context. The delegate
+code path exists and is tested for them (a run that has `ARGUS_ACCOUNT_SETTINGS`), but
+nothing calls it from the preflight until the policy context reaches the probe session.
+
+The probe keeps four states apart, and only the first three can block:
+
+1. **Credential present** in the session (exit 78 when absent). Presence only.
 2. **CLI available** (`--version` answers; exit 127 when the binary is missing).
-3. **Provider acceptance**: not proven by the probe, by any report field or by any
-   code path. Nothing is called "authenticated" on its evidence.
-4. **Unknown / inconclusive**: a session that cannot finish, a failed teardown, a probe
-   that throws, an image whose delegate lacks `--auth-probe` (exit 64), an unknown exit
-   code, or a CLI whose `--version` does not answer in 15 s (exit 124,
-   `inconclusive: "version_timeout"`). The task proceeds under the delegate's own gate
-   at run time; an inconclusive probe is never `ok` and never a block.
+3. **Provider rejection**: the metadata request answered 401 or 403 (exit 79,
+   `blocked: "auth_rejected"`, `provider: "rejected"`). Only these two statuses block.
+4. **Unknown / inconclusive**: any other status (404, 429, 5xx), a network or TLS error, a
+   timeout, an executor with no safe request, a session that cannot finish, a failed
+   teardown, a probe that throws, an image whose delegate lacks `--auth-probe` (exit 64),
+   an unknown exit code, or a CLI whose `--version` does not answer in 15 s (exit 124,
+   `inconclusive: "version_timeout"`). Exit 0 reports `provider: "unproven"` with a
+   `provider_reason` code; the task proceeds under the delegate's own gate at run time.
+
+A 2xx answer is `provider: "accepted"` (`probe: "provider_accepted"`). It proves that the
+provider accepted a read of its model list with that credential at that moment.
 
 | Evidence | Proves | Does not prove |
 | --- | --- | --- |
-| `argus-delegate --auth-probe` exit 0 | In a session of the agent image with the gateway contribution, the delegate's credential gate passes for that executor and its CLI answers `--version`. | That the provider accepts the credential (a revoked, expired or exhausted one passes), that the gateway injects it on the provider's host, the account's quota, or any model. The CLI is never asked to authenticate or run. |
+| `argus-delegate --auth-probe` exit 0 with `provider: "accepted"` | The credential gate and CLI check pass, and the provider answered 2xx to a model-list request carrying the credential. | That the account has quota, that the chosen model is allowed, or that a run works: no model was called. |
+| Exit 0 with `provider: "unproven"` | The credential gate and CLI check pass. | That the provider accepts the credential (a revoked one passes when no request was possible or the provider answered otherwise). |
+| Exit 79 | The provider answered 401 or 403 to the model-list request. | Why: a revoked or expired credential, or a gateway that did not inject for that host and path. The text names both. |
 | Exit 124, 64, other, or a probe error | Nothing. | Whether the credential or the CLI is usable; the task proceeds. |
 | Exit 78 / 127 | No credential was visible to the executor in the session, or its CLI is missing. | Which side is at fault (lease not applied, stub not mounted, image); the text names both. |
-| Offline tests with a fake docker CLI | The host's control flow: argv, exit-code mapping, redaction, teardown on timeout. | Any real executor, gateway or image. |
+| Offline tests (fake docker CLI, mocked provider status, local sockets) | The host's control flow and the delegate's status mapping, request shape and fail-open paths. | Any real provider, gateway injection, TLS through the gateway, or image. |
 
 ## 3.4 The worker can say "environment"
 
@@ -541,6 +566,11 @@ and whether the model's or the work's own output can forge it.
 
 ## Open items
 
+- Executor probe: the provider request is proven only against mocks and local sockets.
+  Real-gateway injection on the probed hosts and paths is not measured; `agent`, a
+  ChatGPT-login `codex` and a Claude login file stay unproven; `opencode` and custom or
+  local accounts are not probed by the preflight until the policy context reaches the probe
+  session (3.3.1).
 - Full recovery of a private-repository 404 whose injection is missing is pending a
   supported OneCLI evidence or rule read (published policy rule or request log for the exact
   agent). The host-side interface (`InjectionEvidenceSource`) and the bounded re-arm exist and
@@ -646,14 +676,20 @@ and whether the model's or the work's own output can forge it.
     another pool, a stale fail and the reaper do not promote; unblock and a
     memory change reset, a retry does not; the cap still ends the loop.
 - Executor probe (3.3.1): `runExecutorPreflight` in `argus-repo-preflight.test.ts`
-  (exit 0, 78 and 127 mapping, redaction, an unprobed executor, and a hung session or
-  exit 64, 124, 1 or none as inconclusive); `argus-delegate.test.mjs` (`--auth-probe`
-  exit 0/78/127 with nothing run, and a `--version` that hangs is 124, never ok or 127);
+  (exit 0, 78, 79 and 127 mapping for claude, codex, agent and copilot, redaction, an
+  unprobed executor, and a hung session or exit 64, 124, 1 or none as inconclusive);
+  `argus-delegate.test.mjs` (`--auth-probe` exit 0/78/127 with nothing run, a `--version`
+  that hangs is 124, never ok or 127; with a mocked provider, per executor and account
+  kind: 200 accepted, 401 and 403 exit 79, 429, 404, 500 and a network error unproven and
+  exit 0; no request for `agent` or a credential held only in a file; the transport
+  against local sockets: direct, forward proxy, `NO_PROXY`, timeout, refused CONNECT);
   the channel tests in `argus-accounts.test.ts` ("executor credential probe in the
   channel": a 78 or 127 block is `env_executor_auth` with the attempt, no session, no
   `/fail`; no delegated executor is never probed; a probe that throws proceeds and
   reports nothing authenticated; a clean probe runs before the session). Not verified:
-  provider acceptance of any credential, and a real image's delegate.
+  a real provider's answer, the gateway injecting on the probed host and path (a gateway
+  that does not would answer 401 and block), TLS through the real gateway CA, and a real
+  image's delegate.
 - Not verified: real Docker sessions dying, a real NanoClaw host lost mid-claim,
   whether Docker sets `OOMKilled` when a non-init process of the session is
   killed (the [OOM smoke](../runbooks/2026-10-31.oom-smoke.ref.md) checks the
