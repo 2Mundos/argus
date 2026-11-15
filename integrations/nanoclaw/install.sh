@@ -576,6 +576,9 @@ cp "$here/overlays/claude-rate-limit.ts" "$here/overlays/claude-rate-limit.test.
 # Codex's usage limit ("You've hit your usage limit … try again at …") likewise.
 cp "$here/overlays/codex-usage-limit.ts" "$here/overlays/codex-usage-limit.test.ts" "$providers_dir/"
 python3 "$here/patch-claude-rate-limit.py" "$target"
+# A task run's unwrapped final reply (a bare `COMPLETE:`) must reach the send_message nudge, not
+# the chat wrap-nudge: the task-run result door drops both plain text and <message> blocks.
+python3 "$here/patch-task-unwrapped-nudge.py" "$target"
 # The harness's own token usage (claude.ts, codex.ts) for the host to post (account usage spec 3.10).
 cp "$here/overlays/harness-usage.ts" "$here/overlays/harness-usage.test.ts" "$providers_dir/"
 python3 "$here/patch-harness-usage.py" "$target"
