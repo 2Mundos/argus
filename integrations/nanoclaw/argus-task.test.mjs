@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
-import { ciSummary, digestLog, EXIT, main, waitCap } from "./argus-task.mjs";
+import { ciSummary, digestLog, EXIT, main, pollDelay, waitCap } from "./argus-task.mjs";
 
 const REPO = "https://git.example.com/team/project";
 const ENV = {
@@ -182,7 +182,7 @@ describe("wait ci", () => {
       },
     });
     assert.equal(r.code, EXIT.ok);
-    assert.equal(r.elapsed, 30);
+    assert.equal(r.elapsed, 3); // first re-check is fast: the wait reacts in seconds
     assert.deepEqual([r.out.state, r.out.failed, r.out.running], ["failure", ["lint"], 0]);
   });
 
@@ -216,11 +216,11 @@ describe("wait ci", () => {
       },
     });
     assert.equal(r.code, EXIT.ok, r.err);
-    assert.equal(r.elapsed, 30);
+    assert.equal(r.elapsed, 3);
     assert.equal(r.calls.filter((c) => c.startsWith("GET /statuses")).length, 2);
   });
 
-  it("checks once per interval and returns when CI finishes", async () => {
+  it("checks fast at first, then the interval, and returns when CI finishes", async () => {
     let checks = 0;
     let during = null;
     const r = await run(["wait", "ci", "--pr", "7"], {
@@ -238,7 +238,7 @@ describe("wait ci", () => {
     assert.equal(r.code, EXIT.ok);
     assert.equal(r.out.state, "failure");
     assert.deepEqual(r.out.failed, ["test"]);
-    assert.equal(r.elapsed, 60); // checks at 0, 30 and 60 s
+    assert.equal(r.elapsed, 9); // checks at 0, 3 and 9 s: 3 then 6, doubling to the interval
     assert.deepEqual(during, { on: "ci", ref: "#7", since: iso(0), sha: HEAD });
     // The terminal record replaces the pending one, so the host can supersede the milestone.
     assert.deepEqual(JSON.parse(readFileSync(join(signals(r.cwd), "waiting.json"), "utf8")), {
@@ -482,6 +482,91 @@ describe("wait ci pins one commit", () => {
   });
 });
 
+describe("wait merge", () => {
+  const merged = (extra = {}) =>
+    pr({ state: "closed", merged: true, merged_at: iso(4), merge_commit_sha: NEW, ...extra });
+
+  it("returns as soon as the PR is merged, with the merge evidence", async () => {
+    const r = await run(["wait", "merge", "--pr", "7"], {
+      routes: { "GET /pulls/7": merged() },
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.status, "merged");
+    assert.equal(r.out.merged, true);
+    assert.equal(r.out.merge_commit_sha, NEW);
+    assert.equal(r.out.merged_at, iso(4));
+    assert.equal(r.elapsed, 0);
+  });
+
+  it("keeps waiting while the PR is open and reacts on the first fast re-check", async () => {
+    let reads = 0;
+    const r = await run(["wait", "merge", "--pr", "7"], {
+      routes: {
+        // open on the first read, merged on the second
+        "GET /pulls/7": () => (++reads === 1 ? pr({ state: "open", merged: false }) : merged()),
+      },
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.elapsed, 3);
+    assert.equal(r.out.status, "merged");
+  });
+
+  it("treats a PR closed without a merge as terminal, not as success", async () => {
+    const r = await run(["wait", "merge", "--pr", "7"], {
+      routes: { "GET /pulls/7": pr({ state: "closed", merged: false }) },
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.status, "closed without merge");
+    assert.equal(r.out.merged, false);
+  });
+
+  it("refuses --sha: a merge wait follows the PR state, not a commit", async () => {
+    const r = await run(["wait", "merge", "--pr", "7", "--sha", NEW], {
+      routes: { "GET /pulls/7": merged() },
+    });
+    assert.equal(r.code, 2);
+    assert.match(r.err, /wait merge takes no --sha/);
+  });
+
+  it("a ci wait ends when the PR is merged, instead of spinning to the cap", async () => {
+    // The stale worker: CI still reports running checks, but the owner already merged.
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "100"], {
+      routes: {
+        "GET /pulls/7": merged(),
+        [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "pending" }],
+      },
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.status, "merged");
+    assert.equal(r.out.merged, true);
+    assert.equal(r.out.merge_commit_sha, NEW);
+    assert.equal(r.elapsed, 0);
+    // No CI state to record: the pending record is cleared, not rewritten with a half outcome.
+    assert.equal(existsSync(join(signals(r.cwd), "waiting.json")), false);
+  });
+
+  it("a ci wait ends on a closed PR too, and never calls the statuses API", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "100"], {
+      routes: { "GET /pulls/7": pr({ state: "closed", merged: false }) },
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.status, "closed without merge");
+    assert.equal(r.calls.filter((c) => c.startsWith("GET /statuses")).length, 0);
+  });
+});
+
+describe("pollDelay", () => {
+  it("starts fast, doubles, and never exceeds the configured interval", () => {
+    const delays = [0, 1, 2, 3, 4, 5, 9].map((n) => pollDelay(n, 30_000));
+    assert.deepEqual(delays, [3000, 6000, 12000, 24000, 30000, 30000, 30000]);
+  });
+
+  it("respects a smaller interval as the ceiling", () => {
+    const delays = [0, 1, 2, 3].map((n) => pollDelay(n, 10_000));
+    assert.deepEqual(delays, [3000, 6000, 10000, 10000]);
+  });
+});
+
 describe("wait deadline", () => {
   const link = (body) =>
     new Response(JSON.stringify(body), { headers: { link: '<x>; rel="next"' } });
@@ -535,7 +620,8 @@ describe("wait deadline", () => {
       });
       assert.equal(r.code, EXIT.pending, r.err);
       assert.equal(r.elapsed, 40);
-      assert.equal(r.calls.filter((c) => c === statuses).length, 2);
+      // checks at 0, 3, 9 and 21 s; the next would be 45 s, past the cap
+      assert.equal(r.calls.filter((c) => c === statuses).length, 4);
     }
   });
 
