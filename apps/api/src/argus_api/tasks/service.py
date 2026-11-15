@@ -14,9 +14,8 @@ from typing import Any, NamedTuple
 from uuid import uuid4
 
 import aiosqlite
-from argus_core.accounts import ENGINE_PROVIDERS, LOCAL_PROVIDER
+from argus_core.accounts import ENGINE_PROVIDERS
 from argus_core.agents import AgentState
-from argus_core.auth import Scope
 from argus_core.continuation import (
     ArtifactKind,
     ArtifactState,
@@ -33,25 +32,14 @@ from argus_core.continuation import (
     clean,
     merge_acceptance,
 )
-from argus_core.custom_accounts import CustomConfig, serves_role
-from argus_core.decisions import REVIEW_OPTIONS, Audience, DecisionKind
-from argus_core.difficulty import Difficulty, DifficultySource, classify
+from argus_core.decisions import Audience, DecisionKind
+from argus_core.difficulty import DifficultySource, classify
 from argus_core.kinds import TaskKind
-from argus_core.task_edit import (
-    CLEARABLE,
-    TaskAttempt,
-    TaskAttemptSummary,
-    TaskChanges,
-    editable_fields,
-)
 from argus_core.tasks import (
     ENV_OOM,
     MAX_DEPENDENCIES,
-    TERMINAL,
     Action,
     Deliverable,
-    ExecutorModel,
-    HarnessModel,
     LeaseObservation,
     PromptTrust,
     RetryClass,
@@ -60,22 +48,17 @@ from argus_core.tasks import (
     Task,
     TaskCreate,
     TaskResult,
-    TaskState,
-    check_harness_providers,
     retry_class,
     retry_delay_s,
     validate_milestone,
 )
-from pydantic import ValidationError
 
 from argus_api import orchestrator
 from argus_api.access import record_lease_grant
-from argus_api.accounts.eligibility import engine_pool
 from argus_api.accounts.usage import insert_usage
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.disk_guard import DiskGuard
-from argus_api.engine_choice import EngineAccount, EngineChoice
 from argus_api.errors import (
     ConflictError,
     ForbiddenError,
@@ -92,7 +75,36 @@ from argus_api.tasks import continuation as cont
 from argus_api.tasks import cost as task_cost
 from argus_api.tasks import defaults as task_defaults
 from argus_api.tasks import deliverable, steers
+from argus_api.tasks.archive import archive, archive_matching, unarchive
 from argus_api.tasks.cost import BUDGET_EXHAUSTED
+from argus_api.tasks.edit import (
+    _check_new_pins,
+    _check_pages_exist,
+    _digest,
+    _pin_json,
+    _providers_json,
+    _resolve_harness_account,
+    _snapshot_attempt,
+    attempt_definitions,
+    attempt_summaries,
+    edit_task,
+    set_dependencies,
+)
+from argus_api.tasks.engine import (
+    _check_engine_lease,
+    _record_runtime_providers,
+    _restriction_met,
+    attempt_model_switch,
+    awaiting_quota,
+    can_serve,
+    engine_capacity,
+    engine_choice_for,
+    executor_provider,
+    manages_accounts,
+    prefers_local,
+    record_model_switch,
+    wake_waiting,
+)
 from argus_api.tasks.exits import (
     _NOT_CONFIRMED,
     ATTEMPT_PROGRESS_SQL,
@@ -104,7 +116,6 @@ from argus_api.tasks.exits import (
     _exit_confirmed,
     _oom_outcome,
     _record_auto_resumed,
-    reset_oom_streak,
 )
 from argus_api.tasks.leases import (
     Lease,
@@ -117,16 +128,27 @@ from argus_api.tasks.leases import (
     renew,
     renew_paused_disk,
 )
+from argus_api.tasks.manage import (
+    ENV_DISK_FULL,
+    RELEASE_REASON_MAX,
+    approve,
+    cancel,
+    check_reviewer,
+    release,
+    release_agent_tasks,
+    retry,
+    review,
+    review_failed,
+    shed_disk_full,
+    unblock,
+)
 from argus_api.tasks.reads import (
-    _JSON_FIELDS,
-    _PIN_FIELDS,
     _TICK,
     S,
     _agent_state,
     _deadline,
     _row,
     _states,
-    _states_of,
     get_task,
     task_row,
 )
@@ -134,7 +156,6 @@ from argus_api.tasks.reasons import (
     ADMISSION_REASONS,
     AWAITING_QUOTA,
     NO_COMPATIBLE_WORKER,
-    QUOTA_WAIT_REASONS,
     RUNTIME_FAILED,
     RUNTIME_PREPARING,
     RUNTIME_SWITCH_FAILED,
@@ -145,7 +166,6 @@ from argus_api.tasks.transitions import (
     _apply,
     _budget_block,
     _dependency_failed_event,
-    _deps_done,
     _escalation,
     check_acceptance_met,
     moot_decisions,
@@ -700,424 +720,6 @@ async def _note_incompatible(tx: Tx, agent_id: str) -> None:
             )
 
 
-async def prefers_local(conn: aiosqlite.Connection, task_id: str) -> bool:
-    """A trivial task ranks the local model first (task difficulty spec 3)."""
-    row = await _row(conn, task_id)
-    return row["difficulty"] == Difficulty.TRIVIAL
-
-
-async def executor_provider(conn: aiosqlite.Connection, task_id: str) -> str | None:
-    """The provider of the task's pinned executor, None when not pinned."""
-    pin = (await _row(conn, task_id))["executor_model"]
-    return None if pin is None else ExecutorModel.model_validate_json(pin).provider
-
-
-def pinned_provider(row: aiosqlite.Row) -> str | None:
-    """The provider the task's harness model pin needs, None when not pinned."""
-    pin = row["harness_model"]
-    return None if pin is None else HarnessModel.model_validate_json(pin).provider
-
-
-def engine_choice(
-    row: aiosqlite.Row,
-    accounts: list[EngineAccount],
-    known: set[str],
-    runtime_providers: list[str] | None = None,
-) -> EngineChoice:
-    """The one decision of which engine providers and account a task may use now: a
-    harness pin is a preference, kept while its provider (or account) is usable and
-    otherwise dropped for the stored `account_providers` (task models spec 3.2-3.4).
-    The claim gate, waking, lease, `exhausted` and `fail_task` all read it. A pinned
-    account that no longer exists never falls back: the task waits for its edit."""
-    stored = (
-        None
-        if row["account_providers"] is None
-        else json.loads(row["account_providers"])
-    )
-    pin = pinned_provider(row)
-    if pin is not None and stored is not None and pin not in stored:
-        return EngineChoice([])  # edits refuse this; never widen if it happens anyway
-    online = [
-        a
-        for a in accounts
-        if runtime_providers is None or a.provider in runtime_providers
-    ]
-    reason = None
-    if (account_id := row["harness_account"]) is not None:
-        if account_id not in known:
-            return EngineChoice([], account_id)
-        mine = [a for a in accounts if a.id == account_id]
-        if any(a.status == "usable" for a in online if a.id == account_id):
-            return EngineChoice([mine[0].provider], account_id)
-        reason = _unusable_reason(mine, online)
-    if pin is not None:
-        mine = [a for a in accounts if a.provider == pin]
-        if any(a.status == "usable" for a in online if a.provider == pin):
-            return EngineChoice([pin], None, reason)
-        reason = reason or _unusable_reason(mine, online)
-    return EngineChoice(stored, None, reason)
-
-
-def _unusable_reason(mine: list[EngineAccount], online: list[EngineAccount]) -> str:
-    """Why the pinned account(s) cannot serve: `offline` when no runtime applies
-    them (or none is known), `exhausted` when any is spent or full, else `disabled`."""
-    reachable = [a for a in mine if a in online]
-    if not reachable:
-        return "offline"
-    if any(a.status == "exhausted" for a in reachable):
-        return "exhausted"
-    return "disabled"
-
-
-async def known_engine_accounts(conn: aiosqlite.Connection) -> set[str]:
-    async with conn.execute("SELECT id FROM accounts") as cur:
-        return {r[0] for r in await cur.fetchall()}
-
-
-async def engine_accounts(
-    conn: aiosqlite.Connection, now: datetime, agent_id: str | None = None
-) -> list[EngineAccount]:
-    """Every engine account with its `status` for the pin preference. An account the
-    caller holds counts even at `max_leases`."""
-    async with conn.execute(
-        "SELECT a.id, a.provider, a.config, a.state, a.exhausted_until, a.max_leases,"
-        " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
-        "  AND l.released_at IS NULL) AS active,"
-        " EXISTS (SELECT 1 FROM account_leases l WHERE l.account_id = a.id"
-        "  AND l.agent_id = ? AND l.role = 'engine'"
-        "  AND l.released_at IS NULL) AS mine FROM accounts a",
-        (agent_id,),
-    ) as cur:
-        rows = await cur.fetchall()
-    out = []
-    for r in rows:
-        config = CustomConfig.model_validate_json(r["config"]) if r["config"] else None
-        if r["provider"] not in ENGINE_PROVIDERS or not serves_role(
-            r["provider"], config, "engine"
-        ):
-            continue
-        until = r["exhausted_until"] and datetime.fromisoformat(r["exhausted_until"])
-        full = (
-            r["max_leases"] is not None
-            and r["active"] >= r["max_leases"]
-            and not r["mine"]
-        )
-        held_back = r["state"] == "exhausted" and (not until or until > now)
-        if r["state"] == "disabled":
-            status = "disabled"
-        else:
-            status = "exhausted" if held_back or full else "usable"
-        out.append(EngineAccount(r["id"], r["provider"], status))
-    return out
-
-
-async def engine_choice_for(
-    conn: aiosqlite.Connection,
-    now: datetime,
-    row: aiosqlite.Row,
-    agent_id: str | None,
-    runtime_providers: list[str] | None,
-) -> EngineChoice:
-    """`engine_choice` over the registry as the caller sees it."""
-    return engine_choice(
-        row,
-        await engine_accounts(conn, now, agent_id),
-        await known_engine_accounts(conn),
-        runtime_providers,
-    )
-
-
-async def record_model_switch(
-    tx: Tx,
-    task_id: str,
-    attempt: int,
-    agent_id: str,
-    reason: str,
-    leased: dict[str, str],
-) -> dict[str, Any] | None:
-    """A harness pin fell back to the account the engine lease landed on (task models
-    spec 3.3): a `task.model_switched` event and the attempt snapshot's `model_switch`.
-    `from` is the pin (provider, model, account id), `to` the leased account (ids and
-    names only; its model is the channel's policy default, unknown here). Once per
-    attempt and account. Returns the record, None when already recorded."""
-    row = await _row(tx.conn, task_id)
-    pin = row["harness_model"] and HarnessModel.model_validate_json(
-        row["harness_model"]
-    )
-    provider = pin.provider if pin else None
-    if row["harness_account"] is not None:
-        async with tx.conn.execute(
-            "SELECT provider FROM accounts WHERE id = ?", (row["harness_account"],)
-        ) as cur:
-            found = await cur.fetchone()
-        provider = found["provider"] if found else provider
-    switch = {
-        "from": {
-            "provider": provider,
-            "model": pin.model if pin else None,
-            "account_id": row["harness_account"],
-        },
-        "to": {
-            "provider": leased["provider"],
-            "model": None,
-            "account_id": leased["id"],
-            "account_name": leased["name"],
-        },
-        "reason": reason,
-        "attempt": attempt,
-    }
-    async with tx.conn.execute(
-        "SELECT id, definition FROM task_attempts WHERE task_id = ? AND attempt = ?"
-        " ORDER BY id DESC LIMIT 1",
-        (task_id, attempt),
-    ) as cur:
-        snapshot = await cur.fetchone()
-    if snapshot is None:
-        return None
-    definition = json.loads(snapshot["definition"])
-    if (definition.get("model_switch") or {}).get("to", {}).get("account_id") == leased[
-        "id"
-    ]:
-        return None
-    definition["model_switch"] = switch
-    await tx.conn.execute(
-        "UPDATE task_attempts SET definition = ? WHERE id = ?",
-        (json.dumps(definition), snapshot["id"]),
-    )
-    await record(
-        tx, f"agent:{agent_id}", "task", task_id, "task.model_switched", switch
-    )
-    return switch
-
-
-async def attempt_model_switch(
-    conn: aiosqlite.Connection, task_id: str, attempt: int
-) -> dict[str, Any] | None:
-    """The `model_switch` the attempt snapshot carries, None when the pin held."""
-    async with conn.execute(
-        "SELECT definition FROM task_attempts WHERE task_id = ? AND attempt = ?"
-        " ORDER BY id DESC LIMIT 1",
-        (task_id, attempt),
-    ) as cur:
-        row = await cur.fetchone()
-    return json.loads(row["definition"]).get("model_switch") if row else None
-
-
-async def _restriction_met(
-    tx: Tx,
-    providers: list[str],
-    runtime_providers: list[str] | None,
-    agent_id: str | None = None,
-    account_id: str | None = None,
-) -> bool:
-    """Can the caller start a task allowing `providers` now: the runtime applies one
-    of them and either the caller already holds an engine lease of one, or an account
-    of one is usable (available or past its reset, below `max_leases`; an
-    unreachable local model is disabled by its probe, so it never counts). With
-    `account_id` (a harness account pin) only that account counts, held or usable."""
-    wanted = sorted(set(providers) & set(runtime_providers or []))
-    if not wanted:
-        return False
-    async with tx.conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM account_leases l JOIN accounts a"
-        "  ON a.id = l.account_id WHERE l.agent_id = ? AND l.role = 'engine'"
-        "  AND l.released_at IS NULL"
-        "  AND a.provider IN (SELECT value FROM json_each(?))"
-        "  AND (? IS NULL OR a.id = ?))"
-        " OR EXISTS (SELECT 1 FROM accounts a"
-        " WHERE a.provider IN (SELECT value FROM json_each(?))"
-        "  AND (? IS NULL OR a.id = ?)"
-        "  AND (a.state = 'available'"
-        "   OR (a.state = 'exhausted' AND a.exhausted_until <= ?))"
-        "  AND (a.max_leases IS NULL OR a.max_leases >"
-        "   (SELECT count(*) FROM account_leases l"
-        "    WHERE l.account_id = a.id AND l.released_at IS NULL)))",
-        (
-            agent_id,
-            json.dumps(wanted),
-            account_id,
-            account_id,
-            json.dumps(wanted),
-            account_id,
-            account_id,
-            ts(tx.now),
-        ),
-    ) as cur:
-        row = await cur.fetchone()
-    return bool(row and row[0])
-
-
-async def manages_accounts(conn: aiosqlite.Connection) -> bool:
-    """Does the fleet manage model accounts at all (else claims are never gated)?"""
-    async with conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM accounts"
-        " WHERE provider IN (SELECT value FROM json_each(?)))",
-        (json.dumps(sorted(ENGINE_PROVIDERS)),),
-    ) as cur:
-        row = await cur.fetchone()
-    return bool(row and row[0])
-
-
-async def _record_runtime_providers(
-    tx: Tx, agent_id: str, runtime_providers: list[str]
-) -> bool:
-    """Store the providers the agent's runtime applies (its latest claim). True
-    when that adds a provider no live agent declared before."""
-    wanted = sorted(set(runtime_providers))
-    before = await _served_providers(tx.conn)
-    async with tx.conn.execute(
-        "SELECT runtime_providers FROM agents WHERE id = ?", (agent_id,)
-    ) as cur:
-        row = await cur.fetchone()
-    if row is None or (row[0] and json.loads(row[0]) == wanted):
-        return False
-    await tx.conn.execute(
-        "UPDATE agents SET runtime_providers = ? WHERE id = ?",
-        (json.dumps(wanted), agent_id),
-    )
-    return before is not None and not set(wanted) <= before
-
-
-async def _served_providers(conn: aiosqlite.Connection) -> set[str] | None:
-    """Providers some live (active) agent's runtime applies, as declared on its
-    claims; None when no live agent declared any (older workers): then every
-    provider counts, as before."""
-    async with conn.execute(
-        "SELECT DISTINCT p.value FROM agents a, json_each(a.runtime_providers) p"
-        " WHERE a.state = 'active' AND a.runtime_providers IS NOT NULL"
-    ) as cur:
-        rows = await cur.fetchall()
-    return {r[0] for r in rows} or None
-
-
-async def engine_capacity(tx: Tx) -> list[list[Any]]:
-    """`[provider, slots, account_id]` of each usable engine account, cloud before
-    the local model: how many more tasks it can serve now. Slots are the free lease slots plus
-    the engine leases held by agents with no claimed task (they can take one at
-    once); None means no lease limit. Accounts with no slot are left out, and so are
-    accounts of a provider no live agent's runtime can apply (a `custom` account no
-    worker runs is no capacity)."""
-    served = await _served_providers(tx.conn)
-    async with tx.conn.execute(
-        "SELECT a.id, a.provider, a.max_leases,"
-        " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
-        "  AND l.released_at IS NULL) AS active,"
-        " (SELECT count(*) FROM account_leases l WHERE l.account_id = a.id"
-        "  AND l.released_at IS NULL AND l.role = 'engine' AND NOT EXISTS ("
-        "   SELECT 1 FROM tasks t WHERE t.state = 'claimed'"
-        "   AND t.assignee_agent_id = l.agent_id)) AS idle"
-        " FROM accounts a WHERE a.state = 'available'"
-        "  OR (a.state = 'exhausted' AND a.exhausted_until <= ?)"
-        " ORDER BY a.priority DESC, a.id",
-        (ts(tx.now),),
-    ) as cur:
-        rows = await cur.fetchall()
-    out: list[list[Any]] = []
-    for r in rows:
-        if r["provider"] not in ENGINE_PROVIDERS:
-            continue
-        if served is not None and r["provider"] not in served:
-            continue
-        if r["max_leases"] is None:
-            out.append([r["provider"], None, r["id"]])
-            continue
-        slots = max(0, r["max_leases"] - r["active"]) + r["idle"]
-        if slots > 0:
-            out.append([r["provider"], slots, r["id"]])
-    out.sort(key=lambda c: c[0] == LOCAL_PROVIDER)  # stable: cloud first
-    return out
-
-
-async def _capacity_choice(
-    tx: Tx, row: aiosqlite.Row, capacity: list[list[Any]]
-) -> EngineChoice:
-    """`engine_choice` over the accounts that have a slot now (waking, parking)."""
-    return engine_choice(
-        row,
-        [
-            EngineAccount(c[2], c[0], "usable")
-            for c in capacity
-            if c[1] is None or c[1] > 0
-        ],
-        await known_engine_accounts(tx.conn),
-    )
-
-
-async def can_serve(tx: Tx, row: aiosqlite.Row) -> bool:
-    """Could any agent run this task's engine role now, under its effective provider
-    set (pin preference included)?"""
-    capacity = await engine_capacity(tx)
-    choice = await _capacity_choice(tx, row, capacity)
-    return any(choice.fits(c[0], c[2]) for c in capacity)
-
-
-async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
-    """Return tasks waiting for an account (`awaiting_quota`, or the older
-    `no_account`) to ready, highest priority first, but only as many as the usable
-    engine accounts can serve now: each woken task takes one slot of an account its
-    `account_providers` allow. No thundering herd: the rest keep waiting for the
-    next release, refill or account change. Returns the woken task ids."""
-    capacity = await engine_capacity(tx)
-    if not capacity:
-        return []
-    async with tx.conn.execute(
-        "SELECT id, account_providers, harness_model, harness_account FROM tasks"
-        " WHERE state = 'blocked'"
-        " AND block_reason IN (?, ?) ORDER BY priority DESC, created_at, id",
-        QUOTA_WAIT_REASONS,
-    ) as cur:
-        rows = await cur.fetchall()
-    woken: list[str] = []
-    for r in rows:
-        choice = await _capacity_choice(tx, r, capacity)
-        slot = next(
-            (
-                c
-                for c in capacity
-                if (c[1] is None or c[1] > 0) and choice.fits(c[0], c[2])
-            ),
-            None,
-        )
-        if slot is None:
-            continue
-        if slot[1] is not None:
-            slot[1] -= 1
-        await unblock(tx, r["id"], actor)
-        woken.append(r["id"])
-    return woken
-
-
-async def awaiting_quota(conn: aiosqlite.Connection, now: datetime | None) -> bool:
-    """True when some engine account is held back and none is usable: a claim would
-    only burn an attempt on a provider limit (one rule: `engine_pool`)."""
-    return (await engine_pool(conn, now)).awaiting_quota
-
-
-async def _check_engine_lease(tx: Tx, agent_id: str) -> None:
-    """A claim whose engine lease sits on an account that is disabled, or exhausted
-    with its reset ahead, cannot run: `409 lease_account_unusable`. The channel
-    drops that account, leases again and recycles the runtime."""
-    async with tx.conn.execute(
-        "SELECT a.name, a.provider, a.state, a.exhausted_until FROM account_leases l"
-        " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
-        " AND l.role = 'engine' AND l.released_at IS NULL",
-        (agent_id,),
-    ) as cur:
-        rows = await cur.fetchall()
-    for r in rows:
-        if r["provider"] == LOCAL_PROVIDER:
-            continue
-        held_back = r["state"] == "exhausted" and (
-            not r["exhausted_until"]
-            or datetime.fromisoformat(r["exhausted_until"]) > tx.now
-        )
-        if r["state"] == "disabled" or held_back:
-            raise ConflictError(
-                f"engine account {r['name']} is {r['state']}; lease another",
-                code="lease_account_unusable",
-            )
-
-
 async def block_switch_failed(
     tx: Tx, agent_id: str, task_id: str, attempt: int, error: str
 ) -> Task:
@@ -1657,717 +1259,6 @@ async def await_quota_ready(
     return [r["id"] for r in rows]
 
 
-# -- orchestrator / human operations --------------------------------------------
-
-
-async def unblock(tx: Tx, task_id: str, actor: str) -> Task:
-    row = await _row(tx.conn, task_id)
-    if (
-        row["state"] == S.BLOCKED
-        and row["block_reason"] == BUDGET_EXHAUSTED
-        and (spent := await task_cost.exhausted_reason(tx.conn, row)) is not None
-    ):
-        raise ConflictError(f"task {task_id}: the {spent}", code=BUDGET_EXHAUSTED)
-    await _apply(tx, row, Action.UNBLOCK, actor, set_={"block_reason": None})
-    if row["block_reason"] == ENV_OOM and actor != "system":
-        # The operator answered the pool's OOM block (failure classes 3.2.1).
-        async with tx.conn.execute(
-            "SELECT json_extract(data, '$.pool') FROM events"
-            " WHERE subject_type = 'task' AND subject_id = ? AND kind = 'task.block'"
-            " ORDER BY id DESC LIMIT 1",
-            (task_id,),
-        ) as cur:
-            found = await cur.fetchone()
-        if found and found[0]:
-            await reset_oom_streak(tx, found[0])
-    return await get_task(tx.conn, task_id)
-
-
-_RETRY_ERROR_MAX = 500
-
-
-async def retry(tx: Tx, task_id: str, actor: str) -> Task:
-    """Give a `failed` task a fresh window of attempts (`max_attempts` is kept).
-
-    Not a state-machine action: `failed` is terminal for the workers' transitions,
-    and only an operator may leave it. `failures` is reset with `attempt` because
-    `failures` is what `max_attempts` limits (3.2).
-    """
-    row = await _row(tx.conn, task_id)
-    if row["state"] != S.FAILED:
-        raise ConflictError(
-            f"task is {row['state']}, not failed", code="task_not_failed"
-        )
-    await tx.conn.execute(
-        "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"
-        " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
-        " progress_message = NULL, progress_percent = NULL, progress_at = NULL,"
-        " progress_kind = NULL, progress_data = NULL, output_at = NULL,"
-        " block_reason = NULL, archived_at = NULL, oom_kill = 0, updated_at = ?"
-        " WHERE id = ?",
-        (S.READY, ts(tx.now), task_id),
-    )
-    await tx.conn.execute("DELETE FROM task_log WHERE task_id = ?", (task_id,))
-    await tx.conn.execute("DELETE FROM task_changes WHERE task_id = ?", (task_id,))
-    await tx.conn.execute(
-        "DELETE FROM task_command_blocks WHERE task_id = ?", (task_id,)
-    )
-    await steers.close_task(tx, task_id)
-    error = row["error"] or ""
-    await record(
-        tx,
-        actor,
-        "task",
-        task_id,
-        "task.retried",
-        {
-            "from": S.FAILED,
-            "to": S.READY,
-            "task_id": task_id,
-            "previous_attempts": row["attempt"],
-            "max_attempts": row["max_attempts"],
-            "previous_error": error[:_RETRY_ERROR_MAX]
-            + ("…" if len(error) > _RETRY_ERROR_MAX else ""),
-        },
-    )
-    return await get_task(tx.conn, task_id)
-
-
-async def review_failed(
-    tx: Tx, row: aiosqlite.Row, actor: str, event: str, data: dict[str, Any]
-) -> Task:
-    """Move a `failed` task to `in_review` with the normal review decision, for a
-    delivery verified after the failure (task deliverable spec 3.8).
-
-    Not a state-machine action, as `retry` is not: only a manager leaves `failed`
-    this way, and the caller has checked the evidence. `attempt`, `failures`,
-    `error`, the checklist and every earlier event stay as they are; the decision is
-    the gate that may still accept or reject."""
-    if row["state"] != S.FAILED:
-        raise ConflictError(
-            f"task is {row['state']}, not failed", code="task_not_failed"
-        )
-    bumped = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
-    await tx.conn.execute(
-        "UPDATE tasks SET state = ?, archived_at = NULL, retry_at = NULL,"
-        " updated_at = ? WHERE id = ?",
-        (S.IN_REVIEW, bumped, row["id"]),
-    )
-    review = Review(row["review"])
-    decision_id = await decisions.open_decision(
-        tx,
-        subject_type="task",
-        subject_id=row["id"],
-        kind=DecisionKind.REVIEW,
-        question=f"Review the result of {row['title']!r} (attempt {row['attempt']}).",
-        options=list(REVIEW_OPTIONS),
-        audience=Audience.HUMAN if review is Review.HUMAN else Audience.ORCHESTRATOR,
-        requested_by=actor,
-    )
-    await record(
-        tx,
-        actor,
-        "task",
-        row["id"],
-        event,
-        {
-            "from": S.FAILED,
-            "to": S.IN_REVIEW,
-            "attempt": row["attempt"],
-            "failures": row["failures"],
-            "decision_id": decision_id,
-            **data,
-        },
-    )
-    return await get_task(tx.conn, row["id"])
-
-
-_ARCHIVABLE = sorted(TERMINAL)
-
-
-async def archive(tx: Tx, task_id: str, actor: str) -> Task:
-    """Archive a terminal task. Archiving an archived task changes nothing."""
-    row = await _row(tx.conn, task_id)
-    if row["archived_at"] is None:
-        _require_archivable(row)
-        await _set_archived(tx, row, ts(tx.now), actor)
-    return await get_task(tx.conn, task_id)
-
-
-async def unarchive(tx: Tx, task_id: str, actor: str) -> Task:
-    """Bring an archived task back into listings and totals. Idempotent."""
-    row = await _row(tx.conn, task_id)
-    if row["archived_at"] is not None:
-        await _set_archived(tx, row, None, actor)
-    return await get_task(tx.conn, task_id)
-
-
-async def archive_matching(
-    tx: Tx,
-    actor: str,
-    *,
-    states: list[TaskState],
-    project: str | None = None,
-    older_than_days: int | None = None,
-    dry_run: bool = False,
-) -> int:
-    """Archive every unarchived task in `states` (terminal only), optionally in
-    one project and last changed more than `older_than_days` ago. With `dry_run`
-    nothing is written; either way the count is of tasks that match now."""
-    if bad := sorted(set(states) - TERMINAL):
-        raise ValidationFailedError(
-            f"only {', '.join(_ARCHIVABLE)} tasks can be archived, not {', '.join(bad)}",
-            code="state_not_archivable",
-        )
-    where = ["archived_at IS NULL", f"state IN ({','.join('?' * len(states))})"]
-    params: list[Any] = [*states]
-    if project is not None:
-        where.append("project = ?")
-        params.append(project)
-    if older_than_days is not None:
-        where.append("updated_at < ?")
-        params.append(ts(tx.now - timedelta(days=older_than_days)))
-    async with tx.conn.execute(
-        f"SELECT * FROM tasks WHERE {' AND '.join(where)} ORDER BY id",  # noqa: S608
-        params,
-    ) as cur:
-        rows = list(await cur.fetchall())
-    if not dry_run:
-        for row in rows:
-            await _set_archived(tx, row, ts(tx.now), actor)
-    return len(rows)
-
-
-def _require_archivable(row: aiosqlite.Row) -> None:
-    if S(row["state"]) not in TERMINAL:
-        raise ConflictError(
-            f"task is {row['state']}; only {', '.join(_ARCHIVABLE)} tasks can be"
-            " archived",
-            code="task_not_terminal",
-        )
-
-
-async def _set_archived(
-    tx: Tx, row: aiosqlite.Row, archived_at: str | None, actor: str
-) -> None:
-    await tx.conn.execute(
-        "UPDATE tasks SET archived_at = ?, updated_at = ? WHERE id = ?",
-        (archived_at, ts(tx.now), row["id"]),
-    )
-    kind = "task.unarchived" if archived_at is None else "task.archived"
-    await record(
-        tx,
-        actor,
-        "task",
-        row["id"],
-        kind,
-        {"task_id": row["id"], "state": row["state"]},
-    )
-
-
-_DEPS_EDITABLE = (S.PENDING, S.AWAITING_APPROVAL, S.READY)
-
-
-async def set_dependencies(
-    tx: Tx, task_id: str, depends_on: list[str], expected_version: str, actor: str
-) -> Task:
-    """Replace a waiting task's dependencies (task dependencies 3.1): an edit of
-    `depends_on` alone, which keeps its own code for a task that is not waiting."""
-    return await edit_task(
-        tx,
-        task_id,
-        TaskChanges(depends_on=depends_on),
-        expected_version,
-        actor,
-        state_code="task_not_waiting",
-    )
-
-
-async def edit_task(
-    tx: Tx,
-    task_id: str,
-    changes: TaskChanges,
-    expected_version: str,
-    actor: str,
-    *,
-    state_code: str = "task_not_editable",
-) -> Task:
-    """Edit a task's definition (task edit spec). The one path for REST, MCP and
-    the dashboard: every check runs before the first write, so a refused edit
-    leaves the task as it was."""
-    if unknown := changes.unknown():
-        raise ValidationFailedError(
-            "these fields cannot be edited: " + ", ".join(unknown),
-            code="immutable_field",
-            details=unknown,
-        )
-    given = changes.given()
-    if not given:
-        raise ValidationFailedError(
-            "nothing to change: name at least one field",
-            details=["changes: nothing to change"],
-        )
-    row = await _row(tx.conn, task_id)
-    if row["updated_at"] != expected_version:
-        raise ConflictError(
-            f"task {task_id} changed since you read it (version"
-            f" {row['updated_at']}); read it again and reapply your change",
-            code="stale_version",
-            details=[row["updated_at"]],
-        )
-    state = S(row["state"])
-    allowed = editable_fields(state, archived=row["archived_at"] is not None)
-    if rejected := [f for f in given if f not in allowed]:
-        raise ConflictError(
-            f"task {task_id} is {state}{' (archived)' if row['archived_at'] else ''};"
-            f" {', '.join(rejected)} cannot be edited now",
-            code=state_code,
-            details=[
-                f"state: {state}",
-                f"not editable: {', '.join(rejected)}",
-                f"editable: {', '.join(allowed) or 'none'}",
-            ],
-        )
-    current = await get_task(tx.conn, task_id)
-    new = _normalized_edit(row, given)
-    if new.get("harness_account") is not None:  # a name is stored as its id
-        new["harness_account"] = await _account_id(tx.conn, new["harness_account"])
-    changed = {f: v for f, v in new.items() if v != getattr(current, f)}
-    if not changed:
-        return current  # nothing differs: no write, same version
-    if why := check_harness_providers(
-        new.get("harness_model", current.harness_model),
-        new.get("account_providers", current.account_providers),
-    ):
-        raise ValidationFailedError(
-            f"invalid values: harness_model: {why}",
-            details=[f"harness_model: {why}"],
-        )
-    if changed.keys() & {"deliverable", "required_capabilities"}:
-        await deliverable.check_creatable(
-            tx.conn,
-            row["project"],
-            new.get("required_capabilities", current.required_capabilities),
-            new.get("deliverable", current.deliverable),
-        )
-    if changed.keys() & set(_ACCOUNT_PIN_RULES):
-        await _resolve_harness_account(
-            tx.conn,
-            new.get("harness_account", current.harness_account),
-            account_providers=new.get("account_providers", current.account_providers),
-            harness_model=new.get("harness_model", current.harness_model),
-            executor_model=new.get("executor_model", current.executor_model),
-        )
-
-    deps = changed.get("depends_on")
-    dep_states: dict[str, TaskState] = {}
-    if deps is not None:
-        dep_states = await _check_dependencies(tx.conn, task_id, deps)
-    if (pins := changed.get("knowledge")) is not None:
-        await _check_new_pins(
-            tx.conn, row["project"], [p for p in pins if p not in current.knowledge]
-        )
-
-    sets: dict[str, Any] = {
-        f: json.dumps(v) if f in _JSON_FIELDS else v
-        for f, v in changed.items()
-        if f not in ("knowledge", "depends_on", "account_providers", *_PIN_FIELDS)
-    }
-    if "difficulty" in sets:
-        sets["difficulty_source"] = DifficultySource.DECLARED
-    if "account_providers" in changed:
-        sets["account_providers"] = _providers_json(changed["account_providers"])
-    for f in _PIN_FIELDS:
-        if f in changed:
-            sets[f] = _pin_json(changed[f])
-    if sets:
-        assignments = ", ".join(f"{k} = ?" for k in sets)
-        await tx.conn.execute(
-            f"UPDATE tasks SET {assignments} WHERE id = ?",  # noqa: S608 - keys are code-controlled
-            (*sets.values(), task_id),
-        )
-    if pins is not None:
-        await tx.conn.execute(
-            "DELETE FROM task_knowledge WHERE task_id = ?", (task_id,)
-        )
-        await tx.conn.executemany(
-            "INSERT INTO task_knowledge (task_id, page_id) VALUES (?, ?)",
-            [(task_id, p) for p in pins],
-        )
-    if deps is not None:
-        await tx.conn.execute("DELETE FROM task_deps WHERE task_id = ?", (task_id,))
-        await tx.conn.executemany(
-            "INSERT INTO task_deps (task_id, depends_on_id) VALUES (?, ?)",
-            [(task_id, d) for d in deps],
-        )
-        added = sorted(set(deps) - set(current.depends_on))
-        await record(
-            tx,
-            actor,
-            "task",
-            task_id,
-            "task.dependencies_changed",
-            {"added": added, "removed": sorted(set(current.depends_on) - set(deps))},
-        )
-        for dep in added:
-            if dep_states[dep] in (S.FAILED, S.CANCELLED):
-                await _dependency_failed_event(tx, task_id, dep, dep_states[dep])
-        deps_done = all(s is S.SUCCEEDED for s in dep_states.values())
-        if state is S.READY and not deps_done:
-            await _apply(tx, row, Action.DEPS_ADDED, actor)
-        elif state is S.PENDING and deps_done:
-            await _apply(tx, row, Action.DEPS_SATISFIED, actor)
-    if (
-        "budget_usd" in changed
-        and state is S.BLOCKED
-        and row["block_reason"] == BUDGET_EXHAUSTED
-        and await task_cost.exhausted_reason(tx.conn, await _row(tx.conn, task_id))
-        is None
-    ):
-        # Raising (or clearing) a spent budget is how a manager continues (3.4, 3.6).
-        await _apply(tx, row, Action.UNBLOCK, actor, set_={"block_reason": None})
-    # A version that did not move would let a stale editor through, so it only grows.
-    version = ts(max(tx.now, datetime.fromisoformat(row["updated_at"]) + _TICK))
-    await tx.conn.execute(
-        "UPDATE tasks SET updated_at = ? WHERE id = ?", (version, task_id)
-    )
-    await record(
-        tx,
-        actor,
-        "task",
-        task_id,
-        "task.edited",
-        {
-            "from_version": row["updated_at"],
-            "to_version": version,
-            "changes": {
-                f: _diff(f, getattr(current, f), v) for f, v in changed.items()
-            },
-        },
-    )
-    return await get_task(tx.conn, task_id)
-
-
-def _normalized_edit(row: aiosqlite.Row, given: dict[str, Any]) -> dict[str, Any]:
-    """The values an edit would store, checked with the creation rules: a clear
-    becomes the empty value, lists are de-duplicated as at creation."""
-    errors: list[str] = []
-    values: dict[str, Any] = {}
-    for field, value in given.items():
-        if value is None:
-            if field in (
-                "account_providers",
-                "harness_account",
-                "budget_usd",
-                *_PIN_FIELDS,
-            ):
-                values[field] = None
-            elif field not in CLEARABLE:
-                errors.append(f"{field}: cannot be cleared")
-                continue
-            else:
-                values[field] = "" if field == "spec" else []
-        else:
-            values[field] = value
-    if "required_capabilities" in values:
-        values["required_capabilities"] = sorted(set(values["required_capabilities"]))
-    if "knowledge" in values:
-        values["knowledge"] = list(dict.fromkeys(values["knowledge"]))
-    if "depends_on" in values:
-        values["depends_on"] = sorted(set(values["depends_on"]))
-    if "account_providers" in values:
-        # an empty list clears to "unrestricted", like the other list fields
-        values["account_providers"] = (
-            sorted(set(values["account_providers"]))
-            if values["account_providers"]
-            else None
-        )
-    try:
-        TaskCreate.model_validate(
-            {"project": row["project"], "kind": row["kind"], "title": row["title"]}
-            | values
-        )
-    except ValidationError as exc:
-        errors += [
-            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
-            for e in exc.errors(include_input=False, include_url=False)
-            if e["loc"] and e["loc"][0] in values
-        ]
-    if errors:
-        raise ValidationFailedError(
-            "invalid values: " + "; ".join(errors), details=errors
-        )
-    return values
-
-
-def _providers_json(providers: list[str] | None) -> str | None:
-    return None if providers is None else json.dumps(providers)
-
-
-# The fields a harness account pin is checked against (task models spec 3.4).
-_ACCOUNT_PIN_RULES = (
-    "harness_account",
-    "account_providers",
-    "harness_model",
-    "executor_model",
-)
-
-
-async def _account_id(conn: aiosqlite.Connection, ref: str) -> str:
-    """The id of the account `ref` names (its id or its name); 422 when none does."""
-    return (await _named_account(conn, ref))["id"]
-
-
-async def _named_account(conn: aiosqlite.Connection, ref: str) -> aiosqlite.Row:
-    """The account `ref` names (its id first, else its name); 422 when none does."""
-    async with conn.execute(
-        "SELECT id, name, provider FROM accounts WHERE id = ? OR name = ?"
-        " ORDER BY id = ? DESC LIMIT 1",
-        (ref, ref, ref),
-    ) as cur:
-        row = await cur.fetchone()
-    if row is None:
-        why = f"no account {ref!r}"
-        raise ValidationFailedError(
-            f"invalid values: harness_account: {why}",
-            details=[f"harness_account: {why}"],
-        )
-    return row
-
-
-async def _resolve_harness_account(
-    conn: aiosqlite.Connection,
-    ref: str | None,
-    *,
-    account_providers: list[str] | None,
-    harness_model: HarnessModel | None,
-    executor_model: ExecutorModel | None,
-) -> str | None:
-    """The id of the account a harness account pin names, checked against the
-    task's other fields (task models spec 3.4); None when the task is not pinned.
-    The account must be an engine account its `account_providers` and harness pin
-    allow; a local (Strata) harness orchestrates and may pin Cursor (`agent`) or
-    OpenCode (`opencode`) as executor (local harness / task models specs)."""
-    if ref is None:
-        return None
-    acc = await _named_account(conn, ref)
-    account_id, name, provider = acc["id"], acc["name"], acc["provider"]
-    why = None
-    if provider not in ENGINE_PROVIDERS:
-        why = f"account {name} ({provider}) cannot run a harness"
-    elif account_providers is not None and provider not in account_providers:
-        why = f"account {name} is {provider}, excluded by account_providers"
-    elif harness_model is not None and harness_model.provider != provider:
-        why = (
-            f"account {name} is {provider}; harness_model engine"
-            f" {harness_model.engine} needs {harness_model.provider}"
-        )
-    elif (
-        provider == LOCAL_PROVIDER
-        and executor_model is not None
-        and executor_model.executor not in ("agent", "opencode")
-    ):
-        why = (
-            f"account {name} is the local harness, which delegates to the Cursor"
-            f" agent or OpenCode; executor_model {executor_model.executor} cannot run"
-        )
-    if why:
-        raise ValidationFailedError(
-            f"invalid values: harness_account: {why}",
-            details=[f"harness_account: {why}"],
-        )
-    return account_id
-
-
-def _pin_json(pin: HarnessModel | ExecutorModel | None) -> str | None:
-    return None if pin is None else pin.model_dump_json()
-
-
-def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
-
-
-def _diff(field: str, old: Any, new: Any) -> dict[str, Any]:
-    """What the audit keeps of one change. Spec and acceptance text never enter the
-    event log (it is streamed and shown): only sizes and digests do."""
-    if field in _PIN_FIELDS:
-        return {
-            "from": old and old.model_dump(),
-            "to": new and new.model_dump(),
-        }
-    if field in (
-        "title",
-        "priority",
-        "difficulty",
-        "deliverable",
-        "account_providers",
-        "harness_account",
-        "budget_usd",
-    ):
-        return {"from": old, "to": new}
-    if field in ("required_capabilities", "knowledge", "depends_on"):
-        return {
-            "added": sorted(set(new) - set(old)),
-            "removed": sorted(set(old) - set(new)),
-        }
-    texts = (old, new) if field == "spec" else (json.dumps(old), json.dumps(new))
-    sizes = (len(old), len(new))
-    return {
-        "from_size": sizes[0],
-        "to_size": sizes[1],
-        "from_sha256": _digest(texts[0]),
-        "to_sha256": _digest(texts[1]),
-    }
-
-
-async def _check_dependencies(
-    conn: aiosqlite.Connection, task_id: str, deps: list[str]
-) -> dict[str, TaskState]:
-    """The rules for a task's dependencies (task dependencies 3.1); returns the
-    state of each. Raises before anything is written."""
-    if len(deps) > MAX_DEPENDENCIES:
-        raise ValidationFailedError(f"at most {MAX_DEPENDENCIES} dependencies")
-    if task_id in deps:
-        raise ValidationFailedError(
-            "a task cannot depend on itself",
-            code="dependency_cycle",
-            details=[task_id, task_id],
-        )
-    dep_states = await _states(conn, deps)
-    if missing := sorted(set(deps) - dep_states.keys()):
-        raise NotFoundError(
-            f"dependency not found: {', '.join(missing)}",
-            details=[f"depends_on: {m}" for m in missing],
-        )
-    if cycle := await _path_back(conn, deps, task_id):
-        raise ValidationFailedError(
-            "these dependencies would close a cycle: " + " -> ".join(cycle),
-            code="dependency_cycle",
-            details=cycle,
-        )
-    return dep_states
-
-
-async def _check_new_pins(
-    conn: aiosqlite.Connection, project: str, added: list[str]
-) -> None:
-    """Pages an edit adds must exist and belong to the task's project or `global`."""
-    if not added:
-        return
-    await _check_pages_exist(conn, added)
-    marks = ",".join("?" * len(added))
-    async with conn.execute(
-        f"SELECT id FROM knowledge_pages WHERE id IN ({marks})"  # noqa: S608
-        " AND project NOT IN (?, 'global')",
-        [*added, project],
-    ) as cur:
-        foreign = sorted(r[0] for r in await cur.fetchall())
-    if foreign:
-        raise ValidationFailedError(
-            f"pages of another project cannot be pinned: {', '.join(foreign)}",
-            details=[f"knowledge: {p}: not in {project} or global" for p in foreign],
-        )
-
-
-async def _snapshot_attempt(tx: Tx, task: Task, agent_id: str) -> None:
-    """Keep the definition this attempt was handed (task edit 3.5)."""
-    definition = {
-        f: getattr(task, f)
-        for f in (
-            "kind",
-            "project",
-            "title",
-            "spec",
-            "acceptance",
-            "priority",
-            "required_capabilities",
-            "knowledge",
-            "depends_on",
-            "difficulty",
-            "difficulty_source",
-            "deliverable",
-            "harness_account",
-        )
-    }
-    for f in _PIN_FIELDS:
-        pin = getattr(task, f)
-        definition[f] = pin and pin.model_dump()
-    # What the attempt was told about continuing (history is never rewritten).
-    definition["continuation"] = (
-        task.continuation.model_dump(mode="json") if task.continuation else None
-    )
-    await tx.conn.execute(
-        "INSERT INTO task_attempts (task_id, attempt, agent_id, claimed_at, definition)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (task.id, task.attempt, agent_id, ts(tx.now), json.dumps(definition)),
-    )
-
-
-async def attempt_definitions(
-    conn: aiosqlite.Connection, task_id: str
-) -> list[TaskAttempt]:
-    """The definition of every attempt, oldest first."""
-    await _row(conn, task_id)
-    async with conn.execute(
-        "SELECT * FROM task_attempts WHERE task_id = ? ORDER BY id", (task_id,)
-    ) as cur:
-        return [
-            TaskAttempt(
-                attempt=r["attempt"],
-                agent_id=r["agent_id"],
-                claimed_at=r["claimed_at"],
-                definition=json.loads(r["definition"]),
-                outcome=r["outcome"],
-                outcome_reason=r["outcome_reason"],
-                steer_unknown=r["steer_unknown"],
-            )
-            for r in await cur.fetchall()
-        ]
-
-
-async def attempt_summaries(
-    conn: aiosqlite.Connection, task_id: str
-) -> list[TaskAttemptSummary]:
-    """What the attempt strip needs, oldest first, without the stored definitions."""
-    await _row(conn, task_id)
-    async with conn.execute(
-        "SELECT attempt, steer_unknown FROM task_attempts"
-        " WHERE task_id = ? ORDER BY id",
-        (task_id,),
-    ) as cur:
-        return [
-            TaskAttemptSummary(attempt=r["attempt"], steer_unknown=r["steer_unknown"])
-            for r in await cur.fetchall()
-        ]
-
-
-async def _path_back(
-    conn: aiosqlite.Connection, starts: list[str], target: str
-) -> list[str] | None:
-    """A dependency path from one of `starts` back to `target`, if any, as
-    [target, start, ..., target]: adding target -> start would close it."""
-    parent: dict[str, str | None] = dict.fromkeys(starts)
-    frontier = list(starts)
-    while frontier:
-        marks = ",".join("?" * len(frontier))
-        sql = f"SELECT task_id, depends_on_id FROM task_deps WHERE task_id IN ({marks})"  # noqa: S608
-        async with conn.execute(sql, frontier) as cur:
-            edges = await cur.fetchall()
-        frontier = []
-        for node, dep in edges:
-            if dep in parent:
-                continue
-            parent[dep] = node
-            if dep == target:
-                path, at = [], dep
-                while at is not None:
-                    path.append(at)
-                    at = parent[at]
-                return [target, *reversed(path)]
-            frontier.append(dep)
-    return None
-
-
 async def add_clarification(
     tx: Tx,
     task_id: str,
@@ -2622,155 +1513,6 @@ async def update_continuation(
     return await get_task(tx.conn, task_id)
 
 
-RELEASE_REASON_MAX = 500
-
-
-async def release(
-    tx: Tx, task_id: str, actor: str, reason: str, *, attempt: int | None = None
-) -> Task:
-    """An operator takes a claimed task back from its holder: `ready` again with
-    `failures` untouched, so the attempt never counts toward `max_attempts` (3.3).
-    `attempt`, when given, must be the current one. The holder's account leases
-    end with it unless it holds another claim; its next write gets 409."""
-    from argus_api.accounts import service as accounts  # it imports this module
-
-    row = await _row(tx.conn, task_id)
-    if row["state"] != S.CLAIMED:
-        raise ConflictError(
-            f"task is {row['state']}, not claimed", code="task_not_claimed"
-        )
-    if attempt is not None and attempt != row["attempt"]:
-        raise ConflictError(
-            f"task {task_id} is at attempt {row['attempt']}, not {attempt}",
-            code="stale_attempt",
-        )
-    holder = row["assignee_agent_id"]
-    await release_claim(tx, row, actor, reason)
-    async with tx.conn.execute(
-        "SELECT 1 FROM tasks WHERE state = 'claimed' AND assignee_agent_id = ?",
-        (holder,),
-    ) as cur:
-        if await cur.fetchone() is None:
-            await accounts.release(tx, holder, "task_released")
-    return await get_task(tx.conn, task_id)
-
-
-async def release_agent_tasks(
-    tx: Tx, agent_id: str, actor: str, reason: str
-) -> list[str]:
-    """Release every task an agent holds (an operator ended it: 3.4). The caller
-    deals with the agent's account leases."""
-    async with tx.conn.execute(
-        "SELECT * FROM tasks WHERE state = 'claimed' AND assignee_agent_id = ?"
-        " ORDER BY id",
-        (agent_id,),
-    ) as cur:
-        rows = await cur.fetchall()
-    for row in rows:
-        await release_claim(tx, row, actor, reason)
-    return [r["id"] for r in rows]
-
-
-async def release_claim(tx: Tx, row: aiosqlite.Row, actor: str, reason: str) -> None:
-    """Requeue a claimed row without a failure and mark its attempt `released`."""
-    await _apply(
-        tx,
-        row,
-        Action.RELEASE,
-        actor,
-        set_={
-            "error": None,
-            "progress_message": f"attempt {row['attempt']} released: {reason};"
-            " requeued",
-            "progress_percent": None,
-            "progress_at": ts(tx.now),
-        },
-        data={"reason": reason, "previous_holder": row["assignee_agent_id"]},
-        event="task.released",
-    )
-    await tx.conn.execute(
-        "UPDATE task_attempts SET outcome = 'released', outcome_reason = ?"
-        " WHERE id = (SELECT max(id) FROM task_attempts"
-        "  WHERE task_id = ? AND attempt = ?)",
-        (reason, row["id"], row["attempt"]),
-    )
-
-
-async def cancel(tx: Tx, task_id: str, actor: str) -> Task:
-    row = await _row(tx.conn, task_id)
-    data: dict[str, Any] = {"cancelled_by": actor}
-    set_: dict[str, Any] = {}
-    if row["state"] == S.BLOCKED and row["block_reason"]:
-        # Name the cause: a cancelled task keeps its block reason, so say who
-        # cancelled it and why it was blocked.
-        data["block_reason"] = row["block_reason"]
-        set_["progress_message"] = (
-            f"cancelled by {actor} while blocked as {row['block_reason']}"[:500]
-        )
-    await _apply(tx, row, Action.CANCEL, actor, set_=set_, data=data)
-    return await get_task(tx.conn, task_id)
-
-
-async def approve(tx: Tx, task_id: str, actor: str) -> Task:
-    row = await _row(tx.conn, task_id)
-    await _apply(
-        tx, row, Action.APPROVE, actor, deps_done=await _deps_done(tx.conn, task_id)
-    )
-    return await get_task(tx.conn, task_id)
-
-
-async def review(
-    tx: Tx,
-    task_id: str,
-    actor: str,
-    reviewer: Scope,
-    *,
-    accept: bool,
-    notes: str = "",
-    forge: deliverable.ForgeRead | None = None,
-    deviation: bool = False,
-) -> Task:
-    """Accept or reject a result in review. `deviation` accepts over unmet acceptance
-    items with `notes` as the recorded deviation (deliverable spec 3.10)."""
-    row = await _row(tx.conn, task_id)
-    check_reviewer(row, reviewer)
-    if accept:
-        deliverable.check_accept(row, forge)
-        if not deviation:
-            check_acceptance_met(row)
-        elif not notes.strip():
-            raise ValidationFailedError(
-                "accept_with_deviation needs text: which criteria are unmet, why the"
-                " result is accepted anyway, and who authorized it",
-                code="deviation_reason_required",
-            )
-        await _apply(
-            tx,
-            row,
-            Action.ACCEPT,
-            actor,
-            data={"notes": notes},
-            disposition=("accepted_with_deviation", clean(notes))
-            if deviation
-            else None,
-        )
-    else:
-        # Rejection is not a failure: `failures` is untouched (3.2).
-        spec = row["spec"]
-        if notes:
-            spec += f"\n\n## Review notes (attempt {row['attempt']})\n\n{notes}"
-        harder = _escalation(row, "verification_failed")
-        await _apply(
-            tx,
-            row,
-            Action.REJECT,
-            actor,
-            set_={"spec": spec} | harder.get("set", {}),
-            data={"notes": notes} | harder.get("data", {}),
-        )
-    return await get_task(tx.conn, task_id)
-
-
 # -- system ---------------------------------------------------------------------
 
 
@@ -2818,30 +1560,6 @@ async def expire_agent_leases(tx: Tx, agent_id: str) -> list[str]:
 
     All or nothing: the caller ends the agent in the same savepoint."""
     return await _expire_where(tx, "assignee_agent_id = ?", agent_id, "agent_ended")
-
-
-ENV_DISK_FULL = "env_disk_full"
-
-
-async def shed_disk_full(tx: Tx, task_id: str, attempt: int) -> bool:
-    """End the disk guard's shed attempt as `env_disk_full` without spending it:
-    the task is `ready` again with `failures` untouched, like a release, and the
-    holder's account leases end with it unless it holds another claim. A pair that
-    is not the current claimed attempt is skipped (false)."""
-    from argus_api.accounts import service as accounts  # it imports this module
-
-    row = await _row(tx.conn, task_id)
-    if row["state"] != S.CLAIMED or row["attempt"] != attempt:
-        return False
-    holder = row["assignee_agent_id"]
-    await release_claim(tx, row, "system", ENV_DISK_FULL)
-    async with tx.conn.execute(
-        "SELECT 1 FROM tasks WHERE state = 'claimed' AND assignee_agent_id = ?",
-        (holder,),
-    ) as cur:
-        if await cur.fetchone() is None:
-            await accounts.release(tx, holder, "task_released")
-    return True
 
 
 # Reaper interval is 10 s (reaper.REAP_INTERVAL_S); three missed passes.
@@ -3191,11 +1909,6 @@ def _cap_utf8(text: str, limit: int) -> str:
     return text.encode()[:limit].decode(errors="ignore")
 
 
-def check_reviewer(row: aiosqlite.Row, reviewer: Scope) -> None:
-    if row["review"] == Review.HUMAN and reviewer is not Scope.ADMIN:
-        raise ForbiddenError("this task requires human review")
-
-
 _APPROVAL_OPTIONS = ("approve", "reject")
 
 
@@ -3282,15 +1995,6 @@ async def _check_project_and_pins(
         await _check_pages_exist(conn, body.knowledge)
     if body.project is not None:
         await _check_new_pins(conn, body.project, list(dict.fromkeys(own_pins)))
-
-
-async def _check_pages_exist(conn: aiosqlite.Connection, pages: list[str]) -> None:
-    found = set((await _states_of(conn, "knowledge_pages", pages)).keys())
-    if missing := sorted(set(pages) - found):
-        raise NotFoundError(
-            f"knowledge page not found: {', '.join(missing)}",
-            details=[f"knowledge: {m}" for m in missing],
-        )
 
 
 async def _record_result_usage(
