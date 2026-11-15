@@ -29,6 +29,7 @@ import {
   assertPreflightPositive,
   ephemeralSessionRunner,
   type GatewayControl,
+  PROBED_EXECUTORS,
   type PreflightEvidenceEvent,
   type ProbeAnswer,
   type ProbeEvidence,
