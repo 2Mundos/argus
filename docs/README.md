@@ -343,6 +343,9 @@ why you are here.
 
 ### Reports
 
+- [P4 interruption measurement (2026-11-15)](reports/2026-11-15.p4-interruption-measurement.ref.md) —
+  30-day attempt counts by interruption kind, PR-reaching attempts, and the recommendation to keep the
+  account-switch resume path unsupported; from a read-only export, with its limits
 - [Repository preflight QA receipt (2026-11-04)](reports/2026-11-04.repository-preflight-qa.ref.md) —
   independent verification of merged PR #154 on `351f632`: exact-head CI, gates,
   each acceptance criterion, a real-forge probe, and the real-image suite that
