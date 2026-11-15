@@ -1326,6 +1326,19 @@ function environmentLine(c: ContinuationContract | null | undefined): string[] {
   ];
 }
 
+const CHECKLIST_CONTRACT =
+  "Your COMPLETE payload must carry `checklist: [{id, status, evidence}]` with one entry per acceptance id above (only those ids); `status: done` requires non-empty `evidence` naming the command and its real output; prose in the summary is not evidence.";
+
+/** The nudge for a COMPLETE the server rejected as `acceptance_unmet`: names the ids still open. */
+export function acceptanceUnmetNudge(message: string, claim: ArgusTask | null): string {
+  const items = claim?.continuation?.checklist ?? [];
+  const open = items.filter((i) => i.status !== "done");
+  const ids = (open.length > 0 ? open : items).map((i) => i.id);
+  return `[Argus] Your COMPLETE was rejected: ${message}. ${
+    ids.length > 0 ? `Open acceptance ids: ${ids.join(", ")}. ` : ""
+  }Complete again in this same attempt with \`checklist: [{id, status, evidence}]\`, one entry per id; \`status: done\` needs non-empty \`evidence\` with the command and its real output.`;
+}
+
 function contractLines(task: ArgusTask): string[] {
   const c = task.continuation;
   if (!c) {
@@ -1340,7 +1353,7 @@ function contractLines(task: ArgusTask): string[] {
     ...PHASE_RULES[c.phase],
     c.checklist_state === "unstructured"
       ? "Acceptance is not structured for this task (gaps: acceptance_not_structured): derive the criteria from the original spec's acceptance section, list them in your COMPLETE checklist with evidence; nothing is considered satisfied until you do."
-      : `Checklist: ${pending} of ${c.checklist.length} item(s) still pending or unverified.`,
+      : `Checklist: ${pending} of ${c.checklist.length} item(s) still pending or unverified. ${CHECKLIST_CONTRACT}`,
     ...environmentLine(c),
     ...deliverableLines(task),
     ...grantLines(task),
@@ -1412,7 +1425,11 @@ export function renderTask(
     prompt_trust: promptTrust,
     title: task.title,
     spec: clip(split.original.trim(), SPEC_MAX_CHARS) || null,
-    acceptance: [...task.acceptance],
+    // With a structured checklist each criterion carries its ac-* id, the one a COMPLETE reports.
+    acceptance:
+      task.continuation?.checklist_state === "structured" && task.continuation.checklist.length > 0
+        ? task.continuation.checklist.map((i) => ({ id: i.id, text: i.text }))
+        : [...task.acceptance],
     // Argus-held structure, authoritative over `history`; its free text is still data.
     effective_contract: task.continuation ? contractView(task.continuation) : null,
     history: split.clarifications
@@ -5402,6 +5419,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             task.attempt,
             `[Argus] Your COMPLETE was rejected: ${err.message}. Report only the checklist ids of this task.`,
           );
+        } else if (err instanceof ArgusError && err.code === "acceptance_unmet") {
+          resends += 1;
+          await injectTask(task.id, task.attempt, acceptanceUnmetNudge(err.message, currentClaim));
         } else if (err instanceof ArgusError && err.status === 409) {
           log.warn("Argus says this task is no longer ours; dropping the reply", {
             task: task.id,
