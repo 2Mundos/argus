@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-25
-updated: 2026-11-11
+updated: 2026-11-15
 ---
 
 # Gitea helper for workers (`argus-gitea-api`)
@@ -22,10 +22,9 @@ only dependency is the pinned `undici`.
 
 # 2. Non-Goals
 
-- No merge command: `argus-gitea-api merge` fails `policy_denied`; `argus-github-api` has
-  a gated one ([GitHub repositories](github-repositories.spec.md) 3.4). Authorized delivery merges keep using the Gitea merge endpoint
-  through `GiteaApi.request`, under the rules the task prompt gives. No command approves
-  a review: `pr-review-create` refuses `APPROVED`.
+- `merge` is a gated command: it needs a channel-issued merge authorization (see
+  [GitHub repositories](github-repositories.spec.md) 3.4), refused `policy_denied` without
+  one. No command approves a review: `pr-review-create` refuses `APPROVED`.
 - No users, organizations, tokens, secrets, webhooks, repository settings, admin, or
   repository-delete commands. No generic "send this HTTP request" command.
 - No token parameter or credential storage. No direct network fallback when the proxy
@@ -53,6 +52,7 @@ fields stay next to them. `--pr` is an alias of `--number`.
 | Reviews | `pr-review-list`, `pr-review-get`, `pr-review-comments`, `pr-review-create` | `pr-review-get` includes inline comments. `pr-review-comments` collects the inline threads of every review. `pr-review-create` takes `COMMENT` or `REQUEST_CHANGES`, `commit_id` defaults to the PR head, and `--comments-file` holds JSON inline comments. |
 | Statuses | `statuses --sha S` | Paginated statuses plus `combined_state`. |
 | Actions | `run-list`, `run-get`, `job-list`, `job-logs`, `artifact-list`, `artifact-download` | `run-list --branch/--head-sha/--status/--event`. `job-logs` prints text, or saves raw bytes with `--out` (default 20 MiB). `artifact-download --out` is required (default 200 MiB). |
+| Merge | `merge --number N --sha S [--merge-method merge\|squash\|rebase]` | Gated: refused `policy_denied` without the channel-issued merge authorization (HMAC of `merge:TASK:ATTEMPT`, same as `argus-github-api`). Reads the PR and refuses `conflict`, sending nothing, when it is not open or its head is not `S`. Then sends `POST /pulls/N/merge` with `{Do, head_commit_id: S}` (branch deletion is left to the server default) and prints the PR read back, which must be merged with a `merge_commit_sha` (else `bad_response`). |
 | Review gate | `review-findings --pr N [--author LOGIN]` | See 3.4. |
 
 `argus-gitea-api --help` and `<command> --help` list every option.
@@ -90,7 +90,7 @@ argument values are never echoed.
 | 3 | `unauthorized` | HTTP 401 |
 | 4 | `forbidden` | HTTP 403 |
 | 5 | `not_found` | HTTP 404 |
-| 6 | `conflict` | HTTP 409 |
+| 6 | `conflict` | HTTP 409, 405 or 423 (for example a merge that is not allowed, a head that changed, or a locked PR); the Gitea message is kept |
 | 7 | `validation_failed` | HTTP 422 |
 | 8 | `rate_limited` | HTTP 429 |
 | 9 | `server_error` | HTTP 5xx |
