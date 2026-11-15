@@ -1,6 +1,7 @@
 import type { Account } from "./api";
 import { credentialLabel, rejectedSinceAccepted } from "./authHealth";
 import { DateChip } from "./DateChip";
+import { LEASE_BLOCK_LABELS } from "./usage";
 
 /** Credential state, last accepted and last rejected as three separate facts. */
 export function AuthFacts({ account: a }: { account: Account }) {
@@ -17,6 +18,13 @@ export function AuthFacts({ account: a }: { account: Account }) {
           </span>
         )}
       </li>
+      {a.lease_block && (
+        <li>
+          <span className="badge account-exhausted">
+            {LEASE_BLOCK_LABELS[a.lease_block] ?? a.lease_block}
+          </span>
+        </li>
+      )}
       <li>
         Last accepted:{" "}
         {a.last_accepted_at ? (

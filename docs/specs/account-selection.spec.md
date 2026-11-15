@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-06
+updated: 2026-11-15
 ---
 
 # Global account selection
@@ -284,7 +284,9 @@ isolation or sandbox/TLS restrictions.
     `refill_at`, `release_waiting_tasks`, the overview and the engine catalog
     (`usable`) all agree. An account whose provider is executor-only (Cursor) or
     the repository provider is not engine capacity, so a usable executor never
-    hides an exhausted engine pool.
+    hides an exhausted engine pool. An account with a lease block
+    ([account usage](account-usage.spec.md) 3.3) is in neither count, ranking nor
+    claim gate, like a disabled one.
   - *Safe boundary.* Rotation happens only with the old runtime stopped before
     the new writer: the switch is a lease bound to the live claim, never made in
     `/exhausted` or `/fail`: the channel leases at the next claim, recycles the

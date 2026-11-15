@@ -31,6 +31,11 @@ describe("AuthFacts", () => {
     expect(screen.getByText(/newer than last accepted/)).toBeTruthy();
   });
 
+  it("says why a dead credential keeps the account out of lease", () => {
+    render(<AuthFacts account={account({ lease_block: "credential_rejected" })} />);
+    expect(screen.getByText(/Not leased: the provider rejected the credential/)).toBeTruthy();
+  });
+
   it("says never/none for an account with no evidence, and never healthy", () => {
     const { container } = render(<AuthFacts account={account({})} />);
     expect(screen.getByText("never")).toBeTruthy();

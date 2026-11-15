@@ -144,8 +144,7 @@ export const QUOTA_REASON_LABELS: Record<string, string> = {
   credential_invalid: "The stored credential is not a login this reader understands",
   credential_expired: "Login expired: its holder refreshes it, Argus does not",
   credential_rejected: "The provider rejected the credential",
-  oauth_scope_missing:
-    "This token cannot read usage: sign in with a full Claude login, not setup-token",
+  oauth_scope_missing: "token lacks the usage-read scope; a full login is required",
   admin_key_required:
     "A Cursor API key reads usage only through the team Admin API; import a Cursor login to read it from the account",
   no_usage_window_for_login: "The login answered, but states no numeric usage or credit to show",
@@ -156,6 +155,12 @@ export const QUOTA_REASON_LABELS: Record<string, string> = {
   fetch_failed: "Could not reach the provider; it will be retried",
   bad_response: "The provider's answer was not understood",
   no_windows: "The provider reported no quota window",
+};
+
+/** Why a dead credential keeps an available account out of lease: not a spent quota. */
+export const LEASE_BLOCK_LABELS: Record<string, string> = {
+  credential_rejected: "Not leased: the provider rejected the credential (last quota read)",
+  auth_rejected: "Not leased: a run was rejected as unauthorized since the last accepted run",
 };
 
 /** A human sentence per reason code. Never a blanket claim about a provider: the

@@ -50,6 +50,7 @@ SWEEP_INTERVAL_S = 900.0  # then every 15 minutes
 REFRESH_AFTER = timedelta(minutes=30)  # a snapshot (or probe) older than this is due
 PROBE_GAP_S = 2.0  # pause after each probe that ran
 SWEEP_CAP = 10  # accounts queued per sweep
+REJECTED_BACKOFF = timedelta(hours=6)  # a sweep re-probes a rejected login this seldom
 
 
 class Skip(Exception):
@@ -193,8 +194,10 @@ class QuotaProber:
         """Queue the accounts with a pollable source (Codex, Claude subscription,
         OpenRouter) whose quota is missing or stale: at most
         `SWEEP_CAP`, the longest-unobserved first. A recent probe (any outcome)
-        defers an account, unless `backoff` is off (the start-up inventory)."""
+        defers an account, unless `backoff` is off (the start-up inventory); a rejected
+        credential waits `REJECTED_BACKOFF`. "Refresh quota" is never deferred."""
         cutoff = ts(self._now() - REFRESH_AFTER)
+        rejected_cutoff = ts(self._now() - REJECTED_BACKOFF)
         async with (
             self._db.read() as conn,
             conn.execute(
@@ -203,7 +206,9 @@ class QuotaProber:
                 "  WHERE q.account_id = a.id UNION ALL SELECT observed_at FROM"
                 "  account_credit c WHERE c.account_id = a.id)) AS seen,"
                 " (SELECT at FROM account_quota_probe p"
-                "  WHERE p.account_id = a.id) AS probed"
+                "  WHERE p.account_id = a.id) AS probed,"
+                " (SELECT code FROM account_quota_probe p"
+                "  WHERE p.account_id = a.id) AS probe_code"
                 " FROM accounts a WHERE a.state != 'disabled'"
             ) as cur,
         ):
@@ -214,6 +219,11 @@ class QuotaProber:
             if _pollable(r)
             and (r["seen"] is None or r["seen"] <= cutoff)
             and (not backoff or r["probed"] is None or r["probed"] <= cutoff)
+            and (
+                not backoff
+                or r["probe_code"] != "credential_rejected"
+                or r["probed"] <= rejected_cutoff
+            )
         ]
         due.sort(key=lambda r: (r["seen"] or "", r["id"]))
         queued = []
