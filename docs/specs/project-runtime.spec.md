@@ -198,3 +198,11 @@ are declared but not yet running locally.
   `test_project_runtime_api.py`, `test_mcp.py`; opt-in real Docker
   `test_runtime_docker.py` (`ARGUS_DOCKER_TESTS=1`,
   `ARGUS_RUNTIME_TEST_BASE=<local tools-layer agent image>`).
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider packages/core/tests/test_runtime.py packages/core/tests/test_test_services.py apps/api/tests/test_project_runtime.py apps/api/tests/test_project_runtime_api.py apps/api/tests/test_mcp.py`
+  - `make test-docker` runs the real-Docker integration tests (needs a Docker daemon); `apps/api/tests/test_runtime_docker.py` also needs `ARGUS_DOCKER_TESTS=1` and `ARGUS_RUNTIME_TEST_BASE=<local tools-layer agent image>`.
+- Verified: unit and fake-API level (recipe rendering, build gate, REST routes, MCP tools, test-service lifecycle) in the commands above. The opt-in Docker test is a real-Docker check on a local daemon; it has not been run as part of writing this section.
+- Not verified: image builds and smoke runs against real project recipes and registries, the shipped worker images with real harness CLIs, and any deployed or production node.

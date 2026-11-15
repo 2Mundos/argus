@@ -303,3 +303,18 @@ In scope:
   real Dockerfile states (`integrations/nanoclaw/fixtures/engines-dockerfile/`).
 - The dashboard combo reads `GET /api/engines` (a later increment); the
   catalogue already carries everything it needs.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_engines.py apps/api/tests/test_local_harness_routing.py`
+  - `node --test integrations/nanoclaw/engines/argus-delegate.test.mjs`
+  - `pnpm --filter @argus/dashboard exec vitest run src/views/Engines.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level. Engine and executor status, readiness records and
+  local routing run against an in-memory database and recorded readiness files; the
+  delegate runs with fake CLIs.
+- Not verified: the real harness and executor CLIs (Claude, Codex, opencode, Cursor
+  `agent`, `dsh`) and `integrations/nanoclaw/engines/smoke.sh` against a real agent image; local
+  validation runs against a real local model; the dashboard in a real browser; any
+  production node.

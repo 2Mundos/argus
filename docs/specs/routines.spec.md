@@ -216,3 +216,11 @@ routine cancels the open question.
 - REST routes, MCP tools, the dashboard section.
 - [Worker lifecycle](worker-lifecycle.spec.md) gains `routine:<id>` as a
   `created_by` value; [settings](settings.spec.md) gains `routines.enabled`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_routines_api.py apps/api/tests/test_routine_runs.py apps/api/tests/test_routine_schedule.py apps/api/tests/test_routine_findings.py`
+  - `pnpm --filter @argus/dashboard test` runs the dashboard suite, including `apps/dashboard/src/views/Routines.test.tsx`.
+- Verified: unit and fake-API level (schedule, run creation, findings, REST routes) against an in-memory database; the dashboard section under vitest with a mocked API.
+- Not verified: routines firing on a long-running node over real time, runs executed by real harness CLIs or real inference, the dashboard in a real browser, and any production node.

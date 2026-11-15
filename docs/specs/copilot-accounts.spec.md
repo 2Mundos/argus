@@ -161,3 +161,17 @@ on create and replace, and deliver it to the **delegated** GitHub Copilot CLI
   explicit model, native CLI exit code 0, and an exact controlled nonce echoed
   in the CLI result. Record the outcome in a dated ref under `docs/runbooks/`
   when verified.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_copilot_accounts.py packages/core/tests/test_copilot_auth.py`
+  - `pnpm --filter @argus/dashboard exec vitest run src/views/AccountsCopilot.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only. Token-shape validation, the executor lease
+  and the dashboard form run against an in-memory database and store; the delegate and
+  stub are covered by `integrations/nanoclaw/argus-copilot-stub.test.ts` and
+  `integrations/nanoclaw/engines/argus-delegate.test.mjs` with fake credentials (the first runs only in
+  a provisioned NanoClaw checkout).
+- Not verified: the real GitHub Copilot CLI with a real token, including which token
+  types it accepts today; a delegated job in a real worker; any production node.

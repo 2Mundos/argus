@@ -186,3 +186,11 @@ None.
 - `deploy/Dockerfile.api`: `ARG`/`ENV ARGUS_VERSION` and OCI labels.
 - `argus_api.ops.VERSION` reads `ARGUS_VERSION`.
 - `scripts/validate_docs.py`: the `releases/` naming rule and series link.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider scripts/test_release.py scripts/test_release_workflow.py`
+  - `make release ARGS=--dry-run` previews the next release without publishing.
+- Verified: unit and fixture level. `scripts/test_release.py` includes one run against a throwaway repository with a bare remote; `scripts/test_release_workflow.py` checks job ordering and permissions in `.github/workflows/release.yaml` statically, with negative cases.
+- Not verified: the release workflow on GitHub Actions, image publishing and `latest` moves on a real registry, and an upgrade or rollback on a deployed node.

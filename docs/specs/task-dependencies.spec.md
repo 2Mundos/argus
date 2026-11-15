@@ -110,3 +110,9 @@ One PR:
    others, stale version, unknown ids, self and transitive cycles, the cancelled
    dependency released by removal, inbox rows, totals and the `pending` filter,
    and MCP forwarding.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_dependencies.py`.
+- Verified: unit and fake-API level against a test database, covering the cases listed under Build order step 4.
+- Not verified: the dashboard rendering of dependencies in a real browser, and any real node or production use.

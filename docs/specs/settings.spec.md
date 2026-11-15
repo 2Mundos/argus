@@ -336,3 +336,11 @@ the creation snapshot and `GET /api/projects/{slug}/task-defaults` are in
 - Update [model selection](model-selection.spec.md) 4a and
   [worker lifecycle](worker-lifecycle.spec.md) 3.2 (the `in_review` path) in the
   same PR as the code.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_settings.py apps/api/tests/test_forge_review_policy.py`
+  - `pnpm --filter @argus/dashboard test` runs the dashboard suite, including the views that read settings.
+- Verified: unit and fake-API level against an in-memory database; the dashboard under vitest with a mocked API.
+- Not verified: the settings page in a real browser, setting changes taking effect across a restarted node, and any production node.

@@ -253,3 +253,9 @@ One PR for the API side: this spec and its index link; migration `0028`;
 `get_task_log` and the catalog in [MCP operations](mcp-operations.spec.md); the
 dashboard panel and no-signal change; regenerated `openapi.json` and `schema.d.ts`;
 tests for each. The `argus-delegate`/NanoClaw client is a separate change.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_log.py`; `make test` also runs `apps/dashboard/src/taskLog.test.ts` and `apps/dashboard/src/views/TaskLog.test.tsx`.
+- Verified: unit and fake-API level, plus dashboard tests under jsdom.
+- Not verified: the live panel in a real browser, logs from real harness CLIs, and production. The `argus-delegate`/NanoClaw client is out of scope and has no check here.

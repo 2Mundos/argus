@@ -155,3 +155,9 @@ the engine role, and the model-policy maps that pin the models.
 - `integrations/nanoclaw`: `model-policy.mjs`, defaults and fixture, `argus.ts`
   workspace context (`complexity`, derived), `argus-delegate`, harness instructions.
 - Dashboard: difficulty select on the task form, badge and source on the detail, one row per engine layer, API client.
+
+## Verification boundary
+
+- Commands: `uv run pytest -q -p no:cacheprovider apps/api/tests/test_task_difficulty.py apps/api/tests/test_difficulty_routing.py`; `make test` also runs `integrations/nanoclaw/argus-models.test.mjs`.
+- Verified: unit and fake-API level; routing is checked against fixture policies, not a live model.
+- Not verified: real inference with the chosen models, the NanoClaw `argus-delegate` and harness-instruction changes on a live install, the dashboard in a real browser, and production.

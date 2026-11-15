@@ -85,3 +85,11 @@ Related: [worker lifecycle](worker-lifecycle.spec.md), [knowledge](knowledge.spe
 - Claim payload includes `prompt_trust` for the channel; missing values on older
   servers are treated as `orchestrator` for the label only — content is still
   framed as untrusted data.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_tasks_service.py apps/api/tests/test_knowledge.py`
+  - `integrations/nanoclaw/argus.test.ts` has the channel-side negative tests; it runs through `integrations/nanoclaw/provision.sh check` in a NanoClaw checkout.
+- Verified: unit and fixture level. The API tests check that stored task and knowledge text is framed as untrusted data, and the channel tests check the same framing in the rendered prompt.
+- Not verified: how real models (Claude, Codex or others) treat the framed content, including injection attempts against real inference; any deployed or production node.

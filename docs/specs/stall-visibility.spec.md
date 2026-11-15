@@ -198,3 +198,12 @@ been deleted, so sessions never started and each claim sat quiet until
   row. No migration: all fields are derived from `tasks.quiet_at`,
   `tasks.activity_at`, `tasks.progress_at`, `tasks.output_at`,
   `task_attempts.claimed_at`, `tasks.observation`, `tasks.observation_at`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_stall_visibility.py apps/api/tests/test_stall_causes.py apps/api/tests/test_task_read_stall.py`
+  - `integrations/nanoclaw/argus-stall-causes.test.ts` covers the channel workspace probe; it runs through `integrations/nanoclaw/provision.sh check` in a NanoClaw checkout.
+  - `pnpm --filter @argus/dashboard test` runs the dashboard suite.
+- Verified: unit and fixture level. The API tests derive stall state from stored timestamps with a fake clock; the channel test uses a fake Docker/probe.
+- Not verified: stall causes against real stalled harness CLIs or a real Docker daemon, the dashboard in a real browser, and any production node.

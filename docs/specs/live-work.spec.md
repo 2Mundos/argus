@@ -155,3 +155,12 @@ One PR:
    status bar (3.4). Tests for the activity feed (current attempt only), the
    agent drawer's work and log polling (stops when closed), the
    missing-instance message, and the status bar's filter and seed.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_tasks_api.py apps/api/tests/test_kinds_progress.py`
+  - `pnpm --dir apps/dashboard test` (includes `live.test.tsx`, `views/AgentDetail.test.tsx` and `views/LiveStatusBar.test.tsx`)
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: the task and progress reads against an in-memory database and a test client; the activity feed, agent drawer and status bar in jsdom tests with a fake event source.
+- Not verified: live behaviour against a running fleet and the real SSE feed; the drawer and status bar in a real browser; any deployed or production node.

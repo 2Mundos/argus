@@ -464,3 +464,12 @@ while paused; the API process owns the loop; the two draft changes (resume gated
   `/readyz`, and `/data/admin-token`; it also builds `deploy/nanoclaw-host` and
   `examples/echo-worker`. The NanoClaw agent image stays a host build
   (`provision.sh`). Operator quick-start: `deploy/compose.yaml` (README).
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_disk_guard.py apps/api/tests/test_disk_pause.py apps/api/tests/test_disk_guard_runtime.py apps/api/tests/test_ops.py`
+  - `sudo -E make test-disk-guard-runtime` (opt-in, privileged; see the subsection above)
+  - `make bench` and `make test` (whole suite).
+- Verified: unit and fixture level for the disk guard (injected `statvfs`, clock, Docker info and a fake container target) and the real-runtime harness itself with a fake host.
+- Not verified: the disk guard against a real `dockerd` on a loop filesystem (real pause and resume, lease renewal, hysteresis, `io.stat` writer ranking); no evidence file has been recorded. The rest is detailed in the "Verification boundary" subsection above.

@@ -159,3 +159,12 @@ knowledge: {pages_by_state, proposals_by_state}
 - After `make openapi` and regenerating `packages/api-client/src/schema.d.ts`,
   replace the local `Overview` types with `components["schemas"]["Overview"]` and
   drop `getJson`.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_overview.py`
+  - `pnpm --dir apps/dashboard test` (includes `overview.test.ts` and `views/Home.test.tsx`)
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit and fake-API level only: the overview service and route against an in-memory database and a test client; the attention rules and the Home view in a jsdom test.
+- Not verified: the Home view, layout from 390 px, keyboard and screen reader behaviour in a real browser; any deployed or production node.

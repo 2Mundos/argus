@@ -140,3 +140,9 @@ gateway as `DOCKER_BRIDGE_IP`; neither file publishes on all host interfaces.
   up --build`); an optional `deploy/compose.docker.yaml` overlay adds the host
   Docker socket and a bridge-gateway port binding when the operator wants local
   pools.
+
+## Verification boundary
+
+- Commands: none beyond `make lint`; `make test` exercises the code paths the single-node constraints apply to but has no check that asserts the spec as a whole.
+- Verified: no automated check in this repository for the spec's deployment claims (Litestream backup and restore, the Compose overlays, the image layout); tests use a temporary SQLite file per test, which is unit level only.
+- Not verified: Litestream replication and restore against a real replica, `make run-docker` and the Compose overlays on a clean host, and any production node.

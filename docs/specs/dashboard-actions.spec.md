@@ -77,3 +77,14 @@ only the clicked button shows the spinner; siblings disable via
   `setBusy` / `setSaving` for the same job are removed where the primitive
   covers them.
 - Unit tests for single-flight, keyed pending, and unmount mid-flight.
+
+## Verification boundary
+
+- Commands:
+  - `pnpm --filter @argus/dashboard exec vitest run src/ActionButton.test.tsx src/Working.test.tsx`
+  - `make test` runs the whole Python and Node suite.
+- Verified: unit level under jsdom. `ActionButton` and the shared pending primitives
+  are tested for disabling, `aria-busy` and the spinner; views are not individually
+  checked for using them instead of local flags.
+- Not verified: every mutation control in every view; the visual spinner and
+  double-click behaviour in a real browser.

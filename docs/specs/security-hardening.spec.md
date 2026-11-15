@@ -135,3 +135,11 @@ Related: [single-node](single-node.spec.md), [worker lifecycle](worker-lifecycle
 - Deferred items (rate limiting, pool env encryption, bootstrap-via-file, admin
   token entropy/env policy, high quick-wins) are listed in the PR body, not
   half-implemented.
+
+## Verification boundary
+
+- Commands:
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_security_headers.py apps/api/tests/test_agent_token_expiry.py apps/api/tests/test_entrypoint_path.py apps/api/tests/test_mcp.py packages/core/tests/test_docker_host.py packages/core/tests/test_onecli_url.py packages/core/tests/test_task_size_caps.py`
+  - `pnpm --filter @argus/dashboard test` runs the dashboard vitest suite (`apps/dashboard/src/api.test.ts`, `apps/dashboard/src/Markdown.test.tsx`).
+- Verified: unit and fake-API level negative tests for the findings the spec lists; no real attack or penetration testing.
+- Not verified: the deferred items the spec names, behaviour behind a real reverse proxy or TLS terminator, the dashboard in a real browser, and any production node.
