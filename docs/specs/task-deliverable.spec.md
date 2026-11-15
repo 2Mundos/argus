@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-06
+updated: 2026-11-15
 ---
 
 # Task deliverable
@@ -202,6 +202,16 @@ The gate applies to every route that answers a decision (single and batch;
 the MCP and inbox actions use them). **Independent review** no longer accepts
 such a task on its own: on approval it opens the review decision instead, which
 then passes the gate above.
+
+### Issue linkage
+
+When a task names a tracker issue (`#<n>` in its title, spec or acceptance), the
+worker briefing requires a standalone `Closes #<n>` line in the PR body. Gitea
+and GitHub close an issue on merge only for that form; prose such as "reported
+in #1345" links and closes nothing. At COMPLETE the nanoclaw channel checks a PR
+body the worker reports as `data.pr_body` (no network call; Argus holds no PR
+body) and, when the line is missing, sends a non-fatal advisory naming the
+issue. The completion is never rejected for it.
 
 ## 3.6 Editing
 

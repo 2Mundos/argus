@@ -15,6 +15,7 @@ import {
   frameUntrustedTaskData,
   fromEnv,
   heldAccountFits,
+  issueClosureAdvisory,
   parseFramedSteer,
   parseFramedUntrustedTaskData,
   parseReply,
@@ -440,6 +441,47 @@ describe("renderTask", () => {
     expect(text).toContain('"COMPLETE:"');
   });
 
+  it("requires a standalone Closes line only when the task names a tracker issue", () => {
+    const repo = {
+      repository_url: "https://github.com/acme/widget.git",
+      required_capabilities: ["repository:write"],
+    };
+    const named = renderTask(
+      task({ ...repo, title: "Fix the crash", spec: "Crash reported in #1345." }) as any,
+      new Map(),
+    );
+    expect(named).toContain("Closes #1345");
+    expect(named).toContain("standalone");
+    expect(named).toContain('"reported in #1345" does not link or close anything');
+    const plain = renderTask(task(repo) as any, new Map());
+    expect(plain).not.toContain("Closes #");
+    expect(plain).not.toContain("Issue linkage");
+  });
+  it("advises, never rejects, a COMPLETE whose PR body lacks a standalone Closes line", async () => {
+    const named = task({ spec: "Crash reported in #1345." });
+    expect(issueClosureAdvisory(named as any, "Fixes the crash, reported in #1345.")).toContain(
+      "#1345",
+    );
+    expect(issueClosureAdvisory(named as any, "Fix.\n\nCloses #1345\n")).toBeNull();
+    expect(issueClosureAdvisory(named as any, null)).toBeNull();
+    expect(issueClosureAdvisory(task() as any, "no issue")).toBeNull();
+
+    const fake = fakeArgus({ tasks: [named] });
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver("local", h.thread(), {
+      kind: "chat",
+      content: {
+        text: `COMPLETE: ${JSON.stringify({ summary: "fixed", data: { pr_body: "reported in #1345" } })}`,
+      },
+    });
+    await until(() => h.inbound.length === 2);
+    expect(h.inbound[1].content.text).toContain("Advisory");
+    expect(h.inbound[1].content.text).toContain("#1345");
+    expect(fake.calls.some((c) => c.path === "/tasks/t1/complete")).toBe(true);
+  });
   it("names argus-github-api and check runs for a github.com repository", () => {
     const repoTask = task({
       repository_url: "https://github.com/acme/widget.git",

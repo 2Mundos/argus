@@ -772,7 +772,7 @@ function repositoryTaskLines(
           `To open a PR (you can; push your branch first, then): ${helper} create --repository ${task.repository_url} --title "<title>" --head <branch> --base <base-branch> --body "<text>"   (a long body may use --body-file <path> or --body-stdin when --help lists them; older images silently ignore unsupported options, so check the returned PR body). create is idempotent: if an open PR for the same head and base exists it is returned instead of a duplicate. To edit one: ${helper} update --repository ${task.repository_url} --number <N> [--title T] [--body-file PATH | --body TEXT] [--base B] [--state open|closed]. Both print the PR JSON (number, html_url, head.sha).`,
         ]),
   ];
-  if (!readOnly) lines.push(...forgeReviewLines(task));
+  if (!readOnly) lines.push(...forgeReviewLines(task), ...issueClosureLines(task));
   if (!readOnly && taskAuthorizesMerge(task)) {
     lines.push(
       "This task explicitly authorizes merge when every precondition below holds; otherwise stop after CI/review without merging.",
@@ -785,6 +785,45 @@ function repositoryTaskLines(
     );
   }
   return lines;
+}
+
+/** Tracker issue numbers a task names (`#1345`) in its title, original spec and acceptance. */
+export function namedIssues(task: Pick<ArgusTask, "title" | "spec" | "acceptance">): number[] {
+  const text = [task.title, splitSpec(task.spec).original, ...task.acceptance].join("\n");
+  const found = new Set<number>();
+  for (const m of text.matchAll(/(?<![\w&/])#(\d{1,9})\b/g)) found.add(Number(m[1]));
+  return [...found];
+}
+
+/** Gitea and GitHub close an issue on merge only for a standalone `Closes #<n>` line. */
+function closesLine(n: number): RegExp {
+  return new RegExp(
+    `^[ \\t>*-]*(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \\t]+#${n}[ \\t.]*$`,
+    "im",
+  );
+}
+
+/** Briefing lines for the PR body rule; empty when the task names no tracker issue. */
+export function issueClosureLines(task: ArgusTask): string[] {
+  const issues = namedIssues(task);
+  if (issues.length === 0) return [];
+  return [
+    `Issue linkage: this task names tracker issue ${issues.map((n) => `#${n}`).join(", ")}. The PR body must contain a standalone line \`Closes #<n>\` for each (for example \`Closes #${issues[0]}\`), on its own line, so the forge closes the issue on merge. Prose such as "reported in #${issues[0]}" does not link or close anything: Gitea and GitHub only honour the standalone form.`,
+  ];
+}
+
+/**
+ * Non-fatal advisory for COMPLETE: the issues the task named that the PR body does not close
+ * with a standalone `Closes #<n>` line. Null when nothing is missing or the body is unknown.
+ */
+export function issueClosureAdvisory(
+  task: Pick<ArgusTask, "title" | "spec" | "acceptance">,
+  prBody: string | null | undefined,
+): string | null {
+  if (typeof prBody !== "string") return null;
+  const missing = namedIssues(task).filter((n) => !closesLine(n).test(prBody));
+  if (missing.length === 0) return null;
+  return `[Argus] Advisory (your COMPLETE is accepted): the PR body has no standalone \`Closes #<n>\` line for ${missing.map((n) => `#${n}`).join(", ")}, so merging will not close ${missing.length > 1 ? "them" : "it"}. Prose such as "reported in #${missing[0]}" does not link anything; add \`Closes #${missing[0]}\` on its own line with the \`update\` command.`;
 }
 
 /** Trusted preamble immediately before the framed untrusted payload. */
@@ -5324,6 +5363,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {
           const result = completionPayload(d.text);
+          // Advisory only: the PR body is not held locally, so the worker may report it as data.pr_body.
+          const advisory = issueClosureAdvisory(
+            task,
+            typeof result.data?.pr_body === "string" ? result.data.pr_body : null,
+          );
+          if (advisory) {
+            resends += 1;
+            await injectTask(task.id, task.attempt, advisory);
+          }
           const foreign = foreignChecklistIds(currentClaim, result.checklist);
           if (foreign.length > 0) {
             // Evidence for items this task does not hold is another task's work: never record it.
