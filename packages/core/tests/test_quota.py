@@ -68,6 +68,13 @@ def test_notice_is_sanitized() -> None:
     [
         ("You've hit your usage limit", "", "quota_exhausted"),
         ("Error: HTTP 401 token_expired", "", "auth_expired"),
+        ("HTTP 403 Forbidden", "", "provider_auth"),
+        ("Error: 401 Unauthorized", "", "auth_expired"),
+        ("credential_rejected: key revoked", "", "provider_auth"),
+        ("auth_rejected", "", "provider_auth"),
+        ("codex: not logged in", "", "provider_auth"),
+        # Only the runner's first words classify, not the work's.
+        ("tests failed: got HTTP 401 from the fixture", "", "implementation"),
         ("fetch failed: ETIMEDOUT", "", "network_unavailable"),
         ("Error: stream disconnected before completion", "", "network_unavailable"),
         ("Reconnecting... 2/5: stream disconnected", "", "network_unavailable"),

@@ -14,6 +14,7 @@ type FailoverInfo = Pick<
 const CODES: Record<string, string> = {
   quota_exhausted: "Quota exhausted",
   auth_expired: "Login expired",
+  provider_auth: "Provider refused the credential",
   network_unavailable: "Network unavailable",
   runtime_switch_failed: "Runtime switch failed",
   implementation: "Implementation error",

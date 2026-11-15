@@ -4456,6 +4456,7 @@
                 "enum": [
                   "quota_exhausted",
                   "auth_expired",
+                  "provider_auth",
                   "network_unavailable",
                   "runtime_switch_failed",
                   "implementation"
@@ -21389,6 +21390,7 @@
                 "enum": [
                   "quota_exhausted",
                   "auth_expired",
+                  "provider_auth",
                   "network_unavailable",
                   "runtime_switch_failed",
                   "implementation"
@@ -22897,6 +22899,7 @@
                 "enum": [
                   "quota_exhausted",
                   "auth_expired",
+                  "provider_auth",
                   "network_unavailable",
                   "runtime_switch_failed",
                   "implementation"
@@ -24265,6 +24268,7 @@
                 "enum": [
                   "quota_exhausted",
                   "auth_expired",
+                  "provider_auth",
                   "network_unavailable",
                   "runtime_switch_failed",
                   "implementation"

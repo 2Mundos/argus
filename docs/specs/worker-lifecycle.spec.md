@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -251,7 +251,11 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   a human. A worker that finds the environment broken does not fail the task: it
   blocks it with an `env_*` reason and an optional `error` (`POST
   /tasks/{id}/block` accepts only `ENV_BLOCK_REASONS`), spending no attempt, and
-  a manager unblocks it once the environment is fixed.
+  a manager unblocks it once the environment is fixed. A `provider_failure`
+  whose error is a refused credential (401/403, `token_expired`,
+  `credential_rejected`, `auth_rejected`, not logged in) is environmental too:
+  Argus blocks the task as `env_provider_auth`, spends no attempt and leaves the
+  agent `active` (failure classes 3.2).
 - **Operator release never burns an attempt.** `POST /tasks/{id}/release
   {reason, attempt?}` (orchestrator and admin, like cancel; workers get `403`)
   takes a claimed task off its holder and puts it back in the queue, for an
