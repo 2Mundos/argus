@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 # Failure classes
@@ -484,7 +484,10 @@ gates (credential present for that executor, CLI installed: `--version`), then a
 provider once whether it accepts the credential: one authenticated `GET .../models`
 (a metadata list, no prompt, no model run), sent through the gateway proxy the session
 names (`HTTPS_PROXY`, CONNECT, the gateway's CA; a `NO_PROXY` host goes direct), 10 s
-limit, no redirect followed, body discarded unread. The credential goes only into that
+limit, no redirect followed, body discarded unread. The proxy URL's userinfo goes to the
+proxy as Basic `Proxy-Authorization` on the CONNECT (and on a proxied plain-HTTP GET): the
+gateway injects only into an authenticated CONNECT and splices an anonymous one, whose
+provider then sees the placeholder and answers 401. The credential goes only into that
 request's header; it is never printed, logged or reported, and no `auth.json` is read.
 Exit 0 proceeds; 78 (no credentials), 79 (the provider answered 401 or 403) and 127 (not
 installed) block `env_executor_auth` with fixed host-written text (at most 1,500
@@ -682,7 +685,9 @@ and whether the model's or the work's own output can forge it.
   that hangs is 124, never ok or 127; with a mocked provider, per executor and account
   kind: 200 accepted, 401 and 403 exit 79, 429, 404, 500 and a network error unproven and
   exit 0; no request for `agent` or a credential held only in a file; the transport
-  against local sockets: direct, forward proxy, `NO_PROXY`, timeout, refused CONNECT);
+  against local sockets: direct, forward proxy, `NO_PROXY`, timeout, refused CONNECT,
+  the proxy userinfo decoded into `Proxy-Authorization` on the CONNECT and forward GET and
+  no header without it, a genuine 401 through an authenticated proxy still exit 79);
   the channel tests in `argus-accounts.test.ts` ("executor credential probe in the
   channel": a 78 or 127 block is `env_executor_auth` with the attempt, no session, no
   `/fail`; no delegated executor is never probed; a probe that throws proceeds and

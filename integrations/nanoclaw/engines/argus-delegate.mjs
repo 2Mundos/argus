@@ -1151,10 +1151,21 @@ function gatewayCa(e) {
 }
 
 /**
+ * The proxy URL's userinfo as a Basic `Proxy-Authorization` header, none without a username.
+ * The gateway injects the credential only into an authenticated CONNECT.
+ */
+function proxyAuthorization(proxy) {
+  if (!proxy.username) return {};
+  const userPass = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
+  return { "proxy-authorization": `Basic ${Buffer.from(userPass).toString("base64")}` };
+}
+
+/**
  * GET `url` through the gateway proxy the session environment names (HTTPS via CONNECT, the
  * gateway terminates TLS with its CA and injects the credential), directly for a NO_PROXY
- * host. Resolves the HTTP status; the body is discarded unread, redirects are not followed.
- * Rejects on a network error or `timeoutMs`.
+ * host. The proxy URL's userinfo authenticates to the proxy. Resolves the HTTP status; the
+ * body is discarded unread, redirects are not followed. Rejects on a network error or
+ * `timeoutMs`.
  */
 export function httpStatus(url, headers, e = process.env, timeoutMs = PROVIDER_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
@@ -1167,6 +1178,8 @@ export function httpStatus(url, headers, e = process.env, timeoutMs = PROVIDER_T
     } catch {
       proxy = null;
     }
+    // Before the timer: a malformed percent-escape rejects here and leaves nothing running.
+    const auth = proxy ? proxyAuthorization(proxy) : {};
     const timer = setTimeout(() => done(new Error("timeout")), timeoutMs);
     let live = [];
     const done = (err, status) => {
@@ -1195,13 +1208,14 @@ export function httpStatus(url, headers, e = process.env, timeoutMs = PROVIDER_T
         hostname: proxy.hostname,
         port: proxyPort,
         path: url,
-        headers: { ...headers, host: u.host },
+        headers: { ...headers, host: u.host, ...auth },
       });
     const connect = http.request({
       hostname: proxy.hostname,
       port: proxyPort,
       method: "CONNECT",
       path: `${u.hostname}:${port}`,
+      headers: auth,
       agent: false,
     });
     live.push(connect);
