@@ -294,11 +294,13 @@ export function sanitizeMessage(text, max = 200) {
   return out.length > max ? `${out.slice(0, max)}…` : out;
 }
 
-function httpErrorCode(status) {
+function httpErrorCode(status, product = "Gitea") {
   if (status === 401) return "unauthorized";
   if (status === 403) return "forbidden";
   if (status === 404) return "not_found";
   if (status === 409) return "conflict";
+  // Gitea refuses a merge with 405 (not allowed) or 423 (locked); GitHub keeps its generic mapping.
+  if ((status === 405 || status === 423) && product === "Gitea") return "conflict";
   if (status === 422) return "validation_failed";
   if (status === 429) return "rate_limited";
   if (status >= 500) return "server_error";
@@ -309,7 +311,7 @@ async function httpError(response, method, path, product = "Gitea") {
   const code =
     response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0"
       ? "rate_limited"
-      : httpErrorCode(response.status);
+      : httpErrorCode(response.status, product);
   let detail = "";
   // 401/403 bodies come from the gateway or auth layer; never echo them.
   if (code !== "unauthorized" && code !== "forbidden") {
@@ -842,6 +844,32 @@ export class GiteaApi {
 
   getPullRequest(number) {
     return this.request(`/pulls/${positiveNumber(number)}`);
+  }
+
+  /** Merge at the expected head SHA; returns the PR read back, merged with a merge commit. */
+  async mergePullRequest(number, { sha, merge_method = "merge" }) {
+    const n = positiveNumber(number);
+    const expected = commitSha(sha);
+    const method = token(merge_method, "merge-method", /^(merge|squash|rebase)$/);
+    const pr = await this.getPullRequest(n);
+    if (pr.state !== "open" || pr.merged === true)
+      throw new GiteaError("conflict", "pull request is not open or is already merged");
+    if (pr.head?.sha !== expected)
+      throw new GiteaError(
+        "conflict",
+        "pull request head moved since the expected SHA; re-run the gates on the new head",
+      );
+    const merged = (current) =>
+      current?.merged === true && current.merge_commit_sha ? current : undefined;
+    await this.mutate(
+      `/pulls/${n}/merge`,
+      { method: "POST", body: { Do: method, head_commit_id: expected } },
+      async () => merged(await this.getPullRequest(n)),
+    );
+    const readback = await this.getPullRequest(n);
+    if (!merged(readback))
+      throw new GiteaError("bad_response", "merge readback shows no merged PR with a merge commit");
+    return readback;
   }
 
   /** Read-only issue tracker item via `issue-get`; `get` is pull-request-only — do not assume an issue number is a PR. */
@@ -2014,7 +2042,7 @@ function usageText({ name, product, notes, unsupported = {} }) {
 
 Credential-free ${product} client for the allowlisted repository (ARGUS_REPOSITORY_URL or
 --repository, checked against ARGUS_REPOSITORIES_JSON). The OneCLI HTTPS proxy injects
-credentials; this helper never takes a token. There is no ${"merge" in unsupported ? "merge, " : ""}approve, admin, user,
+credentials; this helper never takes a token. There is no approve, admin, user,
 token, secret or repository-delete command, and no arbitrary-HTTP command.
 
 Commands:
@@ -2117,13 +2145,18 @@ function allowlistFrom(env) {
   return values.filter((v) => typeof v === "string");
 }
 
+const GITEA_NOTES = `merge: refused unless the Argus channel issued an authorization for this attempt (pr_merged
+tasks with auto_merge or allow_merge): ARGUS_MERGE_AUTH_KEY, _TASK and _ATTEMPT plus
+ARGUS_MERGE_AUTHORIZED, the HMAC-SHA256 of the key over merge:TASK:ATTEMPT. Needs --sha (the
+expected head SHA), --merge-method merge|squash|rebase (default merge); sends POST /pulls/N/merge
+and prints the PR read back. HTTP 405 (merge not allowed), 409 (head changed) and 423 (locked)
+exit as conflict with Gitea's message.`;
+
 const GITEA_CLI = {
   Api: GiteaApi,
   name: "argus-gitea-api",
   product: "Gitea",
-  unsupported: {
-    merge: "merge is not supported on Gitea repositories; argus-gitea-api has no merge command",
-  },
+  notes: GITEA_NOTES,
 };
 
 /** CLI entry point; injectable for tests. Returns the exit code. `cli` picks the forge client (argus-github-api). */

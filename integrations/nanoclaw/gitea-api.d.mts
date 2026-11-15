@@ -113,6 +113,11 @@ export class GiteaApi {
     head?: { sha?: string };
     html_url?: string;
   }>;
+  /** Merge at the expected head SHA; resolves to the PR read back (merged, with `merge_commit_sha`). */
+  mergePullRequest(
+    number: number,
+    options: { sha: string; merge_method?: "merge" | "squash" | "rebase" },
+  ): Promise<{ number: number; merged?: boolean; merge_commit_sha?: string }>;
   /**
    * Legacy return: the pull-request object itself (not `{pull, reconciled}`).
    * Ambiguous mutator failures still reconcile via GET readback internally.

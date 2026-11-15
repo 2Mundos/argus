@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import {
   lstatSync,
   mkdtempSync,
@@ -1260,7 +1260,7 @@ describe("argus-gitea-api command matrix", () => {
     assert.throws(() => parseArgs(["positional"], spec), /--name value/);
   });
 
-  it("prints text format and help, and exposes no merge command", async () => {
+  it("prints text format and help, and keeps merge a command", async () => {
     const gitea = mockGitea(({ route }) =>
       route === "/issues" ? page([{ id: 1, number: 2, title: "A\nB", state: "open" }]) : undefined,
     );
@@ -1269,15 +1269,113 @@ describe("argus-gitea-api command matrix", () => {
     const help = await cli(["--help"], gitea);
     assert.match(help.out, /review-findings/);
     assert.match(help.out, /14 {2}ambiguous/);
-    assert.doesNotMatch(help.out, /^ {2}merge /m);
-    const before = gitea.calls.length;
-    const merge = await cli(["merge", "--number", "1", "--sha", "a".repeat(40)], gitea);
-    assert.equal(merge.code, EXIT_CODES.policy_denied);
-    assert.match(merge.err, /merge is not supported on Gitea repositories/);
-    assert.equal(gitea.calls.length, before);
+    assert.match(help.out, /^ {2}merge /m);
+    assert.doesNotMatch(help.out, /There is no merge/);
+    assert.doesNotMatch(help.out, /not supported on Gitea/);
     for (const command of ["pr-merge", "approve", "repo-delete", "request"])
       assert.equal((await cli([command, "--number", "1"], gitea)).code, EXIT_CODES.usage);
     assert.equal(new Set(Object.values(EXIT_CODES)).size, Object.keys(EXIT_CODES).length);
+  });
+});
+
+describe("argus-gitea-api merge", () => {
+  const SHA = "a".repeat(40);
+  const MERGE_SHA = "m".repeat(40);
+  const open = { number: 1, state: "open", merged: false, head: { sha: SHA } };
+  const done = { number: 1, state: "closed", merged: true, merge_commit_sha: MERGE_SHA };
+  const issued = { key: "k".repeat(64), task: "t1", attempt: "2" };
+  const authorized = createHmac("sha256", issued.key)
+    .update(`merge:${issued.task}:${issued.attempt}`)
+    .digest("hex");
+  const mergeEnv = (token = authorized) => ({
+    ARGUS_MERGE_AUTH_KEY: issued.key,
+    ARGUS_MERGE_AUTH_TASK: issued.task,
+    ARGUS_MERGE_AUTH_ATTEMPT: issued.attempt,
+    ARGUS_MERGE_AUTHORIZED: token,
+  });
+  const mergeCalls = (gitea) => gitea.calls.filter(({ url }) => url.pathname.endsWith("/merge"));
+  /** Gitea whose merge POST answers `reply`; the PR reads back merged once a merge was accepted. */
+  const mergeGitea = (reply = () => new Response(null, { status: 200 }), pr = open) => {
+    let merged = false;
+    return mockGitea(({ route, method }) => {
+      if (route === "/pulls/1" && method === "GET") return Response.json(merged ? done : pr);
+      if (route === "/pulls/1/merge" && method === "POST") {
+        const response = reply();
+        merged = response.ok;
+        return response;
+      }
+    });
+  };
+  const run = (args, gitea, env = mergeEnv()) =>
+    cli(["merge", "--number", "1", "--sha", SHA, ...args], { ...gitea, env });
+
+  it("merges at the expected head and prints the PR read back", async () => {
+    const gitea = mergeGitea();
+    const result = await run([], gitea);
+    assert.equal(result.code, 0, result.err);
+    assert.deepEqual(result.json(), done);
+    const [post] = mergeCalls(gitea);
+    assert.equal(post.method, "POST");
+    assert.equal(post.url.pathname, `${API}/pulls/1/merge`);
+    assert.deepEqual(post.body, { Do: "merge", head_commit_id: SHA });
+  });
+
+  it("refuses a moved head or a closed PR without sending a merge request", async () => {
+    const moved = mergeGitea(undefined, { ...open, head: { sha: "b".repeat(40) } });
+    const result = await run([], moved);
+    assert.equal(result.code, EXIT_CODES.conflict);
+    assert.match(result.error().message, /head moved/);
+    assert.equal(mergeCalls(moved).length, 0);
+    const closed = mergeGitea(undefined, done);
+    assert.equal((await run([], closed)).code, EXIT_CODES.conflict);
+    assert.equal(mergeCalls(closed).length, 0);
+  });
+
+  it("refuses missing, bare and stale authorization before any request", async () => {
+    for (const env of [{}, { ARGUS_MERGE_AUTHORIZED: "1" }, mergeEnv("0".repeat(64))]) {
+      const gitea = mergeGitea();
+      const result = await run([], gitea, env);
+      assert.equal(result.code, EXIT_CODES.policy_denied);
+      assert.equal(gitea.calls.length, 0);
+    }
+  });
+
+  it("maps --merge-method to Do and rejects others before any request", async () => {
+    for (const method of ["merge", "squash", "rebase"]) {
+      const gitea = mergeGitea();
+      assert.equal((await run(["--merge-method", method], gitea)).code, 0);
+      assert.equal(mergeCalls(gitea)[0].body.Do, method);
+    }
+    const gitea = mergeGitea();
+    const result = await run(["--merge-method", "fast-forward"], gitea);
+    assert.equal(result.code, EXIT_CODES.usage);
+    assert.equal(gitea.calls.length, 0);
+  });
+
+  it("surfaces Gitea's message for 405, 409 and 423", async () => {
+    for (const [status, message] of [
+      [405, "Does not have enough approvals yet"],
+      [409, "head commit id does not match"],
+      [423, "pull request is locked"],
+    ]) {
+      const gitea = mergeGitea(() => Response.json({ message }, { status }));
+      const result = await run([], gitea);
+      assert.equal(result.code, EXIT_CODES.conflict);
+      assert.equal(result.error().status, status);
+      assert.match(result.error().message, new RegExp(message));
+      assert.equal(mergeCalls(gitea).length, 1);
+    }
+  });
+
+  it("fails bad_response when the readback is not merged", async () => {
+    const gitea = mockGitea(({ route, method }) =>
+      route === "/pulls/1"
+        ? Response.json(open)
+        : method === "POST"
+          ? new Response(null)
+          : undefined,
+    );
+    assert.equal((await run([], gitea)).code, EXIT_CODES.bad_response);
   });
 });
 
