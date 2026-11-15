@@ -1096,3 +1096,39 @@ def test_orchestrator_reads_the_project_repository_and_starts_a_checkout(
     assert "error" in tool(
         client, worker, "checkout_project_repository", project="acme"
     )
+
+
+def test_retry_task_overrides_match_rest(client: TestClient) -> None:
+    worker, orchestrator = register(client), register(client, "orchestrator")
+    rest = {"Authorization": f"Bearer {orchestrator}"}
+    ids = []
+    for _ in range(2):
+        created = client.post(
+            "/api/tasks",
+            json={"project": "demo", "title": "t", "max_attempts": 1},
+            headers=rest,
+        ).json()
+        claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
+        out = tool(
+            client, worker, "fail_task", task_id=claimed["id"],
+            attempt=claimed["attempt"], error="quota exhausted",
+        )  # fmt: skip
+        assert out["state"] == "failed"
+        ids.append(created["id"])
+    over = {
+        "priority": 5,
+        "budget_usd": 2.5,
+        "difficulty": "hard",
+        "harness_model": {"engine": "claude", "model": "claude-haiku-4-5"},
+    }
+    via_mcp = tool(client, orchestrator, "retry_task", task_id=ids[0], **over)
+    via_rest = client.post(f"/api/tasks/{ids[1]}/retry", json=over, headers=rest).json()
+    keep = ("state", "priority", "budget_usd", "difficulty", "harness_model")
+    assert {k: via_mcp[k] for k in keep} == {k: via_rest[k] for k in keep}
+    assert (via_mcp["state"], via_mcp["priority"]) == ("ready", 5)
+
+    bad = tool(client, orchestrator, "retry_task", task_id=ids[0], priority=1)
+    assert bad["error"].startswith("409 task_not_failed")
+    assert (
+        tool(client, orchestrator, "get_task", task_id=ids[0])["priority"] == 5
+    )  # nothing changed

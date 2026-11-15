@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-06
+updated: 2026-11-15
 ---
 
 # Task edit
@@ -24,7 +24,7 @@ thin callers of the same function with only `depends_on` set.
 
 # 2. Non-Goals
 
-- No change to creation, retry, cancel, approval, archive or PR management.
+- No change to creation, cancel, approval, archive or PR management.
   To assemble a definition before anything can claim it, draft and publish it
   instead ([task drafts](task-drafts.spec.md)); editing a published task follows
   this spec.
@@ -189,6 +189,27 @@ on the latest version* (re-base the draft on the current version). A re-based
 draft that changes a field the new state does not allow shows that field's
 error instead of dropping the change. Live
 refreshes never overwrite a draft. Cancel closes without a request.
+
+## 3.11 Retry overrides
+
+`POST /api/tasks/{id}/retry` and MCP `retry_task` take optional `harness_model`,
+`executor_model`, `account_providers`, `difficulty`, `deliverable`, `priority` and
+`budget_usd` (flat in the body; the same types as `changes`), for a failed task
+whose route or budget was wrong. They go through the validation `edit_task` uses
+(`checked_changes`: creation rules on the merged task, harness/provider
+compatibility, deliverable creatability, `difficulty` becomes `declared`), run
+before the first write, and are stored in the retry's own transaction, so a claim
+never finds the task `ready` with the old values. A refused override (422, same
+codes and `details` as an edit) leaves the task `failed` and unchanged; a task that
+is not `failed` is 409 `task_not_failed`, also with nothing written. Any other key
+(`spec`, `acceptance`, `kind`, `title`, `knowledge`, `depends_on`,
+`harness_account`) is 422 `immutable_field`. `null` clears a pin, the providers or
+the budget as in an edit; without overrides the retry is as before ([worker
+lifecycle](worker-lifecycle.spec.md) 3.2). The response is the task with the new
+values, and `task.retried` carries `overrides`: a `{from, to}` per field that
+changed (no secrets). `edit_task`'s per-state rules do not change: a `failed`
+task is still not editable. On MCP, an argument left out is not given, so a pin
+cannot be cleared through `retry_task`; use REST.
 
 # 4. Open Questions
 

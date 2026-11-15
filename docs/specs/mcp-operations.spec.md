@@ -390,7 +390,8 @@ Findings outside the gap list:
   not repeat the decision's question; `get_decision` reads it in full. REST serves it as
   `POST /api/decisions/answers`; a malformed or oversized batch is a 422 as a
   whole, and an item's domain error (`{status, code, message}`) fails only it.
-- **Unblock and retry** are exposed as MCP `unblock_task` and `retry_task`;
+- **Unblock and retry** are exposed as MCP `unblock_task` and `retry_task`
+  (which takes the field overrides of [task edit](task-edit.spec.md) 3.11);
   `release_task(task_id, reason, attempt?)` requeues a claimed task without
   counting an attempt ([worker lifecycle](worker-lifecycle.spec.md) 3.3).
 

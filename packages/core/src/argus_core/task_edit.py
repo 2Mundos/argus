@@ -104,6 +104,48 @@ class TaskChanges(BaseModel):
         return sorted(self.model_extra or {})
 
 
+# The fields a retry may change with it (task edit spec 3.11): the route, the
+# difficulty, the deliverable, the priority and the budget; never the definition.
+RETRY_OVERRIDES = (
+    "harness_model",
+    "executor_model",
+    "account_providers",
+    "difficulty",
+    "deliverable",
+    "priority",
+    "budget_usd",
+)
+
+
+class RetryOverrides(BaseModel):
+    """The optional body of `POST /api/tasks/{id}/retry`: the same types as
+    `TaskChanges`, for `RETRY_OVERRIDES` only. Any other key (spec, title, ...)
+    is kept in `model_extra` and refused as `immutable_field`."""
+
+    model_config = ConfigDict(extra="allow")
+
+    harness_model: HarnessModel | None = None
+    executor_model: ExecutorModel | None = None
+    account_providers: list[str] | None = None
+    difficulty: Difficulty | None = None
+    deliverable: Deliverable | None = None
+    priority: int | None = None
+    budget_usd: float | None = Field(default=None, gt=0, le=BUDGET_MAX_USD)
+
+    def unknown(self) -> list[str]:
+        return sorted(self.model_extra or {})
+
+    def changes(self) -> TaskChanges:
+        """The overrides as an edit, so both paths share one validator."""
+        return TaskChanges(
+            **{
+                f: getattr(self, f)
+                for f in RETRY_OVERRIDES
+                if f in self.model_fields_set
+            }
+        )
+
+
 class TaskEdit(BaseModel):
     """The body of `PATCH /api/tasks/{id}` and the arguments of `edit_task`."""
 

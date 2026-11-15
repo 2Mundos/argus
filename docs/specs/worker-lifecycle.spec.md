@@ -170,6 +170,8 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   (`task is claimed, not failed`). It resets `attempt` and `failures` to 0 (the
   latter is what `max_attempts` limits), clears `error`, the assignee, lease,
   deadline and progress, keeps `max_attempts`, and returns the task to `ready`.
+  Optional field overrides (route, difficulty, deliverable, priority, budget) are
+  applied in the same transaction ([task edit](task-edit.spec.md) 3.11).
   Each retry is an explicit operator act and writes `task.retried` with the
   actor, the `previous_attempts` it discarded (which may exceed `max_attempts`)
   and the previous error, truncated to 500 characters.

@@ -409,3 +409,51 @@ async def test_newest_list_uses_partial_index(db: Database) -> None:
             async with conn.execute("EXPLAIN QUERY PLAN " + sql) as cur:
                 plan = " | ".join(row["detail"] for row in await cur.fetchall())
             assert index in plan, (name, plan)
+
+
+def test_retry_applies_overrides_and_returns_the_new_values(
+    client: TestClient, agent: dict[str, str]
+) -> None:
+    failed = _fail_once(client, agent)
+    res = client.post(
+        f"/api/tasks/{failed['id']}/retry",
+        json={"priority": 8, "budget_usd": 4, "difficulty": "hard"},
+    )
+    assert res.status_code == 200
+    task = res.json()
+    assert (task["state"], task["priority"], task["budget_usd"]) == ("ready", 8, 4)
+    assert (task["difficulty"], task["difficulty_source"]) == ("hard", "declared")
+    events = client.get(f"/api/events?subject_id={failed['id']}").json()
+    (event,) = [e for e in events if e["kind"] == "task.retried"]
+    assert set(event["data"]["overrides"]) == {"priority", "budget_usd", "difficulty"}
+    claimed = client.post("/api/tasks/claim", json={}, headers=agent).json()
+    assert (claimed["id"], claimed["priority"]) == (failed["id"], 8)
+
+
+def test_a_refused_retry_override_writes_nothing(
+    client: TestClient, agent: dict[str, str]
+) -> None:
+    failed = _fail_once(client, agent)
+    before = client.get(f"/api/tasks/{failed['id']}").json()
+    url = f"/api/tasks/{failed['id']}/retry"
+    res = client.post(url, json={"priority": 8, "spec": "new"})
+    assert res.status_code == 422
+    assert res.json()["detail"]["code"] == "immutable_field"
+    assert res.json()["detail"]["details"] == ["spec"]
+    res = client.post(url, json={"priority": 8, "budget_usd": -1})
+    assert res.status_code == 422
+    res = client.post(
+        url,
+        json={
+            "harness_model": {"engine": "codex", "model": "gpt-5"},
+            "account_providers": ["anthropic"],
+        },
+    )
+    assert res.status_code == 422
+    assert client.get(f"/api/tasks/{failed['id']}").json() == before
+
+    task = client.post("/api/tasks", json={"project": "demo", "title": "x"}).json()
+    before = client.get(f"/api/tasks/{task['id']}").json()
+    res = client.post(f"/api/tasks/{task['id']}/retry", json={"priority": 8})
+    assert res.json()["detail"]["code"] == "task_not_failed"
+    assert client.get(f"/api/tasks/{task['id']}").json() == before

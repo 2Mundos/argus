@@ -1588,9 +1588,35 @@ async def unblock_task(ctx: Context, task_id: str) -> dict:
 
 
 @tool(MANAGERS)
-async def retry_task(ctx: Context, task_id: str) -> dict:
-    """Give a failed task a fresh window of attempts (409 task_not_failed otherwise)."""
-    return await _call(ctx, "POST", f"/tasks/{task_id}/retry")
+async def retry_task(
+    ctx: Context,
+    task_id: str,
+    harness_model: dict | None = None,
+    executor_model: dict | None = None,
+    account_providers: list[str] | None = None,
+    difficulty: str | None = None,
+    deliverable: dict | None = None,
+    priority: int | None = None,
+    budget_usd: float | None = None,
+) -> dict:
+    """Give a failed task a fresh window of attempts (409 task_not_failed otherwise).
+    Optional harness_model, executor_model, account_providers, difficulty,
+    deliverable, priority and budget_usd take the edit_task shapes and rules and
+    apply in the same step; a refused one retries nothing."""
+    given = {
+        k: v
+        for k, v in {
+            "harness_model": harness_model,
+            "executor_model": executor_model,
+            "account_providers": account_providers,
+            "difficulty": difficulty,
+            "deliverable": deliverable,
+            "priority": priority,
+            "budget_usd": budget_usd,
+        }.items()
+        if v is not None
+    }
+    return await _call(ctx, "POST", f"/tasks/{task_id}/retry", json=given or None)
 
 
 @tool(MANAGERS)

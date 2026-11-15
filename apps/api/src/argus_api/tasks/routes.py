@@ -13,7 +13,12 @@ from argus_core.cost import TaskCost
 from argus_core.delivery import Delivery, DeliveryReconciliation, PrBinding
 from argus_core.difficulty import chain_for
 from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
-from argus_core.task_edit import TaskAttempt, TaskAttemptSummary, TaskEdit
+from argus_core.task_edit import (
+    RetryOverrides,
+    TaskAttempt,
+    TaskAttemptSummary,
+    TaskEdit,
+)
 from argus_core.tasks import (
     ENV_BLOCK_REASONS,
     ClaimedTask,
@@ -705,10 +710,19 @@ async def unblock_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
 
 
 @router.post("/{task_id}/retry")
-async def retry_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
-    """Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise)."""
+async def retry_task(
+    task_id: str,
+    db: DbDep,
+    caller: ManagerDep,
+    body: RetryOverrides | None = None,
+) -> Task:
+    """Return a `failed` task to `ready` with a fresh window of attempts (409
+    `task_not_failed` otherwise). The optional body overrides harness_model,
+    executor_model, account_providers, difficulty, deliverable, priority and
+    budget_usd in the same transaction, with the edit rules; any other key is 422
+    `immutable_field`, an invalid value 422, and a refused retry writes nothing."""
     async with db.write() as tx:
-        return await service.retry(tx, task_id, caller.actor)
+        return await service.retry(tx, task_id, caller.actor, body)
 
 
 @router.post("/{task_id}/release")

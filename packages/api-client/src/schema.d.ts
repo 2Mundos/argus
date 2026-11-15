@@ -3574,7 +3574,11 @@ export interface paths {
         put?: never;
         /**
          * Retry Task
-         * @description Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise).
+         * @description Return a `failed` task to `ready` with a fresh window of attempts (409
+         *     `task_not_failed` otherwise). The optional body overrides harness_model,
+         *     executor_model, account_providers, difficulty, deliverable, priority and
+         *     budget_usd in the same transaction, with the edit rules; any other key is 422
+         *     `immutable_field`, an invalid value 422, and a refused retry writes nothing.
          */
         post: operations["retry_task_api_tasks__task_id__retry_post"];
         delete?: never;
@@ -10166,6 +10170,26 @@ export interface components {
          * @enum {string}
          */
         RetryClass: "admission" | "environment" | "transient" | "session" | "task";
+        /**
+         * RetryOverrides
+         * @description The optional body of `POST /api/tasks/{id}/retry`: the same types as
+         *     `TaskChanges`, for `RETRY_OVERRIDES` only. Any other key (spec, title, ...)
+         *     is kept in `model_extra` and refused as `immutable_field`.
+         */
+        RetryOverrides: {
+            /** Account Providers */
+            account_providers?: string[] | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
+            deliverable?: components["schemas"]["Deliverable"] | null;
+            difficulty?: components["schemas"]["Difficulty"] | null;
+            executor_model?: components["schemas"]["ExecutorModel"] | null;
+            harness_model?: components["schemas"]["HarnessModel"] | null;
+            /** Priority */
+            priority?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * Review
          * @enum {string}
@@ -19417,7 +19441,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RetryOverrides"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

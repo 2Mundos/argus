@@ -18931,6 +18931,92 @@
         "title": "RetryClass",
         "type": "string"
       },
+      "RetryOverrides": {
+        "additionalProperties": true,
+        "description": "The optional body of `POST /api/tasks/{id}/retry`: the same types as\n`TaskChanges`, for `RETRY_OVERRIDES` only. Any other key (spec, title, ...)\nis kept in `model_extra` and refused as `immutable_field`.",
+        "properties": {
+          "account_providers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Providers"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 10000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
+          "deliverable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Deliverable"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Difficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executor_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutorModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          }
+        },
+        "title": "RetryOverrides",
+        "type": "object"
+      },
       "Review": {
         "enum": [
           "none",
@@ -38610,7 +38696,7 @@
     },
     "/api/tasks/{task_id}/retry": {
       "post": {
-        "description": "Return a `failed` task to `ready` with a fresh window of attempts (409 otherwise).",
+        "description": "Return a `failed` task to `ready` with a fresh window of attempts (409\n`task_not_failed` otherwise). The optional body overrides harness_model,\nexecutor_model, account_providers, difficulty, deliverable, priority and\nbudget_usd in the same transaction, with the edit rules; any other key is 422\n`immutable_field`, an invalid value 422, and a refused retry writes nothing.",
         "operationId": "retry_task_api_tasks__task_id__retry_post",
         "parameters": [
           {
@@ -38623,6 +38709,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RetryOverrides"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
