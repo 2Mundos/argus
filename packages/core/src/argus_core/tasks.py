@@ -337,12 +337,18 @@ ENV_BLOCK_REASONS = frozenset(
 # 3.2.1); never one a worker may send, so it is not in ENV_BLOCK_REASONS.
 ENV_OOM = "env_oom"
 
+# Argus's own block for a provider that refused the credential (401/403,
+# `token_expired`, `credential_rejected`, `auth_rejected`, not logged in) before the
+# work could start (failure classes 3.2); not one a worker may send.
+ENV_PROVIDER_AUTH = "env_provider_auth"
+
 # The one map from a failure reason to its class; a reason not listed is `task`.
 FAILURE_CLASS: dict[str, RetryClass] = {
     "quota": RetryClass.ADMISSION,
     "account_unavailable": RetryClass.ADMISSION,
     **dict.fromkeys(ENV_BLOCK_REASONS, RetryClass.ENVIRONMENT),
     ENV_OOM: RetryClass.ENVIRONMENT,
+    ENV_PROVIDER_AUTH: RetryClass.ENVIRONMENT,
     # The disk guard stopped the session that wrote most (operations.spec.md 3.5).
     "env_disk_full": RetryClass.ENVIRONMENT,
     "provider_failure": RetryClass.TRANSIENT,

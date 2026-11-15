@@ -7,8 +7,10 @@ from typing import Any
 
 import aiosqlite
 from argus_core.continuation import ContinuationProvenance, ItemStatus, merge_acceptance
+from argus_core.quota import failure_class, sanitize_notice
 from argus_core.tasks import (
     ENV_OOM,
+    ENV_PROVIDER_AUTH,
     Action,
     RetryClass,
     Review,
@@ -291,6 +293,32 @@ async def fail(
     if oom_kill and reason != "session_lost":
         raise ValidationFailedError("oom_kill is only valid with reason session_lost")
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
+    if reason == "provider_failure" and failure_class(error) in (
+        "provider_auth",
+        "auth_expired",
+    ):
+        # The provider refused the credential before any work counted: the
+        # environment is broken, not the task. Block it with the provider's own
+        # words and spend no attempt (failure classes 3.2).
+        note = sanitize_notice(error)
+        await _apply(
+            tx,
+            row,
+            Action.BLOCK,
+            f"agent:{agent_id}",
+            set_={
+                "error": note,
+                "block_reason": ENV_PROVIDER_AUTH,
+                "progress_message": f"provider authentication failed: {note}",
+            },
+            data={
+                "error": note,
+                "reason": ENV_PROVIDER_AUTH,
+                "cause": reason,
+                "retry_class": RetryClass.ENVIRONMENT,
+            },
+        )
+        return await get_task(tx.conn, task_id)
     quota = reason in ADMISSION_REASONS
     if quota and await manages_accounts(tx.conn) and not await can_serve(tx, row):
         await _apply(

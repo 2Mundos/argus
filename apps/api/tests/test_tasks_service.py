@@ -432,6 +432,77 @@ async def test_an_environment_block_keeps_its_error_and_spends_nothing(
 
 
 @pytest.mark.parametrize(
+    "error",
+    [
+        "Error: HTTP 401 token_expired: your login expired",
+        "HTTP 403 Forbidden",
+        "token_expired",
+        "credential_rejected: the account key was revoked",
+        "auth_rejected",
+        "codex: not logged in",
+    ],
+)
+async def test_a_provider_auth_failure_spends_no_attempt_and_stays_visible(
+    db: Database, error: str
+) -> None:
+    task = await create(db, max_attempts=1)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        after = await service.fail(tx, A, task.id, c.attempt, error, "provider_failure")
+    assert (after.state, after.failures) == (S.BLOCKED, 0)
+    assert after.block_reason == "env_provider_auth"
+    assert FAILURE_CLASS[after.block_reason] is RetryClass.ENVIRONMENT
+    assert after.error == error
+    assert error in (after.progress_message or "")
+    assert after.assignee_agent_id is None
+    block = [d for k, d in await events(db, task.id) if k == "task.block"][-1]
+    assert (block["reason"], block["error"]) == ("env_provider_auth", error)
+    # The operator fixes the account and unblocks: claimable again, nothing spent.
+    async with db.write() as tx:
+        again = await service.unblock(tx, task.id, "human:test")
+    assert (again.state, again.failures, again.block_reason) == (S.READY, 0, None)
+
+
+async def test_a_provider_auth_failure_does_not_end_the_agent(db: Database) -> None:
+    task = await create(db)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        await service.fail(
+            tx, A, task.id, c.attempt, "HTTP 401 token_expired", "provider_failure"
+        )
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT state FROM agents WHERE id = ?", (A,)) as cur,
+    ):
+        assert (await cur.fetchone())["state"] == "active"
+    assert [d for k, d in await events(db, task.id) if k == "task.expire"] == []
+
+
+@pytest.mark.parametrize(
+    ("reason", "error"),
+    [
+        ("worker_fail", "the build is broken: tests fail"),
+        # The work's own words are not provider evidence (failure classes 3.5).
+        ("worker_fail", "HTTP 401 token_expired"),
+        ("channel_error", "HTTP 401 token_expired"),
+        ("provider_failure", "502 bad gateway from the model API"),
+    ],
+)
+async def test_other_failures_still_count_toward_max_attempts(
+    db: Database, reason: str, error: str
+) -> None:
+    task = await create(db, max_attempts=3)
+    c = await claim(db)
+    assert c is not None
+    async with db.write() as tx:
+        after = await service.fail(tx, A, task.id, c.attempt, error, reason)
+    assert after.failures == 1
+    assert after.block_reason != "env_provider_auth"
+
+
+@pytest.mark.parametrize(
     "reason",
     [
         "env_workspace_unconfigured",

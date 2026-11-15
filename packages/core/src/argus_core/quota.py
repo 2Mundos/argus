@@ -59,6 +59,18 @@ AUTH_EXPIRED_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("custom", _AUTH_EXPIRED),
 )
 
+# A credential the provider or the executor refused, whatever the account: HTTP 401
+# or 403 from an engine, the provider's own codes, or a missing login. Environmental
+# (failure classes 3.2): re-running the same attempt cannot fix it. Anchored like the
+# notices above, so the work's own words never count.
+PROVIDER_AUTH_NOTICES = re.compile(
+    r"^(?:http\s*)?(?:401|403)\b"
+    r"|^(?:token_expired|credential_rejected|auth_rejected|auth_missing"
+    r"|invalid[_ ]api[_ ]key)\b"
+    r"|^(?:(?:codex|claude|cursor|copilot|opencode):\s*)?not logged in\b",
+    re.I,
+)
+
 # Structured `codexErrorInfo` / `error.code` values of the Codex app-server that mean
 # "this account's quota is spent", keyed by the same account provider.
 STRUCTURED_QUOTA_CODES = frozenset(
@@ -108,6 +120,7 @@ ResetStatus = Literal["stated", "ambiguous", "absent"]
 FailureClass = Literal[
     "quota_exhausted",
     "auth_expired",
+    "provider_auth",
     "network_unavailable",
     "runtime_switch_failed",
     "implementation",
@@ -212,7 +225,7 @@ def failure_class(
     notice: str, reason: str = "", provider: str | None = None
 ) -> FailureClass:
     """What kind of failure a task error is, for REST/MCP/UI: a provider quota, an
-    expired login, the network, a failed runtime switch, or (the default) the work."""
+    expired login, a refused credential, the network, a failed runtime switch, or (the default) the work."""
     if reason == "runtime_switch_failed":
         return "runtime_switch_failed"
     hit = classify_quota(notice, provider)
@@ -221,6 +234,8 @@ def failure_class(
     head = _JS_ERROR.sub(
         "", _CHANNEL_STEP.sub("", _PREFIX.sub("", _fold(notice), count=1))
     )
+    if PROVIDER_AUTH_NOTICES.match(head):
+        return "provider_auth"
     if NETWORK_NOTICES.match(head):
         return "network_unavailable"
     return "implementation"

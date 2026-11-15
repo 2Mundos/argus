@@ -5166,7 +5166,7 @@ export interface components {
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
-            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
+            failure_class?: ("quota_exhausted" | "auth_expired" | "provider_auth" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
             /** Forge Agentic Review Required */
@@ -11031,7 +11031,7 @@ export interface components {
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
-            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
+            failure_class?: ("quota_exhausted" | "auth_expired" | "provider_auth" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
             /** Harness Account */
@@ -11501,7 +11501,7 @@ export interface components {
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
-            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
+            failure_class?: ("quota_exhausted" | "auth_expired" | "provider_auth" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
             /** Harness Account */
@@ -11927,7 +11927,7 @@ export interface components {
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
-            failure_class?: ("quota_exhausted" | "auth_expired" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
+            failure_class?: ("quota_exhausted" | "auth_expired" | "provider_auth" | "network_unavailable" | "runtime_switch_failed" | "implementation") | null;
             /** Failures */
             failures: number;
             finalization?: components["schemas"]["Finalization"] | null;

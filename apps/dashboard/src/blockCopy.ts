@@ -29,6 +29,8 @@ export const BLOCK_COPY: Record<string, string> = {
     "the worker's Kubernetes route or MCP broker is not available (no docker bridge, or the server is unreachable)",
   env_guard_missing: "the worker image has no command guard hook for its engine",
   env_oom: "sessions on its pool keep running out of memory; raise the pool's memory or unblock",
+  env_provider_auth:
+    "the provider refused the credential (401/403, expired or rejected login); fix the account, then unblock",
   worker_env: "the worker reported a missing workspace, tool or credential",
   worker_gave_up: "the worker gave up; retry or cancel it",
   budget_exhausted: "its budget is spent; raise the budget or cancel it",

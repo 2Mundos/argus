@@ -63,11 +63,28 @@ reasons and adds `failure_class` to each failure row and a count per class.
 | Class | Action | Spends an attempt |
 | --- | --- | --- |
 | `admission` | unchanged: requeue or `awaiting_quota` | no |
-| `environment` | `blocked` with the `env_*` reason; inbox row; a manager unblocks | no |
+| `environment` | `blocked` with the `env_*` reason (including `env_provider_auth`, below); inbox row; a manager unblocks | no |
 | `transient` | requeue after a backoff (below) | yes |
 | `session` | requeue once after a confirmed exit; a further automatic requeue needs progress since the last automatic resume, else the task fails with the cause | yes |
 | `task` | escalating reasons: requeue one difficulty up, as today; `worker_fail`: `blocked` as `worker_gave_up` | yes |
 
+- **Provider credential failures are environmental.** A `provider_failure` whose
+  error starts (after the runner's own prefix) with HTTP 401 or 403, `token_expired`,
+  `credential_rejected`, `auth_rejected`, `auth_missing`, `invalid_api_key` or
+  "not logged in" is class `environment`, whatever the account: re-running the
+  attempt cannot fix a credential the provider refused (`failure_class`
+  `provider_auth`, or `auth_expired` for an expired login). Account failover
+  ([account selection](account-selection.spec.md)) still runs first when the agent
+  holds a matching account lease; when it does not apply, `POST /tasks/{id}/fail`
+  blocks the task as `env_provider_auth` with the sanitized provider text as
+  `error` and in `progress_message`, in the `task.block` event, and spends no
+  attempt (`failures` unchanged). Argus writes this reason itself: a worker cannot
+  send it as a block. The block is not a failure of the agent: the agent stays
+  `active`, nothing expires, and no instance is recycled. An unblock retries it
+  once an operator has fixed the account, so a dead provider is never retried in
+  a loop. The same words under `worker_fail` or `channel_error` stay
+  `implementation`: the work's own text is not evidence (3.5). Genuine
+  implementation failures count exactly as before.
 - **Backoff.** A `transient` fail that requeues sets `tasks.retry_at` to
   `tx.now + min(60 · 2^(failures − 1), 900)` s, `failures` counted after this
   fail (60 s, 120 s, 240 s, …, at most 15 min). `claim()` skips a ready task
@@ -561,6 +578,7 @@ and whether the model's or the work's own output can forge it.
 | Classifier | Source | Anchoring | Exit code | Forgeable? |
 | --- | --- | --- | --- | --- |
 | `quota.py classify_quota()` — quota / auth | Provider-level error text; structured JSON `codexErrorInfo`/`code`/`type`; `auth_expired` notices | `_PREFIX` stripped then patterns anchored at `^` via `_fold` → `_PREFIX.sub` + `body` start | No | No — anchored at start after runner prefix |
+| `quota.py failure_class()` — provider credential (`provider_auth`) | Runner's error head after the same prefixes: HTTP 401/403, `token_expired`, `credential_rejected`, `auth_rejected`, `auth_missing`, `invalid_api_key`, "not logged in"; acted on only for reason `provider_failure` | `PROVIDER_AUTH_NOTICES.match(head)` — `^` anchored | No | No — only the runner's first line, and never under `worker_fail` |
 | `quota.py failure_class()` — network | Runner's own error head after `_PREFIX`, `_CHANNEL_STEP`, `_JS_ERROR` stripped | `NETWORK_NOTICES.match(head)` — `^` anchored | No | No — only the runner's first line classifies |
 | `overlays/claude-rate-limit.ts classifyRateLimit()` | SDK `RateLimitError` mark or one exact whole-line notice | Pattern anchored at `^` after prefix strip | No | No — SDK mark or exact runner line |
 | `overlays/codex-usage-limit.ts codexUsageLimitFailure()` | Structured `codexErrorInfo`/`code`/`type` field, or runner-prefixed text | `LIMIT_TEXT` anchored at `^` after `NOTICE_PREFIX` strip; structured path bypasses text match | No | No — anchored after prefix strip |
