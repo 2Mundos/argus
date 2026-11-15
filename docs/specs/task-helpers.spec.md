@@ -82,6 +82,7 @@ No credential appears in stdout, stderr or any file the helper writes.
 ```
 argus-task wait ci --pr N [--sha SHA]
 argus-task wait review --pr N [--since CURSOR]
+argus-task wait merge --pr N
     [--interval SECONDS] [--max SECONDS]
 ```
 
@@ -111,8 +112,18 @@ argus-task wait review --pr N [--since CURSOR]
   with the forge helper) and a `cursor` for the next call.
 - `ci` ignores agentic-review contexts (they are review, not CI) and keeps the newest
   status per context. No status at all is "no checks reported yet", still pending.
-- The helper checks the forge every `--interval` seconds (default 30, minimum 10) and
-  returns after `--max` seconds at most. `--max` defaults to `ARGUS_TASK_WAIT_MAX_S`
+- A merged or closed PR ends a `ci` wait at once, with `status` `merged` or
+  `closed without merge`, `merged` and, when present, `merged_at` and `merge_commit_sha`: no
+  further check can ever finish on that PR, so spinning to the cap would leave the worker
+  stale exactly when the owner merged. A `wait ci` therefore also reacts to the merge. That
+  end carries no CI state, so it writes no terminal record (3.4); the pending one is cleared.
+- `merge` waits for the PR to become terminal: `merged` (exit 0, `status` `merged`) or
+  `closed without merge` (exit 0, `merged: false` — terminal, not success). It carries the
+  head it read, and takes no `--sha`: it follows the PR, not a commit.
+- The first checks are fast — 3, 6, 12 and 24 s — and then settle on `--interval` (default
+  30, minimum 10), which is the ceiling, not a floor. A merge or a finished CI is noticed in
+  seconds; a long wait still costs the interval rate. It returns after `--max` seconds at
+  most. `--max` defaults to `ARGUS_TASK_WAIT_MAX_S`
   (110 when unset, never above 540) and is clamped to it (3.8). Exit 10 carries a
   one-line status (`"3 of 5 checks running"`) so a re-call costs one short turn.
 - Between forge checks it reads the interrupt marker (3.4) once a second, a local file

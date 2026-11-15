@@ -44,6 +44,10 @@ export const EXIT = Object.freeze({
 
 const DEFAULT_INTERVAL_S = 30;
 const MIN_INTERVAL_S = 10;
+// A merged PR or a finished CI is noticed in seconds, not after one full interval: the first
+// re-checks run at 3, 6, 12, 24 s and then settle on the interval, which stays the ceiling.
+const FAST_POLL_MS = 3000;
+const MAX_DOUBLINGS = 4; // 3, 6, 12, 24, then the interval
 const DEFAULT_MAX_S = 110; // under the shortest engine shell timeout we know of (spec 3.8)
 const CEILING_MAX_S = 540;
 const MARKER_TICK_MS = 1000;
@@ -164,11 +168,21 @@ export function ciSummary(statuses) {
   return { state, total: checks.length, running, failed };
 }
 
-async function headSha(api, number) {
-  const pr = await api.getPullRequest(number);
+/** A compact PR head read shared by the waits: both fields must be present or the forge is lying. */
+function prHead(pr) {
   if (typeof pr?.head?.sha !== "string")
     throw new GiteaError("bad_response", "PR response has no head SHA");
   return pr.head.sha.toLowerCase();
+}
+
+/** Whether a PR can never change again: merged, or closed without a merge. */
+function prTerminal(pr) {
+  const state = String(pr?.state ?? "").toLowerCase();
+  return pr?.merged === true ? "merged" : state === "closed" ? "closed without merge" : null;
+}
+
+async function headSha(api, number) {
+  return prHead(await api.getPullRequest(number));
 }
 
 // ---- wait ----
@@ -192,6 +206,15 @@ export function waitCap(option, env) {
   return seconds(option, "max", configured, 1, configured);
 }
 
+/**
+ * How long to wait before the next check: 3, 6, 12, 24 s and then the configured interval, which
+ * is the ceiling. A merge or a finished CI arrives in seconds instead of after a full interval,
+ * and a long wait still settles at the cheap rate.
+ */
+export function pollDelay(attempt, capMs) {
+  return Math.min(capMs, FAST_POLL_MS * 2 ** Math.min(attempt, MAX_DOUBLINGS));
+}
+
 const SHA = /^[0-9a-f]{7,64}$/i;
 const MAX_FAILED = 20; // the host accepts at most this many contexts of 100 printable ASCII
 const contextName = (name) =>
@@ -207,7 +230,29 @@ const short = (sha) => sha.slice(0, 7);
  * when the checks on the watched commit have finished and the PR head still is that commit.
  */
 async function checkCi(api, o, watch) {
-  const head = await headSha(api, o.number);
+  const pr = await api.getPullRequest(o.number);
+  const head = prHead(pr);
+  // A merged or closed PR can never produce another check: waiting on it would spin to the cap and
+  // leave the worker stale exactly when the owner merged. Report it as a final state instead.
+  const terminal = prTerminal(pr);
+  if (terminal) {
+    if (!watch.bound) {
+      watch.bound = true;
+      watch.sha ??= head;
+    }
+    return {
+      done: true,
+      status: terminal,
+      sha: watch.sha,
+      watched_sha: watch.sha,
+      pr_head_sha: head,
+      head_matches: head.startsWith(watch.sha),
+      merged: pr.merged === true,
+      pr_state: String(pr.state ?? "").toLowerCase(),
+      ...(pr.merged_at ? { merged_at: pr.merged_at } : {}),
+      ...(pr.merge_commit_sha ? { merge_commit_sha: pr.merge_commit_sha } : {}),
+    };
+  }
   if (!watch.bound) {
     watch.bound = true;
     if (watch.sha && !watch.explicit && !head.startsWith(watch.sha)) {
@@ -245,6 +290,23 @@ async function checkCi(api, o, watch) {
 
 const reviewTime = (r) => r.submitted_at ?? r.updated_at ?? r.created_at ?? null;
 
+/** `wait merge`: done the moment the PR is merged; a closed PR is terminal too, without a merge. */
+async function checkMerge(api, o) {
+  const pr = await api.getPullRequest(o.number);
+  const head = prHead(pr);
+  const terminal = prTerminal(pr);
+  return {
+    done: terminal !== null,
+    status: terminal ?? "not merged yet",
+    sha: head,
+    pr_head_sha: head,
+    merged: pr.merged === true,
+    pr_state: String(pr.state ?? "").toLowerCase(),
+    ...(pr.merged_at ? { merged_at: pr.merged_at } : {}),
+    ...(pr.merge_commit_sha ? { merge_commit_sha: pr.merge_commit_sha } : {}),
+  };
+}
+
 async function checkReview(api, o, since) {
   const sinceMs = Date.parse(since);
   const comments = (await api.listComments(o.number, { since, all: true, limit: 50 })).items;
@@ -271,7 +333,9 @@ async function checkReview(api, o, since) {
 
 async function wait(api, o, ctx) {
   const on = o.on;
-  if (on !== "ci" && on !== "review") throw usage("wait takes ci or review");
+  if (on !== "ci" && on !== "review" && on !== "merge")
+    throw usage("wait takes ci, review or merge");
+  if (on === "merge" && o.sha !== undefined) throw usage("wait merge takes no --sha");
   positiveNumber(o.number);
   const intervalMs =
     seconds(o.interval, "interval", DEFAULT_INTERVAL_S, MIN_INTERVAL_S, CEILING_MAX_S) * 1000;
@@ -287,8 +351,9 @@ async function wait(api, o, ctx) {
   const since = same ? previous.since : new Date(start).toISOString();
   const cursor =
     on === "review" ? (o.since === undefined ? since : timestamp(o.since, "since")) : null;
+  // Only a ci wait has a watched commit; a merge wait follows the PR state alone.
   const stored =
-    same && typeof previous.sha === "string" && SHA.test(previous.sha)
+    on === "ci" && same && typeof previous.sha === "string" && SHA.test(previous.sha)
       ? previous.sha.toLowerCase()
       : null;
   const watch =
@@ -319,6 +384,9 @@ async function wait(api, o, ctx) {
   // can supersede the waiting milestone (spec 3.4). Best effort like the pending record.
   const finish = (check) => {
     if (!file || on !== "ci" || !watch?.sha) return clear();
+    // A merged or closed PR ends the wait without a CI state: there is no outcome to record, and
+    // the terminal record's shape (3.4) must not gain a half-filled one.
+    if (typeof check.state !== "string") return clear();
     try {
       mkdirSync(ctx.dir, { recursive: true });
       const failed = check.failed.slice(0, MAX_FAILED).map(contextName);
@@ -339,6 +407,9 @@ async function wait(api, o, ctx) {
   // before it starts and is cut to the time left. No retries inside a wait (the next check is
   // the retry), so there is no backoff to bound either.
   const deadline = start + capMs;
+  // The first re-checks are fast (a merge or a finished CI is worth noticing in seconds); the
+  // configured interval is the ceiling they settle on, never a floor.
+  let attempt = 0;
   api.maxRetries = 0;
   api.timeoutMs = PROBE_REQUEST_MS;
   api.deadline = { at: deadline, now: ctx.now };
@@ -359,7 +430,12 @@ async function wait(api, o, ctx) {
       }
       let check;
       try {
-        check = on === "ci" ? await checkCi(api, o, watch) : await checkReview(api, o, cursor);
+        check =
+          on === "ci"
+            ? await checkCi(api, o, watch)
+            : on === "merge"
+              ? await checkMerge(api, o)
+              : await checkReview(api, o, cursor);
       } catch (error) {
         if (!(error instanceof GiteaError)) throw error;
         if (error.code === "deadline_exceeded") return pending({ status: "wait budget spent" });
@@ -376,7 +452,7 @@ async function wait(api, o, ctx) {
           result: { on, ref, waited_s: (ctx.now() - start) / 1000, ...check },
         };
       }
-      const nextCheck = ctx.now() + intervalMs;
+      const nextCheck = ctx.now() + pollDelay(attempt++, intervalMs);
       for (;;) {
         if (ctx.now() >= deadline) return pending(check);
         if (ctx.now() >= nextCheck || interruptAfter(ctx.dir, start)) break;
@@ -1200,7 +1276,7 @@ const COMMANDS = {
   },
   wait: {
     summary:
-      "wait ci|review --pr N: block until CI on the head SHA finishes or a new review/comment lands; exits 10 at the cap, 11 on a steer",
+      "wait ci|review|merge --pr N: block until CI on the head SHA finishes, a new review/comment lands, or the PR is merged or closed; exits 10 at the cap, 11 on a steer. First checks are 3 s apart, settling on --interval (default 30 s)",
     options: { sha: "string", since: "string", interval: "int", max: "int" },
     positional: "on",
     run: wait,
