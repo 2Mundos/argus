@@ -484,10 +484,12 @@ gates (credential present for that executor, CLI installed: `--version`), then a
 provider once whether it accepts the credential: one authenticated `GET .../models`
 (a metadata list, no prompt, no model run), sent through the gateway proxy the session
 names (`HTTPS_PROXY`, CONNECT, the gateway's CA; a `NO_PROXY` host goes direct), 10 s
-limit, no redirect followed, body discarded unread. The proxy URL's userinfo goes to the
-proxy as Basic `Proxy-Authorization` on the CONNECT (and on a proxied plain-HTTP GET): the
-gateway injects only into an authenticated CONNECT and splices an anonymous one, whose
-provider then sees the placeholder and answers 401. The credential goes only into that
+limit, no redirect followed, body discarded unread. An HTTPS request travels in TLS inside
+the CONNECT tunnel; it never dials the provider itself, where only the placeholder would
+reach it. The proxy URL's userinfo goes to the proxy as Basic `Proxy-Authorization` on the
+CONNECT (and on a proxied plain-HTTP GET): the gateway injects only into an authenticated
+CONNECT and splices an anonymous one, whose provider then sees the placeholder and answers
+401. The credential goes only into that
 request's header; it is never printed, logged or reported, and no `auth.json` is read.
 Exit 0 proceeds; 78 (no credentials), 79 (the provider answered 401 or 403) and 127 (not
 installed) block `env_executor_auth` with fixed host-written text (at most 1,500
@@ -687,7 +689,9 @@ and whether the model's or the work's own output can forge it.
   exit 0; no request for `agent` or a credential held only in a file; the transport
   against local sockets: direct, forward proxy, `NO_PROXY`, timeout, refused CONNECT,
   the proxy userinfo decoded into `Proxy-Authorization` on the CONNECT and forward GET and
-  no header without it, a genuine 401 through an authenticated proxy still exit 79);
+  no header without it, a genuine 401 through an authenticated proxy still exit 79; an
+  HTTPS GET in TLS inside a CONNECT tunnel to an unresolvable host, trusting only the
+  `SSL_CERT_FILE` CA, and through it 200 exit 0 and 401 exit 79);
   the channel tests in `argus-accounts.test.ts` ("executor credential probe in the
   channel": a 78 or 127 block is `env_executor_auth` with the attempt, no session, no
   `/fail`; no delegated executor is never probed; a probe that throws proceeds and

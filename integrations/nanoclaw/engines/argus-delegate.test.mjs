@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -2681,6 +2683,120 @@ test("httpStatus: the proxy URL's userinfo is sent, decoded, as Basic Proxy-Auth
       ["GET", expected],
     ]);
   }
+});
+
+/**
+ * A CONNECT proxy whose every tunnel ends at a local TLS server with a self-signed certificate
+ * for `host` (its own CA, at `ca`). `host` never resolves, so a request that reaches `handler`
+ * came through a tunnel: a direct dial fails. Records each CONNECT and the bytes the client
+ * sent inside its tunnel.
+ */
+async function tlsTunnel(t, host, handler) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delegate-tunnel-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const key = path.join(dir, "key.pem");
+  const ca = path.join(dir, "ca.pem");
+  const req = `req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=${host}`.split(" ");
+  const san = ["-addext", `subjectAltName=DNS:${host}`];
+  execFileSync("openssl", [...req, ...san, "-keyout", key, "-out", ca], { stdio: "ignore" });
+  const origin = https.createServer(
+    { key: fs.readFileSync(key), cert: fs.readFileSync(ca) },
+    handler,
+  );
+  await new Promise((r) => origin.listen(0, "127.0.0.1", r));
+  const sockets = [];
+  t.after(() => {
+    for (const s of sockets) s.destroy();
+    origin.closeAllConnections();
+    origin.close();
+  });
+  const connects = [];
+  const port = await listen(
+    t,
+    (_req, res) => res.writeHead(405).end(),
+    (req, client, head) => {
+      const tunnel = { target: req.url, auth: req.headers["proxy-authorization"], bytes: 0 };
+      connects.push(tunnel);
+      const upstream = net.connect(origin.address().port, "127.0.0.1", () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        client.on("data", (chunk) => (tunnel.bytes += chunk.length));
+        upstream.write(head);
+        client.pipe(upstream).pipe(client);
+      });
+      sockets.push(client, upstream);
+      upstream.on("error", () => client.destroy());
+      client.on("error", () => upstream.destroy());
+    },
+  );
+  return { port, ca, connects };
+}
+
+// The tunnel test fails if the GET dials the provider itself: in Node an Agent opens its own
+// connection and ignores `createConnection`, so the tunnel socket would go unused.
+test("httpStatus: an https GET travels in TLS inside the CONNECT tunnel and reads the status", async (t) => {
+  const host = "api.example.invalid";
+  const seen = [];
+  const tunnel = await tlsTunnel(t, host, (req, res) => {
+    seen.push([req.url, req.headers.host, req.headers["x-api-key"], req.socket.servername]);
+    res.writeHead(req.url === "/v1/models?limit=1" ? 200 : 401).end("{}");
+  });
+  const e = { HTTPS_PROXY: `http://127.0.0.1:${tunnel.port}`, SSL_CERT_FILE: tunnel.ca };
+  const headers = { "x-api-key": "k" };
+  assert.equal(await httpStatus(`https://${host}/v1/models?limit=1`, headers, e), 200);
+  assert.equal(await httpStatus(`https://${host}/v1/denied`, headers, e), 401);
+  const untrusted = { HTTPS_PROXY: e.HTTPS_PROXY };
+  await assert.rejects(httpStatus(`https://${host}/v1/x`, headers, untrusted), /self-signed/);
+  assert.deepEqual(seen, [
+    ["/v1/models?limit=1", host, "k", host],
+    ["/v1/denied", host, "k", host],
+  ]);
+  assert.deepEqual(
+    tunnel.connects.map((c) => c.target),
+    Array(3).fill(`${host}:443`),
+  );
+  assert.ok(
+    tunnel.connects.every((c) => c.bytes > 0),
+    "the request went through the tunnel",
+  );
+});
+
+test("--auth-probe through an authenticated CONNECT tunnel: 200 is exit 0, a 401 is exit 79", async (t) => {
+  const host = "llm.example.invalid";
+  let status = 200;
+  const seen = [];
+  const tunnel = await tlsTunnel(t, host, (req, res) => {
+    seen.push([req.url, req.headers.authorization]);
+    res.writeHead(status).end("{}");
+  });
+  const s = sandbox(t);
+  s.fake("opencode", 'echo "1.0.0"');
+  const env = {
+    ...s.env,
+    ARGUS_ACCOUNT_SETTINGS: JSON.stringify({ base_url: `https://${host}/v1`, label: "custom" }),
+    [CUSTOM_KEY_ENV]: SECRET,
+    HTTPS_PROXY: `http://agent:p%40ss@127.0.0.1:${tunnel.port}`,
+    SSL_CERT_FILE: tunnel.ca,
+  };
+  const accepted = await authProbeWithProvider("opencode", env);
+  assert.deepEqual(
+    [accepted.code, accepted.report.probe, accepted.report.provider_status],
+    [0, "provider_accepted", 200],
+  );
+  status = 401;
+  const rejected = await authProbeWithProvider("opencode", env);
+  assert.deepEqual(
+    [rejected.code, rejected.report.blocked, rejected.report.provider_status],
+    [79, "auth_rejected", 401],
+  );
+  assert.deepEqual(seen, [
+    ["/v1/models", `Bearer ${SECRET}`],
+    ["/v1/models", `Bearer ${SECRET}`],
+  ]);
+  assert.deepEqual(
+    tunnel.connects.map((c) => [c.target, c.auth]),
+    Array(2).fill([`${host}:443`, basic("agent:p@ss")]),
+  );
+  assert.equal(JSON.stringify([accepted, rejected]).includes(SECRET), false);
 });
 
 test("--auth-probe through an authenticated gateway proxy: 200 is accepted, a genuine 401 is still exit 79", async (t) => {
