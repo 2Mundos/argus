@@ -493,6 +493,11 @@ open(p, "w").write(s.replace(old, "'ARGUS_COMMAND_GUARD', 'ARGUS_FORGE_REVIEW']"
 PY
   echo "patched $container_runner (host ARGUS_FORGE_REVIEW → agent contributedEnv)"
 fi
+# The per-attempt merge authorization (github-repositories spec 3.4) rides the same list; its
+# own idempotent script also extends a runner that already carries ARGUS_FORGE_REVIEW.
+if [ -f "$container_runner" ]; then
+  python3 "$here/patch-merge-auth-env.py" "$target"
+fi
 
 codex_test="$target/container/agent-runner/src/providers/codex-app-server.test.ts"
 if [ -f "$codex_test" ]; then
