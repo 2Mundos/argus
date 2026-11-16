@@ -1,0 +1,6 @@
+{"type":"session","sessionId":"s-0001","cwd":"/workspace/task"}
+{"type":"text","text":"Reading the config.\n"}
+{"type":"future_event","n":1}
+{"type":"text","text":"The setting is "}
+{"type":"text","text":"enabled by default.\n"}
+{"type":"final","sessionId":"s-0001","reason":{"kind":"completed"},"text":"Reading the config.\nThe setting is enabled by default.","model":"deepseek-v4","usage":{"inputTokens":1200,"outputTokens":85,"cacheReadTokens":900,"cacheWriteTokens":40,"costUsd":0.0021}}

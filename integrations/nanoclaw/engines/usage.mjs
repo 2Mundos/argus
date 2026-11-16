@@ -13,6 +13,10 @@
 // Provenance of the parsers:
 //   claude   - verified against a real `claude -p --output-format json` result
 //              (fixtures/claude-result.json, trimmed).
+//   dsh      - SYNTHETIC / UNVERIFIED: fixtures/dsh-headless.jsonl is written from the
+//              draft (docs/drafts/2026-11-04.dsh-engine.draft.md), not recorded. Re-record
+//              it with the pinned dsh before trusting a figure; until then a miss is
+//              "not_reported".
 //   codex, agent, opencode - SYNTHETIC / UNVERIFIED: written from the documented event
 //              shapes, with no real sample yet. Their fixtures in usage.test.mjs are
 //              hand-made. Treat a wrong guess as "not_reported", never as a number.
@@ -184,11 +188,31 @@ function parseOpencode(objects) {
   return parts.length ? measured(sumTokens(parts), null) : notReported("no_step_finish_tokens");
 }
 
+/** dsh --json: the `final` event's `usage` (camelCase or snake_case), once per run. */
+function parseDsh(objects) {
+  const final = [...objects].reverse().find((o) => o.type === "final");
+  if (!final) return notReported("no_final_event");
+  const u = final.usage;
+  const input = first(u, "inputTokens", "input_tokens");
+  const output = first(u, "outputTokens", "output_tokens");
+  if (input === null || output === null) return notReported("no_usage_in_final");
+  const sum = sumTokens([
+    {
+      input: input + (first(u, "cacheWriteTokens", "cache_write_tokens") ?? 0),
+      output,
+      cached: first(u, "cacheReadTokens", "cache_read_tokens") ?? 0,
+      cost: num(u.costUsd ?? u.cost_usd),
+    },
+  ]);
+  return measured(sum, typeof final.model === "string" ? final.model : null, 1);
+}
+
 const PARSERS = {
   claude: parseClaude,
   codex: parseCodex,
   agent: parseAgent,
   opencode: parseOpencode,
+  dsh: parseDsh,
   // copilot -s prints the answer only: the pinned CLI (1.0.105) has no usage output.
   copilot: () => notReported("no_usage_output"),
 };

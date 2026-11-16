@@ -345,11 +345,64 @@ export function codexEventLines(ev, secrets = [], state = { started: new Set() }
   return lines;
 }
 
+/**
+ * Readable lines for one `dsh --profile headless --json` event. Shown: `text` events
+ * (the answer as it streams, a line at a time; `state.partial` holds the unfinished
+ * tail), `dsh finished` or `dsh finished with an error: ...` for the `final` event
+ * (any text not already shown follows it), and `error` events. Never shown: the
+ * prompt or unknown events. The event shapes are those `dshOutcome` (argus-delegate.mjs)
+ * reads; fixtures/dsh-headless.jsonl is SYNTHETIC (see its README).
+ */
+export function dshEventLines(ev, secrets = [], state = { seen: new Set(), partial: "" }) {
+  if (!isObject(ev)) return [];
+  const lines = [];
+  const text = (raw) => {
+    for (const l of textLines(raw, secrets)) {
+      if (!l.trim() || state.seen.has(l)) continue;
+      state.seen.add(l);
+      lines.push(l);
+    }
+  };
+  switch (ev.type) {
+    case "session":
+      lines.push("dsh started");
+      break;
+    case "text":
+      if (typeof ev.text === "string") {
+        state.partial += ev.text;
+        const cutAt = state.partial.lastIndexOf("\n");
+        if (cutAt >= 0) {
+          text(state.partial.slice(0, cutAt));
+          state.partial = state.partial.slice(cutAt + 1);
+        }
+      }
+      break;
+    case "error":
+      lines.push(`dsh error: ${cut(oneLine(ev.message ?? ""), RESULT_MAX)}`);
+      break;
+    case "final": {
+      const tail = state.partial;
+      state.partial = "";
+      if (tail) text(tail);
+      if (typeof ev.text === "string" && ev.reason?.kind === "completed") text(ev.text);
+      lines.push(
+        ev.reason?.kind === "completed"
+          ? "dsh finished"
+          : `dsh finished with an error: ${cut(oneLine(ev.reason?.error?.message ?? ev.reason?.kind ?? ""), RESULT_MAX)}`,
+      );
+      break;
+    }
+    default:
+  }
+  return lines;
+}
+
 /** Feed it stdout chunks; calls `onLines` with the readable lines of each complete event. */
 export function createStreamParser({ executor, onLines, secrets = [] }) {
   let rest = "";
   const agentState = { seen: new Set(), partial: "" };
   const codexState = { started: new Set() };
+  const dshState = { seen: new Set(), partial: "" };
   const handle = (raw) => {
     const line = raw.trim();
     if (!line) return;
@@ -369,6 +422,12 @@ export function createStreamParser({ executor, onLines, secrets = [] }) {
     } else if (executor === "codex") {
       try {
         lines = codexEventLines(JSON.parse(line), secrets, codexState);
+      } catch {
+        return;
+      }
+    } else if (executor === "dsh") {
+      try {
+        lines = dshEventLines(JSON.parse(line), secrets, dshState);
       } catch {
         return;
       }
