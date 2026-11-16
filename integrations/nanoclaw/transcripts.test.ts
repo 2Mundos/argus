@@ -67,7 +67,8 @@ describe("copilot transcripts", () => {
 
     if (listed) {
       it(`copilot/${name} is not recorded: ${COPILOT_NOT_RECORDED_REASON}`, () => {
-        if (present) throw new Error(`copilot/${name} exists: remove it from the not-recorded list`);
+        if (present)
+          throw new Error(`copilot/${name} exists: remove it from the not-recorded list`);
         expect(present).toBe(false);
       });
     } else {
