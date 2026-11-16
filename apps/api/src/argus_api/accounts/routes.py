@@ -18,6 +18,7 @@ from argus_core.accounts import (
     AccountCreate,
     AccountLease,
     AccountUpdate,
+    AdminKeyUpdate,
     AuthRejectedReport,
     AwaitingQuotaRequest,
     AwaitingQuotaResult,
@@ -536,6 +537,7 @@ async def delete_account(
                     code="secret_restore_failed",
                 ) from None
         raise
+    await secrets.delete(service.admin_secret_name(account_id))  # no-op without one
 
 
 @router.post("/local/detect")
@@ -696,6 +698,41 @@ async def report_provisional_usage(
 ) -> None:
     async with db.write() as tx:
         await service.record_provisional_usage(tx, account_id, agent_id, body)
+
+
+@router.put("/{account_id}/admin-key", status_code=status.HTTP_204_NO_CONTENT)
+async def put_admin_key(
+    account_id: str,
+    request: Request,
+    body: AdminKeyUpdate,
+    db: DbDep,
+    caller: AdminDep,
+    secrets: SecretsDep,
+) -> None:
+    """Store a Cursor team Admin API key for a Cursor API-key account. Write-only:
+    no read model returns it, and it is never leased (account usage 3.3)."""
+    async with db.read() as conn:
+        account = await service.get_account(conn, account_id, utcnow())
+    if not service.is_cursor_key_account(account.provider, account.kind):
+        raise ValidationFailedError("an admin key belongs to a Cursor API-key account")
+    await secrets.put(
+        service.admin_secret_name(account_id),
+        {"kind": "cursor_admin_key", "api_key": body.api_key},
+    )
+    async with db.write() as tx:
+        await service.set_admin_key(tx, account_id, caller.actor)
+    request.app.state.quota.request(account_id)  # the first reading
+
+
+@router.delete("/{account_id}/admin-key", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_admin_key(
+    account_id: str, db: DbDep, caller: AdminDep, secrets: SecretsDep
+) -> None:
+    """Forget the admin key (the way back); the login and its lease are untouched."""
+    async with db.write() as tx:
+        name = await service.clear_admin_key(tx, account_id, caller.actor)
+    if name is not None:
+        await secrets.delete(name)
 
 
 @router.put("/{account_id}/credential", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 # Account usage
@@ -21,6 +21,8 @@ Show, per provider account, what it spent and how much quota it has left:
   - Cursor (an imported login): credit grants and the billing-cycle reset, read
     from the account's own dashboard calls (§3.3); and, from worker reports, per
     pool whether the limit was hit and when it resets (§3.4).
+  - Cursor (an API key with a team admin key): the team spend window, read from
+    the Admin API (§3.3).
 - **Credit left:** money, not a window. An OpenRouter key's spending limit and
   what remains of it, and a Cursor login's credit grants, in USD.
 
@@ -45,8 +47,8 @@ scope (orchestrator, admin), as `GET /api/accounts` is. The MCP tools `list_acco
 - No near-limit alerts or thresholds (home spec). A window at 100% is already
   reported as `exhausted`.
 - No polling of idle accounts, and no polling of an account kind with no
-  read-only quota call (an API key that only inference accepts, Cursor, the
-  local model). They are named as such (§3.5), not polled.
+  read-only quota call (an API key that only inference accepts, a Cursor API key
+  without an admin key, the local model). They are named as such (§3.5), not polled.
 - No browser sessions, cookies or scraped pages as a quota source, and no
   silent refresh of a login to read it.
 - No change to a credential as a side effect of reading quota.
@@ -114,7 +116,7 @@ scope (orchestrator, admin), as `GET /api/accounts` is. The MCP tools `list_acco
 - Usage rows emit no event (the run's task events already refresh views). A
   quota snapshot that changes emits `account.quota`.
 
-Account credentials are returned only by a lease request with a required,
+Account credentials (the execution `secret_ref` only) are returned only by a lease request with a required,
 non-empty `runtime_providers` list and a `task_id`/`attempt` currently claimed
 by that agent. Exhaustion reports require the same live task claim and return
 fallback account metadata only; the worker obtains any next credential through
@@ -159,11 +161,35 @@ account lease and must preserve the document structure and JSON value types.
     answers with no numeric usage or credit (limits and plan only), the outcome
     is `skipped` / `no_usage_window_for_login`, naming the plan period and cycle
     end when stated; no percentage or 0 is shown.
+  - **Cursor API key with an admin key** (kind `cursor_admin_key`): `POST
+    https://api.cursor.com/teams/spend` with `{}`, the admin key as the Basic
+    auth username (empty password); one request, 15 s, no redirects. The key is
+    its own secret (`cursor-admin-<account id>`, a document `{kind:
+    "cursor_admin_key", api_key}`), pointed to by the account's
+    `admin_secret_ref`, set write-only with `PUT /api/accounts/{id}/admin-key`
+    (admin; removed with `DELETE`, and with the account). Read models carry only
+    `admin_key: present | missing` (null for other accounts). It is **only a
+    quota source**: the lease, the credential handout, a worker's credential
+    return and every rotation read `secret_ref` alone, and the admin key never
+    appears in a lease response, event, log or read model. The Admin API is
+    **Enterprise-only**, so an absent number on a non-Enterprise team is not a
+    bug. **The endpoint and its response are not documented in this repo**; the
+    narrowest mapping is assumed: `teamMemberSpend[]` with `spendCents` and
+    `monthlyLimitDollars`, and `totalPages`. When the page is complete
+    (`totalPages` ≤ 1) and every member states a numeric spend and a positive
+    limit, one `team_spend` pool reports the share of the summed limits already
+    spent (collector `cursor_admin_api`, `polled`, `observed_at` set). Any other
+    shape (missing fields, more pages, not an object) is `no_usage_windows`,
+    never a number. A 401 or 403 is `admin_key_rejected`; an unreachable host, a
+    timeout, 429, a 5xx or any other status is `admin_unavailable`; a body that
+    is not JSON is `bad_response`. A rejected admin key never disables the
+    account, never sets `lease_block`, and never touches the execution secret.
   - **No source:** Anthropic and OpenAI API keys (inference-only; usage windows
-    belong to a login), a **Cursor API key** (its usage is the team Admin API's,
-    read with an admin key, a different source that the login path does not
-    replace: `admin_key_required`), the local model (no provider quota), other custom providers (use
-    `token_limits` estimates). These are named, not polled.
+    belong to a login), a **Cursor API key without an admin key**
+    (`no_admin_key`; it replaces the former `admin_key_required`, which stays
+    valid only for probe rows stored before), the local model (no provider
+    quota), other custom providers (use `token_limits` estimates). These are
+    named, not polled.
 - **Triggers.** A pollable account is probed when: a run ends (a task leaves
   `claimed`) without a snapshot observed since that run's claim, an account
   reports exhaustion, it is created or its credential is renewed, "Refresh
@@ -180,7 +206,10 @@ account lease and must preserve the document structure and JSON value types.
   (reader not installed or configured), `credential_missing`,
   `credential_invalid`, `credential_expired`, `credential_rejected` (HTTP 401),
   `oauth_scope_missing` (HTTP 403 on the usage call), `api_key_account`,
-  `admin_key_required`, `no_provider_source`, `local_no_quota`,
+  `no_admin_key` (a Cursor API-key account has no admin key), `admin_key_rejected`
+  (Admin API 401/403), `admin_unavailable` (Admin API unreachable, 429, 5xx),
+  `no_usage_windows` (the Admin API answered, no numeric data),
+  `no_provider_source`, `local_no_quota`,
   `provider_rate_limited` (HTTP 429), `fetch_failed` (network, 5xx),
   `bad_response`, `no_windows`, `no_usage_window_for_login`, `window_locked`. A probe that never ran reads `not_yet_probed`.
   `skipped` means nothing was asked; `failed` means it was asked and did not
@@ -255,14 +284,14 @@ account lease and must preserve the document structure and JSON value types.
   5. provider snapshots or credit exist but are stale: `stale` (shown with their
      age; never dropped);
   6. no readable source for the account: `unknown` with the reason for it
-     (`api_key_account` for an OpenAI/Anthropic key, `admin_key_required` for
-     a Cursor API key, `local_no_quota`, else `no_provider_source`);
+     (`api_key_account` for an OpenAI/Anthropic key, `no_admin_key` for
+     a Cursor API key without an admin key, `local_no_quota`, else `no_provider_source`);
   7. a readable source, last probe not updated: `unknown` with the probe's
      `code` (§3.3), or `probe_failed | probe_skipped` without one;
   8. otherwise `unknown`, `not_yet_probed`.
   The status also carries `credit`, `observed_at`, `collector`
-  (`codex_rate_limits | claude_oauth_usage | cursor_dashboard | openrouter_key |
-  worker_report`) and
+  (`codex_rate_limits | claude_oauth_usage | cursor_dashboard | cursor_admin_api |
+  openrouter_key | worker_report`) and
   `last_probe`. Credit makes the status `known` while fresh. No figure is ever
   invented: `unknown` has no windows, and unknown is never zero.
 - The account read model carries two auth-health timestamps. Neither is a
@@ -503,9 +532,9 @@ reason). Unknown cost is never counted as zero
 - **Claude usage endpoint stability.** It is read as Claude Code's own client
   reads it but is undocumented. If Anthropic documents or changes it, §3.3
   follows; until then a changed shape reads as `bad_response`.
-- **Cursor usage with an API key.** Only the team Admin API (an admin key,
-  Enterprise) reports it. That needs an admin key registered as its own
-  credential kind; not implemented.
+- **Cursor Admin API shape.** The `teams/spend` mapping (§3.3) is the narrowest
+  reading and has not been checked against a live Enterprise team; no admin key
+  was available. Until it is, the live read is unverified.
 - **Cursor usage shape.** The dashboard calls are read as the Cursor client
   makes them. Which numeric fields a given plan fills (grants, balance) is
   confirmed per plan; a login with none reads `no_usage_window_for_login`.
@@ -560,7 +589,8 @@ usage row of the same run, `null` when none ([spec](model-observability.spec.md)
 - Verified: unit and fake-API level only. The usage rows, windows, quota sources and
   routes run against an in-memory database and stubbed provider responses; the
   dashboard pieces run under jsdom.
-- Not verified: reads of the real Codex, Claude, Cursor and OpenRouter quota
+- Not verified: reads of the real Codex, Claude, Cursor (dashboard and Admin API;
+  no Enterprise admin key exists in the account registry) and OpenRouter quota
   endpoints and their current response shapes; the NanoClaw usage relays
   (`integrations/nanoclaw/argus-usage-relay.test.ts` and `argus-provisional-usage-relay.test.ts` run
   only inside a provisioned NanoClaw checkout, not by `make test`); the dashboard in a

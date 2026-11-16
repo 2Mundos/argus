@@ -147,6 +147,11 @@ export const QUOTA_REASON_LABELS: Record<string, string> = {
   oauth_scope_missing: "token lacks the usage-read scope; a full login is required",
   admin_key_required:
     "A Cursor API key reads usage only through the team Admin API; import a Cursor login to read it from the account",
+  no_admin_key:
+    "A Cursor API key reads usage only through the team Admin API (Enterprise): add an admin key, or import a Cursor login",
+  admin_key_rejected: "The Cursor Admin API rejected the admin key; the login still works",
+  admin_unavailable: "The Cursor Admin API could not be reached; it will be retried",
+  no_usage_windows: "The Cursor Admin API answered with no numeric usage (Enterprise plans only)",
   no_usage_window_for_login: "The login answered, but states no numeric usage or credit to show",
   window_locked: "The provider locked this window: it has no usage figure",
   no_provider_source: "No read-only quota source exists for this account",

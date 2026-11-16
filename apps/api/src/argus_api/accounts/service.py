@@ -104,9 +104,62 @@ def with_credential(
     accounts: list[Account], store: SecretStore, now: datetime
 ) -> list[Account]:
     return [
-        a.model_copy(update={"credential": credential_state(a, store, now)})
+        a.model_copy(
+            update={
+                "credential": credential_state(a, store, now),
+                "admin_key": _admin_key_state(a, store),
+            }
+        )
         for a in accounts
     ]
+
+
+def is_cursor_key_account(provider: str, kind: str) -> bool:
+    return provider == "cursor" and kind == "api_key"
+
+
+def _admin_key_state(account: Account, store: SecretStore) -> str | None:
+    """present / missing for a Cursor API-key account; never the key."""
+    if account.admin_key is None:
+        return None
+    present = account.admin_key == "present" and store.get(
+        admin_secret_name(account.id)
+    )
+    return "present" if present else "missing"
+
+
+def admin_secret_name(account_id: str) -> str:
+    return f"cursor-admin-{account_id}"
+
+
+async def set_admin_key(tx: Tx, account_id: str, actor: str) -> None:
+    """Point the account at its admin secret (`cursor-admin-<id>`), or clear it."""
+    row = await _row(tx.conn, account_id)
+    if not is_cursor_key_account(row["provider"], row["kind"]):
+        raise ValidationFailedError("an admin key belongs to a Cursor API-key account")
+    await tx.conn.execute(
+        "UPDATE accounts SET admin_secret_ref = ?, updated_at = ? WHERE id = ?",
+        (f"sops:{admin_secret_name(account_id)}", ts(tx.now), account_id),
+    )
+    await record(tx, actor, "account", account_id, "account.admin_key_set")
+
+
+async def clear_admin_key(tx: Tx, account_id: str, actor: str) -> str | None:
+    """Forget the admin key; returns the secret name to delete."""
+    row = await _row(tx.conn, account_id)
+    ref = row["admin_secret_ref"]
+    if ref is None:
+        return None
+    await tx.conn.execute(
+        "UPDATE accounts SET admin_secret_ref = NULL, updated_at = ? WHERE id = ?",
+        (ts(tx.now), account_id),
+    )
+    await tx.conn.execute(
+        "DELETE FROM account_quota WHERE account_id = ? AND source = 'polled'",
+        (account_id,),
+    )
+    await record(tx, actor, "account", account_id, "account.admin_key_cleared")
+    return ref_name(ref)
 
 
 async def get_account(
@@ -1646,6 +1699,11 @@ async def _to_account(
         json.loads(data["token_limits"]) if data["token_limits"] else None
     )
     data["config"] = json.loads(data["config"]) if data["config"] else None
+    data["admin_key"] = (
+        ("present" if data.get("admin_secret_ref") else "missing")
+        if is_cursor_key_account(data["provider"], data["kind"])
+        else None
+    )
     for key in ("last_accepted_at", "last_rejected_at"):
         raw = data.get(key)
         data[key] = datetime.fromisoformat(raw) if raw else None

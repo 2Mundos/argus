@@ -565,7 +565,7 @@ async def test_quota_status_reasons(
         codex: "not_yet_probed",
         claude: "not_yet_probed",
         cursor: "not_yet_probed",  # an imported login has a source
-        cursor_key: "admin_key_required",
+        cursor_key: "no_admin_key",
         apikey: "api_key_account",
     }
 
@@ -681,12 +681,12 @@ async def test_probe_of_other_providers_is_skipped_and_recorded(
     result = await p.refresh(c)
     assert (result.status, result.code, result.quota) == (
         "skipped",
-        "admin_key_required",
+        "no_admin_key",
         [],
     )
-    assert result.quota_status.reason == "admin_key_required"
+    assert result.quota_status.reason == "no_admin_key"
     s = (await usage_of(db, clock, c)).quota_status
-    assert (s.reason, s.last_probe.status) == ("admin_key_required", "skipped")
+    assert (s.reason, s.last_probe.status) == ("no_admin_key", "skipped")
     # a Claude account whose document is not a Claude credential is named as such
     bad = await add(db, store, "claude", "anthropic", {"x": 1}, "subscription")
     assert (await p.probe(bad)).code == "credential_invalid"

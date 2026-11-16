@@ -289,6 +289,31 @@ export interface paths {
         patch: operations["update_account_api_accounts__account_id__patch"];
         trace?: never;
     };
+    "/api/accounts/{account_id}/admin-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Admin Key
+         * @description Store a Cursor team Admin API key for a Cursor API-key account. Write-only:
+         *     no read model returns it, and it is never leased (account usage 3.3).
+         */
+        put: operations["put_admin_key_api_accounts__account_id__admin_key_put"];
+        post?: never;
+        /**
+         * Delete Admin Key
+         * @description Forget the admin key (the way back); the login and its lease are untouched.
+         */
+        delete: operations["delete_admin_key_api_accounts__account_id__admin_key_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/auth-rejected": {
         parameters: {
             query?: never;
@@ -3723,6 +3748,8 @@ export interface components {
         Account: {
             /** Active Leases */
             active_leases: number;
+            /** Admin Key */
+            admin_key?: ("present" | "missing") | null;
             /** Billing Day */
             billing_day?: number | null;
             config?: components["schemas"]["CustomConfig"] | null;
@@ -3882,7 +3909,7 @@ export interface components {
          */
         AccountCredit: {
             /** Collector */
-            collector?: ("codex_rate_limits" | "claude_oauth_usage" | "cursor_dashboard" | "openrouter_key" | "worker_report") | null;
+            collector?: ("codex_rate_limits" | "claude_oauth_usage" | "cursor_dashboard" | "cursor_admin_api" | "openrouter_key" | "worker_report") | null;
             /** Free Tier */
             free_tier?: boolean | null;
             /** Limit */
@@ -4136,6 +4163,14 @@ export interface components {
             totals_by_state: {
                 [key: string]: number;
             };
+        };
+        /**
+         * AdminKeyUpdate
+         * @description A Cursor team Admin API key, write-only (account usage 3.3).
+         */
+        AdminKeyUpdate: {
+            /** Api Key */
+            api_key: string;
         };
         /** AdminToken */
         AdminToken: {
@@ -9894,7 +9929,7 @@ export interface components {
              */
             at: string;
             /** Code */
-            code?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
+            code?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_admin_key" | "admin_key_rejected" | "admin_unavailable" | "no_usage_windows" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
             /** Reason */
             reason?: string | null;
             /**
@@ -9906,7 +9941,7 @@ export interface components {
         /** QuotaRefresh */
         QuotaRefresh: {
             /** Code */
-            code?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
+            code?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_admin_key" | "admin_key_rejected" | "admin_unavailable" | "no_usage_windows" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
             credit?: components["schemas"]["AccountCredit"] | null;
             /** Quota */
             quota: components["schemas"]["QuotaWindow"][];
@@ -9981,13 +10016,13 @@ export interface components {
          */
         QuotaStatus: {
             /** Collector */
-            collector?: ("codex_rate_limits" | "claude_oauth_usage" | "cursor_dashboard" | "openrouter_key" | "worker_report") | null;
+            collector?: ("codex_rate_limits" | "claude_oauth_usage" | "cursor_dashboard" | "cursor_admin_api" | "openrouter_key" | "worker_report") | null;
             credit?: components["schemas"]["AccountCredit"] | null;
             last_probe?: components["schemas"]["QuotaProbe"] | null;
             /** Observed At */
             observed_at?: string | null;
             /** Reason */
-            reason?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
+            reason?: ("no_usage_records" | "provider_does_not_expose" | "window_not_configured" | "unsupported_provider" | "api_key_account" | "not_yet_probed" | "probe_failed" | "probe_skipped" | "probe_rate_limited" | "probe_disabled" | "credential_missing" | "credential_invalid" | "credential_expired" | "credential_rejected" | "oauth_scope_missing" | "admin_key_required" | "no_admin_key" | "admin_key_rejected" | "admin_unavailable" | "no_usage_windows" | "no_provider_source" | "local_no_quota" | "provider_rate_limited" | "fetch_failed" | "bad_response" | "no_windows" | "no_usage_window_for_login" | "window_locked") | null;
             /**
              * State
              * @enum {string}
@@ -13657,6 +13692,68 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Account"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_admin_key_api_accounts__account_id__admin_key_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminKeyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_admin_key_api_accounts__account_id__admin_key_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

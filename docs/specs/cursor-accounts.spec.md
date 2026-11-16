@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-17
-updated: 2026-10-24
+updated: 2026-11-16
 ---
 
 # Cursor accounts: import, executor lease, delegated CLI
@@ -67,8 +67,9 @@ on create and replace, and deliver it to the **delegated** Cursor CLI
   strings) with the stored `accessToken` only, read-only, never refreshed, never
   logged. A numeric credit grant becomes credit in USD; a login that states none
   reads `no_usage_window_for_login`, not 0. An **API key** (`kind=api_key`) is a
-  different case: its usage is the team Admin API's (an admin key), so it reads
-  `admin_key_required`, and the login path does not apply to it.
+  different case: its usage is the team Admin API's, read with a separate admin key
+  that is never an execution credential ([account usage](account-usage.spec.md)
+  3.3); without one it reads `no_admin_key`, and the login path does not apply.
 - **Executor-only provider**: `cursor` is listed in `EXECUTOR_ONLY`; the `engine`
   lease role never returns it, the `executor` role may.
 - **OneCLI mapping** (`integrations/nanoclaw/argus-accounts.ts`): two generic

@@ -56,7 +56,7 @@ const ACCOUNTS: Account[] = [
     id: "u1",
     name: "cursor-team",
     provider: "cursor",
-    quota_status: { state: "unknown", reason: "admin_key_required", windows: [] },
+    quota_status: { state: "unknown", reason: "no_admin_key", windows: [] },
   }),
   account({
     id: "k1",
