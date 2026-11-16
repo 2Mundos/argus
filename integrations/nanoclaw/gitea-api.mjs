@@ -2034,8 +2034,10 @@ const ERROR_LINES = Object.entries(EXIT_CODES)
   .map(([code, exit]) => `  ${String(exit).padStart(2)}  ${code}`)
   .join("\n");
 
-function usageText({ name, product, notes, unsupported = {} }) {
-  const commands = Object.entries(COMMANDS).filter(([command]) => !(command in unsupported));
+function usageText({ name, product, notes, unsupported = {}, extraCommands = {} }) {
+  const commands = Object.entries({ ...COMMANDS, ...extraCommands }).filter(
+    ([command]) => !(command in unsupported),
+  );
   const width = Math.max(...commands.map(([command]) => command.length));
   const lines = commands.map(([name, c]) => `  ${name.padEnd(width)}  ${c.summary}`);
   return `usage: ${name} <command> [--repository URL] [options]
@@ -2062,8 +2064,7 @@ ${notes ? `\n${notes}\n` : ""}Run ${name} <command> --help for its options.
 `;
 }
 
-function commandHelp(name, binary) {
-  const c = COMMANDS[name];
+function commandHelp(name, binary, c) {
   const required = new Set(c.required ?? []);
   const flags = Object.entries(c.options).map(([flag, kind]) => {
     const text =
@@ -2171,11 +2172,12 @@ export async function main(argv, env = process.env, io = {}, cli = GITEA_CLI) {
     }
     if (cli.unsupported && Object.hasOwn(cli.unsupported, command))
       throw policy(cli.unsupported[command]);
-    const definition = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : null;
+    const commands = { ...COMMANDS, ...(cli.extraCommands ?? {}) };
+    const definition = Object.hasOwn(commands, command) ? commands[command] : null;
     if (!definition) throw usage(`unknown command; run ${cli.name} --help`);
     const options = parseArgs(rest, { ...GLOBAL_OPTIONS, ...definition.options });
     if (options.help) {
-      stdout.write(commandHelp(command, cli.name));
+      stdout.write(commandHelp(command, cli.name, definition));
       return 0;
     }
     const format = options.json ? "json" : (options.format ?? "json");

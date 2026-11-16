@@ -51,6 +51,9 @@ export function repositoryClient(repositoryUrl, allowedRepositories, fetchImpl, 
   return new Api(repositoryUrl, allowedRepositories, fetchImpl ?? createGatewayFetch(), options);
 }
 
+const DEFAULT_REVIEWER = "copilot-pull-request-reviewer[bot]";
+const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$/;
+
 const PENDING_STATES = new Set(["pending", "queued", "in_progress", "waiting", "requested"]);
 
 /** A commit status state as failure, pending, success, neutral, skipped or unknown. */
@@ -78,6 +81,11 @@ function combinedState(statuses, checkRuns) {
     if (states.includes(state)) return state;
   }
   return states.some((s) => s === "success" || s === "neutral") ? "success" : "skipped";
+}
+
+/** The logins in a PR's requested_reviewers (empty when the field is missing). */
+function loginsOf(pr) {
+  return Array.isArray(pr?.requested_reviewers) ? pr.requested_reviewers.map((r) => r?.login) : [];
 }
 
 export class GitHubApi extends GiteaApi {
@@ -288,6 +296,42 @@ export class GitHubApi extends GiteaApi {
     return readback;
   }
 
+  /**
+   * Request reviews from `logins` on an open PR in one call; returns the requested
+   * reviewers read back from the PR, never the arguments.
+   */
+  async requestReviewers(number, logins) {
+    const n = positiveNumber(number);
+    const seen = new Set();
+    const reviewers = [];
+    for (const login of logins) {
+      if (typeof login !== "string" || !LOGIN.test(login))
+        throw usage("reviewer login is not a valid GitHub login");
+      if (seen.has(login.toLowerCase())) continue;
+      seen.add(login.toLowerCase());
+      reviewers.push(login);
+    }
+    if (!reviewers.length) throw usage("reviewer login is not a valid GitHub login");
+    const pr = await this.getPullRequest(n);
+    if (pr.state !== "open" || pr.merged === true)
+      throw policy(
+        `pull request is ${pr.merged === true ? "merged" : "closed"}; a review cannot be requested`,
+      );
+    const requested = (current) => {
+      const have = new Set(loginsOf(current).map((l) => l.toLowerCase()));
+      return reviewers.every((l) => have.has(l.toLowerCase())) ? current : undefined;
+    };
+    await this.mutate(
+      `/pulls/${n}/requested_reviewers`,
+      { method: "POST", body: { reviewers } },
+      async () => requested(await this.getPullRequest(n)),
+    );
+    const readback = await this.getPullRequest(n);
+    if (!Array.isArray(readback?.requested_reviewers))
+      throw new GiteaError("bad_response", "PR readback has no requested_reviewers array");
+    return { pr_number: n, requested_reviewers: loginsOf(readback) };
+  }
+
   pullDiff(number, options) {
     return this.download(`/pulls/${positiveNumber(number)}`, {
       ...options,
@@ -305,6 +349,15 @@ _ATTEMPT plus ARGUS_MERGE_AUTHORIZED, the HMAC-SHA256 of the key over merge:TASK
 missing token, a bare or worker-set one, and a stale or altered one are refused; needs --sha
 (the expected head SHA), --merge-method merge|squash|rebase (default merge); sends PUT /pulls/N/merge and prints the PR read back.`;
 
+const EXTRA_COMMANDS = {
+  "pr-review-request": {
+    summary: `request a review from --reviewer LOGIN (repeatable; default ${DEFAULT_REVIEWER}); prints the requested reviewers read back from the API`,
+    options: { number: "string", reviewer: "list" },
+    required: ["number"],
+    run: (api, o) => api.requestReviewers(o.number, o.reviewer ?? [DEFAULT_REVIEWER]),
+  },
+};
+
 /** CLI entry point; injectable for tests. Returns the exit code. */
 export function main(argv, env = process.env, io = {}) {
   return forgeMain(argv, env, io, {
@@ -312,6 +365,7 @@ export function main(argv, env = process.env, io = {}) {
     name: "argus-github-api",
     product: "GitHub",
     notes: NOTES,
+    extraCommands: EXTRA_COMMANDS,
   });
 }
 
