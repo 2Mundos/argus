@@ -102,6 +102,9 @@ cp -r "$here/fixtures/continuation" "$target/src/channels/fixtures/continuation"
 # Chat framing shared with the built-in orchestrator (builtin-orchestrator spec 3.5).
 rm -rf "$target/src/channels/fixtures/chat-framing"
 cp -r "$here/fixtures/chat-framing" "$target/src/channels/fixtures/chat-framing"
+# Merge decisions shared with the API read (worker lifecycle spec 3.7).
+rm -rf "$target/src/channels/fixtures/merge-decision"
+cp -r "$here/fixtures/merge-decision" "$target/src/channels/fixtures/merge-decision"
 cp "$here/argus-codex-stub.ts" "$target/src/gateway-providers/argus-codex-stub.ts"
 cp "$here/argus-codex-stub.test.ts" "$target/src/gateway-providers/argus-codex-stub.test.ts"
 cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub.ts"
