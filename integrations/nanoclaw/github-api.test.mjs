@@ -676,6 +676,104 @@ describe("merge", () => {
   });
 });
 
+describe("pr-review-request", () => {
+  const BOT = "copilot-pull-request-reviewer[bot]";
+  const posts = (calls) => calls.filter((c) => c.method === "POST");
+  const open = (reviewers) => ({
+    number: 5,
+    state: "open",
+    merged: false,
+    requested_reviewers: reviewers.map((login) => ({ login })),
+  });
+  const routes = (readback = ["alice", "bob"]) => ({
+    "GET /pulls/5": open(readback),
+    "POST /pulls/5/requested_reviewers": open(readback),
+  });
+  const body = (r) => JSON.parse(posts(r.calls)[0].body);
+
+  it("refuses merged and closed pull requests without a POST", async () => {
+    for (const [pr, word] of [
+      [{ number: 5, state: "closed", merged: true }, "merged"],
+      [{ number: 5, state: "closed", merged: false }, "closed"],
+    ]) {
+      const r = await run(["pr-review-request", "--pr", "5"], { "GET /pulls/5": pr });
+      assert.equal(r.code, 13);
+      assert.match(JSON.parse(r.err).error.message, new RegExp(word));
+      assert.equal(posts(r.calls).length, 0);
+    }
+  });
+
+  it("refuses malformed logins before any HTTP call", async () => {
+    for (const login of ["", "bad login", "a/b", "x".repeat(40)]) {
+      const { api, calls } = client(routes());
+      await assert.rejects(api.requestReviewers(5, [login]), { code: "usage" });
+      assert.equal(calls.length, 0);
+    }
+  });
+
+  it("refuses a missing repository before any HTTP call", async () => {
+    const { fetch, calls } = forge(routes());
+    let err = "";
+    const code = await main(["pr-review-request", "--pr", "5"], ENV, {
+      fetch,
+      stdout: { write: () => {} },
+      stderr: { write: (c) => (err += c) },
+    });
+    assert.equal(code, 13);
+    assert.match(err, /no repository/);
+    assert.equal(calls.length, 0);
+  });
+
+  it("sends each reviewer once in a single request", async () => {
+    const r = await run(
+      [
+        "pr-review-request",
+        "--pr",
+        "5",
+        "--reviewer",
+        "alice",
+        "--reviewer",
+        "bob",
+        "--reviewer",
+        "Alice",
+      ],
+      routes(),
+    );
+    assert.equal(r.code, 0, r.err);
+    assert.equal(posts(r.calls).length, 1);
+    assert.deepEqual(body(r), { reviewers: ["alice", "bob"] });
+  });
+
+  it("prints the read-back, not the arguments", async () => {
+    const r = await run(
+      ["pr-review-request", "--pr", "5", "--reviewer", "alice", "--reviewer", "bob"],
+      routes(["bob"]),
+    );
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json(), { pr_number: 5, requested_reviewers: ["bob"] });
+  });
+
+  it("fails bad_response when the read-back has no reviewer list", async () => {
+    const r = await run(["pr-review-request", "--pr", "5", "--reviewer", "bob"], {
+      "GET /pulls/5": { number: 5, state: "open", merged: false },
+      "POST /pulls/5/requested_reviewers": {},
+    });
+    assert.equal(JSON.parse(r.err).error.code, "bad_response");
+  });
+
+  it("defaults to the Copilot reviewer, named in the help", async () => {
+    const r = await run(["pr-review-request", "--pr", "5"], routes([BOT]));
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(body(r), { reviewers: [BOT] });
+    for (const argv of [["pr-review-request", "--help"], ["--help"]]) {
+      let out = "";
+      await main(argv, ENV, { stdout: { write: (c) => (out += c) }, stderr: { write: () => {} } });
+      assert.match(out, /pr-review-request/);
+      assert.ok(out.includes(BOT));
+    }
+  });
+});
+
 describe("deadline across paginated CI reads", () => {
   it("starts no check-runs page once the shared deadline has passed", async () => {
     let now = 0;

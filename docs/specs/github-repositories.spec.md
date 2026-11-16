@@ -34,7 +34,7 @@ delivery PR-state reads ([task delivery](task-delivery.spec.md)).
 - No change to the Gitea path: `argus-gitea-api` keeps its commands, output and exit
   codes; Gitea accounts, leases and injection are unchanged.
 - No approve, admin, token, secret, webhook or repository-settings command, as for
-  Gitea. `merge` exists only on `argus-github-api` (3.4).
+  Gitea. `merge` and `pr-review-request` exist only on `argus-github-api` (3.4).
 
 # 3. Decisions Made
 
@@ -162,6 +162,19 @@ differs from `--sha` (re-run the gates on the new head). Then it sends
 ambiguous failure it reconciles by reading the PR. The output is the PR read back, which
 must be merged with a non-empty `merge_commit_sha`, else `bad_response`. `argus-gitea-api`
 has no `merge` command and fails `policy_denied` for it.
+
+`argus-github-api pr-review-request --number N [--reviewer LOGIN]...` (`--pr` is an alias of
+`--number`) asks for reviews through `GitHubApi.requestReviewers`; `--reviewer` repeats and
+defaults to `copilot-pull-request-reviewer[bot]`, a default the command summary states.
+Before any request each login must match a GitHub login (optionally ending in `[bot]`), else
+`usage`; logins are de-duplicated case-insensitively, and a missing repository is
+`policy_denied`. It reads the PR first and fails `policy_denied` ("merged" or "closed" in the
+message) unless it is open. Then it sends one `POST /pulls/{n}/requested_reviewers` with
+`{reviewers}` through `GitHubApi.mutate` (no team reviewers); after an ambiguous failure it
+reconciles by reading the PR, which must list every requested login. The output is
+`{pr_number, requested_reviewers}` from a fresh read of the PR, never from the arguments; a
+read-back without a `requested_reviewers` array is `bad_response`. `argus-gitea-api` does not
+have the command.
 
 ## 3.5 Callers pick the client by host
 
