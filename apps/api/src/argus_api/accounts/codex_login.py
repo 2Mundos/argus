@@ -251,7 +251,7 @@ class CodexLoginManager(LoginManager[_Session]):
         if s.state is LoginState.PENDING:
             raise _Failure("client_exited")
 
-    async def _complete(self, s: _Session, actor: str) -> None:  # ty: ignore[invalid-method-override]
+    async def _complete(self, s: _Session, actor: str) -> None:  # ty: ignore[incompatible-method-override]
         assert s.home is not None
         doc = json.loads((s.home / "auth.json").read_text())
         if not isinstance(doc, dict):
