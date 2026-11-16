@@ -8305,6 +8305,28 @@ export interface components {
             /** Truncated */
             truncated: boolean;
         };
+        /**
+         * MergeDecision
+         * @description Whether this task's own merge is authorized, and what decided it.
+         */
+        MergeDecision: {
+            /** Allow Merge */
+            allow_merge: boolean;
+            /** Authorized */
+            authorized: boolean;
+            /** Auto Merge */
+            auto_merge: boolean;
+            /**
+             * Auto Merge Source
+             * @enum {string}
+             */
+            auto_merge_source: "project" | "global" | "default";
+            deliverable: components["schemas"]["Deliverable"];
+            /** Granted By */
+            granted_by: ("auto_merge" | "allow_merge") | null;
+            /** May Merge */
+            may_merge: boolean;
+        };
         /** MergeFact */
         MergeFact: {
             /** Checked At */
@@ -9143,6 +9165,30 @@ export interface components {
             reason: string;
             /** Repository */
             repository: string;
+        };
+        /**
+         * PrGate
+         * @description What the PR readiness gate (`argus-task pr-ready`) would report, from the
+         *     delivery snapshot rather than a fresh forge read: CI reasons use its codes; the
+         *     review reason counts forge reviews on the head, not the agentic review comment.
+         */
+        PrGate: {
+            /** Approvals For Head */
+            approvals_for_head: number | null;
+            /** Head Sha */
+            head_sha: string | null;
+            /** Pr */
+            pr: string;
+            pr_state: components["schemas"]["PrState"];
+            /** Ready */
+            ready: boolean;
+            /** Reasons */
+            reasons: string[];
+            /**
+             * Review Policy
+             * @enum {string}
+             */
+            review_policy: "required" | "off";
         };
         /**
          * PrState
@@ -11957,6 +12003,11 @@ export interface components {
             /** Failures */
             failures: number;
             finalization?: components["schemas"]["Finalization"] | null;
+            /**
+             * Forge Review
+             * @enum {string}
+             */
+            forge_review: "required" | "off";
             /** Harness Account */
             harness_account?: string | null;
             harness_model?: components["schemas"]["HarnessModel"] | null;
@@ -11985,6 +12036,7 @@ export interface components {
             lease_ttl_s: number;
             /** Max Attempts */
             max_attempts: number;
+            merge: components["schemas"]["MergeDecision"];
             /**
              * @default {
              *       "executions": 0,
@@ -12004,6 +12056,7 @@ export interface components {
             output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
+            pr_gate?: components["schemas"]["PrGate"] | null;
             /** Priority */
             priority: number;
             /** Progress At */

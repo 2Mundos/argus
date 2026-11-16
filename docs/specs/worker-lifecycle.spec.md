@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -632,6 +632,31 @@ as a managed pool of size 1 uses the same model: see
   publication takes its key in the body ([task drafts](task-drafts.spec.md)).
   Other mutating calls take no key; the ones made under a lease are fenced by
   (task, attempt) instead.
+- **Merge and review decisions on the task read.** `GET /api/tasks/{id}` carries
+  three facts that decide whether the task can finish, so they are visible before
+  something fails. They are DECISIONS (what the channel and the gate will do), not
+  hints:
+  - `merge`: `authorized` and `may_merge` (authorized and `repository:write`, as
+    `taskMayMerge`), with the inputs that decided it: `deliverable`, the effective
+    `auto_merge` and its `auto_merge_source` (`project` override, `global`, or
+    `default`), `allow_merge` from `input.delivery` (false for a worker-created task,
+    whose input never grants authority) and `granted_by`.
+  - `forge_review`: `required` or `off`, the effective `review.forge_agentic`
+    ([settings](settings.spec.md) 3.12).
+  - `pr_gate`, null when no PR is bound: the PR state, the head SHA and the reasons
+    the readiness gate would give (`ci_running`, `ci_failed`, `ci_unknown`,
+    `ci_missing`, `review_required`, `not_mergeable`) with the approvals on that head.
+    It is built from the delivery snapshot (the same forge read as
+    `GET /api/tasks/{id}/delivery`, cached), not from a fresh `argus-task pr-ready`:
+    the CI codes are the helper's, but the review reason counts forge reviews on the
+    head, not the agentic review comment.
+  The merge and review values are computed by the code the claim and the merge helper
+  use: the same settings functions as the claim's `auto_merge` and
+  `forge_agentic_review_required`, and `tasks/readiness.py`, the Python twin of
+  `taskAuthorizesMerge` / `taskMayMerge` / `forgeReviewPolicy`. The TypeScript helper
+  stays authoritative; both languages run the cases in
+  `integrations/nanoclaw/tests/merge_decision_cases.json`, so a divergence fails both.
+  The dashboard shows them with the delivery state and offers no merge or approve action.
 
 ## 3.8 NanoClaw runtime
 

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-06
+updated: 2026-11-16
 ---
 
 # Settings
@@ -280,6 +280,11 @@ git identity), and words the repository part of the task prompt from it:
   counts as required. Only a standalone `argus-task` with no policy at all
   (`ARGUS_FORGE_REVIEW` unset, outside an Argus session) keeps the legacy
   `--skip-review` ([task helpers](task-helpers.spec.md) 3.6).
+
+The task read shows the same decision as `forge_review` (`required` | `off`) and, for a
+bound PR, what the readiness gate would report in `pr_gate`
+([worker lifecycle](worker-lifecycle.spec.md) 3.7). These are decisions, resolved by the
+function the claim uses, not hints.
 
 `delivery.auto_merge` (3.10) stays an authorization: it allows a merge once every
 precondition holds and does not decide which review is one of them. The policy is read

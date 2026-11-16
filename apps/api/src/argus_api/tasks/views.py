@@ -26,8 +26,11 @@ from argus_api.paging import (
     decode_cursor,
     encode_cursor,
 )
-from argus_api.tasks import service
+from argus_api.settings import service as settings_svc
+from argus_api.tasks import delivery, readiness, service
+from argus_api.tasks.delivery import PrChecker
 from argus_api.tasks.finalization import Finalization, WorkspaceFacts, newest
+from argus_api.tasks.readiness import ForgeReview, MergeDecision, PrGate
 
 TaskView = Literal["summary", "detail", "compact"]
 MAX_IDS = 50
@@ -117,12 +120,28 @@ class TaskRead(Task):
     finalization: Finalization | None = None
     # Holder of the current workspace and checkpoint status (task workspace 3.5).
     workspace: WorkspaceFacts | None = None
+    # Decisions, not hints (worker lifecycle spec 3.7): what the claim and merge helper do.
+    merge: MergeDecision
+    forge_review: ForgeReview
+    # What the PR readiness gate would report; null when no PR is bound.
+    pr_gate: PrGate | None = None
 
 
 async def read_task(
-    conn: aiosqlite.Connection, task_id: str, now: datetime
+    conn: aiosqlite.Connection,
+    task_id: str,
+    now: datetime,
+    checker: PrChecker | None = None,
 ) -> TaskRead:
+    """`checker` reads the bound PR for `pr_gate`; without one the gate is null."""
     task = await service.get_task(conn, task_id)
+    merge = readiness.decide_merge(
+        task, await settings_svc.auto_merge_setting(conn, task.project)
+    )
+    review = readiness.forge_review_policy(
+        await settings_svc.forge_agentic_review_required(conn, task.project)
+    )
+    seen = await delivery.delivery_of(conn, checker, task) if checker else None
     facts = await service.quiet_facts(conn, task_id, now)
     finalization, workspace = await newest(conn, task_id, task.state, now)
     return TaskRead(
@@ -133,6 +152,9 @@ async def read_task(
         stall_cause=facts.stall_cause,
         finalization=finalization,
         workspace=workspace,
+        merge=merge,
+        forge_review=review,
+        pr_gate=readiness.pr_gate(seen, review) if seen else None,
     )
 
 

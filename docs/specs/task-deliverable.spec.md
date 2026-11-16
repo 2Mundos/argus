@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 # Task deliverable
@@ -168,6 +168,11 @@ a task with no structured acceptance that already holds a PR, or independent
 review), with no `deliverable_pending`. A PR that merged before the worker reported
 it counts. The setting is read at completion, so turning it off lets the next
 completion take the pending path below.
+
+The task read states whether this task's merge is authorized (`merge`, with the
+deliverable, the effective auto-merge and its source, and `allow_merge`); see
+[worker lifecycle](worker-lifecycle.spec.md) 3.7. It is the decision the merge helper
+applies, from the same cases, not a hint.
 
 **Acceptance off.** With `review.acceptance` off ([settings](settings.spec.md) 3.11)
 no completion waits in review, so a `pr_green` or `pr_merged` task gets the same

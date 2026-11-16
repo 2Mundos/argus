@@ -1128,7 +1128,9 @@ def test_reconciling_fails_closed(
     incident_forge(client, pull)
     res = reconcile(client, task_id, **body)
     assert (res.status_code, code(res)) == outcome
-    assert client.get(f"/api/tasks/{task_id}").json() == before
+    after = client.get(f"/api/tasks/{task_id}").json()
+    # The read's `pr_gate` follows the forge, which the test just replaced.
+    assert {**after, "pr_gate": None} == {**before, "pr_gate": None}
     assert events(client, task_id, "task.delivery_reconciled") == []
 
 

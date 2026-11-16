@@ -24,6 +24,9 @@ _TASK_READ_EXTRA = frozenset(
         "stall_cause",
         "finalization",
         "workspace",
+        "merge",
+        "forge_review",
+        "pr_gate",
     }
 )
 
