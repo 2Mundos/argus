@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-11-15
+updated: 2026-11-16
 ---
 
 # GitHub repositories
@@ -142,8 +142,11 @@ attempt, from `taskMayMerge`, so every attempt has a new key and a new token. It
 session through the host process environment: a session is a separate container whose
 environment is built from the `contributedEnv` allowlist of `container-runner.ts`, which
 `install.sh` patches (`patch-merge-auth-env.py`, also applied to a runner patched before these
-names existed). That allowlist must carry all four names; a name unset on the host is not
-forwarded, so unauthorized and `pr_green` attempts carry none. The command recomputes the token and compares it in constant time. Without
+names existed). The Codex provider filters the session environment again through
+`CODEX_ENV_ALLOWLIST` in `codex-app-server.ts` (`buildCodexProcessEnv`), so `install.sh` adds the
+same four names to that list. Both allowlists must carry all four names; a name unset on the host
+is not forwarded, so unauthorized and `pr_green` attempts carry none. The command recomputes the
+token and compares it in constant time. Without
 `ARGUS_MERGE_AUTHORIZED` it fails `policy_denied` with "merge is not authorized for this
 task"; with it but without the key, task or attempt, with "merge authorization was not issued
 by the Argus channel for this attempt"; with a token that does not match, with "merge

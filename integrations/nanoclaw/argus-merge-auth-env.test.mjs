@@ -1,6 +1,7 @@
 // The merge authorization must survive the host -> session boundary: minted into the host env by
 // argus-merge-auth.ts, forwarded by the install.sh-patched container-runner allowlist
-// (patch-merge-auth-env.py), and verified by the CLI in the session.
+// (patch-merge-auth-env.py), then by the Codex provider's own CODEX_ENV_ALLOWLIST filter
+// (buildCodexProcessEnv, extended from install.sh's runtime_keys), and verified by the CLI.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
@@ -52,6 +53,18 @@ function forwardedBy(env) {
   return out;
 }
 
+/** The Codex provider's second filter; install.sh adds these names to CODEX_ENV_ALLOWLIST. */
+function codexForwardedBy(env) {
+  const installer = readFileSync(join(import.meta.dirname, "install.sh"), "utf8");
+  const block = /runtime_keys = \[([\s\S]*?)\n\]/.exec(installer);
+  assert.ok(block, "install.sh carries the Codex runtime_keys allowlist");
+  const out = {};
+  for (const [, key] of block[1].matchAll(/"([A-Z_]+)"/g)) {
+    if (env[key] !== undefined) out[key] = env[key];
+  }
+  return out;
+}
+
 /** The real CLI verifier; reports its exit code and how many PUTs reached the forge. */
 async function cliMerge(env) {
   let puts = 0;
@@ -82,7 +95,9 @@ describe("merge authorization reaches the session env", () => {
       session.ARGUS_MERGE_AUTHORIZED,
       createHmac("sha256", session.ARGUS_MERGE_AUTH_KEY).update("merge:t1:3").digest("hex"),
     );
-    assert.deepEqual(await cliMerge(session), { code: 0, puts: 1 });
+    const codex = codexForwardedBy(session);
+    assert.deepEqual(codex, session);
+    assert.deepEqual(await cliMerge(codex), { code: 0, puts: 1 });
   });
 
   it("forwards none for pr_green, read-only and unauthorized tasks", () => {
@@ -94,6 +109,7 @@ describe("merge authorization reaches the session env", () => {
       const host = { ARGUS_MERGE_AUTHORIZED: "1" };
       scope(host, t);
       assert.deepEqual(forwardedBy(host), {});
+      assert.deepEqual(codexForwardedBy(forwardedBy(host)), {});
     }
   });
 
