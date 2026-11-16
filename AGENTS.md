@@ -45,7 +45,8 @@ Instructions for AI agents working in this repo.
   commits, pull request titles and descriptions, review comments, and issues
   are English, even when the task text is in another language. Do not add or
   leave Portuguese (or other languages) in the repo, including classifier
-  synonyms and sample fixtures.
+  synonyms and sample fixtures. New docs, comments and commit
+  messages are gated by `make language-lint` ([spec](docs/specs/language-validation.spec.md)).
 - Never commit secrets (gitleaks runs in CI and pre-push).
 - **Living specs are rewritten, not appended to.** When a decision changes, edit
   or delete the text it replaces; history lives in git and dated docs.
@@ -99,5 +100,6 @@ calling work done, check which of these apply and say so:
 make setup   # install everything
 make check   # lint + typecheck + test
 make format  # autofix
+make language-lint  # new docs, code comments and commits must be English (RANGE=a..b)
 make release ARGS=--dry-run  # preview the next release (docs/specs/releases.spec.md)
 ```

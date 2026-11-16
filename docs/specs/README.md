@@ -42,6 +42,7 @@ Every spec in this directory with its status, kept in sync by
 | [Integrations: MCP connections and Kubernetes clusters](integrations.spec.md) | `partial` |
 | [Internal Orchestrator](internal-orchestrator.spec.md) | `implemented` |
 | [Knowledge Spec](knowledge.spec.md) | `implemented` |
+| [Language validation](language-validation.spec.md) | `implemented` |
 | [Launcher](launcher.spec.md) | `implemented` |
 | [Live work](live-work.spec.md) | `implemented` |
 | [Local Strata harness (NanoClaw failover)](local-harness.spec.md) | `implemented` |

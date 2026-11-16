@@ -13,7 +13,7 @@ setup: ## Install Python and Node dependencies.
 	$(PNPM) install
 
 .PHONY: hooks
-hooks: ## Enable .githooks/pre-push.
+hooks: ## Enable .githooks/pre-push and .githooks/commit-msg.
 	git config core.hooksPath .githooks
 
 # Dev servers are per checkout: state in .argus/, ports from a hash of the path
@@ -52,8 +52,13 @@ lint: ## Ruff + Biome + docs validation.
 	$(PNPM) lint
 	python3 scripts/validate_docs.py
 	python3 scripts/check_specs.py
+	python3 scripts/validate_language.py
 	$(UV) run python scripts/check_tests.py --strict
 	$(MAKE) check-engine-transcripts
+
+.PHONY: language-lint
+language-lint: ## Fail on non-English prose in new changes (RANGE=a..b, default worktree vs HEAD).
+	python3 scripts/validate_language.py $(if $(RANGE),--range "$(RANGE)")
 
 .PHONY: check-engine-transcripts
 check-engine-transcripts: ## An engine version bump re-records its success and failure transcripts.

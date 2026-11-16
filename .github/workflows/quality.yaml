@@ -334,6 +334,35 @@ jobs:
       - run: python3 scripts/validate_docs.py
       - run: python3 scripts/check_specs.py
 
+  # English-only prose gate: docs, code comments and commit messages added by
+  # the PR must be English. Cheap (diff-scoped, stdlib-only), so it is not
+  # path-gated -- like secret-scan, a violation can land in any file, and
+  # commit messages never appear in path flags. Legacy text is untouched:
+  # only the PR range is checked.
+  language-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so the PR base..head range resolves for commit
+          # messages and the diff.
+          fetch-depth: 0
+      - name: Check new prose is English
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          if [ -n "$BASE" ]; then
+            range="$BASE..$HEAD_SHA"
+          elif [ -n "$BEFORE" ] && [ "${BEFORE//0/}" != "" ]; then
+            range="$BEFORE..$AFTER"
+          else
+            range="HEAD~1..HEAD"
+          fi
+          python3 scripts/validate_language.py --range "$range"
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:
