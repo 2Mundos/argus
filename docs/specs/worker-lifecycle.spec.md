@@ -655,7 +655,7 @@ as a managed pool of size 1 uses the same model: see
   `forge_agentic_review_required`, and `tasks/readiness.py`, the Python twin of
   `taskAuthorizesMerge` / `taskMayMerge` / `forgeReviewPolicy`. The TypeScript helper
   stays authoritative; both languages run the cases in
-  `integrations/nanoclaw/tests/merge_decision_cases.json`, so a divergence fails both.
+  `integrations/nanoclaw/fixtures/merge-decision/cases.json`, so a divergence fails both.
   The dashboard shows them with the delivery state and offers no merge or approve action.
 
 ## 3.8 NanoClaw runtime

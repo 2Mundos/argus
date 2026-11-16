@@ -1,7 +1,7 @@
 """The merge and review decisions on the task read (docs/specs/worker-lifecycle.spec.md 3.7).
 
 `decide_merge` and `forge_review_policy` run the cases shared with the TypeScript
-helpers (integrations/nanoclaw/tests/merge_decision_cases.json); the REST tests check
+helpers (integrations/nanoclaw/fixtures/merge-decision/cases.json); the REST tests check
 the read carries what the settings resolve and what the delivery snapshot shows."""
 
 import json
@@ -32,8 +32,9 @@ CASES = json.loads(
         Path(__file__).resolve().parents[3]
         / "integrations"
         / "nanoclaw"
-        / "tests"
-        / "merge_decision_cases.json"
+        / "fixtures"
+        / "merge-decision"
+        / "cases.json"
     ).read_text()
 )
 AUTO_MERGE = "/api/settings/delivery.auto_merge"

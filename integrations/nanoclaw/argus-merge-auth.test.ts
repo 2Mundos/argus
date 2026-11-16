@@ -81,7 +81,7 @@ describe("merge authorization scope", () => {
 
 // Shared with apps/api/tests/test_task_readiness.py: the API shows this decision on the task read.
 const CASES = JSON.parse(
-  readFileSync(new URL("./tests/merge_decision_cases.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fixtures/merge-decision/cases.json", import.meta.url), "utf8"),
 );
 
 describe("merge decision cases shared with the API", () => {

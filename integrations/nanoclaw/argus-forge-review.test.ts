@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { forgeReviewLines, forgeReviewPolicy, scopeForgeReview } from "./argus-forge-review.js";
 
 const CASES = JSON.parse(
-  readFileSync(new URL("./tests/merge_decision_cases.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fixtures/merge-decision/cases.json", import.meta.url), "utf8"),
 );
 
 describe("forge review policy", () => {

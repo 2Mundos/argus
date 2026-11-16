@@ -5,7 +5,7 @@ These are DECISIONS, not hints. `decide_merge` is the Python twin of
 `taskAuthorizesMerge` / `taskMayMerge` (integrations/nanoclaw/argus-merge-auth.ts, which
 stays authoritative) and `forge_review_policy` of `forgeReviewPolicy`
 (argus-forge-review.ts). Both sides run the cases in
-integrations/nanoclaw/tests/merge_decision_cases.json, so a parity break fails in both
+integrations/nanoclaw/fixtures/merge-decision/cases.json, so a parity break fails in both
 languages. The claim delivers the same two inputs (`auto_merge`,
 `forge_agentic_review_required`), resolved by the same settings functions.
 """
