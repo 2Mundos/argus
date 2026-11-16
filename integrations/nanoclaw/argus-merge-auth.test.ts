@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ArgusTask } from "./argus.js";
 import {
   mergeAuthorizationToken,
   scopeMergeAuthorization,
+  taskAuthorizesMerge,
   taskMayMerge,
 } from "./argus-merge-auth.js";
 
@@ -75,4 +77,19 @@ describe("merge authorization scope", () => {
     scopeMergeAuthorization(env, undefined, false);
     expect(absent(env)).toBe(true);
   });
+});
+
+// Shared with apps/api/tests/test_task_readiness.py: the API shows this decision on the task read.
+const CASES = JSON.parse(
+  readFileSync(new URL("./fixtures/merge-decision/cases.json", import.meta.url), "utf8"),
+);
+
+describe("merge decision cases shared with the API", () => {
+  for (const c of CASES.merge) {
+    it(c.name, () => {
+      const t = task(c.task);
+      expect(taskAuthorizesMerge(t)).toBe(c.authorized);
+      expect(taskMayMerge(t)).toBe(c.may_merge);
+    });
+  }
 });

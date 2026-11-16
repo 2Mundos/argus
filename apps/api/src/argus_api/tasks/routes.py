@@ -401,10 +401,14 @@ def _became_ready(event: Event) -> bool:
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: str, db: DbDep, caller: CallerDep) -> views.TaskRead:
+async def get_task(
+    task_id: str, request: Request, db: DbDep, caller: CallerDep
+) -> views.TaskRead:
     async with db.snapshot() as snap:
         await require_task_readable(snap.conn, caller, task_id)
-        return await views.read_task(snap.conn, task_id, snap.now)
+        return await views.read_task(
+            snap.conn, task_id, snap.now, request.app.state.pr_checker
+        )
 
 
 @router.get("/{task_id}/delivery")

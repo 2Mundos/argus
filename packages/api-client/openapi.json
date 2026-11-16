@@ -13798,6 +13798,65 @@
         "title": "MatchHit",
         "type": "object"
       },
+      "MergeDecision": {
+        "description": "Whether this task's own merge is authorized, and what decided it.",
+        "properties": {
+          "allow_merge": {
+            "title": "Allow Merge",
+            "type": "boolean"
+          },
+          "authorized": {
+            "title": "Authorized",
+            "type": "boolean"
+          },
+          "auto_merge": {
+            "title": "Auto Merge",
+            "type": "boolean"
+          },
+          "auto_merge_source": {
+            "enum": [
+              "project",
+              "global",
+              "default"
+            ],
+            "title": "Auto Merge Source",
+            "type": "string"
+          },
+          "deliverable": {
+            "$ref": "#/components/schemas/Deliverable"
+          },
+          "granted_by": {
+            "anyOf": [
+              {
+                "enum": [
+                  "auto_merge",
+                  "allow_merge"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted By"
+          },
+          "may_merge": {
+            "title": "May Merge",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "authorized",
+          "may_merge",
+          "deliverable",
+          "auto_merge",
+          "auto_merge_source",
+          "allow_merge",
+          "granted_by"
+        ],
+        "title": "MergeDecision",
+        "type": "object"
+      },
       "MergeFact": {
         "properties": {
           "checked_at": {
@@ -16042,6 +16101,70 @@
           "reason"
         ],
         "title": "PrBinding",
+        "type": "object"
+      },
+      "PrGate": {
+        "description": "What the PR readiness gate (`argus-task pr-ready`) would report, from the\ndelivery snapshot rather than a fresh forge read: CI reasons use its codes; the\nreview reason counts forge reviews on the head, not the agentic review comment.",
+        "properties": {
+          "approvals_for_head": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approvals For Head"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "pr": {
+            "title": "Pr",
+            "type": "string"
+          },
+          "pr_state": {
+            "$ref": "#/components/schemas/PrState"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "review_policy": {
+            "enum": [
+              "required",
+              "off"
+            ],
+            "title": "Review Policy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pr",
+          "pr_state",
+          "head_sha",
+          "ready",
+          "reasons",
+          "review_policy",
+          "approvals_for_head"
+        ],
+        "title": "PrGate",
         "type": "object"
       },
       "PrState": {
@@ -24381,6 +24504,14 @@
               }
             ]
           },
+          "forge_review": {
+            "enum": [
+              "required",
+              "off"
+            ],
+            "title": "Forge Review",
+            "type": "string"
+          },
           "harness_account": {
             "anyOf": [
               {
@@ -24473,6 +24604,9 @@
             "title": "Max Attempts",
             "type": "integer"
           },
+          "merge": {
+            "$ref": "#/components/schemas/MergeDecision"
+          },
           "models": {
             "$ref": "#/components/schemas/ModelsSummary",
             "default": {
@@ -24519,6 +24653,16 @@
               }
             ],
             "title": "Parent Id"
+          },
+          "pr_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrGate"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "priority": {
             "title": "Priority",
@@ -24764,6 +24908,8 @@
           "updated_at",
           "archived_at",
           "version",
+          "merge",
+          "forge_review",
           "complexity"
         ],
         "title": "TaskRead",

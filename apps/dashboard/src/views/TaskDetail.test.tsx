@@ -93,6 +93,17 @@ const base = {
   editable_fields: [],
   spec: "",
   result: null,
+  merge: {
+    authorized: false,
+    may_merge: false,
+    deliverable: "response",
+    auto_merge: false,
+    auto_merge_source: "default",
+    allow_merge: false,
+    granted_by: null,
+  },
+  forge_review: "off",
+  pr_gate: null,
 };
 
 afterEach(() => {
@@ -544,5 +555,60 @@ describe("TaskDetail dependency delivery", () => {
     });
     expect(requests()).toBe(2);
     expect(screen.getByRole("link", { name: "Build the parser" })).toBeTruthy();
+  });
+});
+
+describe("TaskDetail merge and review decisions", () => {
+  const text = async () => {
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    await screen.findByText(/trace task/);
+    return screen.getByLabelText("Merge and review").textContent;
+  };
+
+  it("says a pr_green task may not merge and review is off", async () => {
+    mock.task = { ...base, merge: { ...base.merge, deliverable: "pr_green" } };
+    mock.trace = { executions: [], timeline: [] };
+    const line = await text();
+    expect(line).toContain("Merge: not authorized — deliverable pr_green; enable auto-merge");
+    expect(line).toContain("Review: off");
+  });
+
+  it("names global auto-merge for a pr_merged task that may merge", async () => {
+    mock.task = {
+      ...base,
+      merge: {
+        ...base.merge,
+        authorized: true,
+        may_merge: true,
+        deliverable: "pr_merged",
+        auto_merge: true,
+        auto_merge_source: "global",
+        granted_by: "auto_merge",
+      },
+    };
+    mock.trace = { executions: [], timeline: [] };
+    expect(await text()).toContain(
+      "Merge: authorized by global auto-merge (deliverable pr_merged)",
+    );
+  });
+
+  it("shows required review and the PR gate reasons for a bound PR without approvals", async () => {
+    mock.task = {
+      ...base,
+      forge_review: "required",
+      pr_gate: {
+        pr: "https://git.example.test/org/repo/pulls/7",
+        pr_state: "open",
+        head_sha: "a".repeat(40),
+        ready: false,
+        reasons: ["review_required"],
+        review_policy: "required",
+        approvals_for_head: 0,
+      },
+    };
+    mock.trace = { executions: [], timeline: [] };
+    const line = await text();
+    expect(line).toContain("Review: required by forge review policy");
+    expect(line).toContain("PR gate at aaaaaaa: review required, 0 approvals");
   });
 });

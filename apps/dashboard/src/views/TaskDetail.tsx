@@ -10,6 +10,7 @@ import { TaskFailover } from "../failover";
 import { bytes, shortId } from "../format";
 import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
+import { TaskReadiness } from "../readiness";
 import { TaskLabel } from "../TaskLabel";
 import { pinText } from "../taskEdit";
 import { WorkerChip } from "../WorkerChip";
@@ -327,6 +328,7 @@ export function TaskDetail({
           )}
           <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
+          <TaskReadiness task={task} />
           {task.state === "blocked" && task.block_reason === "env_repository_unconfigured" && (
             <RepositoryBlockAction taskId={taskId} project={task.project} onUnblocked={reload} />
           )}

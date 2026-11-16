@@ -313,9 +313,14 @@ async def claim_command_guard_enabled(conn: aiosqlite.Connection, project: str) 
     return bool((await _setting(conn, Path(), project, COMMAND_GUARD_KEY)).value)
 
 
+async def auto_merge_setting(conn: aiosqlite.Connection, project: str) -> SettingValue:
+    """`delivery.auto_merge` for a project with the layer that decided it."""
+    return await _setting(conn, Path(), project, AUTO_MERGE_KEY)
+
+
 async def auto_merge_enabled(conn: aiosqlite.Connection, project: str) -> bool:
     """Whether `delivery.auto_merge` is on for a project: override, else global."""
-    return bool((await _setting(conn, Path(), project, AUTO_MERGE_KEY)).value)
+    return bool((await auto_merge_setting(conn, project)).value)
 
 
 async def forge_agentic_review_required(

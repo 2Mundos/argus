@@ -1,7 +1,20 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { forgeReviewLines, forgeReviewPolicy, scopeForgeReview } from "./argus-forge-review.js";
 
+const CASES = JSON.parse(
+  readFileSync(new URL("./fixtures/merge-decision/cases.json", import.meta.url), "utf8"),
+);
+
 describe("forge review policy", () => {
+  it("matches the decision cases the API shows on the task read", () => {
+    for (const c of CASES.review) {
+      expect(
+        forgeReviewPolicy({ forge_agentic_review_required: c.forge_agentic_review_required }),
+      ).toBe(c.policy);
+    }
+  });
+
   it("is off only for an explicit false; an absent or odd value is required", () => {
     expect(forgeReviewPolicy({ forge_agentic_review_required: false })).toBe("off");
     for (const value of [true, undefined, null, "false", 0]) {

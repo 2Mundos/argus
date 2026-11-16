@@ -1,0 +1,75 @@
+{
+  "comment": "Decision cases shared by apps/api/tests/test_task_readiness.py (readiness.decide_merge, forge_review_policy) and integrations/nanoclaw/argus-merge-auth.test.ts / argus-forge-review.test.ts (taskAuthorizesMerge, taskMayMerge, forgeReviewPolicy). Change a policy and both sides fail until both agree.",
+  "merge": [
+    {
+      "name": "pr_merged with auto_merge",
+      "task": { "deliverable": "pr_merged", "auto_merge": true },
+      "authorized": true,
+      "may_merge": true
+    },
+    {
+      "name": "pr_green with auto_merge is not authorized",
+      "task": { "deliverable": "pr_green", "auto_merge": true },
+      "authorized": false,
+      "may_merge": false
+    },
+    {
+      "name": "pr_merged without auto_merge",
+      "task": { "deliverable": "pr_merged", "auto_merge": false },
+      "authorized": false,
+      "may_merge": false
+    },
+    {
+      "name": "pr_green with allow_merge",
+      "task": {
+        "deliverable": "pr_green",
+        "auto_merge": false,
+        "input": { "delivery": { "allow_merge": true } }
+      },
+      "authorized": true,
+      "may_merge": true
+    },
+    {
+      "name": "allow_merge must be boolean true",
+      "task": { "deliverable": "pr_green", "input": { "delivery": { "allow_merge": "true" } } },
+      "authorized": false,
+      "may_merge": false
+    },
+    {
+      "name": "allow_merge from a worker-created task is ignored",
+      "task": {
+        "deliverable": "pr_green",
+        "prompt_trust": "worker",
+        "input": { "delivery": { "allow_merge": true } }
+      },
+      "authorized": false,
+      "may_merge": false
+    },
+    {
+      "name": "auto_merge still applies to a worker-created pr_merged task",
+      "task": { "deliverable": "pr_merged", "auto_merge": true, "prompt_trust": "worker" },
+      "authorized": true,
+      "may_merge": true
+    },
+    {
+      "name": "authorized but read-only may not merge",
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "required_capabilities": ["repository:read"]
+      },
+      "authorized": true,
+      "may_merge": false
+    },
+    {
+      "name": "delivery input that is not an object",
+      "task": { "deliverable": "pr_green", "input": { "delivery": [true] } },
+      "authorized": false,
+      "may_merge": false
+    }
+  ],
+  "review": [
+    { "name": "setting on", "forge_agentic_review_required": true, "policy": "required" },
+    { "name": "setting off", "forge_agentic_review_required": false, "policy": "off" }
+  ]
+}
