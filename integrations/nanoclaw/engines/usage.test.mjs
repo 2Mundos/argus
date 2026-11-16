@@ -109,6 +109,26 @@ test("opencode (synthetic): step-finish tokens and cost are summed", () => {
   assert.ok(Math.abs(u.cost_usd - 0.03) < 1e-9);
 });
 
+// SYNTHETIC recording (fixtures/dsh-headless.README.md): usage on the final event is a guess.
+const dshReal = fs.readFileSync(new URL("./fixtures/dsh-headless.jsonl", import.meta.url), "utf8");
+
+test("dsh (synthetic fixture): final usage, cache writes counted as input", () => {
+  assert.deepEqual(parseUsage("dsh", dshReal), {
+    measurement: "measured",
+    input_tokens: 1240, // 1200 fresh + 40 cache writes
+    output_tokens: 85,
+    cached_input_tokens: 900,
+    cost_usd: 0.0021,
+    model: "deepseek-v4",
+    turns: 1,
+  });
+  const snake = parseUsage("dsh", '{"type":"final","usage":{"input_tokens":10,"output_tokens":2}}');
+  assert.deepEqual(
+    [snake.input_tokens, snake.output_tokens, snake.cached_input_tokens, snake.cost_usd],
+    [10, 2, 0, null],
+  );
+});
+
 test("absent, partial or garbage usage is not_reported, never zeros", () => {
   for (const [executor, text] of [
     ["claude", ""],
@@ -119,6 +139,9 @@ test("absent, partial or garbage usage is not_reported, never zeros", () => {
     ["codex", '{"type":"turn.completed","usage":{"input_tokens":"many"}}'],
     ["agent", '{"type":"result","result":"hi"}'],
     ["opencode", '{"type":"step_finish","part":{"tokens":{}}}'],
+    ["dsh", '{"type":"text","text":"hi"}'], // no final event
+    ["dsh", '{"type":"final","reason":{"kind":"completed"},"text":"hi"}'], // no usage
+    ["dsh", '{"type":"final","usage":{"outputTokens":3}}'], // input missing: do not invent 0
     ["unknown", "{}"],
   ]) {
     const u = parseUsage(executor, text);

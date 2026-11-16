@@ -765,6 +765,52 @@ test("claude and cursor parsers keep their exact output through createStreamPars
   assert.deepEqual(agent, ["agent started (m)", "▸ read x", "agent finished"]);
 });
 
+// SYNTHETIC recording (fixtures/dsh-headless.README.md): the shapes dshOutcome reads.
+const dshFixture = fs.readFileSync(
+  new URL("./fixtures/dsh-headless.jsonl", import.meta.url),
+  "utf8",
+);
+
+test("dsh stream over the recorded fixture: text by line, no duplicate from the final, unknown events skipped", () => {
+  const got = [];
+  const p = createStreamParser({ executor: "dsh", onLines: (l) => got.push(...l) });
+  // Split mid-event to cover fragmented chunks.
+  p.push(dshFixture.slice(0, 150));
+  p.push(dshFixture.slice(150));
+  p.end();
+  assert.deepEqual(got, [
+    "dsh started",
+    "Reading the config.",
+    "The setting is enabled by default.",
+    "dsh finished",
+  ]);
+});
+
+test("dsh stream: failed final, error event, unfinished tail, noise and secrets", () => {
+  const got = [];
+  const p = createStreamParser({
+    executor: "dsh",
+    secrets: ["sk-live-secret-value"],
+    onLines: (l) => got.push(...l),
+  });
+  p.push(ev({ type: "text", text: "key sk-live-secret-value then" }));
+  p.push("not json\n");
+  p.push(ev({ type: "error", message: "rate   limited" }));
+  p.push(
+    ev({
+      type: "final",
+      reason: { kind: "error", error: { code: "TRANSPORT", message: "boom" } },
+      text: "ignored on failure",
+    }),
+  );
+  p.end();
+  assert.deepEqual(got, [
+    "dsh error: rate limited",
+    "key [redacted] then",
+    "dsh finished with an error: boom",
+  ]);
+});
+
 test("relay writer refuses symlinks, hard links and non-regular targets, and never throws", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-safe-"));
   const victim = path.join(dir, "victim");

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-14
+updated: 2026-11-16
 ---
 
 # Engines, executors and the local model
@@ -82,7 +82,15 @@ In scope:
   Node 22, so `integrations/nanoclaw/install-dsh.sh` unpacks a pinned Node 24 (sha256
   per arch) and a pinned dsh (npm sha512 integrity) into their own prefixes with
   a `dsh` wrapper, failing closed before extracting on any mismatch or unsupported
-  arch. The script is not yet run by the image build (needs `xz-utils`).
+  arch. The image build runs it only as an opt-in, off by default: the Dockerfile
+  block from `patch-engines-dockerfile.py` has `ARG ARGUS_DSH_ENABLED=false`, and
+  only `--build-arg ARGUS_DSH_ENABLED=true` installs `xz-utils` and `openssl` (which
+  `install-dsh.sh` needs) and runs the script. Otherwise nothing of dsh, its Node
+  runtime or those packages is in the image and `dsh` is not on `PATH`; `smoke.sh`
+  probes it only when `ARGUS_DSH_ENABLED=true`. The live log and usage parsers read
+  its `--json` events; their fixture is synthetic until a real run is recorded, and
+  absent usage is `not_reported`, never zero. Not yet verified: an image built with
+  the flag and a live run. The ACP harness (draft step 2) stays open.
   - **ACP verdict for dsh: drop for now.** Measured with dsh 0.2.2-alpha.3 under
     Node v24.22.2, run unchanged via `dsh --profile acp`: `initialize` ok (ACP v1,
     `authMethods []`); `session/new` ok (model and `reasoning_effort` config

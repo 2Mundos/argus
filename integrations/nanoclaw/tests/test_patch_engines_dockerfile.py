@@ -87,6 +87,17 @@ def assert_buildable(s: str) -> None:
         re.M,
     )
     assert s.count("Argus specialist CLIs") == 1
+    # dsh is opt-in: off by default, installed (with the xz and openssl it needs) only
+    # inside the flag's own branch, and its script is staged for that step.
+    assert s.count("ARG ARGUS_DSH_ENABLED=false\n") == 1
+    assert "install-dsh.sh" in sources
+    (branch,) = re.findall(
+        r'if \[ "\$ARGUS_DSH_ENABLED" = true \]; then(.*?)\n\s*fi \\', run, re.S
+    )
+    assert "sh /tmp/argus-engines/install-dsh.sh" in branch
+    assert "xz-utils" in branch and "openssl" in branch
+    assert run.count("/tmp/argus-engines/install-dsh.sh") == 1
+    assert run.count("xz-utils") == 1
 
 
 def test_pristine_gets_the_whole_block_once(tmp_path: Path) -> None:

@@ -125,8 +125,10 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # agent is a checksummed tarball; Copilot CLI is a pinned npm package; argus-delegate
 # is the non-interactive entry the worker uses to hand work to any of the five. The smoke fails the build if a CLI
 # does not run, so "in the image" is proven, not assumed. Authentication is NOT
-# part of the image: each worker logs in with the vendor client.
-COPY install-cursor-agent.sh install-copilot-cli.sh argus-delegate.mjs account-settings.mjs anthropic-redirect.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs changes.mjs usage.mjs gitea-api.mjs github-api.mjs /tmp/argus-engines/
+# part of the image: each worker logs in with the vendor client. dsh is opt-in:
+# build with --build-arg ARGUS_DSH_ENABLED=true to add it; the default adds nothing.
+ARG ARGUS_DSH_ENABLED=false
+COPY install-cursor-agent.sh install-copilot-cli.sh argus-delegate.mjs account-settings.mjs anthropic-redirect.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs changes.mjs usage.mjs gitea-api.mjs github-api.mjs install-dsh.sh /tmp/argus-engines/
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \
  && sh /tmp/argus-engines/install-copilot-cli.sh \
  && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \
@@ -137,6 +139,12 @@ RUN sh /tmp/argus-engines/install-cursor-agent.sh \
  && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \
  && install -m 0644 /tmp/argus-engines/github-api.mjs /usr/local/bin/github-api.mjs \
  && install -m 0755 /tmp/argus-engines/github-api.mjs /usr/local/bin/argus-github-api \
+ && if [ "$ARGUS_DSH_ENABLED" = true ]; then \
+      apt-get update \
+   && apt-get install -y --no-install-recommends xz-utils openssl \
+   && rm -rf /var/lib/apt/lists/* \
+   && sh /tmp/argus-engines/install-dsh.sh; \
+    fi \
  && rm -rf /tmp/argus-engines \
  && claude --version && codex --version && opencode --version && agent --version && copilot --version
 

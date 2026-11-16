@@ -34,15 +34,30 @@ SHIPPED = (
     "usage.mjs",
     "gitea-api.mjs",
     "github-api.mjs",
+    "install-dsh.sh",
 )
 MARKER = "# ---- ncl CLI wrapper"
+DSH_ARG = "ARG ARGUS_DSH_ENABLED=false\n"
+# Opt-in dsh (docs/specs/engines.spec.md): with the flag off the step is a no-op and no
+# dsh, Node 24, xz or openssl lands in the image. install-dsh.sh needs xz (to unpack
+# the Node runtime) and openssl (the integrity check), which node:22-slim lacks; they
+# are installed here, only for a dsh image: this RUN comes before the tools layer.
+DSH_STEP = (
+    ' && if [ "$ARGUS_DSH_ENABLED" = true ]; then \\\n'
+    "      apt-get update \\\n"
+    "   && apt-get install -y --no-install-recommends xz-utils openssl \\\n"
+    "   && rm -rf /var/lib/apt/lists/* \\\n"
+    "   && sh /tmp/argus-engines/install-dsh.sh; \\\n"
+    "    fi \\\n"
+)
 BLOCK = f"""# ---- Argus specialist CLIs ---------------------------------------------------
 # claude, codex and opencode come from cli-tools.json above (pinned). The Cursor
 # agent is a checksummed tarball; Copilot CLI is a pinned npm package; argus-delegate
 # is the non-interactive entry the worker uses to hand work to any of the five. The smoke fails the build if a CLI
 # does not run, so "in the image" is proven, not assumed. Authentication is NOT
-# part of the image: each worker logs in with the vendor client.
-COPY {" ".join(SHIPPED)} {STAGE}
+# part of the image: each worker logs in with the vendor client. dsh is opt-in:
+# build with --build-arg ARGUS_DSH_ENABLED=true to add it; the default adds nothing.
+{DSH_ARG}COPY {" ".join(SHIPPED)} {STAGE}
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && sh /tmp/argus-engines/install-copilot-cli.sh \\
  && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \\
@@ -53,7 +68,7 @@ RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\
  && install -m 0644 /tmp/argus-engines/github-api.mjs /usr/local/bin/github-api.mjs \\
  && install -m 0755 /tmp/argus-engines/github-api.mjs /usr/local/bin/argus-github-api \\
- && rm -rf /tmp/argus-engines \\
+{DSH_STEP} && rm -rf /tmp/argus-engines \\
  && claude --version && codex --version && opencode --version && agent --version && copilot --version
 
 """
@@ -102,6 +117,7 @@ STEPS = (
         " && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\\n"
         " && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\\n",
     ),
+    (f"{STAGE}install-dsh.sh", DSH_STEP),
     (
         "/usr/local/bin/argus-github-api",
         " && install -m 0644 /tmp/argus-engines/github-api.mjs /usr/local/bin/github-api.mjs \\\n"
@@ -153,7 +169,8 @@ def patch(p: Path, s: str) -> str:
             1,
         )
     line = f"COPY {' '.join(dict.fromkeys(files))} {STAGE}"
-    return s[: copy.start()] + line + run + s[end:]
+    arg = "" if re.search("^" + re.escape(DSH_ARG.strip()) + "$", s, re.M) else DSH_ARG
+    return s[: copy.start()] + arg + line + run + s[end:]
 
 
 def main() -> None:
