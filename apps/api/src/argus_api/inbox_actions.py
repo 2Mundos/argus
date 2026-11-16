@@ -190,7 +190,7 @@ class ExternalReads(BaseModel):
 
 class ActionableInboxPage(InboxPage):
     # Narrowed on purpose: every row of this page is projected.
-    items: list[ActionableInboxItem]  # ty: ignore[invalid-attribute-override]
+    items: list[ActionableInboxItem]  # ty: ignore[incompatible-attribute-override]
     snapshot_at: datetime  # the one read transaction behind every stored value
     external: ExternalReads
     authority_note: str = AUTHORITY_NOTE
