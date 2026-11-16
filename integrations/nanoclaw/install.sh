@@ -421,6 +421,10 @@ runtime_keys = [
     "ARGUS_GIT_AUTHOR_EMAIL",
     "ARGUS_CODEX_TURN_TIMEOUT_MS",
     "ARGUS_COMMAND_GUARD",
+    "ARGUS_MERGE_AUTH_KEY",
+    "ARGUS_MERGE_AUTH_TASK",
+    "ARGUS_MERGE_AUTH_ATTEMPT",
+    "ARGUS_MERGE_AUTHORIZED",
 ]
 missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
 if missing:
@@ -434,7 +438,7 @@ if s != original:
 PY
   )"
   if [ "$patch_result" = patched ]; then
-    echo "patched $codex_ts (Codex env allowlist: git, Cursor delegate, Gitea map, command guard)"
+    echo "patched $codex_ts (Codex env allowlist: git, Cursor delegate, Gitea map, command guard, merge authorization)"
   fi
 fi
 
@@ -492,6 +496,12 @@ assert old in s, "container-runner forwarded-env list changed upstream"
 open(p, "w").write(s.replace(old, "'ARGUS_COMMAND_GUARD', 'ARGUS_FORGE_REVIEW']", 1))
 PY
   echo "patched $container_runner (host ARGUS_FORGE_REVIEW → agent contributedEnv)"
+fi
+# The per-attempt merge authorization (github-repositories spec 3.4) rides the same list; its
+# own idempotent script also extends a runner that already carries ARGUS_FORGE_REVIEW and drops
+# a stale tuple from a prepopulated contribution or gateway env.
+if [ -f "$container_runner" ]; then
+  python3 "$here/patch-merge-auth-env.py" "$target"
 fi
 
 codex_test="$target/container/agent-runner/src/providers/codex-app-server.test.ts"

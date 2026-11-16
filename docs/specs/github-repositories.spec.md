@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-11-11
+updated: 2026-11-16
 ---
 
 # GitHub repositories
@@ -137,7 +137,19 @@ variables in its environment at the start of the attempt: `ARGUS_MERGE_AUTH_KEY`
 per-attempt key), `ARGUS_MERGE_AUTH_TASK`, `ARGUS_MERGE_AUTH_ATTEMPT`, and
 `ARGUS_MERGE_AUTHORIZED`, the lowercase hex HMAC-SHA256 of `merge:<task>:<attempt>` under the
 key. It clears all four (and any preset values) for every other task and when the attempt
-ends. The command recomputes the token and compares it in constant time. Without
+ends. It is minted by `scopeMergeAuthorization` in `argus-merge-auth.ts` at the start of each
+attempt, from `taskMayMerge`, so every attempt has a new key and a new token. It reaches the
+session through the host process environment: a session is a separate container whose
+environment is built from the `contributedEnv` allowlist of `container-runner.ts`, which
+`install.sh` patches (`patch-merge-auth-env.py`, also applied to a runner patched before these
+names existed). The Codex provider filters the session environment again through
+`CODEX_ENV_ALLOWLIST` in `codex-app-server.ts` (`buildCodexProcessEnv`), so `install.sh` adds the
+same four names to that list. Both allowlists must carry all four names; the runner deletes the
+four from any prepopulated contribution or gateway env before forwarding the host values, so a
+name unset on the host leaves none and an attempt for which `taskMayMerge` is false carries none.
+A `pr_green` attempt does not qualify through `auto_merge` alone, but a trusted
+`input.delivery.allow_merge === true` can authorize it with `repository:write`. The command
+recomputes the token and compares it in constant time. Without
 `ARGUS_MERGE_AUTHORIZED` it fails `policy_denied` with "merge is not authorized for this
 task"; with it but without the key, task or attempt, with "merge authorization was not issued
 by the Argus channel for this attempt"; with a token that does not match, with "merge
