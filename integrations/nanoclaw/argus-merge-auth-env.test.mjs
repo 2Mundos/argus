@@ -37,8 +37,11 @@ const task = (over = {}) => ({
 /** What the channel does at the start of an attempt. */
 const scope = (env, t) => scopeMergeAuthorization(env, t, taskMayMerge(t));
 
-/** The runner's loop over the allowlist, after install.sh patched a runner that already had it. */
-function forwardedBy(env) {
+/**
+ * The runner's contribution env, after install.sh patched a runner that already had the loop:
+ * the merge-authorization names are dropped, then the host values are forwarded.
+ */
+function forwardedBy(env, contributed = {}) {
   const root = mkdtempSync(join(tmpdir(), "argus-merge-auth-"));
   mkdirSync(join(root, "src"));
   const runner = join(root, "src", "container-runner.ts");
@@ -47,10 +50,26 @@ function forwardedBy(env) {
     "  for (const key of ['ARGUS_GIT_AUTHOR_NAME', 'ARGUS_COMMAND_GUARD', 'ARGUS_FORGE_REVIEW']) {\n  }\n",
   );
   execFileSync("python3", [join(import.meta.dirname, "patch-merge-auth-env.py"), root]);
-  const list = /for \(const key of \[([^\]]*)\]\)/.exec(readFileSync(runner, "utf8"))[1];
-  const out = {};
+  const text = readFileSync(runner, "utf8");
+  const drop = /for \(const key of \[([^\]]*)\]\) \{\n\s+delete contributedEnv\[key\];/.exec(
+    text,
+  )[1];
+  const list = /for \(const key of \[([^\]]*'ARGUS_COMMAND_GUARD'[^\]]*)\]\)/.exec(text)[1];
+  const out = { ...contributed };
+  for (const [, key] of drop.matchAll(/'([A-Z_]+)'/g)) delete out[key];
   for (const [, key] of list.matchAll(/'([A-Z_]+)'/g)) if (env[key]?.trim()) out[key] = env[key];
   return out;
+}
+
+/** A valid tuple from an earlier attempt, as a contribution or gateway env could carry it. */
+function staleAuthorization() {
+  const key = "w".repeat(64);
+  return {
+    ARGUS_MERGE_AUTH_KEY: key,
+    ARGUS_MERGE_AUTH_TASK: "t1",
+    ARGUS_MERGE_AUTH_ATTEMPT: "3",
+    ARGUS_MERGE_AUTHORIZED: mergeAuthorizationToken(key, "t1", 3),
+  };
 }
 
 /** The Codex provider's second filter; install.sh adds these names to CODEX_ENV_ALLOWLIST. */
@@ -106,6 +125,25 @@ describe("merge authorization reaches the session env", () => {
     const session = codexForwardedBy(forwardedBy(host));
     assert.deepEqual(Object.keys(session).sort(), [...NAMES].sort());
     assert.deepEqual(await cliMerge(session), { code: 0, puts: 1 });
+  });
+
+  it("clears a valid authorization prepopulated in the contribution env", async () => {
+    const host = {};
+    scope(host, task());
+    const session = forwardedBy(host, staleAuthorization());
+    assert.deepEqual(session, {});
+    const codex = codexForwardedBy(session);
+    assert.deepEqual(codex, {});
+    assert.deepEqual(await cliMerge(codex), { code: 13, puts: 0 });
+  });
+
+  it("replaces a prepopulated authorization on an authorized attempt", async () => {
+    const host = {};
+    const stale = staleAuthorization();
+    scope(host, task({ auto_merge: true }));
+    const session = forwardedBy(host, stale);
+    assert.notEqual(session.ARGUS_MERGE_AUTH_KEY, stale.ARGUS_MERGE_AUTH_KEY);
+    assert.deepEqual(await cliMerge(codexForwardedBy(session)), { code: 0, puts: 1 });
   });
 
   it("forwards none for pr_green without allow_merge, read-only and unauthorized tasks", () => {

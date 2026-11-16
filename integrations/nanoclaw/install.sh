@@ -498,7 +498,8 @@ PY
   echo "patched $container_runner (host ARGUS_FORGE_REVIEW → agent contributedEnv)"
 fi
 # The per-attempt merge authorization (github-repositories spec 3.4) rides the same list; its
-# own idempotent script also extends a runner that already carries ARGUS_FORGE_REVIEW.
+# own idempotent script also extends a runner that already carries ARGUS_FORGE_REVIEW and drops
+# a stale tuple from a prepopulated contribution or gateway env.
 if [ -f "$container_runner" ]; then
   python3 "$here/patch-merge-auth-env.py" "$target"
 fi

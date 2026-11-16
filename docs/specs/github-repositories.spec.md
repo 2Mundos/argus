@@ -144,9 +144,10 @@ environment is built from the `contributedEnv` allowlist of `container-runner.ts
 `install.sh` patches (`patch-merge-auth-env.py`, also applied to a runner patched before these
 names existed). The Codex provider filters the session environment again through
 `CODEX_ENV_ALLOWLIST` in `codex-app-server.ts` (`buildCodexProcessEnv`), so `install.sh` adds the
-same four names to that list. Both allowlists must carry all four names; a name unset on the host
-is not forwarded, so an attempt for which `taskMayMerge` is false carries none. A `pr_green`
-attempt does not qualify through `auto_merge` alone, but a trusted
+same four names to that list. Both allowlists must carry all four names; the runner deletes the
+four from any prepopulated contribution or gateway env before forwarding the host values, so a
+name unset on the host leaves none and an attempt for which `taskMayMerge` is false carries none.
+A `pr_green` attempt does not qualify through `auto_merge` alone, but a trusted
 `input.delivery.allow_merge === true` can authorize it with `repository:write`. The command
 recomputes the token and compares it in constant time. Without
 `ARGUS_MERGE_AUTHORIZED` it fails `policy_denied` with "merge is not authorized for this

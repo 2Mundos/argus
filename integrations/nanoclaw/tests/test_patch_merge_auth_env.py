@@ -14,6 +14,9 @@ NAMES = [
     "ARGUS_MERGE_AUTH_ATTEMPT",
     "ARGUS_MERGE_AUTHORIZED",
 ]
+BASE = "'ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL', 'ARGUS_COMMAND_GUARD'"
+FORGE = f"{BASE}, 'ARGUS_FORGE_REVIEW'"
+MERGE = ", ".join(f"'{n}'" for n in NAMES)
 TEMPLATE = """  const contributedEnv: Record<string, string> = {{
     ...(contribution.env ?? {{}}),
   }};
@@ -22,10 +25,7 @@ TEMPLATE = """  const contributedEnv: Record<string, string> = {{
     if (value?.trim()) contributedEnv[key] = value;
   }}
 """
-STATES = [
-    "'ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL', 'ARGUS_COMMAND_GUARD'",
-    "'ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL', 'ARGUS_COMMAND_GUARD', 'ARGUS_FORGE_REVIEW'",
-]
+STATES = [BASE, FORGE, f"{FORGE}, {MERGE}"]
 
 
 def _run(root: Path) -> subprocess.CompletedProcess[str]:
@@ -43,10 +43,28 @@ def _checkout(tmp_path: Path, body: str) -> Path:
     return tmp_path
 
 
+def _loop_names(text: str, marker: str) -> list[str]:
+    pattern = re.compile(r"for \(const key of \[([^\]]*)\]\)")
+    for match in pattern.finditer(text):
+        names = re.findall(r"'([A-Z_]+)'", match.group(1))
+        if marker in names:
+            return names
+    raise AssertionError(f"no loop forwards {marker}")
+
+
 def _forwarded(root: Path) -> list[str]:
+    return _loop_names(
+        (root / "src" / "container-runner.ts").read_text(), "ARGUS_COMMAND_GUARD"
+    )
+
+
+def _dropped(root: Path) -> list[str]:
     text = (root / "src" / "container-runner.ts").read_text()
-    match = re.search(r"for \(const key of \[([^\]]*)\]\)", text)
-    assert match
+    pattern = re.compile(
+        r"for \(const key of \[([^\]]*)\]\) \{\n\s+delete contributedEnv\[key\];"
+    )
+    match = pattern.search(text)
+    assert match, "no loop deletes stale merge authorization"
     return re.findall(r"'([A-Z_]+)'", match.group(1))
 
 
@@ -57,7 +75,8 @@ def test_extends_a_patched_runner_once_and_keeps_earlier_names(
     root = _checkout(tmp_path, TEMPLATE.format(names=state))
     before = re.findall(r"'([A-Z_]+)'", state)
     assert _run(root).returncode == 0
-    assert _forwarded(root) == before + NAMES
+    assert _forwarded(root) == before + [n for n in NAMES if n not in before]
+    assert _dropped(root) == NAMES
     text = (root / "src" / "container-runner.ts").read_text()
     assert _run(root).returncode == 0
     assert (root / "src" / "container-runner.ts").read_text() == text
