@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Commit-msg hook: fail fast on non-English commit messages (the pre-push
+# language gate re-checks the same messages over the push range).
+# Enable with `make hooks`; bypass with `git commit --no-verify`.
+set -uo pipefail
+
+exec python3 scripts/validate_language.py --message-file "$1"
