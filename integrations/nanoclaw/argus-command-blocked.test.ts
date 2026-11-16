@@ -15,8 +15,8 @@ const SINCE = Date.parse("2026-11-06T10:00:00Z");
 const NOW = "2026-11-06T10:05:00.000Z";
 const OLD = "2026-11-05T10:00:00.000Z";
 
-const blockText = (rule: string) =>
-  `Blocked by Argus command guard: ${COMMAND_GUARD_REASONS[rule]}. Do not retry or work around this block.`;
+const blockText = (rule: string, detail = "") =>
+  `Blocked by Argus command guard: ${COMMAND_GUARD_REASONS[rule]}${detail}. Do not retry or work around this block.`;
 
 const toolUse = (id: string, command: unknown, at: string | null = NOW) => ({
   type: "assistant",
@@ -43,8 +43,22 @@ describe("rule table", () => {
     for (const rule of Object.keys(COMMAND_GUARD_REASONS))
       expect(ruleOfBlockText(blockText(rule))).toBe(rule);
     expect(ruleOfBlockText("Blocked by Argus command guard: made up. Do not retry")).toBeNull();
+    expect(ruleOfBlockText(blockText("rm_root", "x"))).toBeNull();
     expect(ruleOfBlockText(`x ${blockText("rm_root")}`)).toBeNull();
     expect(ruleOfBlockText("")).toBeNull();
+  });
+});
+
+describe("rule table with an element", () => {
+  it("takes the rule from the reason before the element and the also-present clause", () => {
+    expect(ruleOfBlockText(blockText("commit_author_flag", " (--author)"))).toBe(
+      "commit_author_flag",
+    );
+    const also = " (core.hooksPath); also present: commit_coauthor_trailer";
+    expect(ruleOfBlockText(blockText("hooks_path_override", also))).toBe("hooks_path_override");
+    // An element cannot name another rule: only the leading reason counts.
+    const forged = blockText("commit_no_verify", ` (${COMMAND_GUARD_REASONS.rm_root})`);
+    expect(ruleOfBlockText(forged)).toBe("commit_no_verify");
   });
 });
 

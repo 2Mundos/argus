@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-01
-updated: 2026-11-14
+updated: 2026-11-16
 ---
 
 # Command guard
@@ -54,18 +54,38 @@ bypass. Background: draft (removed; in git history),
     `kubectl --kubeconfig <path> get pods` passes. It stops an accidental print
     or copy of the attempt's kubeconfig; it is not a boundary
     ([integrations](integrations.spec.md) 3.6).
-  - `commit_attribution`: a `git commit` (including in a compound shell command)
-    whose `-m`/`--message`/`-F`/`--file` text contains a prohibited co-author
-    or attribution trailer line (case-insensitive), uses `--no-verify`/`-n`, or
-    passes `-c core.hooksPath=…` on the command line. Editor-only commits are covered by the workspace commit-msg hook instead;
-    publication is covered by the git wrapper on `git push` ([worker lifecycle](worker-lifecycle.spec.md)
-    3.8).
+  - Commit attribution, one reason id per trigger family (all in a Bash command,
+    including a compound shell command). Editor-only commits are covered by the
+    workspace commit-msg hook instead; publication is covered by the git wrapper on
+    `git push` ([worker lifecycle](worker-lifecycle.spec.md) 3.8).
+    - `commit_identity_env`: `GIT_AUTHOR_NAME`/`_EMAIL` or `GIT_COMMITTER_NAME`/`_EMAIL`
+      set as an assignment, `export` or `env` argument. Element: the variable name.
+    - `commit_identity_config`: `-c`/`--config` or `--config-env` with a `user.*`,
+      `author.*` or `committer.*` `name`/`email` key, or a `git config` write of one.
+      Element: the key.
+    - `commit_author_flag`: `git commit --author`. Element: `--author`.
+    - `hooks_path_override`: `-c core.hooksPath=…` on the command line. Element:
+      `core.hooksPath`.
+    - `commit_no_verify`: `--no-verify` or `-n` on `git commit`. Element: the flag.
+    - `commit_coauthor_trailer`: a `-m`/`--message`/`-F`/`--file` text with a
+      prohibited co-author or attribution trailer line (case-insensitive). Element:
+      the trailer line, stripped and cut at 120 characters.
+    The push-side refusals of the git wrapper (`push_wide`, `push_non_branch_refspec`,
+    `push_follow_tags`, `git_dir_without_work_tree`, `push_outgoing_trailer`) have
+    their own family ids in `commit_attribution.py`; the Bash guard cannot produce
+    them, so they have no guard reason.
 - **Shell forms.** Commands are split on `;`, `&&`, `||`, `|`, `&`, redirects and
   newlines. `sudo`/`doas`/`env`/`VAR=x` prefixes are skipped, and
   `bash|sh|zsh -c '...'` and `eval` are checked recursively (depth 4).
 - **Block message.** `Blocked by Argus command guard: <reason>. Do not retry or
   work around this block.` Returned as a `deny` decision; the task continues and
-  the agent decides what to do next.
+  the agent decides what to do next. For the commit-attribution families the
+  refusal names the trigger family (its reason) and the offending element:
+  `<reason> (<element>)`. The decision is the first trigger in evaluation order:
+  identity environment assignment, identity overrides over the git commands,
+  then per commit the forbidden git config and the commit arguments (no-verify,
+  then trailers). When other families were also present the message adds
+  `; also present: <id>, <id>` after the element, each other family once.
 - **Fail open.** A parse or runtime error in the guard allows the command.
 - **Missing guard.** When the guard is enabled, an image without it is an
   environment block (`env_guard_missing`), not a silent unguarded run. At claim,

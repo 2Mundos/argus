@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -33,55 +34,101 @@ _PROHIBITED_TRAILER = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
-REASON = (
-    "a commit message must not contain a Co-Authored-By or other co-author "
-    "attribution trailer"
-)
-USER_MESSAGE = (
-    f"Argus rejects this commit: {REASON}. Remove the trailer; git author and "
-    "committer identity is enough. Do not amend history to strip trailers from "
-    "commits that already exist."
-)
-PUSH_TRAILER_MESSAGE = (
-    f"Argus rejects this push: an outgoing commit contains {REASON}. Fix the "
-    "commit message (for example `git commit --amend`) or reset before pushing."
-)
-PUSH_WIDE_MESSAGE = (
-    "Argus rejects this push: `git push --all`, `--tags`, and `--mirror` cannot "
-    "be validated safely; push explicit branch refspecs instead."
-)
-PUSH_NON_BRANCH_MESSAGE = (
-    "Argus rejects this push: tag and non-branch refspecs cannot be validated "
-    "safely; push explicit branch refs only (for example `git push origin "
-    "my-branch`)"
-)
-PUSH_FOLLOW_TAGS_MESSAGE = (
-    "Argus rejects this push: `--follow-tags` cannot be validated safely"
-)
-GIT_DIR_MESSAGE = (
-    "Argus cannot validate this git command: when using --git-dir you must also "
-    "pass --work-tree at the repository root"
-)
-NO_VERIFY_MESSAGE = (
-    "Argus rejects this commit: `git commit --no-verify` skips the commit-msg "
-    "hook; remove --no-verify so attribution rules apply"
-)
-HOOKS_OVERRIDE_MESSAGE = (
-    "Argus rejects this git command: do not override core.hooksPath on the "
-    "command line; worker commits use the workspace hook directory"
-)
-IDENTITY_OVERRIDE_MESSAGE = (
-    "Argus rejects this git command: do not override the git author or committer "
-    "identity (GIT_AUTHOR_*/GIT_COMMITTER_* variables, --author, identity -c keys, "
-    "or git config writes); worker commits use the configured project identity"
-)
+
+class Trigger(NamedTuple):
+    """One refusal trigger: the family that matched and the offending element."""
+
+    family: str
+    element: str
+
+
+# family id -> reason text. The first six are the families the Bash guard can
+# produce; `command_guard.REASONS` and its mirrors carry the same strings (a test
+# compares them). The push families only occur in the git wrapper.
+FAMILY_REASONS = {
+    "commit_identity_env": (
+        "do not set the git author or committer identity through GIT_AUTHOR_* or "
+        "GIT_COMMITTER_* variables; worker commits use the configured project identity"
+    ),
+    "commit_identity_config": (
+        "do not override the git author or committer identity with an identity "
+        "config key (-c, --config-env or git config); worker commits use the "
+        "configured project identity"
+    ),
+    "commit_author_flag": (
+        "do not pass --author to git commit; worker commits use the configured "
+        "project identity"
+    ),
+    "hooks_path_override": (
+        "do not override core.hooksPath on the command line; worker commits use "
+        "the workspace hook directory"
+    ),
+    "commit_no_verify": (
+        "do not skip the commit-msg hook with --no-verify or -n; the attribution "
+        "rules must apply"
+    ),
+    "commit_coauthor_trailer": (
+        "a commit message must not contain a Co-Authored-By or other co-author "
+        "attribution trailer (remove the trailer; git author and committer is enough)"
+    ),
+    "push_wide": (
+        "git push --all, --tags and --mirror cannot be validated safely; push "
+        "explicit branch refspecs instead"
+    ),
+    "push_non_branch_refspec": (
+        "tag and non-branch refspecs cannot be validated safely; push explicit "
+        "branch refs only (for example `git push origin my-branch`)"
+    ),
+    "push_follow_tags": "--follow-tags cannot be validated safely",
+    "git_dir_without_work_tree": (
+        "when using --git-dir you must also pass --work-tree at the repository root"
+    ),
+    "push_outgoing_trailer": (
+        "an outgoing commit contains a co-author attribution trailer; fix the "
+        "commit message (for example `git commit --amend`) or reset before pushing"
+    ),
+}
+ELEMENT_MAX = 120
+
+
+def also_present(triggers: list[Trigger]) -> list[str]:
+    """Distinct families of the triggers after the first, other than its own."""
+    first = triggers[0].family
+    others: list[str] = []
+    for t in triggers[1:]:
+        if t.family != first and t.family not in others:
+            others.append(t.family)
+    return others
+
+
+def refusal(triggers: list[Trigger]) -> str:
+    """Refusal text naming the first trigger's family and element, and the other
+    families that were also present. The guard builds its own text from the same
+    parts (`command_guard.message`)."""
+    first = triggers[0]
+    text = (
+        f"Argus rejects this git command: {FAMILY_REASONS[first.family]} "
+        f"({first.family}: {first.element})"
+    )
+    others = also_present(triggers)
+    if others:
+        text += f"; also present: {', '.join(others)}"
+    return text
+
+
+def _first(triggers: Iterable[Trigger]) -> str | None:
+    for t in triggers:
+        return refusal([t])
+    return None
+
+
 _IDENTITY_ENV = (
     "GIT_AUTHOR_NAME",
     "GIT_AUTHOR_EMAIL",
     "GIT_COMMITTER_NAME",
     "GIT_COMMITTER_EMAIL",
 )
-_IDENTITY_ENV_ASSIGNMENT = re.compile(r"(?<![\w])(?:" + "|".join(_IDENTITY_ENV) + r")=")
+_IDENTITY_ENV_ASSIGNMENT = re.compile(r"(?<![\w])(" + "|".join(_IDENTITY_ENV) + r")=")
 _IDENTITY_KEYS = frozenset(
     f"{section}.{field}"
     for section in ("user", "author", "committer")
@@ -116,16 +163,22 @@ def module_path() -> str:
     return DEFAULT_MODULE
 
 
+def trailer_in_message(message: str) -> Trigger | None:
+    """The first prohibited trailer line of `message`, stripped and cut."""
+    found = _PROHIBITED_TRAILER.search(message) if message else None
+    if not found:
+        return None
+    line = message[found.start() :].splitlines()[0].strip()[:ELEMENT_MAX]
+    return Trigger("commit_coauthor_trailer", line)
+
+
 def prohibited_trailer_in_message(message: str) -> bool:
-    if not message:
-        return False
-    return _PROHIBITED_TRAILER.search(message) is not None
+    return trailer_in_message(message) is not None
 
 
 def check_message(message: str) -> str | None:
-    if prohibited_trailer_in_message(message):
-        return USER_MESSAGE
-    return None
+    found = trailer_in_message(message)
+    return refusal([found]) if found else None
 
 
 def _read_file(path: str) -> str:
@@ -169,14 +222,14 @@ class GitInvocation(NamedTuple):
     work_tree: str | None = None
 
 
-def _git_context_error(inv: GitInvocation) -> str | None:
+def _git_context_error(inv: GitInvocation) -> Trigger | None:
     if inv.git_dir and not inv.work_tree:
-        return GIT_DIR_MESSAGE
+        return Trigger("git_dir_without_work_tree", "--git-dir")
     return None
 
 
-def _forbidden_git_config(argv: list[str]) -> str | None:
-    """Reject per-invocation core.hooksPath overrides (host git may still use them)."""
+def _forbidden_git_config(argv: list[str]) -> Iterator[Trigger]:
+    """Per-invocation core.hooksPath overrides (host git may still use them)."""
     args = list(argv)
     if args and args[0] == "git":
         args = args[1:]
@@ -189,24 +242,26 @@ def _forbidden_git_config(argv: list[str]) -> str | None:
             cfg = args[i + 1]
             key = cfg.split("=", 1)[0]
             if key == "core.hooksPath":
-                return HOOKS_OVERRIDE_MESSAGE
+                yield Trigger("hooks_path_override", key)
             i += 2
             continue
-        if a.startswith("-") and a not in ("-C", "--work-tree"):
-            i += 1
-            continue
         i += 1
-    return None
 
 
 def _is_identity_key(cfg: str) -> bool:
     return cfg.split("=", 1)[0].strip().lower() in _IDENTITY_KEYS
 
 
-def _identity_override(argv: list[str]) -> str | None:
-    """Reject any attempt to override the configured git author/committer identity."""
-    if any(name in os.environ for name in _IDENTITY_ENV):
-        return IDENTITY_OVERRIDE_MESSAGE
+def _config_key(cfg: str) -> str:
+    return cfg.split("=", 1)[0].strip()
+
+
+def _identity_override(argv: list[str]) -> Iterator[Trigger]:
+    """Every attempt to override the configured git author/committer identity."""
+    for name in _IDENTITY_ENV:
+        if name in os.environ:
+            yield Trigger("commit_identity_env", name)
+            break
     args = list(argv)
     if args and Path(args[0]).name == "git":
         args = args[1:]
@@ -215,11 +270,11 @@ def _identity_override(argv: list[str]) -> str | None:
         a = args[i]
         if a in ("-c", "--config") and i + 1 < len(args):
             if _is_identity_key(args[i + 1]):
-                return IDENTITY_OVERRIDE_MESSAGE
+                yield Trigger("commit_identity_config", _config_key(args[i + 1]))
             i += 2
         elif a.startswith("--config-env="):
             if _is_identity_key(a.split("=", 1)[1]):
-                return IDENTITY_OVERRIDE_MESSAGE
+                yield Trigger("commit_identity_config", _config_key(a.split("=", 1)[1]))
             i += 1
         elif a in ("--config-env", "-C", "--git-dir", "--work-tree", "--namespace"):
             if (
@@ -227,28 +282,26 @@ def _identity_override(argv: list[str]) -> str | None:
                 and i + 1 < len(args)
                 and _is_identity_key(args[i + 1])
             ):
-                return IDENTITY_OVERRIDE_MESSAGE
+                yield Trigger("commit_identity_config", _config_key(args[i + 1]))
             i += 2
         else:
             i += 1
     if i >= len(args):
-        return None
+        return
     sub, rest = args[i], args[i + 1 :]
     if sub == "commit" and any(
         a == "--author" or a.startswith("--author=") for a in rest
     ):
-        return IDENTITY_OVERRIDE_MESSAGE
+        yield Trigger("commit_author_flag", "--author")
     is_read = any(a in _CONFIG_READ_FLAGS for a in rest) or rest[:1] in (
         ["get"],
         ["list"],
     )
-    if (
-        sub == "config"
-        and not is_read
-        and any(a.strip().lower() in _IDENTITY_KEYS for a in rest)
-    ):
-        return IDENTITY_OVERRIDE_MESSAGE
-    return None
+    if sub == "config" and not is_read:
+        for a in rest:
+            if a.strip().lower() in _IDENTITY_KEYS:
+                yield Trigger("commit_identity_config", a.strip())
+                break
 
 
 def _validate_branch_refspec(
@@ -257,17 +310,18 @@ def _validate_branch_refspec(
     *,
     git_dir: str | None = None,
     work_tree: str | None = None,
-) -> str | None:
+) -> Trigger | None:
     ctx = {"git_dir": git_dir, "work_tree": work_tree}
     spec = refspec.lstrip("+")
     src, _, dest = spec.partition(":")
+    refused = Trigger("push_non_branch_refspec", refspec[:ELEMENT_MAX])
     if src.startswith("refs/tags/") or dest.startswith("refs/tags/"):
-        return PUSH_NON_BRANCH_MESSAGE
+        return refused
     if dest.startswith("refs/") and not dest.startswith("refs/heads/"):
-        return PUSH_NON_BRANCH_MESSAGE
+        return refused
     sym = _git(cwd, "rev-parse", "--symbolic-full-name", "-q", src, **ctx)
     if sym.returncode != 0 or not sym.stdout.strip().startswith("refs/heads/"):
-        return PUSH_NON_BRANCH_MESSAGE
+        return refused
     return None
 
 
@@ -384,14 +438,20 @@ def _commit_messages_from_argv(argv: list[str]) -> list[str]:
     return messages
 
 
-def check_commit_argv(argv: list[str]) -> str | None:
-    if "--no-verify" in argv or "-n" in argv:
-        return NO_VERIFY_MESSAGE
+def _commit_argv_triggers(argv: list[str]) -> Iterator[Trigger]:
+    """No-verify first, then one trailer per message (a file read may raise)."""
+    for flag in ("--no-verify", "-n"):
+        if flag in argv:
+            yield Trigger("commit_no_verify", flag)
+            break
     for msg in _commit_messages_from_argv(argv):
-        err = check_message(msg)
-        if err:
-            return err
-    return None
+        found = trailer_in_message(msg)
+        if found:
+            yield found
+
+
+def check_commit_argv(argv: list[str]) -> str | None:
+    return _first(_commit_argv_triggers(argv))
 
 
 def _bash_segments(command: str) -> list[list[str]]:
@@ -449,48 +509,50 @@ def _is_short_flag_with_message(token: str) -> bool:
     )
 
 
-def _identity_assignment_in_command(command: str) -> bool:
+def _identity_assignments(command: str) -> Iterator[Trigger]:
     for seg in _bash_segments(command):
         for idx, token in enumerate(seg):
-            if not _IDENTITY_ENV_ASSIGNMENT.match(token):
+            found = _IDENTITY_ENV_ASSIGNMENT.match(token)
+            if not found:
                 continue
             if idx > 0 and (
                 _is_message_flag(seg[idx - 1])
                 or _is_short_flag_with_message(seg[idx - 1])
             ):
                 continue
-            return True
+            yield Trigger("commit_identity_env", found.group(1))
         if (
             seg[0] in ("export", "env")
             and len(seg) > 1
             and _IDENTITY_ENV_ASSIGNMENT.match(seg[1])
         ):
-            return True
-    return False
+            yield Trigger("commit_identity_env", seg[1].split("=", 1)[0])
 
 
-def check_bash_command(command: str) -> str | None:
-    if _identity_assignment_in_command(command):
-        return IDENTITY_OVERRIDE_MESSAGE
+def bash_triggers(command: str) -> list[Trigger]:
+    """Every trigger in `command`, in decision order: identity env assignment,
+    identity overrides over git argvs, then per commit segment the forbidden git
+    config and the commit argv (no-verify, trailers). The first one decides.
+    An exception while scanning past the env assignments keeps what was found."""
+    found = list(_identity_assignments(command))
     try:
         for argv in _bash_git_argvs(command):
-            ident_err = _identity_override(argv)
-            if ident_err:
-                return ident_err
+            found.extend(_identity_override(argv))
         for seg in _bash_git_commit_segments(command):
             argv = seg if seg and seg[0] == "git" else ["git", *seg]
-            cfg_err = _forbidden_git_config(argv)
-            if cfg_err:
-                return cfg_err
+            found.extend(_forbidden_git_config(argv))
             inv = parse_git_argv(seg, ".")
             if not inv or inv.command != "commit":
                 continue
-            err = check_commit_argv(["commit", *inv.args])
-            if err:
-                return err
-    except Exception:
-        return None
-    return None
+            found.extend(_commit_argv_triggers(["commit", *inv.args]))
+    except Exception:  # noqa: S110 - keep the triggers collected so far
+        pass
+    return found
+
+
+def check_bash_command(command: str) -> str | None:
+    found = bash_triggers(command)
+    return refusal(found) if found else None
 
 
 def _parse_push(
@@ -683,8 +745,8 @@ def outgoing_shas_for_refspec(
 
 
 def check_push(cwd: str, argv: list[str]) -> str | None:
-    cfg_err = _forbidden_git_config(
-        argv if argv and argv[0] == "git" else ["git", *argv]
+    cfg_err = _first(
+        _forbidden_git_config(argv if argv and argv[0] == "git" else ["git", *argv])
     )
     if cfg_err:
         return cfg_err
@@ -693,7 +755,7 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
         return None
     ctx_err = _git_context_error(inv)
     if ctx_err:
-        return ctx_err
+        return refusal([ctx_err])
     remote, refspecs, err = _parse_push(
         inv.cwd,
         "origin",
@@ -705,8 +767,8 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
         return err if err.startswith("Argus") else f"Argus rejects this push: {err}"
     if any(r in ("--all", "--tags", "--mirror", "--follow-tags") for r in refspecs):
         if refspecs == ["--follow-tags"]:
-            return PUSH_FOLLOW_TAGS_MESSAGE
-        return PUSH_WIDE_MESSAGE
+            return refusal([Trigger("push_follow_tags", "--follow-tags")])
+        return refusal([Trigger("push_wide", refspecs[0])])
     local = _is_local_destination(
         _push_destination(inv.cwd, remote, git_dir=inv.git_dir, work_tree=inv.work_tree)
     )
@@ -719,7 +781,7 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
             work_tree=inv.work_tree,
         )
         if branch_err and not local:
-            return branch_err
+            return refusal([branch_err])
         if not branch_err:
             scanned.append(spec)
     seen: set[str] = set()
@@ -748,24 +810,25 @@ def check_push(cwd: str, argv: list[str]) -> str | None:
             )
             if log.returncode != 0:
                 return _git_fail(log, "log")
-            if check_message(log.stdout):
-                return PUSH_TRAILER_MESSAGE
+            trailer = trailer_in_message(log.stdout)
+            if trailer:
+                return refusal([Trigger("push_outgoing_trailer", trailer.element)])
     return None
 
 
 def gate_git(default_cwd: str, argv: list[str]) -> str | None:
-    ident_err = _identity_override(argv)
+    ident_err = _first(_identity_override(argv))
     if ident_err:
         return ident_err
     inv = parse_git_argv(argv, default_cwd)
     if not inv:
         return None
-    cfg_err = _forbidden_git_config(argv)
+    cfg_err = _first(_forbidden_git_config(argv))
     if cfg_err:
         return cfg_err
     ctx_err = _git_context_error(inv)
     if ctx_err:
-        return ctx_err
+        return refusal([ctx_err])
     if inv.command == "commit":
         return check_commit_argv(["commit", *inv.args])
     if inv.command == "push":
