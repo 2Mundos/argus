@@ -443,7 +443,7 @@ async def test_accounts_without_a_source_say_which_kind_of_absence(
     )
     p = prober(db, store, tmp_path, provider, clock)
     expected = {
-        cursor: "admin_key_required",
+        cursor: "no_admin_key",
         acme: "no_provider_source",
     }
     for account_id, code in expected.items():
@@ -525,7 +525,7 @@ def test_creating_an_account_queues_its_first_reading(
     made = create(client, "or", "custom", {"api_key": OR_KEY}, config=OR_CONFIG)
     assert queued == [made["id"]]
     unreadable = create(client, "cu", "cursor", {"api_key": "k"})
-    assert unreadable["quota_status"]["reason"] == "admin_key_required"
+    assert unreadable["quota_status"]["reason"] == "no_admin_key"
     local = create(client, "lo", "local", {"base_url": "http://127.0.0.1:8080"})
     assert local["quota_status"]["reason"] == "local_no_quota"
 
@@ -557,7 +557,7 @@ def test_refresh_of_an_unreadable_account_is_skipped_with_its_reason(
     body = client.post(
         f"/api/accounts/{made['id']}/quota/refresh", headers=ADMIN
     ).json()
-    assert (body["status"], body["code"]) == ("skipped", "admin_key_required")
+    assert (body["status"], body["code"]) == ("skipped", "no_admin_key")
     assert body["quota"] == [] and body["credit"] is None
     assert body["quota_status"]["state"] == "unknown"
 
@@ -793,12 +793,210 @@ async def test_cursor_api_key_and_expired_login_make_no_request(
     )
     p = prober(db, store, tmp_path, provider, clock)
     got = await p.probe(key)
-    assert (got.status, got.code) == ("skipped", "admin_key_required")
+    assert (got.status, got.code) == ("skipped", "no_admin_key")
     assert "login" in got.reason and "Admin API" in got.reason  # the other source
     assert (await p.probe(old)).code in ("credential_invalid", "credential_expired")
     assert provider.requests == []
     status = (await account_of(db, clock, key)).quota_status
-    assert status.reason == "admin_key_required"
+    assert status.reason == "no_admin_key"
+
+
+# -- Cursor team Admin API (an admin key is a quota source, never an execution one) ---
+
+ADMIN_KEY = "key_ADMINFAKEADMINFAKE"
+SPEND = "/teams/spend"
+SPEND_OK = {
+    "teamMemberSpend": [
+        {"spendCents": 2500, "monthlyLimitDollars": 100},
+        {"spendCents": "x", "monthlyLimitDollars": 100},
+    ],
+    "totalPages": 1,
+}
+
+
+def spend(*members, pages=1) -> dict:
+    return {"teamMemberSpend": list(members), "totalPages": pages}
+
+
+async def with_admin_key(db, store, clock, account_id) -> None:
+    await store.put(accounts.admin_secret_name(account_id), {"api_key": ADMIN_KEY})
+    async with db.write() as tx:
+        await accounts.set_admin_key(tx, account_id, "admin:test")
+
+
+@pytest.mark.parametrize(
+    ("members", "pages"),
+    [
+        ([{"spendCents": 2500, "monthlyLimitDollars": 100}], 1),
+        (
+            [
+                {"spendCents": 1000, "monthlyLimitDollars": 50},
+                {"spendCents": 4000, "monthlyLimitDollars": 50},
+            ],
+            1,
+        ),
+    ],
+)
+async def test_cursor_admin_key_fills_the_team_spend_window(
+    db, store, tmp_path, provider, clock, members, pages
+) -> None:
+    c = await add(db, store, "ck", "cursor", {"api_key": "k"}, "api_key")
+    await with_admin_key(db, store, clock, c)
+    provider.routes = {SPEND: (200, spend(*members, pages=pages))}
+    result = await prober(db, store, tmp_path, provider, clock).refresh(c)
+    assert (result.status, result.code) == ("updated", None)
+    window = result.quota[0]
+    assert (window.window, window.source, window.observed_at) == (
+        "team_spend",
+        "polled",
+        clock.now,
+    )
+    assert window.used_percent == (25.0 if len(members) == 1 else 50.0)
+    status = (await account_of(db, clock, c)).quota_status
+    assert (status.state, status.collector) == ("known", "cursor_admin_api")
+    req = provider.requests[0]
+    assert req.url.host == "api.cursor.com" and req.method == "POST"
+    assert base64.b64decode(req.headers["authorization"].split()[1]) == (
+        f"{ADMIN_KEY}:".encode()
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        [],
+        spend(),
+        spend({"spendCents": 100}),  # no stated limit
+        spend({"spendCents": 100, "monthlyLimitDollars": 0}),
+        spend({"spendCents": "x", "monthlyLimitDollars": 100}),
+        spend({"spendCents": 100, "monthlyLimitDollars": 10}, pages=2),  # partial
+        SPEND_OK,
+    ],
+)
+async def test_cursor_admin_unknown_shape_has_no_windows_never_zero(
+    db, store, tmp_path, provider, clock, body
+) -> None:
+    c = await add(db, store, "ck", "cursor", {"api_key": "k"}, "api_key")
+    await with_admin_key(db, store, clock, c)
+    provider.routes = {SPEND: (200, body)}
+    result = await prober(db, store, tmp_path, provider, clock).refresh(c)
+    assert (result.status, result.code) == ("skipped", "no_usage_windows")
+    assert result.quota == [] and result.credit is None
+    assert (await account_of(db, clock, c)).quota_status.state == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "code"),
+    [
+        (401, None, "admin_key_rejected"),
+        (403, None, "admin_key_rejected"),
+        (500, None, "admin_unavailable"),
+        (429, None, "admin_unavailable"),
+        (200, httpx.ConnectError("down"), "admin_unavailable"),
+        (200, httpx.ReadTimeout("slow"), "admin_unavailable"),
+    ],
+)
+async def test_cursor_admin_failures_keep_figures_and_the_login_untouched(
+    db, store, tmp_path, provider, clock, status, error, code
+) -> None:
+    c = await add(db, store, "ck", "cursor", {"api_key": "k"}, "api_key")
+    await with_admin_key(db, store, clock, c)
+    p = prober(db, store, tmp_path, provider, clock)
+    provider.routes = {
+        SPEND: (200, spend({"spendCents": 500, "monthlyLimitDollars": 10}))
+    }
+    assert (await p.refresh(c)).status == "updated"
+    p._last.clear()
+    provider.routes = {SPEND: (status, {})}
+    provider.error = error
+    result = await p.refresh(c)
+    assert (result.status, result.code) == ("failed", code)
+    assert result.quota[0].used_percent == 50.0  # the last good figure stays
+    after = await account_of(db, clock, c)
+    assert after.lease_block is None and after.state == "available"
+    assert store.get("ck") == {"api_key": "k"}  # the execution secret
+    assert store.get(accounts.admin_secret_name(c)) == {"api_key": ADMIN_KEY}
+    assert ADMIN_KEY not in json.dumps(after.model_dump(mode="json"))
+
+
+async def test_cursor_without_an_admin_key_is_named_and_makes_no_request(
+    db, store, tmp_path, provider, clock
+) -> None:
+    c = await add(db, store, "ck", "cursor", {"api_key": "k"}, "api_key")
+    got = await prober(db, store, tmp_path, provider, clock).probe(c)
+    assert (got.status, got.code) == ("skipped", "no_admin_key")
+    assert provider.requests == []
+    assert (await account_of(db, clock, c)).admin_key == "missing"
+
+
+def test_the_admin_key_is_write_only_and_never_an_execution_credential(
+    client: TestClient, provider: Provider
+) -> None:
+    made = create(client, "ck", "cursor", {"api_key": "exec-key"})
+    assert made["admin_key"] == "missing"
+    url = f"/api/accounts/{made['id']}/admin-key"
+    assert client.put(url, json={"api_key": ADMIN_KEY}).status_code == 401
+    assert (
+        client.put(url, json={"api_key": ADMIN_KEY}, headers=ADMIN).status_code == 204
+    )
+    secrets = app.state.secrets
+    assert secrets.get(f"cursor-admin-{made['id']}")["kind"] == "cursor_admin_key"
+    got = client.get(f"/api/accounts/{made['id']}", headers=ADMIN)
+    assert got.json()["admin_key"] == "present"
+    assert ADMIN_KEY not in got.text and ADMIN_KEY not in str(got.json())
+    provider.routes = {SPEND: (403, {})}
+    body = client.post(
+        f"/api/accounts/{made['id']}/quota/refresh", headers=ADMIN
+    ).json()
+    assert (body["status"], body["code"]) == ("failed", "admin_key_rejected")
+    # The lease hands out the execution secret only.
+    boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    worker = {"Authorization": f"Bearer {reg.json()['token']}"}
+    client.post("/api/tasks", json={"project": "demo", "title": "t"}, headers=ADMIN)
+    task = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    leased = client.post(
+        "/api/accounts/lease",
+        json={
+            "runtime_providers": ["cursor"],
+            "role": "executor",
+            "task_id": task["id"],
+            "attempt": task["attempt"],
+        },
+        headers=worker,
+    )
+    assert leased.status_code == 200, leased.text
+    assert leased.json()["account_id"] == made["id"]
+    assert leased.json()["credential"] == {"api_key": "exec-key"}
+    assert ADMIN_KEY not in leased.text
+    # Rotation touches only the execution secret.
+    renew = client.put(
+        f"/api/accounts/{made['id']}/credential",
+        json={"credential": {"api_key": "exec-key-2"}},
+        headers=ADMIN,
+    )
+    assert renew.status_code == 204
+    assert secrets.get(f"account-{made['id']}") == {"api_key": "exec-key-2"}
+    assert secrets.get(f"cursor-admin-{made['id']}")["api_key"] == ADMIN_KEY
+    # The way back.
+    assert client.delete(url, headers=ADMIN).status_code == 204
+    assert secrets.get(f"cursor-admin-{made['id']}") is None
+    assert (
+        client.get(f"/api/accounts/{made['id']}", headers=ADMIN).json()["admin_key"]
+        == "missing"
+    )
+
+
+def test_an_admin_key_is_refused_for_a_non_cursor_key_account(
+    client: TestClient,
+) -> None:
+    made = create(client, "or", "custom", {"api_key": OR_KEY}, config=OR_CONFIG)
+    res = client.put(
+        f"/api/accounts/{made['id']}/admin-key", json={"api_key": "x"}, headers=ADMIN
+    )
+    assert res.status_code == 422 or res.status_code == 400
+    assert made["admin_key"] is None
 
 
 # -- lease admission (a dead credential is not a spent quota) -------------------------

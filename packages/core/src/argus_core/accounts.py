@@ -471,6 +471,7 @@ QuotaCollector = Literal[
     "codex_rate_limits",
     "claude_oauth_usage",
     "cursor_dashboard",
+    "cursor_admin_api",
     "openrouter_key",
     "worker_report",
 ]
@@ -492,7 +493,11 @@ QuotaStatusReason = Literal[
     "credential_expired",  # Argus never refreshes a login to read quota
     "credential_rejected",  # the provider answered 401
     "oauth_scope_missing",  # the token serves models but cannot read usage
-    "admin_key_required",  # an API key reads usage only through the team Admin API
+    "admin_key_required",  # legacy: stored probes only; new code says no_admin_key
+    "no_admin_key",  # a Cursor API-key account has no admin key to read usage with
+    "admin_key_rejected",  # the Admin API answered 401/403; the login is untouched
+    "admin_unavailable",  # the Admin API was unreachable, slow, 429 or 5xx
+    "no_usage_windows",  # the Admin API answered, with no numeric usage
     "no_provider_source",  # no read-only quota source exists for this account
     "local_no_quota",  # the node's own model has no provider quota
     "provider_rate_limited",  # the provider answered 429
@@ -592,6 +597,9 @@ class Account(BaseModel):
     credential: CredentialState | None = None
     # `custom` accounts: where and how to call. Never contains the key.
     config: CustomConfig | None = None
+    # Cursor API-key accounts: whether a team Admin API key is stored (never the
+    # key). It only reads usage and is never leased. Null for other accounts.
+    admin_key: Literal["present", "missing"] | None = None
     # `local` accounts: endpoints per runtime, health and last test; set on read.
     local: LocalAccountView | None = None
     created_at: datetime
@@ -832,6 +840,12 @@ class QuotaRefresh(BaseModel):
     quota: list[QuotaWindow]
     credit: AccountCredit | None = None
     quota_status: QuotaStatus | None = None  # what the account now reads as
+
+
+class AdminKeyUpdate(BaseModel):
+    """A Cursor team Admin API key, write-only (account usage 3.3)."""
+
+    api_key: str = Field(min_length=1, max_length=8192, pattern=r"^\S+$")
 
 
 class CredentialUpdate(BaseModel):

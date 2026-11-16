@@ -571,15 +571,21 @@ _PROBE_REASONS: dict[str, QuotaStatusReason] = {
     "rate_limited": "probe_rate_limited",
 }
 _LOGIN_PROVIDERS = frozenset({codex_auth.PROVIDER, claude_auth.PROVIDER})
-Source = Literal["codex", "claude", "cursor", "openrouter"]
+Source = Literal["codex", "claude", "cursor", "cursor_admin", "openrouter"]
 
 
-def collector(provider: str, source: str) -> QuotaCollector | None:
+def collector(provider: str, source: str, kind: str = "") -> QuotaCollector | None:
     """Who produced a snapshot: a worker's report, or the provider's own readout."""
-    return "worker_report" if source == "reported" else _POLLED_BY.get(provider)
+    if source == "reported":
+        return "worker_report"
+    if provider == cursor_auth.PROVIDER and kind == "api_key":
+        return "cursor_admin_api"  # an API-key account is read only by its admin key
+    return _POLLED_BY.get(provider)
 
 
-def quota_source(provider: str, kind: str, config: dict | None = None) -> Source | None:
+def quota_source(
+    provider: str, kind: str, config: dict | None = None, admin_key: bool = False
+) -> Source | None:
     """The read-only source Argus can poll for this account, or None when there is
     none (an admin-only API, a local model). Whether an API key can be read is
     the credential's to say (`api_key_account` when it holds no login)."""
@@ -588,7 +594,9 @@ def quota_source(provider: str, kind: str, config: dict | None = None) -> Source
     if provider == claude_auth.PROVIDER:
         return "claude"
     if provider == cursor_auth.PROVIDER and kind == "subscription":
-        return "cursor"  # an imported login; an API key is the Admin API's business
+        return "cursor"  # an imported login
+    if provider == cursor_auth.PROVIDER and admin_key:
+        return "cursor_admin"  # an API key reads usage only through its admin key
     if provider == CUSTOM_PROVIDER and (config or {}).get("label") == OPENROUTER:
         return "openrouter"
     return None
@@ -597,7 +605,7 @@ def quota_source(provider: str, kind: str, config: dict | None = None) -> Source
 def no_source_reason(provider: str, kind: str) -> QuotaStatusReason:
     """Why an account with no pollable source has no provider figure."""
     if provider == "cursor":
-        return "admin_key_required"
+        return "no_admin_key"
     if provider == "local":
         return "local_no_quota"
     if kind == "api_key" and provider in _LOGIN_PROVIDERS:
@@ -757,7 +765,7 @@ async def quota_status(
             reason=reason,
             windows=windows or [],
             observed_at=max(seen) if seen else None,
-            collector=collector(account["provider"], newest.source)
+            collector=collector(account["provider"], newest.source, account["kind"])
             if newest
             else credit.collector
             if credit
@@ -807,7 +815,8 @@ async def quota_status(
     config = json.loads(account["config"]) if account.get("config") else None
     if account["kind"] == "api_key" and account["provider"] in _LOGIN_PROVIDERS:
         return status("unknown", "api_key_account")
-    if quota_source(account["provider"], account["kind"], config) is None:
+    has_admin = bool(account.get("admin_secret_ref"))
+    if quota_source(account["provider"], account["kind"], config, has_admin) is None:
         return status("unknown", no_source_reason(account["provider"], account["kind"]))
     if probe is not None and probe.status in _PROBE_REASONS:
         return status("unknown", probe.code or _PROBE_REASONS[probe.status])

@@ -385,3 +385,73 @@ async def read_cursor(
     if not all(isinstance(b, dict) for b in (balance, status, plan)):
         raise ReadError("bad_response", "response is not a JSON object")
     return cursor_reading(balance, status, plan)
+
+
+# -- Cursor team Admin API ------------------------------------------------------------
+
+CURSOR_ADMIN_URL = "https://api.cursor.com/teams/spend"
+
+
+@dataclass
+class AdminReading:
+    windows: list[QuotaReport] = field(default_factory=list)
+
+
+def cursor_admin_windows(payload: Any) -> list[QuotaReport]:
+    """`POST /teams/spend`: `teamMemberSpend[]` with `spendCents` and
+    `monthlyLimitDollars`. One `team_spend` pool: the share of the members' stated
+    monthly limits already spent. It is read only when the page is complete
+    (`totalPages` is at most 1) and every member states a spend and a positive
+    limit; any other shape has no window, never a guess or a 0."""
+    if not isinstance(payload, dict):
+        return []
+    members = payload.get("teamMemberSpend")
+    pages = _number(payload.get("totalPages"))
+    if not isinstance(members, list) or not members or (pages or 1) > 1:
+        return []
+    spent, limit = 0.0, 0.0
+    for m in members:
+        if not isinstance(m, dict):
+            return []
+        cents, dollars = (
+            _amount(m.get("spendCents")),
+            _amount(m.get("monthlyLimitDollars")),
+        )
+        if cents is None or dollars is None or dollars <= 0:
+            return []
+        spent += cents / 100
+        limit += dollars
+    return [
+        QuotaReport(pool="team_spend", used_percent=min(spent / limit * 100, 100.0))
+    ]
+
+
+def _admin_failure(status: int) -> ReadError:
+    if status in (401, 403):
+        return ReadError("admin_key_rejected", "the Admin API rejected the admin key")
+    return ReadError("admin_unavailable", f"the Admin API answered HTTP {status}")
+
+
+async def read_cursor_admin(
+    admin_key: str, transport: httpx.AsyncBaseTransport | None = None
+) -> AdminReading:
+    """The team Admin API (Enterprise only): one POST of `{}`, the key as the Basic
+    auth username, 15 s, no redirects."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=TIMEOUT_S, transport=transport, follow_redirects=False
+        ) as client:
+            res = await client.post(
+                CURSOR_ADMIN_URL,
+                auth=(admin_key, ""),
+                json={},
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        log.warning("cursor admin read failed: %s", type(exc).__name__)
+        raise ReadError(
+            "admin_unavailable", f"unreachable ({type(exc).__name__})"
+        ) from None
+    if res.status_code != 200:
+        raise _admin_failure(res.status_code)
+    return AdminReading(windows=cursor_admin_windows(_json(res)))

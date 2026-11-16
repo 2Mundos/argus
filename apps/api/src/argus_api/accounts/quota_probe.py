@@ -201,7 +201,7 @@ class QuotaProber:
         async with (
             self._db.read() as conn,
             conn.execute(
-                "SELECT a.id, a.provider, a.kind, a.config,"
+                "SELECT a.id, a.provider, a.kind, a.config, a.admin_secret_ref,"
                 " (SELECT max(t) FROM (SELECT max(observed_at) AS t FROM account_quota q"
                 "  WHERE q.account_id = a.id UNION ALL SELECT observed_at FROM"
                 "  account_credit c WHERE c.account_id = a.id)) AS seen,"
@@ -320,10 +320,14 @@ class QuotaProber:
         if row is None:
             raise Skip("no_provider_source", "account not found")
         config = json.loads(row["config"]) if row["config"] else None
-        source = usage.quota_source(row["provider"], row["kind"], config)
+        source = usage.quota_source(
+            row["provider"], row["kind"], config, bool(row["admin_secret_ref"])
+        )
         if source is None:
             code = usage.no_source_reason(row["provider"], row["kind"])
             raise Skip(code, _NO_SOURCE[code])
+        if source == "cursor_admin":  # its own secret; the execution one is not read
+            return await self._read_cursor_admin(row["admin_secret_ref"])
         name = ref_name(row["secret_ref"])
         doc = self._secrets.get(name) if name else None
         if not isinstance(doc, dict):
@@ -363,6 +367,23 @@ class QuotaProber:
         )
         return Reading(windows=usage_.windows, note=note)
 
+    async def _read_cursor_admin(self, ref: str) -> Reading:
+        """The team Admin API with the account's admin key. A rejected key says so and
+        nothing else: the login, its lease and the figures already stored stay."""
+        name = ref_name(ref)
+        doc = self._secrets.get(name) if name else None
+        key = doc.get("api_key") if isinstance(doc, dict) else None
+        if not isinstance(key, str) or not key:
+            raise Skip("no_admin_key", _NO_SOURCE["no_admin_key"])
+        read = await quota_readers.read_cursor_admin(key, self._transport)
+        if not read.windows:
+            raise Skip(
+                "no_usage_windows",
+                "the Admin API answered with no numeric usage (it needs an "
+                "Enterprise plan)",
+            )
+        return Reading(windows=read.windows)
+
     async def _read_cursor(self, doc: dict[str, Any]) -> Reading:
         """Cursor's dashboard calls with an imported login's access token. Never
         refreshes the login; a JWT past its `exp` is reported."""
@@ -373,7 +394,7 @@ class QuotaProber:
                 "credential_invalid", "credential is not a Cursor login"
             ) from exc
         if summary.mode != "oauth":
-            raise Skip("admin_key_required", _NO_SOURCE["admin_key_required"])
+            raise Skip("no_admin_key", _NO_SOURCE["no_admin_key"])
         expires = summary.access_expires_at
         if expires is not None and expires <= utcnow():
             raise Skip(
@@ -516,9 +537,9 @@ class QuotaProber:
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)  # validate() without its expiry check
 _NO_SOURCE: dict[QuotaStatusReason, str] = {
     "api_key_account": "an API key has no usage window to read; only a login does",
-    "admin_key_required": (
-        "a Cursor API key reads usage only through the team Admin API (an admin "
-        "key); import a Cursor login to read it from the account itself"
+    "no_admin_key": (
+        "a Cursor API key reads usage only through the team Admin API (an Enterprise "
+        "admin key); add one to this account, or import a Cursor login"
     ),
     "local_no_quota": "the node's own model has no provider quota",
     "no_provider_source": "no read-only quota source exists for this account",
@@ -535,9 +556,10 @@ async def _account(conn, account_id: str) -> dict | None:
 
 def _pollable(row) -> bool:
     config = json.loads(row["config"]) if row["config"] else None
+    admin = bool(row["admin_secret_ref"])
     if row["kind"] != "subscription" and row["provider"] != CUSTOM_PROVIDER:
-        return False  # an API key holds no login to read
-    return usage.quota_source(row["provider"], row["kind"], config) is not None
+        return admin and row["provider"] == "cursor"  # else an API key has no login
+    return usage.quota_source(row["provider"], row["kind"], config, admin) is not None
 
 
 def _stage(doc: dict[str, Any]) -> Path:
