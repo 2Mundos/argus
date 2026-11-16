@@ -95,7 +95,9 @@ def test_commit_argv_with_message_flag() -> None:
 
 
 def test_bash_git_commit_blocked_by_command_guard() -> None:
-    assert guard.check('git commit -m "x\n\nCo-Authored-By: a"') == "commit_attribution"
+    assert guard.check('git commit -m "x\n\nCo-Authored-By: a"') == (
+        "commit_coauthor_trailer"
+    )
 
 
 def test_git_c_global_options(tmp_path: Path) -> None:
@@ -389,7 +391,7 @@ def test_tag_push_fails_when_commit_already_on_remote_main(tmp_path: Path) -> No
     )
     net_push = _run_git(repo, env, "push", "upstream", "vbad")
     assert net_push.returncode != 0
-    assert attribution.PUSH_NON_BRANCH_MESSAGE in net_push.stderr
+    assert "push_non_branch_refspec" in net_push.stderr
     tag_push = _run_git(repo, env, "push", "origin", "vbad")
     assert tag_push.returncode == 0, tag_push.stderr
 
@@ -455,7 +457,7 @@ def test_tag_push_to_network_destination_fails_closed(
     repo, _ = _tagged_repo(tmp_path, *tag_args)
     push = _run_git(repo, _env(), "push", remote, "v1")
     assert push.returncode != 0
-    assert attribution.PUSH_NON_BRANCH_MESSAGE in push.stderr
+    assert "push_non_branch_refspec" in push.stderr
 
 
 def test_push_follow_tags_fails_closed(tmp_path: Path) -> None:

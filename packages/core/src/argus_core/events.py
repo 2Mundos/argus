@@ -10,7 +10,28 @@ TASK_COMMAND_BLOCKED = "task.command_blocked"
 # prints; `integrations/nanoclaw/tests/test_command_guard.py` keeps this equal to
 # `command_guard.REASONS`, and the channel's TypeScript table is checked the same way.
 COMMAND_GUARD_REASONS = {
-    "commit_attribution": (
+    "commit_identity_env": (
+        "do not set the git author or committer identity through GIT_AUTHOR_* or "
+        "GIT_COMMITTER_* variables; worker commits use the configured project identity"
+    ),
+    "commit_identity_config": (
+        "do not override the git author or committer identity with an identity "
+        "config key (-c, --config-env or git config); worker commits use the "
+        "configured project identity"
+    ),
+    "commit_author_flag": (
+        "do not pass --author to git commit; worker commits use the configured "
+        "project identity"
+    ),
+    "hooks_path_override": (
+        "do not override core.hooksPath on the command line; worker commits use "
+        "the workspace hook directory"
+    ),
+    "commit_no_verify": (
+        "do not skip the commit-msg hook with --no-verify or -n; the attribution "
+        "rules must apply"
+    ),
+    "commit_coauthor_trailer": (
         "a commit message must not contain a Co-Authored-By or other co-author "
         "attribution trailer (remove the trailer; git author and committer is enough)"
     ),

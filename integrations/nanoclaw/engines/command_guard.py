@@ -17,6 +17,7 @@ import re
 import shlex
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 _ATTRIBUTION = Path(__file__).with_name("commit_attribution.py")
 _spec = importlib.util.spec_from_file_location("commit_attribution", _ATTRIBUTION)
@@ -39,7 +40,28 @@ BLOCK_DEVICE = r"/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-)"
 
 # id -> reason. The first matching rule wins.
 REASONS = {
-    "commit_attribution": (
+    "commit_identity_env": (
+        "do not set the git author or committer identity through GIT_AUTHOR_* or "
+        "GIT_COMMITTER_* variables; worker commits use the configured project identity"
+    ),
+    "commit_identity_config": (
+        "do not override the git author or committer identity with an identity "
+        "config key (-c, --config-env or git config); worker commits use the "
+        "configured project identity"
+    ),
+    "commit_author_flag": (
+        "do not pass --author to git commit; worker commits use the configured "
+        "project identity"
+    ),
+    "hooks_path_override": (
+        "do not override core.hooksPath on the command line; worker commits use "
+        "the workspace hook directory"
+    ),
+    "commit_no_verify": (
+        "do not skip the commit-msg hook with --no-verify or -n; the attribution "
+        "rules must apply"
+    ),
+    "commit_coauthor_trailer": (
         "a commit message must not contain a Co-Authored-By or other co-author "
         "attribution trailer (remove the trailer; git author and committer is enough)"
     ),
@@ -61,6 +83,15 @@ _MKFS = re.compile(r"^(?:mkfs(?:\.\w+)?|mke2fs)$")
 # The attempt's kubeconfig lives under this directory (integrations spec 3.6).
 TASK_INTEGRATIONS = "task-integrations"
 KUBECTL_RAW = {"--raw", "--raw=true", "--flatten", "--flatten=true"}
+
+
+class Block(NamedTuple):
+    """A blocked command: the rule id, and for the commit families the offending
+    element and the other families that were also present."""
+
+    rule: str
+    element: str = ""
+    also: tuple[str, ...] = ()
 
 
 def _segments(command: str) -> list[list[str]]:
@@ -100,7 +131,7 @@ def _dangerous_target(target: str) -> bool:
     return target in DANGEROUS_DIRS or re.fullmatch(r"/home/[^/]+", target) is not None
 
 
-def _check_segment(tokens: list[str], depth: int) -> str | None:
+def _check_segment(tokens: list[str], depth: int) -> Block | None:
     tokens = _unwrap(tokens)
     if not tokens:
         return None
@@ -108,10 +139,10 @@ def _check_segment(tokens: list[str], depth: int) -> str | None:
     if name == "kubectl":
         view = any(args[i : i + 2] == ["config", "view"] for i in range(len(args)))
         if view and KUBECTL_RAW & set(args):
-            return "kubeconfig_secret"
+            return Block("kubeconfig_secret")
         return None
     if name != "export" and any(TASK_INTEGRATIONS in t for t in tokens):
-        return "kubeconfig_secret"
+        return Block("kubeconfig_secret")
     if name == "eval":
         return _check(" ".join(args), depth + 1)
     if name in SHELLS:
@@ -121,7 +152,7 @@ def _check_segment(tokens: list[str], depth: int) -> str | None:
         return None
     if name == "rm":
         if "--no-preserve-root" in args:
-            return "no_preserve_root"
+            return Block("no_preserve_root")
         recursive = any(
             a in ("--recursive",)
             or (re.fullmatch(r"-[A-Za-z]+", a) and set(a) & {"r", "R"})
@@ -129,23 +160,27 @@ def _check_segment(tokens: list[str], depth: int) -> str | None:
         )
         targets = [a for a in args if not a.startswith("-")]
         if recursive and any(_dangerous_target(t) for t in targets):
-            return "rm_root"
+            return Block("rm_root")
     elif _MKFS.match(name):
-        return "mkfs"
+        return Block("mkfs")
     elif name == "dd" and any(_DD_OF.match(a) for a in args):
-        return "dd_device"
+        return Block("dd_device")
     return None
 
 
-def _check(command: str, depth: int = 0) -> str | None:
+def _check(command: str, depth: int = 0) -> Block | None:
     if depth > MAX_DEPTH:
         return None
-    if _attribution and _attribution.check_bash_command(command):
-        return "commit_attribution"
+    triggers = _attribution.bash_triggers(command) if _attribution else []
+    if triggers:
+        first = triggers[0]
+        return Block(
+            first.family, first.element, tuple(_attribution.also_present(triggers))
+        )
     if _FORK_BOMB.search(command):
-        return "fork_bomb"
+        return Block("fork_bomb")
     if _DEVICE_REDIRECT.search(command):
-        return "device_redirect"
+        return Block("device_redirect")
     for tokens in _segments(command):
         rule = _check_segment(tokens, depth)
         if rule:
@@ -153,8 +188,8 @@ def _check(command: str, depth: int = 0) -> str | None:
     return None
 
 
-def check(command: str) -> str | None:
-    """Return the id of the rule that blocks `command`, or None to allow it.
+def inspect(command: str) -> Block | None:
+    """Return the block for `command`, or None to allow it.
 
     A parse error allows the command (fail open).
     """
@@ -164,9 +199,20 @@ def check(command: str) -> str | None:
         return None
 
 
-def message(rule: str) -> str:
+def check(command: str) -> str | None:
+    """Return the id of the rule that blocks `command`, or None to allow it."""
+    block = inspect(command)
+    return block.rule if block else None
+
+
+def message(rule: str, element: str = "", also: tuple[str, ...] = ()) -> str:
+    reason = REASONS[rule]
+    if element:
+        reason += f" ({element})"
+    if also:
+        reason += f"; also present: {', '.join(also)}"
     return (
-        f"Blocked by Argus command guard: {REASONS[rule]}. "
+        f"Blocked by Argus command guard: {reason}. "
         "Do not retry or work around this block."
     )
 
@@ -178,13 +224,13 @@ def main() -> int:
         event = json.load(sys.stdin)
         if event.get("tool_name") != "Bash":
             return 0
-        rule = check(str(event["tool_input"]["command"]))
-        if rule:
+        block = inspect(str(event["tool_input"]["command"]))
+        if block:
             decision = {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": message(rule),
+                    "permissionDecisionReason": message(*block),
                 }
             }
             sys.stdout.write(json.dumps(decision))

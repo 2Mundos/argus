@@ -20,7 +20,17 @@ import { type TranscriptHit, transcripts } from "./argus-quota-resume.js";
  * `engines/command_guard.py` (a test compares them).
  */
 export const COMMAND_GUARD_REASONS: Readonly<Record<string, string>> = {
-  commit_attribution:
+  commit_identity_env:
+    "do not set the git author or committer identity through GIT_AUTHOR_* or GIT_COMMITTER_* variables; worker commits use the configured project identity",
+  commit_identity_config:
+    "do not override the git author or committer identity with an identity config key (-c, --config-env or git config); worker commits use the configured project identity",
+  commit_author_flag:
+    "do not pass --author to git commit; worker commits use the configured project identity",
+  hooks_path_override:
+    "do not override core.hooksPath on the command line; worker commits use the workspace hook directory",
+  commit_no_verify:
+    "do not skip the commit-msg hook with --no-verify or -n; the attribution rules must apply",
+  commit_coauthor_trailer:
     "a commit message must not contain a Co-Authored-By or other co-author attribution trailer (remove the trailer; git author and committer is enough)",
   rm_root: "recursive deletion of /, ~, $HOME, /home/* or /root",
   no_preserve_root: "--no-preserve-root disables the safety check of rm",
@@ -59,9 +69,14 @@ export function ruleOfBlockText(text: string): string | null {
   const rest = text.slice(PREFIX.length);
   const end = rest.indexOf(SUFFIX);
   if (end < 0) return null;
-  const reason = rest.slice(0, end);
+  // The reason ends the text, or is followed by " (<element>)" and an optional
+  // "also present" clause; the rule is only ever the table entry the text starts with.
+  const tail = rest.slice(0, end);
   return (
-    Object.keys(COMMAND_GUARD_REASONS).find((k) => COMMAND_GUARD_REASONS[k] === reason) ?? null
+    Object.keys(COMMAND_GUARD_REASONS).find((k) => {
+      const reason = COMMAND_GUARD_REASONS[k] as string;
+      return tail === reason || tail.startsWith(`${reason} (`);
+    }) ?? null
   );
 }
 
