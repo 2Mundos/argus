@@ -100,7 +100,15 @@ describe("merge authorization reaches the session env", () => {
     assert.deepEqual(await cliMerge(codex), { code: 0, puts: 1 });
   });
 
-  it("forwards none for pr_green, read-only and unauthorized tasks", () => {
+  it("forwards it for a pr_green attempt an orchestrator allowed to merge", async () => {
+    const host = {};
+    scope(host, task({ deliverable: "pr_green", input: { delivery: { allow_merge: true } } }));
+    const session = codexForwardedBy(forwardedBy(host));
+    assert.deepEqual(Object.keys(session).sort(), [...NAMES].sort());
+    assert.deepEqual(await cliMerge(session), { code: 0, puts: 1 });
+  });
+
+  it("forwards none for pr_green without allow_merge, read-only and unauthorized tasks", () => {
     for (const t of [
       task({ auto_merge: true, deliverable: "pr_green" }),
       task({ auto_merge: true, required_capabilities: ["repository:read"] }),
