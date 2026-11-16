@@ -145,7 +145,9 @@ environment is built from the `contributedEnv` allowlist of `container-runner.ts
 names existed). The Codex provider filters the session environment again through
 `CODEX_ENV_ALLOWLIST` in `codex-app-server.ts` (`buildCodexProcessEnv`), so `install.sh` adds the
 same four names to that list. Both allowlists must carry all four names; a name unset on the host
-is not forwarded, so unauthorized and `pr_green` attempts carry none. The command recomputes the
+is not forwarded. A `pr_green` attempt does not qualify through `auto_merge` alone, but
+trusted `input.delivery.allow_merge === true` can authorize it with `repository:write`.
+The command recomputes the
 token and compares it in constant time. Without
 `ARGUS_MERGE_AUTHORIZED` it fails `policy_denied` with "merge is not authorized for this
 task"; with it but without the key, task or attempt, with "merge authorization was not issued
