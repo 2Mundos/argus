@@ -13,7 +13,8 @@ drop) and `claude/failure-oom` (container memory-cap kill at startup: no events,
 no `events.jsonl`, only `stderr.txt`; not an in-session OOM of a long run).
 `transcripts.test.ts` replays these. A case without `events.jsonl` derives from zero
 events and must have `stderr.txt`. Still to record: Claude session limit, Codex
-usage limit and success, Copilot, and the custom and local bridge errors (OpenRouter
+usage limit and success, Copilot success and auth-rejected (not recorded: no Copilot
+executor route exists), and the custom and local bridge errors (OpenRouter
 402/429, Strata unavailable): no raw evidence exists on the worker.
 
 ## Layout

@@ -7,8 +7,19 @@ import { DERIVE, deriveCopilot, readEvents } from "./transcripts-derive.js";
 
 const ROOT = join(import.meta.dir, "fixtures", "transcripts");
 
-// Copilot recordings are plain text, not events.jsonl; it has no success recording (see below).
+// Copilot recordings are plain text (stdout.txt), not events.jsonl; they are replayed below.
 const TEXT_ONLY = new Set(["copilot"]);
+
+// Copilot cases every recording set must carry, with the authRejected each derives.
+const COPILOT_REQUIRED: [string, boolean][] = [
+  ["success", false],
+  ["auth-rejected", true],
+];
+
+// The only way a required Copilot case may be absent. Remove a case from here when it is recorded.
+const COPILOT_NOT_RECORDED_REASON =
+  "no Copilot executor route in this deployment (argus-delegate copilot exits 78, auth_missing; no copilot account in the registry)";
+const COPILOT_NOT_RECORDED = new Set(["success", "auth-rejected"]);
 
 const cases = readdirSync(ROOT, { withFileTypes: true })
   .filter((d) => d.isDirectory() && d.name in DERIVE && !TEXT_ONLY.has(d.name))
@@ -46,6 +57,34 @@ describe("engine transcripts", () => {
     expect(text).not.toMatch(/\/(?:home|Users)\/(?!user(?:\/|\s|$))/);
     expect(text).not.toMatch(/@[\w-]+(?:\.[\w-]+)+/);
   });
+});
+
+describe("copilot transcripts", () => {
+  for (const [name, authRejected] of COPILOT_REQUIRED) {
+    const dir = join(ROOT, "copilot", name);
+    const listed = COPILOT_NOT_RECORDED.has(name);
+    const present = existsSync(dir);
+
+    if (listed) {
+      it(`copilot/${name} is not recorded: ${COPILOT_NOT_RECORDED_REASON}`, () => {
+        if (present)
+          throw new Error(`copilot/${name} exists: remove it from the not-recorded list`);
+        expect(present).toBe(false);
+      });
+    } else {
+      it(`copilot/${name} derives what expected.json says`, () => {
+        if (!present) throw new Error(`copilot/${name} is missing: the fixture was removed`);
+        const stderrFile = join(dir, "stderr.txt");
+        const stdout = readFileSync(join(dir, "stdout.txt"), "utf8");
+        const stderr = existsSync(stderrFile) ? readFileSync(stderrFile, "utf8") : "";
+        const expected = JSON.parse(readFileSync(join(dir, "expected.json"), "utf8"));
+        const derived = deriveCopilot({ stdout, stderr }) as Record<string, unknown>;
+        expect(derived.authRejected).toBe(authRejected);
+        for (const key of Object.keys(expected)) expect(derived[key]).toEqual(expected[key]);
+        expect(Object.keys(derived).sort()).toEqual(Object.keys(expected).sort());
+      });
+    }
+  }
 });
 
 const probe = JSON.parse(
