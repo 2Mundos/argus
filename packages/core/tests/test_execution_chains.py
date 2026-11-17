@@ -183,6 +183,32 @@ def test_same_native_provider_cannot_select_two_accounts_for_one_gateway_lane():
     assert policy("standard", [route]).difficulties["standard"][0].mode == "paired"
 
 
+def test_account_is_an_optional_pin_and_unpinned_roundtrips_without_it():
+    route = single()
+    del route["harness"]["account_id"]
+    value = {"version": 1, "difficulties": {"trivial": [route]}}
+    parsed = ExecutionChains.model_validate(value)
+    assert parsed.difficulties["trivial"][0].harness.account_id is None
+    assert parsed.model_dump(mode="json") == value
+    explicit_null = deepcopy(value)
+    explicit_null["difficulties"]["trivial"][0]["harness"]["account_id"] = None
+    assert ExecutionChains.model_validate(explicit_null) == parsed
+    pinned = policy("trivial", [single()])
+    assert (
+        resolve_chains(parsed)["trivial"].revision
+        != resolve_chains(pinned)["trivial"].revision
+    )
+
+
+def test_unpinned_native_pair_defers_the_same_account_rule_to_selection():
+    route = single(provider="anthropic", model={"source": "explicit", "id": "harness"})
+    route.update(mode="paired", executor={**route["harness"]})
+    del route["executor"]["account_id"]
+    assert policy("standard", [route]).difficulties["standard"][0].mode == "paired"
+    del route["harness"]["account_id"]
+    assert policy("standard", [route]).difficulties["standard"][0].mode == "paired"
+
+
 @pytest.mark.parametrize(
     "adapter,provider,source",
     [

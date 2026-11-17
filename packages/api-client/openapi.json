@@ -21125,10 +21125,17 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Account Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
           },
           "adapter": {
             "enum": [
@@ -21175,7 +21182,6 @@
         "required": [
           "adapter",
           "provider",
-          "account_id",
           "model"
         ],
         "title": "Selector",

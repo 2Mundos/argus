@@ -6,7 +6,7 @@ store and are only ever handed to the agent holding a lease.
 
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
@@ -1448,6 +1448,7 @@ async def _try_lease(
     reuse_held: bool = False,
     prefer_local: bool = False,
     only_account: str | None = None,
+    exclude: Collection[str] = (),
     kinds: Sequence[str] | None = None,
     runtime: str = "worker",
     local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
@@ -1464,7 +1465,8 @@ async def _try_lease(
     engine lease as is (no second row, no extra slot).
 
     With `only_account` (a task's harness account pin, task models spec 3.4) that
-    account is the only candidate: when it cannot serve, nothing is leased."""
+    account is the only candidate: when it cannot serve, nothing is leased. `exclude`
+    removes accounts a caller already rejected, so it can ask for the next best."""
     reuse = reuse_held and role == "executor"
     candidates = await _ranked(
         tx,
@@ -1475,7 +1477,7 @@ async def _try_lease(
         prefer_local=prefer_local,
         kinds=kinds,
     )
-    candidates = _only(candidates, only_account)
+    candidates = [r for r in _only(candidates, only_account) if r["id"] not in exclude]
     for row in candidates:
         name = ref_name(row["secret_ref"])
         credential = store.get(name) if name else None

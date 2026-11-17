@@ -163,7 +163,8 @@ for no delegated executor ([task difficulty](task-difficulty.spec.md)). Default
 `{}` means the built-in defaults for every level. Unnamed levels inherit those
 defaults. `ARGUS_DIFFICULTY_EXECUTORS` (same JSON shape, validated at startup)
 wins over the store when set, reported as `source: env` like `models`. The
-Settings tab edits the map; claim sends the effective chain for the task's
+Settings tab no longer edits the map (the API and MCP still do); it only shows the
+effective order beside **Execution chains**. Claim sends the effective chain for the task's
 difficulty as `difficulty_executors`.
 
 This is a legacy executor-only setting, not a list of complete execution routes.

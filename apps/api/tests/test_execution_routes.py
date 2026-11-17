@@ -545,3 +545,125 @@ async def test_reference_validation_and_role_change(db, fleet):
         row["attempt"] == 0
         and route.skips[0]["reason"] == "executor_account_unavailable"
     )
+
+
+async def add_account(db, store, id, provider, credential, config=None, **extra):
+    await store.put(id, credential)
+    async with db.write() as tx:
+        await accounts.create_account(
+            tx,
+            id,
+            AccountCreate(
+                name=id,
+                provider=provider,
+                secret_ref=f"sops:{id}" if provider != "local" else None,
+                credential=credential if provider == "local" else None,
+                config=config,
+                **extra,
+            ),
+            f"sops:{id}",
+            "admin:test",
+            store,
+        )
+
+
+def anyone(provider="local", adapter="claude", model=None):
+    value = selector(provider=provider, adapter=adapter, model=model)
+    del value["account_id"]
+    return value
+
+
+async def test_unpinned_pair_resolves_concrete_accounts_and_records_them(db, fleet):
+    # A custom account without an executor model cannot serve the role: skipped.
+    await add_account(
+        db,
+        fleet,
+        "custom-engine-only",
+        "custom",
+        {"api_key": "k"},
+        {
+            "base_url": "https://openrouter.ai/api/v1",
+            "label": "openrouter",
+            "engine": {"model": "vendor/harness"},
+        },
+        priority=100,
+    )
+    pair = paired()
+    pair["harness"] = anyone()
+    pair["executor"] = anyone(
+        "custom", "opencode", {"source": "explicit", "id": "vendor/code"}
+    )
+    await policy(db, [pair])
+    task = await make_task(db)
+    claimed, engine = await claim(db, fleet)
+    assert claimed.id == task.id and engine.account_id == "local"
+    _, route = await state(db, task.id)
+    assert route.selection.harness.account_id == "local"
+    assert route.selection.executor.account_id == "custom"
+    assert route.selection.harness.selector.account_id is None
+    async with db.read() as conn:
+        # Auditable on the attempt record and in the selection event.
+        recorded = await routes.current(conn, task.id, claimed.attempt)
+        assert recorded.executor.account_id == "custom"
+        async with conn.execute(
+            "SELECT data FROM events WHERE kind='task.execution_route_selected'"
+        ) as cur:
+            data = json.loads((await cur.fetchone())[0])
+        assert data["executor"]["account_id"] == "custom"
+
+
+async def test_unpinned_single_local_route_needs_no_account(db, fleet):
+    await policy(db, [direct(harness=anyone())], difficulty="trivial")
+    task = await make_task(db, difficulty="trivial")
+    claimed, engine = await claim(db, fleet)
+    assert claimed.id == task.id and engine.account_id == "local"
+
+
+async def test_unpinned_selector_skips_account_not_serving_a_model(db, fleet):
+    await add_account(
+        db,
+        fleet,
+        "local-b",
+        "local",
+        {"base_url": "http://host.docker.internal:8081", "auth_token": "x"},
+        priority=100,
+    )
+    await policy(db, [direct(harness=anyone())])
+    task = await make_task(db)
+    # local-b ranks first but names no model and serves two; local serves its own.
+    served = {"local-b": ("m1", "m2"), "local": ("served-model",)}
+    async with db.write() as tx:
+        claimed, engine = await accounts.claim(
+            tx, A, CAPS, PROVIDERS, fleet, local_served_models=served
+        )
+    assert claimed.id == task.id and engine.account_id == "local"
+    assert (await state(db, task.id))[1].selection.harness.model == "served-model"
+
+
+@pytest.mark.parametrize("pinned_side", ["harness", "executor"])
+async def test_unpinned_native_pair_adopts_the_pinned_side(db, fleet, pinned_side):
+    await add_account(db, fleet, "cloud-b", "anthropic", {"api_key": "k"}, priority=100)
+    pin = selector(
+        "cloud-b", "anthropic", "claude", {"source": "explicit", "id": "fixture/h"}
+    )
+    free = anyone("anthropic", "claude", {"source": "explicit", "id": "fixture/x"})
+    sides = {"harness": pin, "executor": free}
+    if pinned_side == "executor":
+        sides = {"harness": free, "executor": pin}
+    await policy(db, [{**direct("native"), "mode": "paired", **sides}])
+    task = await make_task(db)
+    claimed, engine = await claim(db, fleet)
+    assert claimed.id == task.id and engine.account_id == "cloud-b"
+    _, route = await state(db, task.id)
+    assert route.selection.executor.lease_id == engine.lease_id
+
+
+async def test_pinned_pair_keeps_working_and_unpinned_default_is_unchanged(db, fleet):
+    # No chain stored: legacy routing, exactly as before.
+    task = await make_task(db)
+    _, route = await state(db, task.id)
+    assert route is None
+    await policy(db, [paired()])
+    claimed, engine = await claim(db, fleet)
+    assert claimed.id == task.id and engine.account_id == "local"
+    assert (await state(db, task.id))[1].selection.executor.account_id == "custom"

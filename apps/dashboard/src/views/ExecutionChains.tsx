@@ -17,12 +17,40 @@ type Alternative =
   | components["schemas"]["PairedAlternative"];
 type Policy = { version: 1; difficulties: Partial<Record<DifficultyLevel, Alternative[]>> };
 const empty = (): Policy => ({ version: 1, difficulties: {} });
+/** No account: "any available account of this provider"; admission picks and records one. */
 const blank = (): Selector => ({
   adapter: "claude",
   provider: "local",
-  account_id: "",
   model: { source: "account" },
 });
+
+/** Why a capability cannot fill `role` here; undefined when it can. */
+function unavailableReason(
+  c: Capability,
+  role: "harness" | "executor",
+  harness?: Selector,
+): string | undefined {
+  if (
+    role === "executor" &&
+    harness &&
+    (c.excluded_harness_providers ?? []).includes(harness.provider)
+  )
+    return `a ${harness.provider} harness only pairs with agent or opencode executors`;
+  return undefined;
+}
+
+/** One line per adapter / provider: which roles it can fill and which modes follow. */
+function describeCapabilities(caps: Capability[]) {
+  const roles = new Map<string, Set<string>>();
+  for (const c of caps) {
+    const key = `${c.adapter} / ${c.provider}`;
+    roles.set(key, (roles.get(key) ?? new Set()).add(c.role));
+  }
+  return [...roles.entries()].map(([key, set]) => {
+    const harness = set.has("harness");
+    return `${key}: ${harness ? "harness or executor" : "executor only"}`;
+  });
+}
 
 function accountModel(account: Account | undefined, role: "harness" | "executor") {
   return (
@@ -52,6 +80,9 @@ function SelectorEditor({
     (c) => c.adapter === value.adapter && c.provider === value.provider,
   );
   const account = accounts.find((a) => a.id === value.account_id);
+  // A native provider has one gateway identity per session: once the other side
+  // is pinned, this side can only use that same account.
+  const sharedNative = !!harness && !!capability?.same_provider_same_account;
   return (
     <fieldset>
       <legend>{role === "harness" ? "Harness" : "Executor"}</legend>
@@ -66,7 +97,6 @@ function SelectorEditor({
             onChange({
               adapter: selected.adapter as Selector["adapter"],
               provider: selected.provider as Selector["provider"],
-              account_id: "",
               model: selected.model_sources.includes("account")
                 ? { source: "account" }
                 : { source: "explicit", id: "" },
@@ -76,39 +106,37 @@ function SelectorEditor({
           <option value="" disabled>
             Select a supported adapter
           </option>
-          {choices.map((c) => (
-            <option
-              key={c.id}
-              value={c.id}
-              disabled={
-                !!harness && (c.excluded_harness_providers ?? []).includes(harness.provider)
-              }
-            >
-              {c.adapter} / {c.provider}
-              {!!harness && (c.excluded_harness_providers ?? []).includes(harness.provider)
-                ? " — unsupported harness pairing"
-                : ""}
-            </option>
-          ))}
+          {choices.map((c) => {
+            const reason = unavailableReason(c, role, harness);
+            return (
+              <option key={c.id} value={c.id} disabled={!!reason}>
+                {c.adapter} / {c.provider}
+                {reason ? ` — ${reason}` : ""}
+              </option>
+            );
+          })}
         </select>
       </label>
       <label>
-        Exact account{" "}
+        Account{" "}
         <select
           aria-label={`${role} account`}
-          value={value.account_id}
-          onChange={(e) => onChange({ ...value, account_id: e.target.value })}
+          value={value.account_id ?? ""}
+          onChange={(e) => {
+            const { account_id: _unpinned, ...rest } = value;
+            onChange(e.target.value ? { ...rest, account_id: e.target.value } : rest);
+          }}
         >
-          <option value="">Choose an account explicitly</option>
+          <option value="">Any available account</option>
           {accounts
             .filter((a) => a.provider === value.provider)
             .map((a) => {
               const unsupported =
                 (a.provider === "custom" &&
                   !a.config?.[role === "harness" ? "engine" : "executor"]?.model) ||
-                (!!harness &&
-                  !!capability?.same_provider_same_account &&
+                (sharedNative &&
                   harness.provider === a.provider &&
+                  !!harness.account_id &&
                   harness.account_id !== a.id);
               return (
                 <option key={a.id} value={a.id} disabled={unsupported}>
@@ -118,6 +146,11 @@ function SelectorEditor({
             })}
         </select>
       </label>
+      <p className="small">
+        {value.account_id
+          ? "Pinned: only this account is used; the alternative is skipped when it cannot serve."
+          : "Unpinned: admission leases the best available account of this provider that can serve the role and records which one it chose."}
+      </p>
       <label>
         Model source{" "}
         <select
@@ -180,10 +213,16 @@ function SelectorEditor({
 export function ExecutionChains({
   project,
   setting,
+  legacyExecutors,
+  legacyNotice,
   onChanged,
 }: {
   project: string | null;
   setting?: SettingValue;
+  /** Executor order a difficulty uses where no chain exists (built-in default or stored). */
+  legacyExecutors: Record<DifficultyLevel, string[]>;
+  /** Environment lock on the legacy executor order, shown beside it. */
+  legacyNotice?: string;
   onChanged: () => void;
 }) {
   const { data: catalog, error: catalogError } = useLiveData(
@@ -211,7 +250,7 @@ export function ExecutionChains({
         (a) =>
           !/^[A-Za-z0-9_-]{1,64}$/.test(a.id) ||
           [a.harness, ...(a.mode === "paired" ? [a.executor] : [])].some(
-            (s) => !s.account_id || (s.model.source === "explicit" && !s.model.id),
+            (s) => s.model.source === "explicit" && !s.model.id,
           ),
       ),
   );
@@ -243,9 +282,21 @@ export function ExecutionChains({
         installed CLI, endpoint or model readiness.
       </p>
       <p>
-        Task model/account pins bypass the entire chain using legacy_task_pin. Legacy model maps and
-        executor lists apply only where no chain is configured.
+        Task model/account pins bypass the entire chain using legacy_task_pin. Where no chain is
+        configured a difficulty keeps its built-in executor order, shown on that level, and the
+        model preferences above. Leave the account on <em>Any available account</em> to let
+        admission pick one; pin it only to force that account.
       </p>
+      <ul className="small" aria-label="Adapter and provider capabilities">
+        {describeCapabilities(caps).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {legacyNotice && (
+        <p className="error" role="alert">
+          {legacyNotice}
+        </p>
+      )}
       {setting?.notice && (
         <p className="error" role="alert">
           {setting.notice}: explicit chains cannot be saved or admitted while legacy environment
@@ -276,8 +327,9 @@ export function ExecutionChains({
             </p>
             {!list && (
               <p>
-                Legacy routing — use the legacy controls below. An empty executor list does not
-                select a local harness.
+                No chain: built-in routing, harness chosen from the model preferences, executor
+                order {legacyExecutors[level].length ? legacyExecutors[level].join(" → ") : "none"}.
+                Add an alternative to replace it; a single layer is a harness with no executor.
               </p>
             )}
             {list?.map((alternative, index) => (
@@ -288,9 +340,10 @@ export function ExecutionChains({
                 </p>
                 {!own ? (
                   <p>
-                    {alternative.harness.provider} / {alternative.harness.account_id}
+                    {alternative.harness.provider} /{" "}
+                    {alternative.harness.account_id ?? "any account"}
                     {alternative.mode === "paired"
-                      ? ` → ${alternative.executor.provider} / ${alternative.executor.account_id}`
+                      ? ` → ${alternative.executor.provider} / ${alternative.executor.account_id ?? "any account"}`
                       : ""}
                   </p>
                 ) : (
@@ -370,9 +423,9 @@ export function ExecutionChains({
                           }
                         />
                         <p className="small">
-                          Local harnesses require agent or opencode. Same-provider native pairs must
-                          use the same account. Custom pairs require separate role capacity.
-                          Unsupported pairs are rejected on Save.
+                          Local harnesses require agent or opencode. Same-provider native pairs run
+                          on one account, chosen when the route is admitted. Custom pairs require
+                          separate role capacity. Unsupported pairs are rejected on Save.
                         </p>
                       </>
                     )}
