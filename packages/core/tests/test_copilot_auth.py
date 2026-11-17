@@ -1,6 +1,7 @@
 import pytest
 from argus_core import copilot_auth
-from argus_core.accounts import role_accepts
+from argus_core.accounts import ENGINE_PROVIDERS, EXECUTOR_ONLY, role_accepts
+from argus_core.tasks import EXECUTOR_PROVIDERS, HARNESS_PROVIDERS, ExecutorModel
 
 BODY = "FAKEBODY0123456789"
 
@@ -40,3 +41,11 @@ def test_copilot_is_executor_only() -> None:
     assert role_accepts("executor", "copilot", runtime)
     assert not role_accepts("engine", "copilot", runtime)
     assert not role_accepts("repository", "copilot", runtime)
+
+
+def test_copilot_is_an_executor_only_provider_with_its_own_executor() -> None:
+    assert EXECUTOR_PROVIDERS["copilot"] == "copilot"
+    assert "copilot" in EXECUTOR_ONLY
+    assert "copilot" not in ENGINE_PROVIDERS
+    assert "copilot" not in HARNESS_PROVIDERS.values()
+    assert ExecutorModel(executor="copilot", model="gpt-5").provider == "copilot"

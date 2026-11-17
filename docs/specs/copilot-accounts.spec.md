@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-11-17
 ---
 
 # Copilot accounts: import, executor lease, delegated CLI
@@ -70,7 +70,10 @@ on create and replace, and deliver it to the **delegated** GitHub Copilot CLI
   that its owner holds a seat; that surfaces as an auth failure at first use
   (below), not as a validation guess. Responses and events never echo the token.
 - **Executor-only provider**: `copilot` joins `cursor` in `EXECUTOR_ONLY`; the
-  `engine` lease role never returns it, the `executor` role may.
+  `engine` lease role never returns it, the `executor` role may. The `copilot`
+  executor runs on the `copilot` provider ([task models](task-models.spec.md)
+  3.1): an executor pin to it with no usable copilot account is refused with a
+  missing-provider reason, never leased from another provider.
 - **Delivery** (`integrations/nanoclaw/argus-accounts.ts`): generic OneCLI
   secrets per agent group (`argus-<group>-copilot-…`), one per host and path
   family, same token value. There is no broad host wildcard: every host and

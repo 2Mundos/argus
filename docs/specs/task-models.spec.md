@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-06
+updated: 2026-11-17
 ---
 
 # Task models
@@ -47,7 +47,9 @@ the harness model the NanoClaw channel configures at claim, and the model
 | Field | Shape | Provider it needs |
 | --- | --- | --- |
 | `harness_model` | `{engine: claude \| codex, model}` or `null` | `claude` → `anthropic`, `codex` → `openai` |
-| `executor_model` | `{executor: claude \| codex \| agent \| opencode, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local` |
+| `executor_model` | `{executor: claude \| codex \| agent \| opencode \| copilot, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local`, `copilot` → `copilot` |
+
+The `copilot` executor is executor-only: it runs on the `copilot` provider, never an engine.
 
 `model` is required and follows the policy's model-ID rule
 (`[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}`). `null` (the default) means "follow the

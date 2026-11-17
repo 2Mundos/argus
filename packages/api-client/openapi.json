@@ -9585,7 +9585,8 @@
               "claude",
               "codex",
               "agent",
-              "opencode"
+              "opencode",
+              "copilot"
             ],
             "title": "Executor",
             "type": "string"
