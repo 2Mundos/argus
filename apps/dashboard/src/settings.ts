@@ -14,6 +14,7 @@ export type SettingValue = {
   scoped_value?: unknown;
   difficulty_sources?: Record<string, string> | null;
   difficulty_revisions?: Record<string, string> | null;
+  warnings?: string[];
 };
 
 export type SettingsResponse = {

@@ -45,6 +45,9 @@ class SettingValue(BaseModel):
     scoped_value: Any = None
     difficulty_sources: dict[str, str] | None = None
     difficulty_revisions: dict[str, str] | None = None
+    # `execution.chains`: readiness warnings for referenced accounts whose state
+    # allows saving but not admission. Never availability or credential data.
+    warnings: list[str] = []
 
 
 class SettingsResponse(BaseModel):

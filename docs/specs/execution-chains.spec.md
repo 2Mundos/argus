@@ -411,7 +411,7 @@ Publication and live activation are separate from their local verification.
    Update affected living specs to implemented only after evidence. Keep live
    rollout/real inference a separately authorized operator task.
 
-## Local implementation and verification boundary
+## Verification boundary
 
 - Core contract, settings validation/inheritance, capability catalogue, route
   diagnostics and REST/MCP use the shared `tasks/execution_routes.py` service.

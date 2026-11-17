@@ -90,7 +90,47 @@ async def policy_setting(conn: aiosqlite.Connection, scope: str) -> SettingValue
         },
         difficulty_sources=sources,
         notice="legacy_env_lock" if locked() else None,
+        warnings=await readiness(conn, levels),
     )
+
+
+async def readiness(conn: aiosqlite.Connection, levels: Mapping[str, Any]) -> list[str]:
+    """Bounded, non-secret readiness notes for accounts a saved chain references.
+
+    A disabled or exhausted account may be saved; admission refuses it with the
+    same reason. Deletion or a role change is reported here, not repaired.
+    """
+    from argus_api.accounts import service as accounts
+
+    wanted: dict[str, set[str]] = {}
+    for alternatives in levels.values():
+        for alternative in alternatives:
+            selectors = [("engine", alternative["harness"])]
+            executor = alternative.get("executor")
+            if executor is not None:
+                selectors.append(("executor", executor))
+            for role, selector in selectors:
+                wanted.setdefault(selector["account_id"], set()).add(role)
+    warnings: list[str] = []
+    for account_id in sorted(wanted):
+        async with conn.execute(
+            "SELECT provider, state, exhausted_until, config FROM accounts WHERE id = ?",
+            (account_id,),
+        ) as cur:
+            account = await cur.fetchone()
+        if account is None:
+            warnings.append(f"account {account_id} is missing")
+            continue
+        if account["state"] == "disabled":
+            warnings.append(f"account {account_id} is disabled")
+        elif account["state"] == "exhausted":
+            warnings.append(f"account {account_id} is exhausted")
+        warnings.extend(
+            f"account {account_id} does not serve the {role} role"
+            for role in sorted(wanted[account_id])
+            if not accounts._serves(account, role)
+        )
+    return warnings
 
 
 async def validate_references(

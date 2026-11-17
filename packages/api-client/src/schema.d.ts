@@ -11208,6 +11208,11 @@ export interface components {
             updated_by?: string | null;
             /** Value */
             value: unknown;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
         };
         /** SettingWrite */
         SettingWrite: {

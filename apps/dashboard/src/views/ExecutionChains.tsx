@@ -252,6 +252,12 @@ export function ExecutionChains({
           locks are set.
         </p>
       )}
+      {setting?.warnings?.map((warning) => (
+        <p className="small" key={warning}>
+          {warning}. The alternative stays saved; admission skips it until the account serves it
+          again.
+        </p>
+      ))}
       {(error || catalogError || accountsError) && (
         <p className="error" role="alert">
           {error ?? catalogError?.message ?? accountsError?.message}
