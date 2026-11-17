@@ -134,7 +134,10 @@ test("channel records revision and fallback before injecting the actual task", a
   assert.equal(s.uploads[0].resolved_model, null);
   assert.equal(s.uploads[0].fallback_reason, "previous_task_failure");
   assert.match(s.uploads[0].policy_revision, /^[a-f0-9]{64}$/);
-  await s.adapter.deliver("local", s.inbound[0][1], { kind: "chat", content: { text: "COMPLETE: done" } });
+  await s.adapter.deliver("local", s.inbound[0][1], {
+    kind: "chat",
+    content: { text: "COMPLETE: done" },
+  });
   assert.ok(s.calls.some((c) => c.endsWith("/complete")));
 });
 
@@ -209,10 +212,15 @@ test("actual harness hook applies config, stops stale containers and pins policy
 
 test("channel installer is idempotent and includes source and built policy assets", (t) => {
   const source = process.env.ARGUS_TEST_NANOCLAW_SOURCE;
-  if (!source) return t.skip("requires the pinned NanoClaw checkout; pass ARGUS_TEST_NANOCLAW_SOURCE from provision.sh check");
+  if (!source)
+    return t.skip(
+      "requires the pinned NanoClaw checkout; pass ARGUS_TEST_NANOCLAW_SOURCE from provision.sh check",
+    );
   const target = mkdtempSync(path.join(os.tmpdir(), "argus-install-"));
   t.after(() => rmSync(target, { recursive: true, force: true }));
-  const archive = spawnSync("git", ["-C", source, "archive", "HEAD"], { maxBuffer: 32 * 1024 * 1024 });
+  const archive = spawnSync("git", ["-C", source, "archive", "HEAD"], {
+    maxBuffer: 32 * 1024 * 1024,
+  });
   assert.equal(archive.status, 0, archive.stderr.toString());
   const unpack = spawnSync("tar", ["-xf", "-", "-C", target], { input: archive.stdout });
   assert.equal(unpack.status, 0, unpack.stderr.toString());
