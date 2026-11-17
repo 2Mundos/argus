@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-24
-updated: 2026-11-06
+updated: 2026-11-17
 ---
 
 # Task delivery
@@ -37,7 +37,8 @@ evidence call an orchestrator uses when working an inbox `review` row
 - No new credential handling, service, table or migration. The projection stores
   nothing: the state is read on request. 3.7 records what it observed as an event
   and a continuation artifact.
-- No free-text guessing of references, and no repository presumed for a project.
+- No free-text guessing of references, no bare `#N` as a binding source, and no
+  repository presumed for a project.
 - No PR / CI state on task lists or inbox rows (one or more forge calls per row);
   detail and the delivery endpoint only. Inbox lists stay cheap; the orchestrator
   calls `get_task_delivery` for the selected review.
@@ -48,16 +49,20 @@ evidence call an orchestrator uses when working an inbox `review` row
 
 `tasks.delivery.extract` returns one PR or nothing, from the task's result
 (summary and string values of `data`), progress (message and data), the last 50
-events, and the continuation's artifacts:
+events, and the continuation's artifacts. **Only structured evidence binds:**
 
-- A **PR artifact** (kind `pr`, recorded by the continuation contract) wins; the
-  newest observation is used. Its `url` or, for a bare numeric `ref`, the project's
-  repository.
-- A **full PR URL** (`https://host/owner/repo/pull|pulls/N`) counts only when
-  host/owner/repo is a configured repository.
-- `PR #N` / `pull request #N` counts only when the **project proves its repository**.
-  No other `#N`, "PR 12" or issue form is a reference.
-- Several different PRs in text with no artifact are ambiguous: none is chosen.
+- A **PR artifact** (kind `pr`; a `pr_opened` progress milestone records one) wins;
+  the newest observation is used. Its `url` or, for a bare numeric `ref`, the
+  project's repository.
+- Otherwise an **explicit full PR URL**
+  (`https://host/owner/repo/pull|pulls/N`) in text counts, only when host/owner/repo
+  is a configured repository.
+- **A bare `#N` in prose is never a reference.** No `PR #N`, `pull request #N`,
+  "PR 12", `#12` or issue form nominates a PR, whatever repository the project
+  proves. A worker's note that mentions someone else's PR ("only the spec revision
+  PR #1399, merged") therefore extracts nothing; that sentence once bound task
+  `75c0eb23` to a PR merged 49 seconds *before* it existed.
+- Several different PR URLs in text with no artifact are ambiguous: none is chosen.
 
 The proof of a repository is the project's own `repository_url`
 ([knowledge](knowledge.spec.md) 3.1), else the pools' explicit
@@ -65,6 +70,23 @@ The proof of a repository is the project's own `repository_url`
 pools disagree on, and has no record of its own, has none.
 Argus tasks are never assumed to live in Radar's repository. Restricting URLs to
 that allowlist also means the credential is never sent to a host from task text.
+
+## 3.1a Plausibility against the forge and the task
+
+Whatever named the PR, the projection accepts it only when the forge's facts make
+it plausible for *this* task; otherwise the task has no delivery PR at all (the
+projection is `null`, and `delivery_of` logs why) instead of a wrong one:
+
+- A PR whose forge `created_at` **precedes** the task's `created_at` cannot be what
+  the task delivered.
+- A PR whose `merged_at` precedes the task's `created_at` likewise cannot.
+- When the task declares a branch (its newest `branch` continuation artifact), a PR
+  whose `head.ref` is a different branch is someone else's work.
+
+The same check gates the merge-supersede reconciler (3.7), which answers a merge
+question only for a plausible PR. Forge timestamps are read from the PR body
+(`created_at`, `merged_at`); a forge that omits one leaves that test unknown, not
+failed.
 
 ## 3.2 Reading the forge (exact head)
 
@@ -185,6 +207,8 @@ again inside the write that acts on it:
 - the project proves its repository (3.1), the task has one unambiguous PR, and
   every PR artifact is that PR in that repository (no bare number under a foreign
   URL, no second PR);
+- the PR passes the plausibility check of 3.1a (it does not predate the task, and
+  its head is the branch the task declares);
 - the forge read of that PR (3.2) is `merged` with head, merge commit and
   `merged_at`, observed within the last 2 minutes, and a head the task reported
   is the forge head.
@@ -251,8 +275,11 @@ MCP and UI.
   apps/api/tests/test_merge_supersede.py`;
   `pnpm --filter @argus/dashboard exec vitest run src/delivery.test.tsx`;
   `make openapi-check`.
-- Verified: parser, mock-transport forge reads (Gitea/GitHub), partial failure,
-  required-gates unknown vs empty, REST/MCP projection and accept offer, dashboard
-  badges for unknown/stale/partial — fixture and fake HTTP only.
+- Verified: parser (a bare `#N` in prose extracts nothing; a PR artifact and an
+  explicit URL do; the task-`75c0eb23` case verbatim), the plausibility rejection
+  (PR older than its task, foreign branch), mock-transport forge reads
+  (Gitea/GitHub), partial failure, required-gates unknown vs empty, REST/MCP
+  projection and accept offer, dashboard badges for unknown/stale/partial — fixture
+  and fake HTTP only.
 - Not verified: live Gitea/GitHub against real credentials or branch-protection
   shapes beyond the mocked paths; agentic `finding_count` parsing remains unknown.

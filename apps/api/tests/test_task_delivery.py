@@ -3,8 +3,9 @@ parser, exact-head forge reads, REST and MCP. The forge is a mock transport."""
 
 import asyncio
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import httpx2 as httpx
@@ -32,6 +33,10 @@ URL = f"https://{HOST}/{OWNER}/{REPO}/pulls/12"
 ADMIN_TOKEN = MCP_ADMIN
 HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+# REST tests create their task on the real clock, so a fixture PR is timestamped
+# after it: `delivery.implausible` rejects a PR that existed before its task.
+SOON_AT = (datetime.now(UTC) + timedelta(hours=1)).replace(microsecond=0)
+SOON = SOON_AT.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def pr_artifact(
@@ -66,16 +71,25 @@ def test_url_of_an_unconfigured_host_or_repository_is_ignored() -> None:
         assert delivery.extract([text], [], None, ALLOWED) is None
 
 
-def test_bare_number_needs_a_repository_the_project_proves() -> None:
-    assert delivery.extract(["PR #12 is open"], [], None, ALLOWED) is None
-    ref = delivery.extract(["PR #12 is open"], [], REPOSITORY, ALLOWED)
-    assert ref == PrRef(HOST, OWNER, REPO, 12)
-    ref = delivery.extract(["pull request #12"], [], REPOSITORY, ALLOWED)
-    assert ref is not None
-
-
-def test_loose_text_is_not_a_reference() -> None:
-    for text in ("fixes #12", "see issue #12", "PR 12", "#12", "PR #x", "PR #1a"):
+def test_bare_number_in_prose_never_binds_a_pr() -> None:
+    """The reported false binding (task 75c0eb23): an honest progress note that names
+    an unrelated, already-merged PR must extract nothing, even when the project's
+    repository is proven (which it is: the bare number used to resolve against it)."""
+    progress = (
+        "no prior branch or PR carries this work (only the spec revision PR #1399,"
+        " merged). Branch argus/task-75c0eb23 is now reset to master at 360a3800."
+    )
+    assert delivery.extract([progress], [], REPOSITORY, ALLOWED) is None
+    for text in (
+        "PR #12 is open",
+        "pull request #12",
+        "fixes #12",
+        "see issue #12",
+        "PR 12",
+        "#12",
+        "PR #x",
+        "PR #1a",
+    ):
         assert delivery.extract([text], [], REPOSITORY, ALLOWED) is None
 
 
@@ -92,6 +106,116 @@ def test_two_different_prs_in_text_are_ambiguous() -> None:
     texts = [URL, f"https://{HOST}/{OWNER}/{REPO}/pulls/13", URL]
     assert delivery.extract(texts, [], None, ALLOWED) is None
     assert delivery.extract([URL, URL], [], None, ALLOWED) is not None
+
+
+def test_explicit_url_in_text_is_a_reference_but_a_bare_number_is_not() -> None:
+    """The two text sources: a full URL binds, a `PR #N` next to it changes nothing
+    (and cannot make the text ambiguous)."""
+    with_url = f"Opened {URL} for this task; the earlier spec PR #1399 is merged."
+    assert delivery.extract([with_url], [], REPOSITORY, ALLOWED) == PrRef(
+        HOST, OWNER, REPO, 12
+    )
+    assert (
+        delivery.extract(
+            ["the earlier spec PR #1399 is merged"], [], REPOSITORY, ALLOWED
+        )
+        is None
+    )
+
+
+def test_structured_artifact_beats_an_explicit_url_in_text() -> None:
+    artifact = pr_artifact("5")
+    assert delivery.extract([URL], [artifact], REPOSITORY, ALLOWED) == PrRef(
+        HOST, OWNER, REPO, 5
+    )
+
+
+def forged(created: str | None = None, merged: str | None = None, ref: str = "feat"):
+    return delivery.ForgeSnapshot(
+        pr_state=PrState.MERGED if merged else PrState.OPEN,
+        merged_at=datetime.fromisoformat(merged) if merged else None,
+        created_at=datetime.fromisoformat(created) if created else None,
+        head_ref=ref,
+    )
+
+
+def task_at(created: str, branch: str | None = None) -> SimpleNamespace:
+    """Only what `implausible`/`declared_branch` read: the task's creation time, its
+    id and its continuation artifacts."""
+    now = datetime.fromisoformat(created)
+    artifacts = (
+        [
+            ContinuationArtifact(
+                kind=ArtifactKind.BRANCH,
+                ref=branch,
+                provenance=ContinuationProvenance.WORKER,
+                observed_at=now,
+            )
+        ]
+        if branch
+        else []
+    )
+    return SimpleNamespace(
+        id="75c0eb23-0000-4000-8000-000000000000",
+        created_at=now,
+        continuation=SimpleNamespace(artifacts=artifacts),
+    )
+
+
+def test_implausible_rejects_a_pr_older_than_its_task() -> None:
+    task = task_at("2026-11-17T15:45:30+00:00")
+    assert (
+        delivery.implausible(
+            forged(
+                created="2026-11-17T15:40:00+00:00", merged="2026-11-17T15:44:01+00:00"
+            ),
+            task,
+            None,
+        )
+        == "predates_task"
+    )
+    assert (
+        delivery.implausible(forged(merged="2026-11-17T15:44:01+00:00"), task, None)
+        == "merged_before_task"
+    )
+    assert (
+        delivery.implausible(
+            forged(
+                created="2026-11-17T15:50:00+00:00", merged="2026-11-17T15:55:00+00:00"
+            ),
+            task,
+            None,
+        )
+        is None
+    )
+
+
+def test_implausible_rejects_a_pr_from_another_branch() -> None:
+    task = task_at("2026-11-17T15:45:30+00:00", "argus/task-75c0eb23")
+    assert delivery.declared_branch(task) == "argus/task-75c0eb23"
+    assert (
+        delivery.implausible(
+            forged(
+                created="2026-11-17T15:50:00+00:00", ref="docs/guided-view-review-fixes"
+            ),
+            task,
+            "argus/task-75c0eb23",
+        )
+        == "foreign_branch"
+    )
+    assert (
+        delivery.implausible(
+            forged(created="2026-11-17T15:50:00+00:00", ref="argus/task-75c0eb23"),
+            task,
+            "argus/task-75c0eb23",
+        )
+        is None
+    )
+    # No declared branch and no forged head ref: nothing to reject on the branch.
+    assert (
+        delivery.implausible(forged(), task_at("2026-11-17T15:45:30+00:00"), None)
+        is None
+    )
 
 
 def test_repository_url_parsing() -> None:
@@ -598,7 +722,8 @@ def test_rest_merged_pr_flags_and_offers_the_existing_review_accept(client) -> N
             {
                 "merged": True,
                 "state": "closed",
-                "merged_at": "2026-10-24T09:00:00Z",
+                "created_at": SOON,
+                "merged_at": SOON,
                 "head": {"sha": HEAD, "ref": "feat"},
                 "base": {"sha": BASE, "ref": "main"},
             }
@@ -607,7 +732,7 @@ def test_rest_merged_pr_flags_and_offers_the_existing_review_accept(client) -> N
     tid = review_task(client, f"Delivered in {URL}")
     got = client.get(f"/api/tasks/{tid}/delivery").json()
     assert got["pr"] == URL and got["pr_state"] == "merged"
-    assert got["merged_at"].startswith("2026-10-24T09:00:00")
+    assert got["merged_at"].startswith(SOON[:16])
     assert got["checked_at"]
     assert got["flags"] == ["delivery_merged_pending_review"]
     assert got["accept_blocked"] is None
@@ -737,28 +862,92 @@ def test_rest_no_reference_is_null_and_workers_stay_scoped(client) -> None:
     assert res.status_code == 403
 
 
-def test_rest_bare_number_uses_the_project_repository(client) -> None:
+def test_rest_bare_number_in_prose_is_null_and_reads_no_pr(client) -> None:
+    """Task 75c0eb23's progress text, verbatim: a merged PR it merely mentions is
+    not its deliverable, so the projection reports none and never reads that PR."""
     setup_repository(client)
-    seen = []
+    seen: list[str] = []
 
     def handler(r):
-        seen.append(str(r.url))
-        if r.url.path.endswith("/pulls/44"):
-            return httpx.Response(
-                200, json={"state": "open", "merged": False, "head": {"sha": HEAD}}
-            )
-        if "statuses" in r.url.path:
-            return httpx.Response(200, json=[])
-        if "reviews" in r.url.path:
-            return httpx.Response(200, json=[])
-        return httpx.Response(404, json={})
+        seen.append(r.url.path)
+        return httpx.Response(200, json=open_pr())
 
     forge(client, handler)
-    tid = review_task(client, "PR #44 is up")
+    tid = review_task(
+        client,
+        "no prior branch or PR carries this work (only the spec revision PR #1399,"
+        " merged). Branch argus/task-75c0eb23 is now reset to master at 360a3800.",
+    )
+    assert client.get(f"/api/tasks/{tid}/delivery").json() is None
+    assert seen == []
+
+
+def test_rest_a_pr_that_predates_the_task_is_rejected(client) -> None:
+    setup_repository(client)
+    forge(
+        client,
+        full_forge(
+            {
+                "state": "closed",
+                "merged": True,
+                "created_at": "2026-11-17T15:40:00Z",
+                "merged_at": "2026-11-17T15:44:01Z",
+                "head": {"sha": HEAD, "ref": "docs/guided-view-review-fixes"},
+                "base": {"sha": BASE, "ref": "main"},
+            }
+        ),
+    )
+    tid = review_task(client, f"Delivered in {URL}")
     got = client.get(f"/api/tasks/{tid}/delivery").json()
-    assert got["pr"] == f"https://{HOST}/{OWNER}/{REPO}/pulls/44"
-    assert got["pr_state"] == "open" and got["flags"] == []
-    assert any(u.endswith("/pulls/44") for u in seen)
+    assert got is None  # never `merged` + delivery_merged_pending_review
+    assert client.get(f"/api/tasks/{tid}").json()["state"] == "in_review"
+
+
+def test_rest_a_foreign_branch_is_rejected(client) -> None:
+    """The task declares its branch; a PR whose head is another branch is not its
+    deliverable even when the worker reported it as a PR artifact."""
+    setup_repository(client)
+    forge(
+        client,
+        full_forge(open_pr(head={"sha": HEAD, "ref": "docs/guided-view-review-fixes"})),
+    )
+    tid = client.post(
+        "/api/tasks",
+        json={"project": "demo", "title": "foreign", "review": "orchestrator"},
+    ).json()["id"]
+    boot = client.post("/api/agents/bootstrap-tokens", json={"role": "worker"}).json()
+    token = client.post(
+        "/api/agents/register", json={"bootstrap_token": boot["token"]}
+    ).json()["token"]
+    worker = {"Authorization": f"Bearer {token}"}
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    mine = f"argus/task-{tid[:8]}"
+    for body in (
+        {
+            "attempt": claimed["attempt"],
+            "message": "branch",
+            "kind": "commit_created",
+            "data": {"branch": mine, "sha": HEAD},
+        },
+        {
+            "attempt": claimed["attempt"],
+            "message": "PR up",
+            "kind": "pr_opened",
+            "data": {"number": 12, "url": URL},
+        },
+    ):
+        res = client.post(f"/api/tasks/{tid}/progress", json=body, headers=worker)
+        assert res.status_code in (200, 201), res.text
+    assert client.get(f"/api/tasks/{tid}/delivery").json() is None
+
+
+def test_rest_a_pr_on_the_tasks_own_branch_is_bound(client) -> None:
+    """The counterpart: the same shape with the task's own head branch projects."""
+    setup_repository(client)
+    forge(client, full_forge(open_pr(head={"sha": HEAD, "ref": "feat"})))
+    tid = review_task(client, f"Delivered in {URL}")
+    got = client.get(f"/api/tasks/{tid}/delivery").json()
+    assert got["pr"] == URL and got["pr_state"] == "open"
 
 
 def test_mcp_exposes_the_delivery(client) -> None:
