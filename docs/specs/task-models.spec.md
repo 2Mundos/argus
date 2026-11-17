@@ -31,10 +31,10 @@ the harness model the NanoClaw channel configures at claim, and the model
 - No change to the global policy, its revision or its chains.
 - No availability check of a model ID: like the policy, IDs are opaque and the
   operator must use one the provider serves.
-- No model pin for `custom` accounts: their models come from the account
-  ([custom accounts](custom-accounts.spec.md)); such a task is pinned to the
-  account itself (3.4). A local OpenCode pin is allowed (3.1); the account still
-  supplies `base_url` ([local harness](local-harness.spec.md)).
+- No harness model pin for `custom` accounts: their harness model comes from the
+  account ([custom accounts](custom-accounts.spec.md)). OpenCode executor pins
+  may select the local or custom account lane (3.1); the leased account supplies
+  the endpoint and routing options, never the task.
 - No change of a running attempt: an edit never reaches a claimed task ([task
   edit](task-edit.spec.md) 3.4).
 - No credential, gateway grant or executable check from the route diagnostic
@@ -50,6 +50,15 @@ the harness model the NanoClaw channel configures at claim, and the model
 | `executor_model` | `{executor: claude \| codex \| agent \| opencode \| copilot, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local`, `copilot` → `copilot` |
 
 The `copilot` executor is executor-only: it runs on the `copilot` provider, never an engine.
+
+An OpenCode pin optionally carries `account_provider: local | custom`. Omitted or
+null preserves the existing `local` route; `custom` strictly leases the existing
+custom/OpenRouter executor lane. Other executors reject this field. REST, MCP,
+routine task templates, edits and retries share this schema. The dashboard uses
+`opencode@custom <model>` for the custom lane and preserves it on edits. Example:
+`{"executor":"opencode","account_provider":"custom","model":"deepseek/deepseek-v4.1-flash-1017"}`.
+This selects a provider, not an account identity: eligible custom accounts still
+rank globally. The executor role must have a configured model.
 
 `model` is required and follows the policy's model-ID rule
 (`[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}`). `null` (the default) means "follow the
@@ -84,8 +93,13 @@ the attempt snapshot keeps them.
 - **Executor.** An executor pin narrows the executor lease to its provider. The
   executor stays outside the claim gate, as today ([account
   selection](account-selection.spec.md) 3): the channel asks for that provider
-  only (`runtime_providers: [provider]`), still reusing a held engine account of
-  it. When no account of that provider is usable it holds no executor lease and
+  only (`runtime_providers: [provider]`), reusing a held native engine account of
+  it. Custom engines are the exception: the channel requests `reuse_held: false`
+  and retains a separately issued executor lease, even for the same provider.
+  A custom harness bridge alone never authorizes OpenCode. With `max_leases=1`,
+  using the same custom account for both roles conflicts; use a different engine
+  account or explicitly provision capacity for two leases. No automatic account
+  capacity changes are made. When no account of that provider is usable it holds no executor lease and
   logs a warning naming the provider and the executor, and `argus-delegate` for
   the pinned executor stops with `auth_missing` whose `need` names that provider
   (no executor lease for it); it never substitutes another provider's account or

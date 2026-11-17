@@ -3366,6 +3366,111 @@ describe("custom (OpenRouter) engine accounts", () => {
     provider: null,
   };
 
+  const executorLease = () =>
+    lease("or-executor", "dummy-executor-key", {
+      provider: "custom",
+      role: "executor",
+      settings,
+    });
+
+  it("applies only the explicitly leased custom executor to exact gateway paths, then unassigns it", async () => {
+    const w = world({ leases: [] });
+    const client = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    const engine = lease("or-harness", "dummy-harness-key", { provider: "custom", settings });
+    await applyLeasesDetailed(client, target, [engine, executorLease()]);
+    const writes = w.calls.filter((c) => c.method === "POST" && c.path === "/secrets");
+    expect(writes.map((c) => c.body.pathPattern)).toEqual([
+      "/api/v1/models",
+      "/api/v1/chat/completions",
+    ]);
+    expect(
+      writes.every((c) => c.body.hostPattern === "openrouter.ai" && c.body.type === "generic"),
+    ).toBe(true);
+    expect(writes.every((c) => c.body.value === "dummy-executor-key")).toBe(true);
+    expect(JSON.stringify(writes)).not.toContain("dummy-harness-key");
+    expect(w.onecli.agents[0]!.secrets).toHaveLength(2);
+    await applyLeasesDetailed(client, target, [engine]);
+    expect(w.onecli.agents[0]!.secrets).toHaveLength(0);
+  });
+
+  it.each(["credential", "host", "settings"])(
+    "rejects an invalid custom executor %s before vault writes",
+    async (bad) => {
+      const w = world({ leases: [] });
+      const invalid = executorLease();
+      if (bad === "credential") invalid.credential = {};
+      if (bad === "host")
+        invalid.settings = { ...settings, base_url: "https://evil.example/api/v1" };
+      if (bad === "settings") invalid.settings = null;
+      await expect(
+        applyLeasesDetailed(new OneCliClient("http://127.0.0.1:10254", w.fetchImpl), target, [
+          lease("harness", "dummy-harness-key"),
+          invalid,
+        ]),
+      ).rejects.toThrow("could not apply the custom executor lease");
+      expect(w.calls).toHaveLength(0);
+    },
+  );
+
+  it("does not leak vault error text even when a backend echoes the credential", async () => {
+    const fake = (async () =>
+      new Response(JSON.stringify({ error: "dummy-executor-key" }), {
+        status: 500,
+      })) as typeof fetch;
+    await expect(
+      applyLeasesDetailed(new OneCliClient("http://127.0.0.1:10254", fake), target, [
+        lease("harness", "dummy-harness-key"),
+        executorLease(),
+      ]),
+    ).rejects.toThrow(/^could not apply the custom executor lease to OneCLI$/);
+  });
+
+  it("targets the custom executor pin without reusing its harness slot and passes role settings to the policy", async () => {
+    const w = world({
+      leases: [lease("harness", "dummy-harness-key"), executorLease()],
+      tasks: [
+        {
+          ...task(),
+          executor_model: {
+            executor: "opencode",
+            model: settings.model,
+            account_provider: "custom",
+          },
+        },
+      ],
+    });
+    const selectModels = vi.fn(async (_task: unknown, _held: unknown) => ({
+      scope: "harness",
+      policy_engine: "claude",
+      requested_model: "test-model",
+      configured_model: "test-model",
+      resolved_model: null,
+      policy_revision: "test",
+      model_attempt: 1,
+      fallback_reason: null,
+      has_next: false,
+    }));
+    const h = harness(w, true, {}, { selectModels });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    const request = w.calls.filter((c) => c.path === "/accounts/lease")[1]!.body;
+    expect(request).toMatchObject({
+      role: "executor",
+      runtime_providers: ["custom"],
+      reuse_held: false,
+    });
+    expect(w.onecli.secrets.some((s) => s.name.includes("-custom-executor-"))).toBe(true);
+    await until(() => selectModels.mock.calls.length > 0);
+    expect(selectModels.mock.calls[0]?.[1]).toMatchObject({
+      executor: { provider: "custom", account_id: "a-or-executor" },
+      executor_settings: settings,
+    });
+    expect(JSON.stringify(w.calls.filter((c) => c.who === "argus"))).not.toContain(
+      "dummy-executor-key",
+    );
+  });
+
   it("lists custom among engine and executor runtime providers", () => {
     // a custom account also serves a delegated CLI (`executor_settings`, the delegate's
     // CUSTOM_KEY_ENV), so the executor role lists it too

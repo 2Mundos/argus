@@ -1705,6 +1705,14 @@ describe("runExecutorPreflight: argus-delegate --auth-probe in the same bounded 
     },
   );
 
+  it("probes OpenCode only for an explicitly leased custom executor", async () => {
+    freshCli();
+    child = () => ({ code: 78, verdict: { blocked: "auth_missing" } });
+    const block = await runExecutorPreflight(runner(), "opencode", "group-1", 400, "custom");
+    expect(block).toMatchObject({ reason: "env_executor_auth" });
+    expect(cli.started).toHaveLength(1);
+  });
+
   it("probes exactly claude, codex, agent and copilot", () => {
     expect([...PROBED_EXECUTORS].sort()).toEqual(["agent", "claude", "codex", "copilot"]);
   });

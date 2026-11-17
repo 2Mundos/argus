@@ -6914,6 +6914,8 @@ export interface components {
          * @description A task's pinned delegated executor and model (task models spec).
          */
         ExecutorModel: {
+            /** Account Provider */
+            account_provider?: ("local" | "custom") | null;
             /**
              * Executor
              * @enum {string}

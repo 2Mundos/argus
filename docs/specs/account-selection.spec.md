@@ -86,8 +86,9 @@ isolation or sandbox/TLS restrictions.
 - **Engine, executor and model policy follow the leased account.** The channel
   selects the harness from the engine account's provider. The executor lease is
   the best usable account for a delegated CLI across all runtime-supported
-  providers; it is held only when its provider differs from the engine's (the
-  vault keeps one account per provider). The channel asks with `reuse_held`: if
+  providers; native providers share the engine's account, while a custom executor
+  always requires its own issued executor lease and role-scoped secrets, even
+  beside a custom engine. The channel asks with `reuse_held` for native accounts: if
   the best executor is the account the worker already holds as its engine (even
   at `max_leases`), Argus returns that engine lease unchanged, no second row and
   no extra slot, so a lower-priority executor (say Codex 0 beside a full Claude

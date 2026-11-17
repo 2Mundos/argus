@@ -9580,6 +9580,21 @@
         "additionalProperties": false,
         "description": "A task's pinned delegated executor and model (task models spec).",
         "properties": {
+          "account_provider": {
+            "anyOf": [
+              {
+                "enum": [
+                  "local",
+                  "custom"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Provider"
+          },
           "executor": {
             "enum": [
               "claude",

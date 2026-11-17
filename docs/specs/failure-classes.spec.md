@@ -523,15 +523,16 @@ Per executor (audit; the delegate's `providerRequest` is the code):
 | `codex` | probed; the Codex stub | `GET api.openai.com/v1/models` with `OPENAI_API_KEY` when it is in the env | a ChatGPT login lives only in `auth.json` (never read) and is served from another host: unproven |
 | `agent` (Cursor) | probed; the Cursor stub | none | unproven: the gateway injects only on `/agent.v1.*` and `/aiserver.v1.*`, so there is no read-only call that is safe to make |
 | `copilot` | probed; the gateway contribution sets the sentinel for the agent group | `GET api.individual.githubcopilot.com/models`, a path the vault injects on, with the sentinel | none |
-| `opencode` | not probed | with `ARGUS_ACCOUNT_SETTINGS` and the account key in the delegate's env: `GET <base_url>/models` | an `auth.json` or an attached server: unproven |
-| custom account (on `opencode`, `codex`, `dsh`) | not probed | as above | the base URL and key come from the task's `executor_settings` in the policy context and from the worker's env, which a probe session does not have |
+| `opencode` | probed for an explicitly leased custom/OpenRouter executor; scoped sentinel and settings from the gateway contribution | `GET openrouter.ai/api/v1/models` | native `auth.json`, attached-server and local routes are not probed |
+| other custom account routes (on `codex`, `dsh`) | not probed | with settings and credential in the delegate env: `GET <base_url>/models` | no managed executor gateway contribution |
 | local account (on `opencode`) | not probed | as above; the server ignores the token, so it sends the run's placeholder | same reason as custom |
 
-`opencode`, custom and local are not in `PROBED_EXECUTORS` because a probe in the
-preflight session would see no credential and block a working account falsely: the
-preflight addresses the probe by executor name only, with no policy context. The delegate
-code path exists and is tested for them (a run that has `ARGUS_ACCOUNT_SETTINGS`), but
-nothing calls it from the preflight until the policy context reaches the probe session.
+`PROBED_EXECUTORS` lists the always-probed native routes. The channel additionally
+passes the held executor provider for OpenCode: `custom` enables its probe using
+the scoped OpenRouter sentinel and endpoint settings, without needing the task's
+model or its policy in the probe session. Other OpenCode/local routes stay unprobed
+because a probe there would falsely block credentials available only in the worker.
+See [custom accounts](custom-accounts.spec.md) for the authorization boundary.
 
 The probe keeps four states apart, and only the first three can block:
 
@@ -593,9 +594,9 @@ and whether the model's or the work's own output can forge it.
 
 - Executor probe: the provider request is proven only against mocks and local sockets.
   Real-gateway injection on the probed hosts and paths is not measured; `agent`, a
-  ChatGPT-login `codex` and a Claude login file stay unproven; `opencode` and custom or
-  local accounts are not probed by the preflight until the policy context reaches the probe
-  session (3.3.1).
+  ChatGPT-login `codex` and a Claude login file stay unproven. OpenCode's explicit
+  custom/OpenRouter executor is probed using its gateway contribution; native and
+  local OpenCode and the other custom executor routes stay unprobed (3.3.1).
 - Full recovery of a private-repository 404 whose injection is missing is pending a
   supported OneCLI evidence or rule read (published policy rule or request log for the exact
   agent). The host-side interface (`InjectionEvidenceSource`) and the bounded re-arm exist and

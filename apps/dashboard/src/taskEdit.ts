@@ -50,12 +50,18 @@ type PinField = (typeof PIN_FIELDS)[number];
 /** Engines and executors a pin may name, as the API accepts them (task models spec 3.1). */
 export const PIN_CHOICES: Record<PinField, string[]> = {
   harness_model: ["claude", "codex"],
-  executor_model: ["claude", "codex", "agent", "opencode"],
+  executor_model: ["claude", "codex", "agent", "opencode", "opencode@custom"],
 };
 
 export function pinText(pin: HarnessPin | ExecutorPin | null | undefined): string {
   if (!pin) return "";
-  return `${"engine" in pin ? pin.engine : pin.executor} ${pin.model}`;
+  const name =
+    "engine" in pin
+      ? pin.engine
+      : pin.account_provider
+        ? `${pin.executor}@${pin.account_provider}`
+        : pin.executor;
+  return `${name} ${pin.model}`;
 }
 
 /** "<engine> <model>" → its two parts; "" → null (follow the policy). */
@@ -71,6 +77,12 @@ export function harnessPin(text: string): HarnessPin | null {
 
 export function executorPin(text: string): ExecutorPin | null {
   const pin = parsePin(text);
+  if (pin?.name === "opencode@custom" || pin?.name === "opencode@local")
+    return {
+      executor: "opencode",
+      model: pin.model,
+      account_provider: pin.name === "opencode@custom" ? "custom" : "local",
+    };
   return pin && { executor: pin.name as ExecutorPin["executor"], model: pin.model };
 }
 

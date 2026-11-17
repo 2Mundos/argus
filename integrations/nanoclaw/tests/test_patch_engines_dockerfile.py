@@ -20,6 +20,7 @@ REQUIRED = {
     "/usr/local/bin/argus-gitea-api",
     "/usr/local/bin/argus-github-api",
     "/tmp/argus-engines/account-settings.mjs",
+    "/tmp/argus-engines/opencode-gateway.mjs",
     "/tmp/argus-engines/anthropic-redirect.mjs",
     "/tmp/argus-engines/milestones.mjs",
     "/tmp/argus-engines/livelog.mjs",

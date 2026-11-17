@@ -49,6 +49,7 @@ import {
   waitingInput,
 } from "./milestones.mjs";
 import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
+import { OPENCODE_GATEWAY_SENTINEL, opencodeGatewayProblem } from "./opencode-gateway.mjs";
 import {
   appendAuthRejectedRecord,
   appendUsageRecord,
@@ -188,6 +189,8 @@ const DSH_NEED_KEY = `${CUSTOM_KEY_ENV} (the provider key for dsh, from the leas
 
 /** Is a credential present for this executor? Presence only, never content. */
 export function authStatus(executor, e = process.env, home = os.homedir(), settings = null) {
+  const gatewayProblem = opencodeGatewayProblem(executor, e, settings);
+  if (gatewayProblem) return { ok: false, need: gatewayProblem };
   if (settings && settingsSupport(executor).length) {
     return env(e, CUSTOM_KEY_ENV)
       ? { ok: true }
@@ -1356,6 +1359,20 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   } catch (err) {
     finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
   }
+  // A custom task pin cannot fall through to a native login, local placeholder or
+  // harness-only bridge when its independently leased executor is unavailable.
+  if (
+    snapshot.context?.executor_model?.account_provider === "custom" &&
+    (executor !== "opencode" ||
+      snapshot.context.executor_account_provider !== "custom" ||
+      !snapshot.context.executor_settings ||
+      e[CUSTOM_KEY_ENV] !== OPENCODE_GATEWAY_SENTINEL)
+  )
+    finish(78, {
+      ...identity,
+      blocked: "auth_missing",
+      need: "custom OpenCode executor requires its own lease settings and scoped gateway sentinel",
+    });
   // The Copilot CLI's own default model is never used: no model, no run.
   if (executor === "copilot" && !selection.configured_model)
     finish(64, {
