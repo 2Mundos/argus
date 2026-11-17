@@ -92,6 +92,20 @@ ARGUS_CAPABILITIES=python,git pnpm start
 
 Without `ARGUS_URL` the channel is simply off.
 
+### Execution-chain capability declaration
+
+An instance may claim tasks whose difficulty has configured execution chains only
+when its `ARGUS_CAPABILITIES` declares the contract and every adapter it really
+has installed, using the IDs from `GET /api/engines` `execution_capabilities`:
+
+```bash
+ARGUS_CAPABILITIES=python,git,execution-chains-v1,nanoclaw:harness:claude:local,nanoclaw:executor:opencode:custom
+```
+
+Declare only adapters whose CLI is present; the claim refuses an alternative whose
+capability is missing, and an installation that declares nothing keeps running
+legacy routing. The declaration is evidence, not a readiness claim.
+
 ### No session-age ceiling
 
 Upstream's `reconcile-session.ts` kills any running container whose heartbeat (or

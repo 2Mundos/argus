@@ -102,10 +102,12 @@ async def readiness(conn: aiosqlite.Connection, levels: Mapping[str, Any]) -> li
     """
     from argus_api.accounts import service as accounts
 
-    wanted: dict[str, set[str]] = {}
+    wanted: dict[str, set[LeaseRole]] = {}
     for alternatives in levels.values():
         for alternative in alternatives:
-            selectors = [("engine", alternative["harness"])]
+            selectors: list[tuple[LeaseRole, Any]] = [
+                ("engine", alternative["harness"])
+            ]
             executor = alternative.get("executor")
             if executor is not None:
                 selectors.append(("executor", executor))
