@@ -741,6 +741,8 @@ export function heldAccountFits(
 
 /** The prepared task workspace the prompt points the model at (task workspace spec). */
 export interface TaskWorkspace {
+  /** Host path of the checkout. */
+  path: string;
   containerPath: string;
   branch: string;
 }
