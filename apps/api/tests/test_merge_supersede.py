@@ -21,14 +21,23 @@ from test_task_deliverable import (
     state,
     worker,
 )
-from test_task_delivery import HEAD, URL, forge, full_forge, open_pr, setup_repository
+from test_task_delivery import (
+    HEAD,
+    SOON,
+    URL,
+    forge,
+    full_forge,
+    open_pr,
+    setup_repository,
+)
 
 MERGE_SHA = "c" * 40
 CHECKLIST = ["the merged change is verified on the base branch"]
 MERGED = open_pr(
     merged=True,
     state="closed",
-    merged_at="2026-11-06T10:00:00Z",
+    created_at=SOON,
+    merged_at=SOON,
     merge_commit_sha=MERGE_SHA,
 )
 
@@ -167,7 +176,7 @@ def test_a_merge_elsewhere_resumes_a_task_blocked_on_the_merge_request(
         "head_sha": HEAD,
         "head_ref": "feat",
         "merge_sha": MERGE_SHA,
-        "merged_at": "2026-11-06T10:00:00+00:00",
+        "merged_at": SOON.replace("Z", "+00:00"),
         "checked_at": None,
         "pending_checklist": proof["data"]["pending_checklist"],
         "not_asserted": ["checks", "review", "acceptance", "completion"],

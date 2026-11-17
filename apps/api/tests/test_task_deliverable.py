@@ -32,6 +32,7 @@ from test_task_delivery import (
     HOST,
     OWNER,
     REPO,
+    SOON,
     URL,
     forge,
     full_forge,
@@ -279,7 +280,9 @@ def test_a_branch_task_is_not_met_by_a_closed_branch(client: TestClient) -> None
 
 
 def merged_pr() -> dict:
-    return open_pr(merged=True, state="closed", merged_at="2026-10-24T09:00:00Z")
+    """Merged after the task the test creates: `delivery.implausible` rejects a PR
+    that predates its task, so the fixture cannot be a fixed past date."""
+    return open_pr(merged=True, state="closed", created_at=SOON, merged_at=SOON)
 
 
 CI_OK = [{"context": "ci", "state": "success"}]
@@ -781,6 +784,7 @@ INCIDENT_URL = "https://git.example.test/team/argus/pulls/154"
 INCIDENT_HEAD = "632b610e18d3b6db6b060af595f67982df3da7e3"
 INCIDENT_MERGE = "91f45bb40feaabe06f43739d0e8ff3700dd1fdcc"
 INCIDENT_BRANCH = "argus/task-1a7c140b"
+INCIDENT_AT = SOON
 CHECKLIST = ["the repository preflight names its cause"]
 REFUSED = (
     "The worker's reply could not be delivered (422 deliverable_missing): "
@@ -792,7 +796,8 @@ def pr_154(**extra) -> dict:
     return {
         "state": "closed",
         "merged": True,
-        "merged_at": "2026-11-01T18:00:00Z",
+        "created_at": INCIDENT_AT,
+        "merged_at": INCIDENT_AT,
         "merge_commit_sha": INCIDENT_MERGE,
         "head": {"sha": INCIDENT_HEAD, "ref": INCIDENT_BRANCH},
         "base": {"sha": BASE, "ref": "main"},
@@ -966,7 +971,7 @@ def test_reconciling_a_merged_delivery_opens_review_and_keeps_every_gate(
         "head_sha": INCIDENT_HEAD,
         "head_ref": INCIDENT_BRANCH,
         "merge_sha": INCIDENT_MERGE,
-        "merged_at": "2026-11-01T18:00:00+00:00",
+        "merged_at": INCIDENT_AT.replace("Z", "+00:00"),
         "revision": before["continuation"]["revision"],
     }
     assert events(client, task_id, "task.retried") == []
@@ -1338,7 +1343,7 @@ def test_completion_finds_the_attempts_pr_behind_a_full_page_of_newer_ones(
     # GitHub's list shape for a merged PR: no `merged` flag, only `merged_at`.
     ours = pull(255, f"argus/task-{task_id[:8]}", newer, state="closed")
     del ours["merged"]
-    ours["merged_at"] = "2026-11-04T09:00:00Z"
+    ours["merged_at"] = "2999-01-01T00:00:00Z"
     pages = {
         "1": [pull(300 - n, f"feat-{n}", newer) for n in range(LIST_CAP)],
         "2": [ours, *(pull(200 - n, f"old-{n}", older) for n in range(LIST_CAP - 1))],

@@ -17,7 +17,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -66,7 +66,6 @@ PENDING_IDS_CAP = 20
 _URL = re.compile(
     r"https://[^\s/<>()\[\]\"']+/[^\s/<>()\[\]\"']+/[^\s/<>()\[\]\"']+/pulls?/(\d{1,9})(?![\w/])"
 )
-_BARE = re.compile(r"\b(?:PR|pull request) #(\d{1,9})\b", re.IGNORECASE)
 _SHA = re.compile(r"^[0-9a-f]{7,64}$", re.IGNORECASE)
 
 _FAILED_CONCLUSIONS = frozenset(
@@ -104,6 +103,7 @@ class ForgeSnapshot:
 
     pr_state: PrState
     merged_at: datetime | None
+    created_at: datetime | None = None  # when the forge says the PR was created
     head_sha: str | None = None
     head_ref: str | None = None
     merge_sha: str | None = None  # the merge commit, when the forge reports one
@@ -189,9 +189,12 @@ def extract(
     project_repo: tuple[str, str, str] | None,
     allowed: set[tuple[str, str, str]],
 ) -> PrRef | None:
-    """The one PR the task delivers, or None. Structured PR artifacts win (newest
-    observation); otherwise the text must name exactly one distinct PR. Several
-    different PRs without a structured one are ambiguous: nothing is guessed."""
+    """The one PR the task delivers, or None. Only structured evidence binds: a PR
+    artifact (kind `pr`, which a `pr_opened` milestone also records) wins, newest
+    observation first; otherwise the text must carry exactly one distinct **full PR
+    URL** in a configured repository. A bare `#N` in prose never nominates a PR, so a
+    worker's note that mentions someone else's PR extracts nothing. Several different
+    URLs without an artifact are ambiguous: nothing is guessed."""
     structured: list[tuple[datetime, PrRef]] = []
     for a in artifacts:
         if a.kind is not ArtifactKind.PR:
@@ -204,11 +207,37 @@ def extract(
         return max(structured, key=lambda s: s[0])[1]
     refs: set[PrRef] = set()
     for text in texts:
-        text = text[:TEXT_CAP]
-        refs.update(_from_url(text, allowed))
-        if project_repo:
-            refs.update(PrRef(*project_repo, int(n)) for n in _BARE.findall(text))
+        refs.update(_from_url(text[:TEXT_CAP], allowed))
     return next(iter(refs)) if len(refs) == 1 else None
+
+
+def declared_branch(task: Task) -> str | None:
+    """The branch this task says it works on, from its newest branch artifact."""
+    found = [
+        a
+        for a in (task.continuation.artifacts if task.continuation else [])
+        if a.kind is ArtifactKind.BRANCH
+    ]
+    return max(found, key=lambda a: a.observed_at).ref if found else None
+
+
+def implausible(snap: ForgeSnapshot, task: Task, branch: str | None) -> str | None:
+    """Why this PR cannot be the task's deliverable, or None when it can.
+
+    A PR that existed before its task cannot be what the task delivered, and a PR
+    whose head is not the branch the task declared belongs to other work. Both are
+    decided from forge facts (`created_at`, `merged_at`, `head.ref`) and the task's
+    own record, never from text."""
+    since = task.created_at
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    if snap.created_at is not None and snap.created_at < since:
+        return "predates_task"
+    if snap.merged_at is not None and snap.merged_at < since:
+        return "merged_before_task"
+    if branch and snap.head_ref and snap.head_ref != branch:
+        return "foreign_branch"
+    return None
 
 
 def _strings(value: Any) -> list[str]:
@@ -395,6 +424,18 @@ def _truncate(text: str | None) -> str | None:
     if not t:
         return None
     return t if len(t) <= DESC_CAP else t[: DESC_CAP - 1] + "…"
+
+
+def _forge_time(raw: Any) -> datetime | None:
+    """A forge timestamp as an aware UTC datetime; None when absent or unparsable.
+    A value without a zone is read as UTC so it can be compared to task times."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _created_before(item: Any, since: datetime) -> bool:
@@ -680,6 +721,7 @@ class PrChecker:
         return ForgeSnapshot(
             pr_state=state,
             merged_at=merged_at,
+            created_at=_forge_time(body.get("created_at")),
             head_sha=head_sha.lower() if head_sha else None,
             head_ref=head_ref,
             merge_sha=merge_sha.lower() if merge_sha else None,
@@ -1074,12 +1116,16 @@ def _checklist(task: Task) -> DeliveryChecklist | None:
 async def delivery_of(
     conn: aiosqlite.Connection, checker: PrChecker, task: Task
 ) -> Delivery | None:
-    """None when the task names no unambiguous PR. Called with a read connection,
-    outside any write transaction."""
+    """None when the task names no unambiguous PR, or when the PR it names cannot be
+    its deliverable (it predates the task, or it is on another branch). Called with a
+    read connection, outside any write transaction."""
     ref = await reference(conn, task)
     if ref is None:
         return None
     snap = await checker.snapshot(conn, ref)
+    if (why := implausible(snap, task, declared_branch(task))) is not None:
+        log.info("delivery rejected %s for task %s: %s", ref.url, task.id, why)
+        return None
     merged = snap.pr_state is PrState.MERGED
     # Top-level accept_* stay merged-only (existing clients); authorization mirrors them.
     offer, blocked = await accept_offer(conn, task) if merged else (None, None)

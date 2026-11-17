@@ -217,6 +217,14 @@ def _verdict(plan: _Plan, snap: delivery.ForgeSnapshot, now) -> None:
         )
     if not (snap.head_sha and snap.merge_sha and snap.merged_at):
         raise Skip("evidence_incomplete", plan.decision_id, url=plan.ref.url)
+    if (
+        why := delivery.implausible(
+            snap, plan.task, delivery.declared_branch(plan.task)
+        )
+    ) is not None:
+        # A PR that predates the task, or is on another branch, is not this task's
+        # work: answering its merge question from that PR would be a false binding.
+        raise Skip("implausible_pr", plan.decision_id, url=plan.ref.url, why=why)
     if now - snap.checked_at > timedelta(seconds=FRESH_S):
         raise Skip("stale_observation", plan.decision_id, audit=False)
     reported = delivery.task_reported_head(plan.task)
