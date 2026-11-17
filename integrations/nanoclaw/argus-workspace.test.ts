@@ -18,8 +18,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  branchWipClaim,
   maxWorkspacesFromEnv,
   prepareTaskWorkspace,
+  probeTaskBranch,
   TASK_WORKSPACES_DIR,
   taskBranch,
   taskWorkspaceContainerPath,
@@ -415,6 +417,55 @@ describe("prepareTaskWorkspace", () => {
       await failsWith(group, id, "env_workspace_branch_mismatch", [group]);
     });
 
+    it("env_workspace_unpreserved_commits: another branch is out and the task branch holds unpublished commits", async () => {
+      const group = tmp("argus-ws-group-");
+      const id = randomUUID();
+      const r = await prepare(group, id);
+      if (!r.ok) throw new Error(r.error);
+      writeFileSync(path.join(r.path, "a.txt"), "a\n");
+      git(r.path, "add", "a.txt");
+      git(r.path, "commit", "-q", "-m", "a");
+      const sha = git(r.path, "rev-parse", "HEAD");
+      git(r.path, "checkout", "-q", "-b", "other");
+      const before = snapshot(r.path);
+      const again = await prepare(group, id);
+      expect(again).toMatchObject({ ok: false, reason: "env_workspace_unpreserved_commits" });
+      if (again.ok) throw new Error("expected a refusal");
+      expect(again.error).toContain(`refs/heads/${r.branch}`);
+      expect(again.error).toContain(sha);
+      expect(snapshot(r.path)).toEqual(before);
+    });
+
+    it("env_workspace_unpreserved_commits: detached HEAD with unpublished commits", async () => {
+      const group = tmp("argus-ws-group-");
+      const id = randomUUID();
+      const r = await prepare(group, id);
+      if (!r.ok) throw new Error(r.error);
+      writeFileSync(path.join(r.path, "a.txt"), "a\n");
+      git(r.path, "add", "a.txt");
+      git(r.path, "commit", "-q", "-m", "a");
+      const sha = git(r.path, "rev-parse", "HEAD");
+      git(r.path, "checkout", "-q", "--detach");
+      const again = await prepare(group, id);
+      expect(again).toMatchObject({ ok: false, reason: "env_workspace_unpreserved_commits" });
+      if (again.ok) throw new Error("expected a refusal");
+      expect(again.error).toContain(sha);
+    });
+
+    it("env_workspace_branch_mismatch stays when the task branch is published or gone", async () => {
+      const group = tmp("argus-ws-group-");
+      const id = randomUUID();
+      const r = await prepare(group, id);
+      if (!r.ok) throw new Error(r.error);
+      writeFileSync(path.join(r.path, "a.txt"), "a\n");
+      git(r.path, "add", "a.txt");
+      git(r.path, "commit", "-q", "-m", "a");
+      // A remote-tracking ref that reaches the commit means it is published.
+      git(r.path, "update-ref", `refs/remotes/origin/${r.branch}`, "HEAD");
+      git(r.path, "checkout", "-q", "-b", "other");
+      await failsWith(group, id, "env_workspace_branch_mismatch", [group]);
+    });
+
     it("env_workspace_invalid: a plain directory, not a git repository", async () => {
       const group = tmp("argus-ws-group-");
       const id = randomUUID();
@@ -512,5 +563,56 @@ describe("prepareTaskWorkspace", () => {
     expect(results.filter((r) => r.ok && r.created)).toHaveLength(1);
     expect(new Set(results.map((r) => r.ok && r.path)).size).toBe(1);
     expect(readdirSync(path.join(group, TASK_WORKSPACES_DIR))).toEqual([id]); // no temp dirs
+  });
+});
+
+describe("task branch probe and the WIP claim derived from it", () => {
+  const commit = (cwd: string, file: string) => {
+    writeFileSync(path.join(cwd, file), `${file}\n`);
+    git(cwd, "add", file);
+    git(cwd, "commit", "-q", "-m", file);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+
+  it("same directory: the branch stays checked out and its unpublished commits stay reachable", async () => {
+    const group = tmp("argus-ws-group-");
+    const id = randomUUID();
+    const r = await prepare(group, id);
+    if (!r.ok) throw new Error(r.error);
+    const sha = commit(r.path, "a.txt");
+    const again = await prepare(group, id);
+    expect(again).toMatchObject({ ok: true, created: false });
+    expect(git(r.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/${r.branch}`);
+    expect(git(r.path, "rev-parse", r.branch)).toBe(sha);
+    expect(git(r.path, "merge-base", "--is-ancestor", sha, "HEAD")).toBe("");
+    const probe = await probeTaskBranch({ path: r.path, branch: r.branch });
+    expect(probe).toEqual({ exists: true, unpublished: [sha] });
+    expect(branchWipClaim(r.branch, probe)).toMatchObject({ ref: sha });
+  });
+
+  it("a branch that is gone says so plainly, not what an earlier agent wrote", async () => {
+    const group = tmp("argus-ws-group-");
+    const r = await prepare(group, randomUUID());
+    if (!r.ok) throw new Error(r.error);
+    const probe = await probeTaskBranch({ path: r.path, branch: r.branch });
+    expect(probe).toEqual({ exists: false, unpublished: [] });
+    const claim = branchWipClaim(r.branch, probe);
+    expect(claim.summary).toContain(`branch ${r.branch} does not exist`);
+    expect(claim.ref).toBeUndefined();
+  });
+
+  it("published commits are not unpublished", async () => {
+    const group = tmp("argus-ws-group-");
+    const r = await prepare(group, randomUUID());
+    if (!r.ok) throw new Error(r.error);
+    const first = commit(r.path, "a.txt");
+    git(r.path, "update-ref", "refs/remotes/origin/main", first);
+    const second = commit(r.path, "b.txt");
+    const probe = await probeTaskBranch({ path: r.path, branch: r.branch });
+    expect(probe.unpublished).toEqual([second]);
+    git(r.path, "update-ref", `refs/remotes/origin/${r.branch}`, second);
+    const none = await probeTaskBranch({ path: r.path, branch: r.branch });
+    expect(none).toEqual({ exists: true, unpublished: [] });
+    expect(branchWipClaim(r.branch, none).summary).toContain("no unpublished commits");
   });
 });

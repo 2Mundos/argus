@@ -29,6 +29,7 @@ export type WorkspaceFailureReason =
   | "env_workspace_invalid"
   | "env_workspace_remote_mismatch"
   | "env_workspace_branch_mismatch"
+  | "env_workspace_unpreserved_commits"
   | "env_workspace_limit";
 
 export type WorkspaceResult =
@@ -77,6 +78,99 @@ export const defaultGit: GitRunner = async (args, cwd, ceiling) => {
   );
   return stdout.trim();
 };
+
+/** What git says about the task branch in a workspace (read-only). */
+export type BranchProbe = {
+  /** `refs/heads/<branch>` exists. */
+  exists: boolean;
+  /** Commits reachable from the branch and from no remote-tracking ref, newest first. */
+  unpublished: string[];
+};
+
+/**
+ * Commits of `ref` that no remote-tracking ref reaches, i.e. work that exists only in this
+ * workspace. A repository with no remote-tracking refs holds every commit unpublished.
+ */
+async function unpublishedCommits(
+  ws: string,
+  ceiling: string,
+  ref: string,
+  git: GitRunner,
+): Promise<string[]> {
+  const out = await git(["rev-list", ref, "--not", "--remotes", "--"], ws, ceiling);
+  return out.split("\n").filter(Boolean);
+}
+
+/** Probe the task branch of the workspace at `ws`. Read-only; rejects when git fails. */
+export async function probeTaskBranch(opts: {
+  path: string;
+  branch: string;
+  git?: GitRunner;
+}): Promise<BranchProbe> {
+  const git = opts.git ?? defaultGit;
+  const ws = await realpath(opts.path);
+  const ceiling = path.dirname(ws);
+  const ref = `refs/heads/${opts.branch}`;
+  const exists = await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], ws, ceiling).then(
+    () => true,
+    () => false,
+  );
+  return { exists, unpublished: exists ? await unpublishedCommits(ws, ceiling, ref, git) : [] };
+}
+
+const MAX_NAMED_SHAS = 10;
+
+/**
+ * The continuation's WIP claim as git states it: whether the task branch exists in the
+ * workspace and which commits only the workspace holds. Replaces a previous agent's prose.
+ */
+export function branchWipClaim(
+  branch: string,
+  probe: BranchProbe,
+): { summary: string; ref?: string } {
+  const prefix = "Checked in the task workspace with git:";
+  if (!probe.exists)
+    return {
+      summary: `${prefix} branch ${branch} does not exist; no local commits from an earlier attempt are present. Any earlier claim of unpublished work is not backed by this workspace.`,
+    };
+  if (probe.unpublished.length === 0)
+    return {
+      summary: `${prefix} branch ${branch} exists and has no unpublished commits: every commit is on a remote-tracking ref.`,
+    };
+  const named = probe.unpublished.slice(0, MAX_NAMED_SHAS).join(", ");
+  const more =
+    probe.unpublished.length > MAX_NAMED_SHAS
+      ? ` and ${probe.unpublished.length - MAX_NAMED_SHAS} more`
+      : "";
+  return {
+    summary: `${prefix} branch ${branch} has ${probe.unpublished.length} commit(s) on no remote-tracking ref (unpublished): ${named}${more}.`,
+    ref: probe.unpublished[0],
+  };
+}
+
+/**
+ * Unpublished commits a refused retry would strand: those of the task branch, plus those
+ * of a detached HEAD. Empty when the task branch is gone or fully published.
+ */
+async function strandedCommits(
+  ws: string,
+  ceiling: string,
+  branch: string,
+  head: string,
+  git: GitRunner,
+): Promise<string[]> {
+  const found = new Set<string>();
+  const ref = `refs/heads/${branch}`;
+  if (await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], ws, ceiling).catch(() => "")) {
+    for (const sha of await unpublishedCommits(ws, ceiling, ref, git)) found.add(sha);
+  }
+  if (
+    !head &&
+    (await git(["rev-parse", "--verify", "-q", "HEAD^{commit}"], ws, ceiling).catch(() => ""))
+  )
+    for (const sha of await unpublishedCommits(ws, ceiling, "HEAD", git)) found.add(sha);
+  return [...found];
+}
 
 const fail = (reason: WorkspaceFailureReason, error: string): WorkspaceResult => ({
   ok: false,
@@ -149,11 +243,24 @@ async function validate(
         : `origin is ${urls.join(", ")}, expected ${repositoryUrl}${caseHint(repositoryUrl)}`,
     );
   const head = await git(["symbolic-ref", "-q", "HEAD"], real, realRoot).catch(() => "");
-  if (head !== `refs/heads/${branch}`)
+  if (head !== `refs/heads/${branch}`) {
+    const stranded = await strandedCommits(real, realRoot, branch, head, git);
+    if (stranded.length) {
+      const named = stranded.slice(0, MAX_NAMED_SHAS).join(", ");
+      const more =
+        stranded.length > MAX_NAMED_SHAS ? ` and ${stranded.length - MAX_NAMED_SHAS} more` : "";
+      return fail(
+        "env_workspace_unpreserved_commits",
+        `HEAD is ${head || "detached"}, not refs/heads/${branch}, and ${stranded.length} unpublished ` +
+          `commit(s) (no remote-tracking ref has them) would be left behind: ${named}${more}. ` +
+          "The workspace is untouched; publish or archive that work, then retry",
+      );
+    }
     return fail(
       "env_workspace_branch_mismatch",
       `HEAD is ${head || "detached"}, expected refs/heads/${branch}`,
     );
+  }
   return null;
 }
 

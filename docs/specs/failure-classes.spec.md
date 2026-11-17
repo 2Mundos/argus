@@ -258,6 +258,7 @@ task. No model session starts and no attempt is spent.
 | Another holder has the task's checkpoint lease | `env_checkpoint_busy` |
 | The work exceeds the checkpoint size limit | `env_checkpoint_limit` |
 | Its HEAD is the task branch | `env_workspace_branch_mismatch` |
+| Its HEAD is the task branch, or no commit of the task branch or a detached HEAD is missing from every remote-tracking ref | `env_workspace_unpreserved_commits` |
 | A new workspace stays within `ARGUS_TASK_WORKSPACE_MAX` | `env_workspace_limit` |
 | A required task input is listed, shared and downloadable ([task inputs](task-inputs.spec.md) 3.6) | `env_input_unavailable` |
 | A required task input has a safe name and destination, and its size and SHA-256 match after the retry | `env_input_invalid` |

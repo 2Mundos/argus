@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-07
+updated: 2026-11-17
 ---
 
 # Task continuation
@@ -120,6 +120,10 @@ observation, a stale attempt or a task that is not claimed wakes nobody, and the
 state never changes. With no observer, no network or a failed report, the recorded
 contract stands and unknown stays unknown. Reconciliation is settled by an
 explicit orchestrator update. Argus never creates branches or PRs for the worker.
+
+For NanoClaw the `wip` claim is derived from git, not from an earlier agent's prose: after
+the task workspace is prepared, the channel reports whether the task branch exists there and
+which commits only the workspace holds ([task workspace](task-workspace.spec.md) 3.6).
 
 Separately, the read-only
 [resumability preflight](task-resumability-preflight.spec.md)
