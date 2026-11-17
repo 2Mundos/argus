@@ -410,9 +410,6 @@ describe("prepareTaskWorkspace", () => {
       const id = randomUUID();
       const r = await prepare(group, id);
       if (!r.ok) throw new Error(r.error);
-      writeFileSync(path.join(r.path, "a.txt"), "a\n");
-      git(r.path, "add", "a.txt");
-      git(r.path, "commit", "-q", "-m", "a");
       git(r.path, "checkout", "-q", "-b", "other");
       await failsWith(group, id, "env_workspace_branch_mismatch", [group]);
     });
