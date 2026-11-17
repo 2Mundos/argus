@@ -308,6 +308,33 @@ async def test_custom_pair_requires_separate_executor_lease(db, fleet):
             )
 
 
+async def test_local_harness_with_opencode_custom_executor(db, fleet):
+    """A local direct route pairs with the scoped OpenCode/custom lane, two leases."""
+    await policy(db, [paired()])
+    task = await make_task(db)
+    claimed, engine = await claim(db, fleet)
+    _, route = await state(db, task.id)
+    assert claimed.id == task.id
+    assert engine.account_id == "local" and engine.role == "engine"
+    assert route.selection.harness.model == "served-model"
+    assert route.selection.executor.selector.adapter == "opencode"
+    assert route.selection.executor.selector.provider == "custom"
+    assert route.selection.executor.account_id == "custom"
+    assert route.selection.executor.lease_id != engine.lease_id
+    async with db.read() as conn:
+        delivery = await routes.executor_delivery(conn, route.selection, A, fleet)
+    assert delivery.role == "executor" and delivery.provider == "custom"
+    assert delivery.model == "vendor/code"
+    assert delivery.settings.model == "vendor/code"
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT role FROM account_leases WHERE released_at IS NULL ORDER BY role"
+        ) as cur,
+    ):
+        assert [r[0] for r in await cur.fetchall()] == ["engine", "executor"]
+
+
 @pytest.mark.parametrize("mode", ["single", "paired"])
 async def test_native_exact_same_account_and_custom_capacity(db, fleet, mode):
     native = direct(
