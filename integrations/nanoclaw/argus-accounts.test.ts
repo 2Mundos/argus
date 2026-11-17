@@ -1131,7 +1131,7 @@ describe("engine and executor leases in the channel", () => {
     // The applied executor lease is the copilot account: its secrets are in the vault.
     const names = w.onecli.secrets.map((s) => s.name);
     expect(names.some((n) => n.startsWith("argus-ag-group-1-copilot-"))).toBe(true);
-    expect(names).toContain("argus-ag-group-1-anthropic");
+    expect(names).toContain("argus-ag-group-1");
   });
 
   it("holds no executor lease and warns, naming the provider, when the pinned provider has no account", async () => {
@@ -1153,7 +1153,7 @@ describe("engine and executor leases in the channel", () => {
     expect(
       w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=executor"),
     ).toBe(true);
-    expect(w.onecli.secrets.map((s) => s.name)).toEqual(["argus-ag-group-1-anthropic"]);
+    expect(w.onecli.secrets.map((s) => s.name)).toEqual(["argus-ag-group-1"]);
     expect(
       warn.mock.calls.some((c) =>
         String(c[0]).includes("No copilot account is usable for the pinned executor copilot"),
