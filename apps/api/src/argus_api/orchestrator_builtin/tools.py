@@ -20,6 +20,7 @@ from argus_api.orchestrator_builtin.transcript import ToolCall
 HIDDEN = frozenset(
     {
         "claim_task",
+        "report_execution_route",
         "heartbeat",
         "leave",
         "lease_account",

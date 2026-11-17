@@ -23,6 +23,7 @@ import {
   sourceLabel,
 } from "../settings";
 import { useHash } from "../unsaved";
+import { ExecutionChains } from "./ExecutionChains";
 import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ModelPreferences, ModelPreferencesEditor } from "./ModelPreferences";
 import { OrchestratorModelPicker } from "./OrchestratorModel";
@@ -122,6 +123,12 @@ export function Settings({
           <div className="card">
             <ModelsSection project={project} setting={models} onChanged={() => reload()} />
           </div>
+          <ExecutionChains
+            key={scope}
+            project={project}
+            setting={byKey.get("execution.chains")}
+            onChanged={() => reload()}
+          />
           <div className="card">
             <DifficultyExecutorsSection
               project={project}

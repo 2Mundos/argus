@@ -1,8 +1,7 @@
-"""Opt-in execution policy contract; not wired to settings or worker admission.
+"""Opt-in complete execution policies, inheritance and worker protocol.
 
-Static selector compatibility is not runtime readiness. The API must additionally
-validate account references/roles and require worker adapter conformance before
-exposing or executing this policy (execution-chains spec).
+Static compatibility is not readiness. API admission additionally validates exact
+account roles, capacity, credentials and the worker's declared adapter capabilities.
 """
 
 import hashlib
@@ -171,3 +170,87 @@ def resolve_chains(
             source=source, revision=revision, alternatives=alternatives
         ).model_copy(deep=True)
     return result
+
+
+class ResolvedSelector(ClosedModel):
+    selector: Selector
+    account_id: str
+    model: str
+    lease_id: str
+
+
+class ExecutionSelection(ClosedModel):
+    version: Literal[1] = 1
+    source: Literal["global", "project"]
+    revision: str
+    difficulty: Difficulty
+    alternative: Alternative
+    index: int
+    generation: int
+    harness: ResolvedSelector
+    candidates: list[Alternative] = Field(default_factory=list)
+    executor: ResolvedSelector | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+
+
+class ExecutionReport(ClosedModel):
+    attempt: int = Field(ge=1)
+    generation: int = Field(ge=1)
+    action: Literal["applied", "advance"]
+    stopped: bool = False
+    failed_role: Literal["harness", "executor"] = "harness"
+    # An advance attests the previous runtime stopped. Free text never selects a route.
+    reason: (
+        Literal[
+            "quota",
+            "provider_unavailable",
+            "auth_missing",
+            "not_installed",
+            "model_not_served",
+            "provider_protocol",
+            "provider_transport",
+        ]
+        | None
+    ) = None
+
+
+class ExecutionCapability(ClosedModel):
+    id: str
+    runtime: Literal["nanoclaw"] = "nanoclaw"
+    role: Literal["harness", "executor"]
+    adapter: str
+    provider: str
+    model_sources: list[str]
+    modes: list[Literal["single", "paired"]]
+    excluded_harness_providers: list[str] = Field(default_factory=list)
+    same_provider_same_account: bool = False
+
+
+EXECUTION_CAPABILITIES = [
+    ExecutionCapability.model_validate(
+        {
+            "id": f"nanoclaw:{role}:{adapter}:{provider}",
+            "role": role,
+            "adapter": adapter,
+            "provider": provider,
+            "model_sources": sorted(sources),
+            "modes": ["single", "paired"] if role == "harness" else ["paired"],
+            "excluded_harness_providers": ["local"]
+            if role == "executor" and adapter not in {"agent", "opencode"}
+            else [],
+            "same_provider_same_account": role == "executor" and provider != "custom",
+        }
+    )
+    for (role, adapter, provider), sources in _SELECTOR_SOURCES.items()
+]
+
+
+def required_capabilities(alternative: Alternative) -> set[str]:
+    selectors = [("harness", alternative.harness)]
+    if isinstance(alternative, PairedAlternative):
+        selectors.append(("executor", alternative.executor))
+    return {"execution-chains-v1"} | {
+        f"{alternative.runtime}:{role}:{selector.adapter}:{selector.provider}"
+        for role, selector in selectors
+    }

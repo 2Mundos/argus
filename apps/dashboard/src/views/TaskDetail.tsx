@@ -90,6 +90,13 @@ export function TaskDetail({
       call(api.GET("/api/tasks/{task_id}", { params: { path: { task_id: taskId } }, signal })),
     [taskId],
   );
+  const { data: executionRoute } = useLiveData(
+    (signal) =>
+      call(
+        api.GET("/api/tasks/{task_id}/route", { params: { path: { task_id: taskId } }, signal }),
+      ).catch(() => null),
+    [taskId],
+  );
   const { data: artifacts, reload: reloadArtifacts } = useLiveData(
     (signal) =>
       call(
@@ -329,6 +336,20 @@ export function TaskDetail({
           <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
           <TaskReadiness task={task} />
+          {executionRoute?.execution && (
+            <details className="card">
+              <summary>
+                Execution route ·{" "}
+                {executionRoute.execution.selection?.alternative.id ?? "Not selected"} · cursor{" "}
+                {executionRoute.execution.cursor}
+              </summary>
+              <p>
+                Last recorded selection is not a claim of current eligibility. Task pins bypass the
+                whole chain; resets and classified advances are recorded in activity.
+              </p>
+              <pre>{JSON.stringify(executionRoute.execution, null, 2)}</pre>
+            </details>
+          )}
           {task.state === "blocked" && task.block_reason === "env_repository_unconfigured" && (
             <RepositoryBlockAction taskId={taskId} project={task.project} onUnblocked={reload} />
           )}

@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from argus_api.access import require_task_readable
 from argus_api.deps import AgentDep, CallerDep, DbDep
 from argus_api.modeltrace import service
+from argus_api.tasks import execution_routes
 from argus_api.tasks import service as tasks
 
 router = APIRouter(prefix="/tasks", tags=["models"])
@@ -18,6 +19,30 @@ async def report_models(
     completes the stored one and never overwrites it (409 on a contradiction)."""
     async with db.write() as tx:
         await tasks.check_lease(tx, task_id, body.attempt, agent_id)
+        await execution_routes.check_generation(
+            tx, task_id, body.attempt, body.execution_generation
+        )
+        selection = await execution_routes.current(tx.conn, task_id, body.attempt)
+        if selection is not None:
+            from argus_api.errors import ValidationFailedError
+
+            for e in body.executions:
+                resolved = (
+                    selection.harness if e.layer == "harness" else selection.executor
+                )
+                if resolved is None or any(
+                    [
+                        e.configured_model is not None
+                        and e.configured_model != resolved.model,
+                        e.account_id is not None
+                        and e.account_id != resolved.account_id,
+                        e.provider is not None
+                        and e.provider != resolved.selector.provider,
+                    ]
+                ):
+                    raise ValidationFailedError(
+                        "model report contradicts the execution contract"
+                    )
         for e in body.executions:
             await service.record_execution(tx, agent_id, task_id, body.attempt, e)
         for s in body.selections:

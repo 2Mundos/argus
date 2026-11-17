@@ -3,6 +3,7 @@
 from typing import Any
 
 from argus_core.difficulty import Difficulty
+from argus_core.execution_chains import ExecutionChains
 from argus_core.settings import IndependentReviewSetting, SettingDefinition
 from argus_core.tasks import Deliverable
 
@@ -83,6 +84,13 @@ _GIT_IDENTITY_SCHEMA: dict[str, Any] = {
 REVIEW_DEFAULT = IndependentReviewSetting().model_dump()
 
 REGISTRY: dict[str, SettingDefinition] = {
+    "execution.chains": SettingDefinition(
+        key="execution.chains",
+        schema=ExecutionChains.model_json_schema(),
+        default=ExecutionChains().model_dump(mode="json"),
+        scopes=["global", "project"],
+        description="Ordered complete single-layer or harness/executor alternatives per difficulty.",
+    ),
     "models": SettingDefinition(
         key="models",
         schema=_MODELS_SCHEMA,

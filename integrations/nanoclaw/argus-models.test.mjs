@@ -83,6 +83,7 @@ async function smoke(t, selectModels) {
           spec: "test",
           project: "test",
           acceptance: [],
+          command_guard_enabled: false,
           knowledge_refs: [],
         });
       }
@@ -133,7 +134,7 @@ test("channel records revision and fallback before injecting the actual task", a
   assert.equal(s.uploads[0].resolved_model, null);
   assert.equal(s.uploads[0].fallback_reason, "previous_task_failure");
   assert.match(s.uploads[0].policy_revision, /^[a-f0-9]{64}$/);
-  await s.adapter.deliver("local", null, { kind: "chat", content: { text: "COMPLETE: done" } });
+  await s.adapter.deliver("local", s.inbound[0][1], { kind: "chat", content: { text: "COMPLETE: done" } });
   assert.ok(s.calls.some((c) => c.endsWith("/complete")));
 });
 
@@ -185,6 +186,7 @@ test("actual harness hook applies config, stops stale containers and pins policy
     executor_account_id: "a-codex",
     preferred_executor: "codex",
     executor_model: null,
+    model_switch: null,
     complexity: "standard",
     engine_settings: null,
     executor_settings: null,
@@ -206,74 +208,14 @@ test("actual harness hook applies config, stops stale containers and pins policy
 });
 
 test("channel installer is idempotent and includes source and built policy assets", (t) => {
+  const source = process.env.ARGUS_TEST_NANOCLAW_SOURCE;
+  if (!source) return t.skip("requires the pinned NanoClaw checkout; pass ARGUS_TEST_NANOCLAW_SOURCE from provision.sh check");
   const target = mkdtempSync(path.join(os.tmpdir(), "argus-install-"));
   t.after(() => rmSync(target, { recursive: true, force: true }));
-  for (const dir of [
-    "src/channels",
-    "src/gateway-providers",
-    "src/drivers",
-    "scripts",
-    "container",
-  ]) {
-    mkdirSync(path.join(target, dir), { recursive: true });
-  }
-  writeFileSync(path.join(target, "src/channels/index.ts"), "// fake NanoClaw barrel\n");
-  writeFileSync(
-    path.join(target, "container/Dockerfile"),
-    "FROM scratch\n# ---- ncl CLI wrapper\n",
-  );
-  // The Claude provider's upstream anchors that the rate-limit and harness-usage patchers hook
-  // (patch-claude-rate-limit.py, patch-harness-usage.py); the other upstream files they touch are optional.
-  const providers = path.join(target, "container/agent-runner/src/providers");
-  mkdirSync(providers, { recursive: true });
-  writeFileSync(
-    path.join(providers, "claude.ts"),
-    [
-      "import { registerProvider } from './provider-registry.js';",
-      "async function run() {",
-      "      let messageCount = 0;",
-      "      let lastStreamActivityAt = 0;",
-      "      for await (const message of sdkResult) {",
-      "        if (message.type === 'system') {",
-      "        } else if (message.type === 'assistant') {",
-      "        } else if (message.type === 'result') {",
-      "          const resultAsError = hint ? `${candidate}\\n${hint}` : '';",
-      "          yield {",
-      "            type: 'result',",
-      "            text: resultAsError ? null : (m.result ?? null),",
-      "            isError,",
-      "            error: m.errors?.length ? m.errors.join('\\n') : resultAsError || undefined,",
-      "          };",
-      "        }",
-      "      }",
-      "}",
-      "",
-    ].join("\n"),
-  );
-  const runner = path.join(target, "container/agent-runner/src");
-  writeFileSync(
-    path.join(runner, "formatter.ts"),
-    [
-      "const PROVIDER_FAILURE_FIELD = 'providerFailure';",
-      "export type ProviderFailureKind = 'auth_expired';",
-      "",
-      "export interface ProviderFailure {",
-      "  provider: string;",
-      "  kind: ProviderFailureKind;",
-      "}",
-      "",
-    ].join("\n"),
-  );
-  writeFileSync(
-    path.join(runner, "poll-loop.ts"),
-    [
-      "import { stripHarnessTagArtifacts } from './harness-tag-strip.js';",
-      "function classifyProviderFailure(providerName: string, error: string | undefined): ProviderFailure | undefined {",
-      "  return undefined;",
-      "}",
-      "",
-    ].join("\n"),
-  );
+  const archive = spawnSync("git", ["-C", source, "archive", "HEAD"], { maxBuffer: 32 * 1024 * 1024 });
+  assert.equal(archive.status, 0, archive.stderr.toString());
+  const unpack = spawnSync("tar", ["-xf", "-", "-C", target], { input: archive.stdout });
+  assert.equal(unpack.status, 0, unpack.stderr.toString());
   for (let i = 0; i < 2; i++) {
     const result = spawnSync("bash", [new URL("./install.sh", import.meta.url).pathname, target], {
       encoding: "utf8",
@@ -289,7 +231,8 @@ test("channel installer is idempotent and includes source and built policy asset
       readFileSync(path.join(target, dir, "model-policy.mjs"), "utf8").includes("selectModel"),
     );
   }
-  const claude = readFileSync(path.join(providers, "claude.ts"), "utf8");
+  const runner = path.join(target, "container/agent-runner/src");
+  const claude = readFileSync(path.join(runner, "providers/claude.ts"), "utf8");
   for (const hook of [
     "claudeRateLimitError(m.result, rateLimited)",
     "recordHarnessUsage('claude'",

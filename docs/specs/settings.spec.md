@@ -22,6 +22,11 @@ Phase 1 ships the store, the API, the Settings tab and two settings:
 
 Readable by any valid token. Written by admins.
 
+Explicit complete per-difficulty routing is owned by
+[execution chains](execution-chains.spec.md). Those opt-in lists own both layers
+and models; the legacy selection rules below apply only without an effective
+explicit list, or when task model/account pins choose the whole legacy pin path.
+
 # 2. Non-Goals
 
 - No free-form key/value store. Unknown keys are rejected; every key has a type,
@@ -164,10 +169,10 @@ difficulty as `difficulty_executors`.
 This is a legacy executor-only setting, not a list of complete execution routes.
 An empty list removes delegation but leaves the harness account ranking unchanged,
 including trivial tasks' soft local preference and possible cloud fallback. The
-[Execution chains contract](execution-chains.spec.md) defines the proposed general
+[Execution chains contract](execution-chains.spec.md) defines the opt-in general
 replacement: complete paired or single-layer alternatives for every difficulty,
-per-level inheritance, compatibility and explicit migration. It is not available
-through the current Settings UI/API/MCP; no automatic conversion is defined.
+per-level inheritance, compatibility and explicit migration. Setup Settings and
+the shared settings API/MCP expose it; no automatic conversion is defined.
 
 ## 3.8 Git identity
 

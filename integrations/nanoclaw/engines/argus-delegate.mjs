@@ -1346,6 +1346,15 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       if (settings.label === "local" && !env(e, CUSTOM_KEY_ENV))
         e = { ...e, [CUSTOM_KEY_ENV]: "argus-local-harness" };
     }
+    const execution = snapshot.context?.execution;
+    if (
+      execution &&
+      (execution.version !== 1 ||
+        execution.alternative.mode !== "paired" ||
+        execution.executor?.selector.adapter !== executor ||
+        (opts.model && opts.model !== execution.executor.model))
+    )
+      throw new Error("executor/model not authorized by the complete execution alternative");
     // --model, then the task's pin and the account's model (fixed choices: no chain),
     // then the policy chain.
     selection = selectModel(
@@ -1354,7 +1363,11 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       executor,
       opts.modelAttempt ?? 1,
       opts.fallbackReason,
-      opts.model || pinnedModel(snapshot, executor) || settings?.model || undefined,
+      execution?.executor?.model ||
+        opts.model ||
+        pinnedModel(snapshot, executor) ||
+        settings?.model ||
+        undefined,
     );
   } catch (err) {
     finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });

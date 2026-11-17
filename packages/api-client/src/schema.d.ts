@@ -3259,6 +3259,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/execution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Execution
+         * @description Acknowledge the exact selection, or advance after stopping the complete runtime.
+         */
+        post: operations["report_execution_api_tasks__task_id__execution_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/fail": {
         parameters: {
             query?: never;
@@ -3970,6 +3990,14 @@ export interface components {
              */
             role?: "engine" | "executor" | "repository";
             settings?: components["schemas"]["LeaseSettings"] | null;
+        };
+        /** AccountModel */
+        AccountModel: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "account";
         };
         /**
          * AccountState
@@ -5204,6 +5232,8 @@ export interface components {
             engine_lease?: components["schemas"]["AccountLease"] | null;
             /** Error */
             error: string | null;
+            execution?: components["schemas"]["ExecutionSelection"] | null;
+            executor_lease?: components["schemas"]["AccountLease"] | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
@@ -6600,6 +6630,173 @@ export interface components {
         EngineCatalog: {
             /** Engines */
             engines: components["schemas"]["EngineEntry"][];
+            /**
+             * Execution Capabilities
+             * @default [
+             *       {
+             *         "adapter": "claude",
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:harness:claude:anthropic",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "single",
+             *           "paired"
+             *         ],
+             *         "provider": "anthropic",
+             *         "role": "harness",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": false
+             *       },
+             *       {
+             *         "adapter": "claude",
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:harness:claude:local",
+             *         "model_sources": [
+             *           "account"
+             *         ],
+             *         "modes": [
+             *           "single",
+             *           "paired"
+             *         ],
+             *         "provider": "local",
+             *         "role": "harness",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": false
+             *       },
+             *       {
+             *         "adapter": "claude",
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:harness:claude:custom",
+             *         "model_sources": [
+             *           "account"
+             *         ],
+             *         "modes": [
+             *           "single",
+             *           "paired"
+             *         ],
+             *         "provider": "custom",
+             *         "role": "harness",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": false
+             *       },
+             *       {
+             *         "adapter": "codex",
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:harness:codex:openai",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "single",
+             *           "paired"
+             *         ],
+             *         "provider": "openai",
+             *         "role": "harness",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": false
+             *       },
+             *       {
+             *         "adapter": "claude",
+             *         "excluded_harness_providers": [
+             *           "local"
+             *         ],
+             *         "id": "nanoclaw:executor:claude:anthropic",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "anthropic",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": true
+             *       },
+             *       {
+             *         "adapter": "codex",
+             *         "excluded_harness_providers": [
+             *           "local"
+             *         ],
+             *         "id": "nanoclaw:executor:codex:openai",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "openai",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": true
+             *       },
+             *       {
+             *         "adapter": "agent",
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:executor:agent:cursor",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "cursor",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": true
+             *       },
+             *       {
+             *         "adapter": "copilot",
+             *         "excluded_harness_providers": [
+             *           "local"
+             *         ],
+             *         "id": "nanoclaw:executor:copilot:copilot",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "copilot",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": true
+             *       },
+             *       {
+             *         "adapter": "opencode",
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:executor:opencode:local",
+             *         "model_sources": [
+             *           "account"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "local",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": true
+             *       },
+             *       {
+             *         "adapter": "opencode",
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:executor:opencode:custom",
+             *         "model_sources": [
+             *           "account",
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "custom",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": false
+             *       }
+             *     ]
+             */
+            execution_capabilities: components["schemas"]["ExecutionCapability"][];
             local: components["schemas"]["LocalModelInfo"] | null;
         };
         /** EngineEntry */
@@ -6667,6 +6864,8 @@ export interface components {
              * @enum {string}
              */
             engine: "codex" | "claude";
+            /** Execution Generation */
+            execution_generation?: number | null;
             /** Provider */
             provider: string;
             /**
@@ -6849,65 +7048,63 @@ export interface components {
             updated_at: string;
             usage?: components["schemas"]["UsageRef"] | null;
         };
-        /**
-         * ExecutionReport
-         * @description One model run of a layer: a harness session, or one delegation attempt.
-         *
-         *     `key` is chosen by the producer (stable across retries of the *report*, unique per
-         *     run). Re-sending it completes the record: values already stored are kept, only
-         *     gaps, `state`, `ended_at`, `error_code` and the observation can be filled.
-         */
-        ExecutionReport: {
-            /** Account Id */
-            account_id?: string | null;
-            /** Configured Model */
-            configured_model?: string | null;
-            /** Delegation Id */
-            delegation_id?: string | null;
-            /** Ended At */
-            ended_at?: string | null;
-            /** Engine */
-            engine?: string | null;
-            /** Error Code */
-            error_code?: string | null;
-            /**
-             * Evidence
-             * @default not_reported
-             * @enum {string}
-             */
-            evidence?: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
-            /** Evidence Reason */
-            evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
-            /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
-            /** Key */
-            key: string;
-            /**
-             * Layer
-             * @enum {string}
-             */
-            layer: "harness" | "delegate";
-            /** Observed Model */
-            observed_model?: string | null;
-            /** Policy Revision */
-            policy_revision?: string | null;
+        /** ExecutionCapability */
+        ExecutionCapability: {
+            /** Adapter */
+            adapter: string;
+            /** Excluded Harness Providers */
+            excluded_harness_providers?: string[];
+            /** Id */
+            id: string;
+            /** Model Sources */
+            model_sources: string[];
+            /** Modes */
+            modes: ("single" | "paired")[];
             /** Provider */
-            provider?: string | null;
-            /** Requested Model */
-            requested_model?: string | null;
-            /** Resumed From */
-            resumed_from?: string | null;
-            /** Run Key */
-            run_key?: string | null;
-            /** Runtime */
-            runtime?: string | null;
-            /** Started At */
-            started_at?: string | null;
+            provider: string;
             /**
-             * State
+             * Role
              * @enum {string}
              */
-            state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
+            role: "harness" | "executor";
+            /**
+             * Runtime
+             * @default nanoclaw
+             * @constant
+             */
+            runtime?: "nanoclaw";
+            /**
+             * Same Provider Same Account
+             * @default false
+             */
+            same_provider_same_account?: boolean;
+        };
+        /** ExecutionSelection */
+        ExecutionSelection: {
+            /** Alternative */
+            alternative: components["schemas"]["SingleAlternative"] | components["schemas"]["PairedAlternative"];
+            /** Candidates */
+            candidates?: (components["schemas"]["SingleAlternative"] | components["schemas"]["PairedAlternative"])[];
+            difficulty: components["schemas"]["Difficulty"];
+            executor?: components["schemas"]["ResolvedSelector"] | null;
+            /** Generation */
+            generation: number;
+            harness: components["schemas"]["ResolvedSelector"];
+            /** Index */
+            index: number;
+            /** Revision */
+            revision: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "global" | "project";
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version?: 1;
         };
         /**
          * ExecutorModel
@@ -6962,6 +7159,16 @@ export interface components {
             task_id?: string | null;
             /** Until */
             until?: string | null;
+        };
+        /** ExplicitModel */
+        ExplicitModel: {
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "explicit";
         };
         /** ExternalReads */
         ExternalReads: {
@@ -8523,8 +8730,10 @@ export interface components {
         ModelTraceReport: {
             /** Attempt */
             attempt: number;
+            /** Execution Generation */
+            execution_generation?: number | null;
             /** Executions */
-            executions?: components["schemas"]["ExecutionReport"][];
+            executions?: components["schemas"]["argus_core__model_trace__ExecutionReport"][];
             /** Selections */
             selections?: components["schemas"]["SelectionReport"][];
         };
@@ -8916,6 +9125,23 @@ export interface components {
          * @enum {string}
          */
         PageState: "active" | "archived";
+        /** PairedAlternative */
+        PairedAlternative: {
+            executor: components["schemas"]["Selector"];
+            harness: components["schemas"]["Selector"];
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "paired";
+            /**
+             * Runtime
+             * @constant
+             */
+            runtime: "nanoclaw";
+        };
         /** PendingItem */
         PendingItem: {
             /** Id */
@@ -10203,6 +10429,16 @@ export interface components {
              */
             source?: "forge";
         };
+        /** ResolvedSelector */
+        ResolvedSelector: {
+            /** Account Id */
+            account_id: string;
+            /** Lease Id */
+            lease_id: string;
+            /** Model */
+            model: string;
+            selector: components["schemas"]["Selector"];
+        };
         /**
          * ResumabilityCause
          * @description Closed set of cause codes (spec 3.8).
@@ -10423,6 +10659,38 @@ export interface components {
             provider: string | null;
             /** State */
             state: string;
+        };
+        /** RoutePolicy */
+        RoutePolicy: {
+            /** Alternatives */
+            alternatives: (components["schemas"]["SingleAlternative"] | components["schemas"]["PairedAlternative"])[];
+            /** Bypass */
+            bypass?: string | null;
+            /**
+             * Cursor
+             * @default 0
+             */
+            cursor?: number;
+            /**
+             * Generation
+             * @default 0
+             */
+            generation?: number;
+            /** Revision */
+            revision: string;
+            selection?: components["schemas"]["ExecutionSelection"] | null;
+            /**
+             * Skips
+             * @default []
+             */
+            skips?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "global" | "project";
         };
         /** RouteProvider */
         RouteProvider: {
@@ -10836,6 +11104,23 @@ export interface components {
             /** To Provider */
             to_provider?: string | null;
         };
+        /** Selector */
+        Selector: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Adapter
+             * @enum {string}
+             */
+            adapter: "claude" | "codex" | "agent" | "copilot" | "opencode";
+            /** Model */
+            model: components["schemas"]["AccountModel"] | components["schemas"]["ExplicitModel"];
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "anthropic" | "openai" | "local" | "custom" | "cursor" | "copilot";
+        };
         /** ServiceContract */
         ServiceContract: {
             /** Command */
@@ -10896,12 +11181,22 @@ export interface components {
         };
         /** SettingValue */
         SettingValue: {
+            /** Difficulty Revisions */
+            difficulty_revisions?: {
+                [key: string]: string;
+            } | null;
+            /** Difficulty Sources */
+            difficulty_sources?: {
+                [key: string]: string;
+            } | null;
             /** Key */
             key: string;
             /** Notice */
             notice?: string | null;
             /** Revision */
             revision?: string | null;
+            /** Scoped Value */
+            scoped_value?: unknown;
             /**
              * Source
              * @enum {string}
@@ -10936,6 +11231,22 @@ export interface components {
             sha?: string | null;
             /** @default unknown */
             source?: components["schemas"]["FactOrigin"];
+        };
+        /** SingleAlternative */
+        SingleAlternative: {
+            harness: components["schemas"]["Selector"];
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "single";
+            /**
+             * Runtime
+             * @constant
+             */
+            runtime: "nanoclaw";
         };
         /**
          * Source
@@ -12197,6 +12508,7 @@ export interface components {
             block_reason: string | null;
             /** Error */
             error: string | null;
+            execution?: components["schemas"]["RoutePolicy"] | null;
             executor_model: components["schemas"]["ExecutorModel"] | null;
             /** Failure Class */
             failure_class: string | null;
@@ -12210,7 +12522,7 @@ export interface components {
             note?: string;
             /** Providers */
             providers: components["schemas"]["RouteProvider"][];
-            resolution: components["schemas"]["RouteResolution"];
+            resolution: components["schemas"]["RouteResolution"] | null;
             state: components["schemas"]["TaskState"];
             /** Task Id */
             task_id: string;
@@ -12992,6 +13304,31 @@ export interface components {
              */
             validated: components["schemas"]["argus_core__engines__Fact"];
         };
+        /** ExecutionReport */
+        argus_core__execution_chains__ExecutionReport: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "applied" | "advance";
+            /** Attempt */
+            attempt: number;
+            /**
+             * Failed Role
+             * @default harness
+             * @enum {string}
+             */
+            failed_role?: "harness" | "executor";
+            /** Generation */
+            generation: number;
+            /** Reason */
+            reason?: ("quota" | "provider_unavailable" | "auth_missing" | "not_installed" | "model_not_served" | "provider_protocol" | "provider_transport") | null;
+            /**
+             * Stopped
+             * @default false
+             */
+            stopped?: boolean;
+        };
         /** Fact */
         argus_core__fleet__Fact: {
             source: components["schemas"]["FactSource"];
@@ -13012,6 +13349,66 @@ export interface components {
             node: string;
             /** Ready */
             ready: boolean;
+        };
+        /**
+         * ExecutionReport
+         * @description One model run of a layer: a harness session, or one delegation attempt.
+         *
+         *     `key` is chosen by the producer (stable across retries of the *report*, unique per
+         *     run). Re-sending it completes the record: values already stored are kept, only
+         *     gaps, `state`, `ended_at`, `error_code` and the observation can be filled.
+         */
+        argus_core__model_trace__ExecutionReport: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Configured Model */
+            configured_model?: string | null;
+            /** Delegation Id */
+            delegation_id?: string | null;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Engine */
+            engine?: string | null;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Evidence
+             * @default not_reported
+             * @enum {string}
+             */
+            evidence?: "reported_by_runtime" | "cli_output" | "provider_response" | "not_reported";
+            /** Evidence Reason */
+            evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
+            /** Executor */
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            /** Key */
+            key: string;
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "harness" | "delegate";
+            /** Observed Model */
+            observed_model?: string | null;
+            /** Policy Revision */
+            policy_revision?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Requested Model */
+            requested_model?: string | null;
+            /** Resumed From */
+            resumed_from?: string | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Runtime */
+            runtime?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "selected" | "running" | "succeeded" | "failed" | "cancelled";
         };
         /** Selection */
         argus_core__model_trace__Selection: {
@@ -19034,6 +19431,39 @@ export interface operations {
             };
         };
     };
+    report_execution_api_tasks__task_id__execution_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["argus_core__execution_chains__ExecutionReport"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     fail_task_api_tasks__task_id__fail_post: {
         parameters: {
             query?: never;
@@ -19588,7 +20018,9 @@ export interface operations {
     };
     retry_task_api_tasks__task_id__retry_post: {
         parameters: {
-            query?: never;
+            query?: {
+                reset_execution_route?: boolean;
+            };
             header?: never;
             path: {
                 task_id: string;
@@ -19783,7 +20215,9 @@ export interface operations {
     };
     unblock_task_api_tasks__task_id__unblock_post: {
         parameters: {
-            query?: never;
+            query?: {
+                reset_execution_route?: boolean;
+            };
             header?: never;
             path: {
                 task_id: string;

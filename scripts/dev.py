@@ -46,6 +46,7 @@ DROP_TABLES = (
     "task_integrations",  # selections of the dropped integrations
     "integrations",  # project connections and SOPS secret references stay isolated
     "account_leases",
+    "task_execution_routes",  # live selection fences refer to the dropped leases
     "instances",
     "runtime_hosts",
     "runtime_builds",

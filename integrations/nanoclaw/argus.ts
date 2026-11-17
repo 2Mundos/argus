@@ -616,6 +616,8 @@ export interface ArgusTask {
   attempt: number;
   /** The engine account Argus reserved in the claim itself; consumed by `ensureAccount`. */
   engine_lease?: AccountLease | null;
+  execution?: import("./model-policy.mjs").ExecutionSelection | null;
+  executor_lease?: AccountLease | null;
   failures?: number;
   error?: string | null;
   acceptance: string[];
@@ -661,10 +663,40 @@ export interface ArgusTask {
   integrations?: string[];
 }
 
+type ExecutionFailureReason =
+  | "quota"
+  | "provider_unavailable"
+  | "auth_missing"
+  | "not_installed"
+  | "model_not_served"
+  | "provider_protocol"
+  | "provider_transport";
+
+/** Only a structured failure from the selected provider can advance a route. */
+export function executionFailureReason(
+  value: unknown,
+  provider: string,
+): ExecutionFailureReason | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const failure = value as Record<string, unknown>;
+  const expected = provider === "openai" ? "codex" : provider === "anthropic" ? "claude" : provider;
+  if (failure.provider !== expected && failure.provider !== provider) return null;
+  const allowed: ExecutionFailureReason[] = [
+    "provider_unavailable",
+    "auth_missing",
+    "not_installed",
+    "model_not_served",
+    "provider_protocol",
+    "provider_transport",
+  ];
+  return allowed.find((code) => failure.kind === code) ?? null;
+}
+
 /** Empty difficulty executor chain and no pin: NanoClaw does the work (task difficulty / local harness). */
 export function noDelegatedExecutor(
-  task: Pick<ArgusTask, "difficulty_executors" | "executor_model">,
+  task: Pick<ArgusTask, "difficulty_executors" | "executor_model" | "execution">,
 ): boolean {
+  if (task.execution) return task.execution.alternative.mode === "single";
   return (
     Array.isArray(task.difficulty_executors) &&
     task.difficulty_executors.length === 0 &&
@@ -2659,7 +2691,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         source: "delegate",
         now: nowMs,
         post: (body) => client.call("POST", `/tasks/${task.id}/log`, body),
-        postModels: (body: unknown) => client.call("POST", `/tasks/${task.id}/models`, body),
+        postModels: (body: unknown) =>
+          client.call("POST", `/tasks/${task.id}/models`, {
+            ...(body as object),
+            execution_generation: currentClaim?.execution?.generation,
+          }),
         postUsage: (accountId: string, payload: unknown) =>
           client.call("POST", `/accounts/${accountId}/usage`, payload),
       });
@@ -3246,6 +3282,35 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * the next one, then give the agent the task again; otherwise the attempt is
    * a failure and Argus decides whether to retry.
    */
+  async function advanceExecution(task: ArgusTask, reason: ExecutionFailureReason): Promise<void> {
+    if (!task.execution || !cfg.accounts?.recycleRuntime)
+      throw new Error("execution runtime stop unavailable");
+    try {
+      await cfg.accounts.recycleRuntime();
+    } catch {
+      recycleOnLease = true;
+      await client.call("POST", `/tasks/${task.id}/fail`, {
+        attempt: task.attempt,
+        reason: "runtime_switch_failed",
+        error: "execution runtime did not stop",
+      });
+      finishTask();
+      return;
+    }
+    await client.call("POST", `/tasks/${task.id}/execution`, {
+      attempt: task.attempt,
+      generation: task.execution.generation,
+      action: "advance",
+      stopped: true,
+      reason,
+    });
+    account = null;
+    executor = null;
+    activeAccountLeases = [];
+    sessionCarriesTask = false;
+    finishTask();
+  }
+
   async function handleFailure(
     task: { id: string; attempt: number },
     noticeText: string,
@@ -3285,6 +3350,23 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       const pointer = (await uploadStderrTail(task, tail)) ? STDERR_TAIL_POINTER : "";
       return boundHead(error, STDERR_TAIL_INLINE_BYTES - utf8Bytes(pointer)) + pointer;
     };
+    if (currentClaim?.execution) {
+      const routeFailure = executionFailureReason(providerFailure, account?.provider ?? "");
+      if (f.kind === "exhausted") {
+        await advanceExecution(currentClaim, "quota");
+      } else if (routeFailure) {
+        await advanceExecution(currentClaim, routeFailure);
+      } else {
+        // Unknown failures and security denials never choose another alternative.
+        await client.call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          error: await failError(f.reason),
+          reason: "worker_fail",
+        });
+        finishTask();
+      }
+      return;
+    }
     if (f.kind === "auth_rejected" && cfg.accounts && account) {
       // Evidence only: a refused or failed report must not keep the attempt open.
       try {
@@ -3531,6 +3613,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   /** The experiment's arm for this claim, after the engine lease (null: not in it). */
   function singleLayerDecision(task: ArgusTask): ArmDecision | null {
+    if (task.execution) return null;
     const sl = cfg.singleLayer;
     if (!sl) return null;
     let assigned: ReturnType<typeof assignedArm>;
@@ -3552,6 +3635,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   async function prepareModels(task: ArgusTask): Promise<void> {
     const singleLayer = armDecision?.arm === "single_layer";
     if (!cfg.selectModels) {
+      if (task.execution) throw new Error("explicit execution requires exact model application");
       // No policy picks the harness model, so nothing would make it the implementation tier.
       if (singleLayer && armDecision)
         armDecision = { ...armDecision, arm: "delegated", fallback: "no_model_policy" };
@@ -4180,6 +4264,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (!(await ensureRuntime(task))) return;
     if (!(await ensureAccount(task))) {
       const stale = switchFailure !== null;
+      if (task.execution && !stale) {
+        await advanceExecution(task, "provider_unavailable");
+        return;
+      }
       await client
         .call("POST", `/tasks/${task.id}/fail`, {
           attempt: task.attempt,
@@ -4208,6 +4296,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     prRelayed.clear();
     try {
       await prepareModels(task);
+      if (task.execution) {
+        await client.call("POST", `/tasks/${task.id}/execution`, {
+          attempt: task.attempt,
+          generation: task.execution.generation,
+          action: "applied",
+        });
+      }
     } catch (err) {
       await client.call("POST", `/tasks/${task.id}/fail`, {
         attempt: task.attempt,
@@ -4255,6 +4350,16 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!envBlock) envBlock = await repositoryPreflight(task);
       step = "executor probe";
       if (!envBlock) envBlock = await executorPreflight(task);
+      if (
+        task.execution &&
+        envBlock &&
+        ["env_executor_missing", "not_installed", "env_executor_not_installed"].includes(
+          envBlock.reason,
+        )
+      ) {
+        await advanceExecution(task, "not_installed");
+        return;
+      }
       let workspace: TaskWorkspace | null = null;
       let inputs: MaterializedInput[] = [];
       if (!envBlock) {
@@ -4559,7 +4664,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     acc: NonNullable<ArgusConfig["accounts"]>,
     lease: AccountLease,
     reason: "lease" | "exhausted",
-    task: Pick<ArgusTask, "id" | "attempt" | "difficulty_executors" | "executor_model">,
+    task: Pick<
+      ArgusTask,
+      "id" | "attempt" | "difficulty_executors" | "executor_model" | "execution" | "executor_lease"
+    >,
   ): Promise<void> {
     const held: AccountLease[] = [lease];
     // The executor (a delegated CLI) is the best usable account across providers
@@ -4579,7 +4687,31 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           attempt: task.attempt,
         })
       ).data as AccountLease;
-    if (noDelegatedExecutor(task)) {
+    if (task.execution) {
+      const route = task.execution;
+      if (
+        route.version !== 1 ||
+        lease.account_id !== route.harness.account_id ||
+        lease.lease_id !== route.harness.lease_id
+      )
+        throw new Error("execution harness lease mismatch");
+      const candidate = task.executor_lease;
+      if (route.alternative.mode === "paired" && route.executor) {
+        if (route.executor.lease_id !== lease.lease_id) {
+          if (
+            !candidate ||
+            candidate.lease_id !== route.executor.lease_id ||
+            candidate.account_id !== route.executor.account_id ||
+            candidate.role !== "executor"
+          )
+            throw new Error("execution executor lease mismatch");
+          held.push(candidate);
+        }
+      } else if (route.alternative.mode !== "single" || candidate) {
+        throw new Error("invalid execution alternative");
+      }
+      delete task.executor_lease;
+    } else if (noDelegatedExecutor(task)) {
       await client.call("POST", "/accounts/release?role=executor").catch(() => undefined);
     } else {
       try {
@@ -4649,6 +4781,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       }
     } catch (err) {
       if (held.length < 2) throw err;
+      if (task.execution) throw err;
       // An unusable executor account (expired token, no credential field) must
       // not take the engine down with it: serve without it and say so.
       log.warn("The executor account cannot be applied; continuing without it", {
@@ -4687,6 +4820,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         reason,
         task_id: task.id,
         attempt: task.attempt,
+        execution_generation: task.execution?.generation,
       })
       .catch((err) => log.warn("Could not report the engine selection", { err }));
     await syncLocalHarnessFile(lease, held);
@@ -4777,6 +4911,37 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   /** Lease and apply an account for the currently claimed task. */
   async function ensureAccount(task: ArgusTask): Promise<boolean> {
     const acc = cfg.accounts;
+    if (task.execution) {
+      const route = task.execution;
+      const required = [
+        "execution-chains-v1",
+        `nanoclaw:harness:${route.harness.selector.adapter}:${route.harness.selector.provider}`,
+        ...(route.executor
+          ? [
+              `nanoclaw:executor:${route.executor.selector.adapter}:${route.executor.selector.provider}`,
+            ]
+          : []),
+      ];
+      if (!required.every((id) => cfg.capabilities.includes(id)))
+        throw new Error("worker does not support the selected execution contract");
+    }
+    if (task.execution && (!acc?.models || !task.engine_lease))
+      throw new Error(
+        "explicit execution requires its atomically reserved engine lease and account adapter",
+      );
+    if (task.execution) {
+      const selected = task.execution.executor;
+      task.executor_model = selected
+        ? {
+            executor: selected.selector.adapter,
+            model: selected.model,
+            ...(selected.selector.provider === "custom" || selected.selector.provider === "local"
+              ? { account_provider: selected.selector.provider }
+              : {}),
+          }
+        : null;
+      task.difficulty_executors = selected ? [selected.selector.adapter] : [];
+    }
     if (!acc) return true;
     if (!repositoryAssignmentReconciled && activeAccountLeases.length > 0) {
       try {
@@ -4810,7 +4975,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
               attempt: task.attempt,
             })
           ).data as AccountLease);
-      if (rebalancing && lease.account_id === account?.id) return true; // still the best
+      if (!task.execution && rebalancing && lease.account_id === account?.id) return true; // still the best
       try {
         // The old runtime stops before the new account is written.
         if (rebalancing || recycleOnLease) {
@@ -4841,7 +5006,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       });
       return true;
     } catch (err) {
-      if (rebalancing && account) {
+      if (!task.execution && rebalancing && account) {
         // The held lease is still valid (a failed lease rolls back); keep working.
         log.warn("Could not re-evaluate the account lease; keeping the current one", { err });
         return true;
@@ -4975,6 +5140,17 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         }
       } catch (err) {
         if (stopped) return;
+        if (err instanceof ArgusError && err.code === "execution_runtime_reset_required") {
+          if (!cfg.accounts?.recycleRuntime) throw err;
+          await cfg.accounts.recycleRuntime();
+          await client.call("POST", "/accounts/release?role=executor");
+          await client.call("POST", "/accounts/release?role=engine");
+          account = null;
+          executor = null;
+          activeAccountLeases = [];
+          sessionCarriesTask = false;
+          continue;
+        }
         if (err instanceof ArgusError && err.code === "lease_account_unusable") {
           // The engine lease sits on an exhausted or disabled account: drop it,
           // lease afresh with the next claim and recycle the runtime then.
@@ -5111,6 +5287,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     await client
       .call("POST", `/tasks/${task.id}/models`, {
         attempt: task.attempt,
+        execution_generation: currentClaim?.execution?.generation,
         executions: [
           {
             key: harnessRun.key,
@@ -6075,12 +6252,14 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       throw new Error(`model policy has no harness chain for engine ${engine}`);
     }
     if (selection.configured_model && config.model !== selection.configured_model) {
+      if (task.execution) await stopGroupSessions(group.id);
       await updateContainerConfigScalars(group.id, { model: selection.configured_model });
       for (const session of await getSessionsByAgentGroup(group.id)) {
         killContainer(session.id, "argus: model policy changed");
       }
     }
     const pinned = policySnapshot(snapshot.policy, {
+      ...(task.execution ? { execution: task.execution } : {}),
       task_id: task.id,
       attempt: task.attempt,
       engine,

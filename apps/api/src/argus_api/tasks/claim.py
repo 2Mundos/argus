@@ -42,6 +42,7 @@ async def claim(
     default_timeout_s: int = 0,
     runtime_providers: list[str] | None = None,
     can_lease: Callable[[Tx, aiosqlite.Row], Awaitable[bool]] | None = None,
+    execution_admission: Callable[[Tx, aiosqlite.Row], Awaitable[bool]] | None = None,
     disk_guard: DiskGuard | None = None,
 ) -> Task | None:
     """Claim the highest-priority, oldest ready task the agent is capable of.
@@ -79,9 +80,28 @@ async def claim(
         # A runtime that can apply a provider no live agent could before makes
         # waiting tasks servable: wake them (bounded) before choosing.
         await wake_waiting(tx)
-    if await awaiting_quota(tx.conn, tx.now):
-        return None
-    await _note_incompatible(tx, agent_id)
+    quota_wait = await awaiting_quota(tx.conn, tx.now)
+    from argus_api.tasks.execution_routes import wake
+
+    if "execution-chains-v1" in capabilities:
+        async with tx.conn.execute(
+            "SELECT capabilities FROM agents WHERE id=?", (agent_id,)
+        ) as cur:
+            registration = await cur.fetchone()
+            assert registration is not None  # _agent_state already fenced this caller
+            registered = json.loads(registration[0])
+        route_caps = [
+            c
+            for c in capabilities
+            if c == "execution-chains-v1" or c.startswith("nanoclaw:")
+        ]
+        await tx.conn.execute(
+            "UPDATE agents SET capabilities=? WHERE id=?",
+            (json.dumps(sorted(set(registered) | set(route_caps))), agent_id),
+        )
+    await wake(tx)
+    if not quota_wait:
+        await _note_incompatible(tx, agent_id)
     async with tx.conn.execute(
         "SELECT * FROM tasks t WHERE state = 'ready'"
         " AND (retry_at IS NULL OR retry_at <= ?) AND NOT EXISTS ("
@@ -95,6 +115,11 @@ async def claim(
     row = None
     runtime_gates: dict[str, Any] = {}
     for candidate in candidates:
+        from argus_api.tasks.execution_routes import EXHAUSTED, WAIT, resolve
+
+        execution = await resolve(tx.conn, candidate)
+        if quota_wait and (execution is None or execution.bypass):
+            continue
         # A spent budget starts no attempt: the task blocks instead (task cost 3.6).
         if (spent := await task_cost.exhausted_reason(tx.conn, candidate)) is not None:
             await _apply(
@@ -125,6 +150,29 @@ async def claim(
                     },
                     data={"reason": RUNTIME_FAILED, "error": blocked.reason},
                 )
+            continue
+        if execution is not None and not execution.bypass:
+            if execution_admission is not None and await execution_admission(
+                tx, candidate
+            ):
+                row = candidate
+                break
+            if "execution-chains-v1" in capabilities:
+                reason = (
+                    EXHAUSTED
+                    if execution.cursor >= len(execution.alternatives)
+                    else WAIT
+                )
+                await _apply(
+                    tx,
+                    candidate,
+                    Action.BLOCK,
+                    f"agent:{agent_id}",
+                    set_={"block_reason": reason},
+                    data={"reason": reason},
+                )
+            continue
+        if quota_wait:
             continue
         pinned = candidate["harness_account"]
         if (

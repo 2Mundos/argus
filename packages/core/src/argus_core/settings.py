@@ -42,6 +42,9 @@ class SettingValue(BaseModel):
     # when ARGUS_MODEL_POLICY locks edits out.
     revision: str | None = None
     notice: str | None = None
+    scoped_value: Any = None
+    difficulty_sources: dict[str, str] | None = None
+    difficulty_revisions: dict[str, str] | None = None
 
 
 class SettingsResponse(BaseModel):

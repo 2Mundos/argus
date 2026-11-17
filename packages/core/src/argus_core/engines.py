@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from argus_core.criteria_safe import assert_schema_definition, criteria_is_effective
 from argus_core.difficulty import Difficulty
+from argus_core.execution_chains import EXECUTION_CAPABILITIES, ExecutionCapability
 
 _DEFAULTS = ConfigDict(json_schema_serialization_defaults_required=True)
 
@@ -137,6 +138,7 @@ class EngineCatalog(BaseModel):
     model_config = _DEFAULTS
 
     engines: list[EngineEntry]
+    execution_capabilities: list[ExecutionCapability] = EXECUTION_CAPABILITIES
     local: LocalModelInfo | None  # None: no local model configured
 
 

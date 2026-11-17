@@ -12,6 +12,7 @@ from argus_core.continuation import (
 from argus_core.cost import TaskCost
 from argus_core.delivery import Delivery, DeliveryReconciliation, PrBinding
 from argus_core.difficulty import chain_for
+from argus_core.execution_chains import ExecutionReport
 from argus_core.resumability import DEFAULT_READ_BOUND, ResumabilityReport
 from argus_core.task_edit import (
     RetryOverrides,
@@ -66,6 +67,7 @@ from argus_api.tasks import (
     changes,
     command_blocked,
     delivery,
+    execution_routes,
     finalization,
     log,
     pr_binding,
@@ -99,6 +101,15 @@ class ClaimRequest(BaseModel):
     wait_s: float = Field(default=0, ge=0, le=30)
     # Account providers the runtime can apply: a task restricted to others is skipped.
     runtime_providers: list[str] = []
+
+
+@router.post("/{task_id}/execution", status_code=204)
+async def report_execution(
+    task_id: str, body: ExecutionReport, db: DbDep, agent_id: AgentDep
+) -> None:
+    """Acknowledge the exact selection, or advance after stopping the complete runtime."""
+    async with db.write() as tx:
+        await execution_routes.report(tx, task_id, agent_id, body)
 
 
 class CompleteRequest(BaseModel):
@@ -363,22 +374,38 @@ async def claim_task(
                     )
                     unknown = await steers.previous_unknown(conn, task.id, task.attempt)
                     resume = await quota_resume.offered(conn, task.id, task.attempt)
+                    execution = await execution_routes.current(
+                        conn, task.id, task.attempt
+                    )
+                    executor_lease = (
+                        await execution_routes.executor_delivery(
+                            conn, execution, agent_id, secrets
+                        )
+                        if execution
+                        else None
+                    )
                 if engine_lease is not None:
                     # A claim is never in-process: the worker endpoint.
                     engine_lease = await local_health.deliver(
                         request.app.state.local_health, engine_lease, "worker"
                     )
+                if executor_lease is not None:
+                    executor_lease = await local_health.deliver(
+                        request.app.state.local_health, executor_lease, "worker"
+                    )
                 return ClaimedTask(
                     **task.model_dump(),
                     knowledge_refs=refs,
                     engine_lease=engine_lease,
-                    model_policy=policy,
-                    model_policy_revision=revision,
+                    execution=execution,
+                    executor_lease=executor_lease,
+                    model_policy=None if execution else policy,
+                    model_policy_revision=None if execution else revision,
                     model_switch=switch,
                     steer_unknown=unknown,
                     quota_resume=resume,
                     project_repository=project_repository,
-                    difficulty_executors=difficulty_executors,
+                    difficulty_executors=None if execution else difficulty_executors,
                     git_identity=git_identity,
                     command_guard_enabled=command_guard_enabled,
                     auto_merge=auto_merge,
@@ -708,9 +735,14 @@ async def block_task(
 
 
 @router.post("/{task_id}/unblock")
-async def unblock_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
+async def unblock_task(
+    task_id: str, db: DbDep, caller: ManagerDep, reset_execution_route: bool = False
+) -> Task:
     async with db.write() as tx:
-        return await service.unblock(tx, task_id, caller.actor)
+        task = await service.unblock(tx, task_id, caller.actor)
+        if reset_execution_route:
+            await execution_routes.reset(tx, task_id, caller.actor)
+        return task
 
 
 @router.post("/{task_id}/retry")
@@ -719,6 +751,7 @@ async def retry_task(
     db: DbDep,
     caller: ManagerDep,
     body: RetryOverrides | None = None,
+    reset_execution_route: bool = False,
 ) -> Task:
     """Return a `failed` task to `ready` with a fresh window of attempts (409
     `task_not_failed` otherwise). The optional body overrides harness_model,
@@ -726,7 +759,10 @@ async def retry_task(
     budget_usd in the same transaction, with the edit rules; any other key is 422
     `immutable_field`, an invalid value 422, and a refused retry writes nothing."""
     async with db.write() as tx:
-        return await service.retry(tx, task_id, caller.actor, body)
+        task = await service.retry(tx, task_id, caller.actor, body)
+        if reset_execution_route:
+            await execution_routes.reset(tx, task_id, caller.actor)
+        return task
 
 
 @router.post("/{task_id}/release")

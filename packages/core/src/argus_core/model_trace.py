@@ -223,6 +223,7 @@ class ModelTraceReport(BaseModel):
     """The ingestion payload: executions and selections of one attempt."""
 
     attempt: int = Field(ge=1)
+    execution_generation: int | None = Field(default=None, ge=1)
     executions: list[ExecutionReport] = Field(
         default_factory=list, max_length=MAX_PER_REQUEST
     )

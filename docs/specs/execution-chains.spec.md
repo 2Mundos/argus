@@ -1,5 +1,5 @@
 ---
-status: partial
+status: implemented
 created: 2026-11-17
 updated: 2026-11-17
 ---
@@ -16,11 +16,10 @@ never the Cartesian product of independent harness and executor rankings.
 
 This is the owning contract for replacing the legacy routing described in
 [task difficulty](task-difficulty.spec.md), [settings](settings.spec.md) and
-[task models](task-models.spec.md). **Runtime routing is not implemented.** The
-pure typed policy and per-difficulty inheritance resolver are implemented in
-`argus_core.execution_chains`; no API, settings registry or worker imports them.
-The remaining cross-layer implementation is specified below. Current runtime
-behavior and stored settings are unchanged.
+[task models](task-models.spec.md). The opt-in policy now runs through settings,
+atomic claim admission, durable traversal, NanoClaw model application and the
+Setup editor. Unconfigured difficulties retain the legacy path unchanged.
+No existing account, capacity, model server or live setting is migrated.
 
 Scope: typed policy, global/project inheritance, capability validation, account
 reservation, claim fencing, persisted fallback, REST/MCP, Setup, diagnostics,
@@ -351,8 +350,8 @@ in the NanoClaw channel, and `model-policy.mjs` selects models independently.
 These boundaries must change coherently; shipping one new dropdown first would
 promise strictness the runtime cannot deliver.
 
-Implement in these dependency-ordered, locally tested slices. Keep the feature
-unadvertised/unset until slices 1–7 pass; do not activate partial behavior.
+The implementation follows these dependency-ordered local acceptance slices.
+Publication and live activation are separate from their local verification.
 
 1. **Core contract and capability matrix.** Create
    `packages/core/src/argus_core/execution_chains.py`; extend `engines.py`,
@@ -412,33 +411,41 @@ unadvertised/unset until slices 1–7 pass; do not activate partial behavior.
    Update affected living specs to implemented only after evidence. Keep live
    rollout/real inference a separately authorized operator task.
 
-## Open items
+## Local implementation and verification boundary
 
-- Slice 1 policy union, static selector compatibility and pure per-difficulty
-  inheritance are implemented and unit tested. The capability catalogue on the
-  API, account-reference validation and runtime conformance remain open.
-- Slices 2–7 remain open in full. No executable setting, API/MCP route protocol,
-  admission, traversal migration, worker change or Setup editor is implemented
-  by this revision. Do not expose or enable the policy before their joint gates.
-
-## Verification boundary
-
-- New code is confined to `argus_core.execution_chains` and its unit tests; no
-  runtime imports it. The old worktree and its uncommitted prototype remain
-  untouched. See the [implementation handoff](../2026-11-17.execution-routes-handoff.ref.md)
-  for inspected prototype risks and the remaining dependency-ordered slices.
-- Core verification: `uv run pytest -q packages/core/tests/test_execution_chains.py`
-  tests mixed alternatives in either order at all four difficulties, forbidden
-  executor fields in single mode, provider/adapter/model-source rejection,
-  bounds, lossless JSON roundtrip, inheritance/reset, defensive copying and
-  deterministic per-difficulty revisions. It does not exercise leases.
-- Repository gates: `make check` and `make build`; concrete results are recorded
-  in the implementation handoff, not inferred from the design.
-- Future executable acceptance: exact-account paired and direct routes for every
-  difficulty; mixed-order fallback across restart; no cross-pair synthesis;
-  project inheritance; pin/lock compatibility; unsupported capability rejection;
-  strict no-executor call/lease assertions; OpenCode/custom credential and scope
-  regressions. Passing docs checks cannot establish these runtime properties.
-- Not verified: implementation, browser UI, actual model behavior, runtime/CLI
-  conformance, paid inference, deployed preview or production. No production
-  settings, accounts, model servers or services are changed by this slice.
+- Core contract, settings validation/inheritance, capability catalogue, route
+  diagnostics and REST/MCP use the shared `tasks/execution_routes.py` service.
+  Migration `0085_execution_routes.sql` stores cursor, fingerprint, generation,
+  last selection and bounded skip evidence. Attempt definitions freeze the
+  candidate list and exact selected tuple without credentials.
+- Tuple reservation uses existing account eligibility inside savepoints within
+  the claim transaction. Native reuse retains one lease; custom roles require
+  separate capacity. Unsupported workers cannot claim explicit routes.
+- `POST /tasks/{id}/execution` (and `report_execution_route`) acknowledges an exact
+  attempt/generation or advances only with `stopped: true` and an allowlisted
+  reason. Exact lease IDs, account IDs, roles and agent ownership are checked;
+  stale/duplicate transitions cannot release or advance a newer selection.
+  Reset increments generation rather than deleting its identity. Failed stops
+  block and retain explicit tuple capacity until confirmed stop or reaping.
+- NanoClaw consumes the reserved leases without account ranking, fixes harness
+  and delegate models from the snapshot, refuses unsupported contracts and stops
+  before advancing. Single mode performs no executor lease/probe. The independent
+  single-layer experiment remains disabled/unmodified in behavior.
+- Workers declare `execution-chains-v1` plus each installed adapter capability ID
+  from `GET /api/engines` in their existing capabilities registration/claim. These
+  declarations are operator/runtime evidence, not inferred from account presence
+  or model/recycle callbacks. An old installation with no such declaration stays
+  legacy-only. Do not declare an adapter whose CLI is not installed.
+- Setup Settings exposes all four difficulties at global/project scope. Ordered
+  cards edit whole alternatives; scoped Save never materializes inherited lists.
+  Capability-driven provider/source controls and server validation share the
+  matrix. Task detail exposes the last selection, cursor and diagnostic evidence.
+- Local tests use disposable databases, memory secrets, fake workers, fake CLIs
+  and a fixture browser API. They cover all four difficulties, both mixed-mode
+  orders across database reopen, exact tuple rollback/reuse/capacity, generation
+  fencing, reset, model freezing, pins/locks and no-executor calls. Repository,
+  provisioned NanoClaw and delegate suites must be green for publication.
+- Real-provider inference, installed production CLI readiness, gateway grants,
+  deployment and live activation remain separately authorized operator work.
+  No local test proves endpoint reachability or model tool-use quality. No live
+  account, setting, model, service, image or capacity is changed here.

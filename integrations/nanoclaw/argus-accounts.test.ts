@@ -344,6 +344,8 @@ function world(opts: {
 
   const fetchImpl = (async (url: string, init: RequestInit) => {
     const u = new URL(url);
+    if (u.hostname === "argus.test" && u.pathname.endsWith("/artifacts") && init.method === "POST")
+      return json(201, { id: "fixture-artifact" });
     const body = init.body ? JSON.parse(init.body as string) : undefined;
     const method = init.method ?? "GET";
     if (u.hostname === "127.0.0.1") {
@@ -4342,5 +4344,223 @@ describe("quota resume in the channel (quota-resume.spec.md 3.3-3.5)", () => {
     expect(thrown.takes).toEqual([{ attempt: 2, outcome: "fallback", reason: "resume_failed" }]);
     expect(thrown.text).not.toContain(NOTE);
     expect(thrown.text).not.toContain("LEAK-7731");
+  });
+});
+
+describe("complete execution contract consumption", () => {
+  const capabilities = [
+    "execution-chains-v1",
+    "nanoclaw:harness:claude:local",
+    "nanoclaw:harness:claude:anthropic",
+    "nanoclaw:harness:claude:custom",
+    "nanoclaw:harness:codex:openai",
+    "nanoclaw:executor:opencode:custom",
+  ];
+  function explicit(
+    engine: AccountLease,
+    mode: "single" | "paired" = "single",
+    executor?: AccountLease,
+  ) {
+    const selector = (l: AccountLease, adapter: string) => ({
+      account_id: l.account_id,
+      lease_id: l.lease_id,
+      model: "fixture/model",
+      selector: { adapter, provider: l.provider },
+    });
+    return {
+      ...task(),
+      command_guard_enabled: false,
+      engine_lease: engine,
+      executor_lease: executor,
+      execution: {
+        version: 1 as const,
+        generation: 7,
+        index: 0,
+        revision: "fixture-revision",
+        alternative: { id: "fixture", mode, runtime: "nanoclaw" as const },
+        harness: selector(engine, engine.provider === "openai" ? "codex" : "claude"),
+        ...(executor ? { executor: selector(executor, "opencode") } : {}),
+      },
+    };
+  }
+  const selectModels = async () => ({
+    scope: "harness",
+    policy_engine: "claude",
+    requested_model: "fixture/model",
+    configured_model: "fixture/model",
+    resolved_model: null,
+    policy_revision: "fixture-revision",
+    model_attempt: 1,
+    fallback_reason: null,
+    has_next: false,
+  });
+
+  it.each(["anthropic", "openai", "local", "custom"])(
+    "runs %s direct without any executor lease or probe",
+    async (provider) => {
+      const engine =
+        provider === "openai"
+          ? codexLease()
+          : lease("route", "fixture-key", {
+              provider,
+              ...(provider === "local"
+                ? {
+                    credential: {
+                      base_url: "http://host.docker.internal:8080",
+                      model: "fixture/model",
+                      auth_token: "fixture",
+                    },
+                  }
+                : {}),
+              ...(provider === "custom"
+                ? {
+                    settings: {
+                      base_url: "https://openrouter.ai/api/v1",
+                      label: "openrouter",
+                      model: "fixture/model",
+                      provider: null,
+                    },
+                  }
+                : {}),
+            });
+      const w = world({ leases: [], tasks: [explicit(engine)] });
+      const probeExecutor = vi.fn(async () => null);
+      const h = harness(
+        w,
+        true,
+        { selectEngine: async () => true, recycleRuntime: async () => {} },
+        { capabilities, selectModels, probeExecutor },
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length === 1);
+      expect(probeExecutor).not.toHaveBeenCalled();
+      expect(w.calls.filter((c) => c.path === "/accounts/lease")).toEqual([]);
+      expect(w.calls.find((c) => c.path === "/tasks/t1/execution")?.body).toMatchObject({
+        attempt: 1,
+        generation: 7,
+        action: "applied",
+      });
+      expect(h.inbound[0].content.text).toContain("No delegated executor");
+    },
+  );
+
+  it.each([true, false])(
+    "consumes a complete mixed-topology handoff (paired first: %s)",
+    async (pairedFirst) => {
+      const engine = lease("route", "fixture-key");
+      const delegated = lease("executor-route", "fixture-custom-key", {
+        provider: "custom",
+        role: "executor",
+        settings: {
+          base_url: "https://openrouter.ai/api/v1",
+          label: "openrouter",
+          model: "fixture/model",
+          provider: null,
+        },
+      });
+      const first = explicit(
+        engine,
+        pairedFirst ? "paired" : "single",
+        pairedFirst ? delegated : undefined,
+      );
+      const second = {
+        ...explicit(
+          { ...engine, lease_id: "next-engine" },
+          pairedFirst ? "single" : "paired",
+          pairedFirst ? undefined : delegated,
+        ),
+        id: "t2",
+      };
+      second.execution.generation = 8;
+      const w = world({ leases: [], tasks: [first, second] });
+      const probeExecutor = vi.fn(async () => null);
+      const recycleRuntime = vi.fn(async () => {});
+      const h = harness(w, true, { recycleRuntime }, { capabilities, selectModels, probeExecutor });
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length === 1);
+      await h.adapter.deliver(
+        "local",
+        h.thread(),
+        failure("You've hit your limit · resets 10pm (UTC)") as never,
+      );
+      await until(() => h.inbound.length === 2);
+      expect(recycleRuntime).toHaveBeenCalledTimes(1);
+      expect(probeExecutor).toHaveBeenCalledTimes(1);
+      expect(w.calls.filter((c) => c.path === "/accounts/lease")).toEqual([]);
+      const applied = w.calls.filter(
+        (c) => c.path.endsWith("/execution") && c.body.action === "applied",
+      );
+      expect(applied.map((c) => c.body.generation)).toEqual([7, 8]);
+      expect(h.inbound[pairedFirst ? 1 : 0].content.text).toContain("No delegated executor");
+    },
+  );
+
+  it("never advances after a failed stop or a gateway security denial", async () => {
+    for (const stopFails of [false, true]) {
+      const w = world({ leases: [], tasks: [explicit(lease("route", "fixture-key"))] });
+      const recycleRuntime = vi.fn(async () => {
+        if (stopFails) throw new Error("stop refused");
+      });
+      const h = harness(w, true, { recycleRuntime }, { capabilities, selectModels });
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length === 1);
+      const notice = stopFails
+        ? failure("You've hit your limit · resets 10pm (UTC)")
+        : {
+            kind: "chat",
+            content: {
+              text: "The agent run failed.",
+              failureNotice: true,
+              providerFailure: { provider: "anthropic", kind: "gateway_denied" },
+            },
+          };
+      await h.adapter.deliver("local", h.thread(), notice as never);
+      expect(
+        w.calls.some((c) => c.path.endsWith("/execution") && c.body.action === "advance"),
+      ).toBe(false);
+      expect(w.calls.find((c) => c.path === "/tasks/t1/fail")?.body.reason).toBe(
+        stopFails ? "runtime_switch_failed" : "worker_fail",
+      );
+      expect(recycleRuntime).toHaveBeenCalledTimes(stopFails ? 1 : 0);
+    }
+  });
+
+  it("stops the old runtime before reporting a complete quota advance", async () => {
+    const engine = lease("route", "fixture-key");
+    const w = world({ leases: [], tasks: [explicit(engine)] });
+    const order: string[] = [];
+    const fetchImpl = w.fetchImpl;
+    w.fetchImpl = (async (...args: Parameters<typeof fetch>) => {
+      if (String(args[0]).endsWith("/execution") && String(args[1]?.body).includes("advance"))
+        order.push("advance");
+      return fetchImpl(...args);
+    }) as typeof fetch;
+    const h = harness(
+      w,
+      true,
+      {
+        recycleRuntime: async () => {
+          order.push("stopped");
+        },
+      },
+      { capabilities, selectModels },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    await h.adapter.deliver(
+      "local",
+      h.thread(),
+      failure("You've hit your limit · resets 10pm (UTC)") as never,
+    );
+    expect(order).toEqual(["stopped", "advance"]);
+    const report = w.calls.find(
+      (c) => c.path === "/tasks/t1/execution" && c.body.action === "advance",
+    );
+    expect(report?.body).toMatchObject({ generation: 7, stopped: true, reason: "quota" });
+    expect(w.calls.some((c) => /\/exhausted$/.test(c.path))).toBe(false);
   });
 });

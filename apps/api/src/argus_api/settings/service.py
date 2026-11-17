@@ -8,6 +8,7 @@ from typing import Any, NamedTuple
 
 import aiosqlite
 from argus_core.difficulty import as_jsonable, parse_difficulty_executors
+from argus_core.execution_chains import ExecutionChains
 from argus_core.settings import (
     IndependentReviewSetting,
     SettingDefinition,
@@ -63,6 +64,11 @@ def _normalize(key: str, value: Any) -> Any:
         # A full policy (global) needs both required maps; a project override is partial.
         return value  # caller picks validate vs validate_partial
     _check_schema(defn, value)
+    if key == "execution.chains":
+        try:
+            return ExecutionChains.model_validate(value).model_dump(mode="json")
+        except ValueError as exc:
+            raise ValidationFailedError(str(exc)) from exc
     if key == REVIEW_KEY:
         return IndependentReviewSetting.model_validate(value).model_dump()
     if key == DIFFICULTY_EXECUTORS_KEY:
@@ -149,6 +155,10 @@ async def _setting(
         if scope == GLOBAL:
             return _models_from_file(path)
         return await _models_for_project(conn, path, scope)
+    if key == "execution.chains":
+        from argus_api.tasks.execution_routes import policy_setting
+
+        return await policy_setting(conn, scope)
     if (
         key == DIFFICULTY_EXECUTORS_KEY
         and os.environ.get("ARGUS_DIFFICULTY_EXECUTORS", "").strip()
@@ -397,6 +407,10 @@ async def put_setting(
 
     row = await _row(tx.conn, scope, key)
     previous_value = json.loads(row["value"]) if row else None
+    if key == "execution.chains":
+        from argus_api.tasks.execution_routes import validate_references
+
+        await validate_references(tx.conn, ExecutionChains.model_validate(normalised))
 
     await tx.conn.execute(
         "INSERT INTO settings (scope, key, value, updated_at, updated_by)"

@@ -31,6 +31,7 @@ from argus_core.tasks import (
 from pydantic import BaseModel
 
 from argus_api.tasks import service
+from argus_api.tasks.execution_routes import RoutePolicy, resolve
 
 _TEXT_MAX = 500
 NOTE = (
@@ -110,6 +111,7 @@ class RouteResolution(BaseModel):
 
 
 class TaskRoute(BaseModel):
+    execution: RoutePolicy | None = None
     task_id: str
     state: TaskState
     block_reason: str | None
@@ -118,7 +120,7 @@ class TaskRoute(BaseModel):
     harness_model: HarnessModel | None
     executor_model: ExecutorModel | None
     harness_account: str | None
-    resolution: RouteResolution
+    resolution: RouteResolution | None
     attempt: RouteAttempt | None
     error: str | None
     failure_class: str | None
@@ -159,7 +161,9 @@ async def diagnose_route(
         worker.agent_id if worker else None,
         worker.runtime_providers if worker else None,
     )
+    execution = await resolve(conn, row)
     return TaskRoute(
+        execution=execution,
         task_id=task_id,
         state=TaskState(row["state"]),
         block_reason=row["block_reason"],
@@ -168,7 +172,9 @@ async def diagnose_route(
         harness_model=harness,
         executor_model=executor,
         harness_account=row["harness_account"],
-        resolution=RouteResolution(
+        resolution=None
+        if execution is not None and not execution.bypass
+        else RouteResolution(
             engine_providers=choice.providers,
             engine_account=choice.account,
             fallback_reason=choice.reason,

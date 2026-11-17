@@ -26,6 +26,11 @@ Scope: the task fields (REST, MCP, dashboard), the lease narrowing they imply,
 the harness model the NanoClaw channel configures at claim, and the model
 `argus-delegate` runs.
 
+Explicit complete per-difficulty routing is owned by
+[execution chains](execution-chains.spec.md). Those opt-in lists own both layers
+and models; the legacy selection rules below apply only without an effective
+explicit list, or when task model/account pins choose the whole legacy pin path.
+
 # 2. Non-Goals
 
 - No change to the global policy, its revision or its chains.

@@ -363,6 +363,42 @@ ArtifactRole = Literal[
 
 
 @tool(AGENTS)
+async def report_execution_route(
+    ctx: Context,
+    task_id: str,
+    attempt: int,
+    generation: int,
+    action: Literal["applied", "advance"],
+    stopped: bool = False,
+    failed_role: Literal["harness", "executor"] = "harness",
+    reason: Literal[
+        "quota",
+        "provider_unavailable",
+        "auth_missing",
+        "not_installed",
+        "model_not_served",
+        "provider_protocol",
+        "provider_transport",
+    ]
+    | None = None,
+) -> dict:
+    """Acknowledge the claimed execution generation; advance only after stopping its complete runtime. Never substitute one layer."""
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/execution",
+        json={
+            "attempt": attempt,
+            "generation": generation,
+            "action": action,
+            "stopped": stopped,
+            "failed_role": failed_role,
+            "reason": reason,
+        },
+    )
+
+
+@tool(AGENTS)
 async def claim_task(
     ctx: Context,
     capabilities: list[str] | None = None,
@@ -606,6 +642,7 @@ async def report_task_models(
     attempt: int,
     executions: list[dict] | None = None,
     selections: list[dict] | None = None,
+    execution_generation: int | None = None,
 ) -> dict:
     """Report which models ran for your task attempt, in two separate layers:
     `harness` (your agent runtime) and `delegate` (a CLI implementer). Each execution
@@ -628,6 +665,7 @@ async def report_task_models(
             "attempt": attempt,
             "executions": executions or [],
             "selections": selections or [],
+            "execution_generation": execution_generation,
         },
     )
 
@@ -1581,16 +1619,24 @@ async def cancel_steer(ctx: Context, task_id: str, steer_id: str) -> dict:
 
 
 @tool(MANAGERS)
-async def unblock_task(ctx: Context, task_id: str) -> dict:
+async def unblock_task(
+    ctx: Context, task_id: str, reset_execution_route: bool = False
+) -> dict:
     """Return a blocked task to ready without answering its question (the question
     is cancelled). To answer it, use answer_decision instead."""
-    return await _call(ctx, "POST", f"/tasks/{task_id}/unblock")
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/unblock",
+        params={"reset_execution_route": reset_execution_route},
+    )
 
 
 @tool(MANAGERS)
 async def retry_task(
     ctx: Context,
     task_id: str,
+    reset_execution_route: bool = False,
     harness_model: dict | None = None,
     executor_model: dict | None = None,
     account_providers: list[str] | None = None,
@@ -1616,7 +1662,13 @@ async def retry_task(
         }.items()
         if v is not None
     }
-    return await _call(ctx, "POST", f"/tasks/{task_id}/retry", json=given or None)
+    return await _call(
+        ctx,
+        "POST",
+        f"/tasks/{task_id}/retry",
+        json=given or None,
+        params={"reset_execution_route": reset_execution_route},
+    )
 
 
 @tool(MANAGERS)

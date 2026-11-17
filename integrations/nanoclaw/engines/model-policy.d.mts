@@ -3,12 +3,32 @@ export interface ModelPolicy {
   implementation: Record<string, string[]>;
   trivial?: Record<string, string[]>;
 }
+export interface ExecutionSelection {
+  version: 1;
+  generation: number;
+  revision: string;
+  index: number;
+  alternative: { id: string; mode: "single" | "paired"; runtime: "nanoclaw" };
+  harness: {
+    account_id: string;
+    model: string;
+    lease_id: string;
+    selector: { adapter: string; provider: string };
+  };
+  executor?: {
+    account_id: string;
+    model: string;
+    lease_id: string;
+    selector: { adapter: string; provider: string };
+  } | null;
+}
 export interface PolicySnapshot {
   policy: ModelPolicy;
   revision: string;
   context: {
     task_id: string;
     attempt: number;
+    execution?: ExecutionSelection | null;
     /** The harness the leased account selected, and that account's provider. */
     engine?: string;
     account_provider?: string | null;
@@ -66,6 +86,7 @@ export function selectHarnessModel(
   task: {
     spec: string;
     failures?: number;
+    execution?: ExecutionSelection | null;
     harness_model?: { engine: string; model: string } | null;
   },
   /** Provider of the leased engine account; the pin holds only on its own provider. */
