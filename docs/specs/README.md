@@ -34,6 +34,7 @@ Every spec in this directory with its status, kept in sync by
 | [Dashboard live data performance](dashboard-performance.spec.md) | `implemented` |
 | [Dashboard working indicator](dashboard-working.spec.md) | `implemented` |
 | [Engines, executors and the local model](engines.spec.md) | `implemented` |
+| [Execution chains](execution-chains.spec.md) | `draft` |
 | [Failure classes](failure-classes.spec.md) | `partial` |
 | [Fleet health](fleet-health.spec.md) | `implemented` |
 | [Gitea helper for workers (`argus-gitea-api`)](gitea-helper.spec.md) | `implemented` |

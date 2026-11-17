@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 # Settings
@@ -160,6 +160,14 @@ defaults. `ARGUS_DIFFICULTY_EXECUTORS` (same JSON shape, validated at startup)
 wins over the store when set, reported as `source: env` like `models`. The
 Settings tab edits the map; claim sends the effective chain for the task's
 difficulty as `difficulty_executors`.
+
+This is a legacy executor-only setting, not a list of complete execution routes.
+An empty list removes delegation but leaves the harness account ranking unchanged,
+including trivial tasks' soft local preference and possible cloud fallback. The
+[Execution chains draft](execution-chains.spec.md) defines the proposed general
+replacement: complete paired or single-layer alternatives for every difficulty,
+per-level inheritance, compatibility and explicit migration. It is not available
+through the current Settings UI/API/MCP; no automatic conversion is defined.
 
 ## 3.8 Git identity
 
