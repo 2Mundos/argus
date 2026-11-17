@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-03
+updated: 2026-11-17
 ---
 
 # Codex accounts: import, dedicated login, engine selection
@@ -86,6 +86,21 @@ equal paths that end in the same record, and let the pool choose the engine:
   released or replaced lease leaves no usable residual secret. No token is written to the
   container, the image, the checkout or a log. Refresh is OneCLI's: Argus does
   not rotate tokens from two places.
+- **How the CLI authenticates.** The Codex app-server child (`codex app-server
+  --listen stdio://`) reads `CODEX_HOME/auth.json`; `buildCodexProcessEnv` sets
+  `CODEX_HOME` to `$HOME/.codex` unless the session sets it. That file is the
+  sentinel OneCLI serves as a credential stub for the `openai` secret (the
+  workspace id mirrored in, `argus-codex-stub.ts`); the token is swapped on the
+  wire. No key or base URL is added to the child's environment allowlist, and
+  the harness never reads the file. Without it the CLI starts, finds no
+  credential and exits 0, so before spawning, `spawnCodexAppServer` creates
+  `CODEX_HOME` (the stub needs a place to land) and refuses with
+  `codex_credential_missing: no Codex credential at <path>` when `auth.json` is
+  absent or empty (`overlays/codex-credential.ts`, `patch-codex-credential.py`).
+  That error leads the failure text, so it is a refused credential: class
+  `environment`, `env_provider_auth`, recorded on the attempt
+  ([failure classes](failure-classes.spec.md) 3.2). Typical cause: the agent
+  holds no `openai` lease, or the container predates the lease.
 - **Engine selection.** The leased account's provider decides the NanoClaw
   provider of the worker's agent group (`openai`→`codex`, `anthropic`→`claude`).
   The channel changes it only between tasks or when a limit forces a switch,
@@ -185,7 +200,8 @@ equal paths that end in the same record, and let the pool choose the engine:
 - Verified: unit and fake-API level only. Import validation, the device-code login
   flow, engine selection and failover run against an in-memory database, a fake
   secret store and a fake login app-server script rather than the real Codex client.
-- Not verified: a real ChatGPT device-code login; applying the sentinel `auth.json`
+- Not verified: the real Codex CLI starting on the sentinel `auth.json` (the launch
+  test uses a fake `codex` binary); a real ChatGPT device-code login; applying the sentinel `auth.json`
   and the token swap in a real worker through the OneCLI vault
   (`integrations/nanoclaw/argus-codex-stub.test.ts` runs only in a provisioned NanoClaw checkout);
   the dashboard in a real browser; any production node.
