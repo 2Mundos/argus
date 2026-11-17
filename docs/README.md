@@ -346,6 +346,11 @@ why you are here.
 - [OneCLI policy bridge failure](runbooks/2026-11-11.onecli-policy-bridge.ref.md) —
   tasks blocked `env_repository_unreachable` with `rearm_exhausted`: detect P2028 on the host,
   restart `onecli`, unblock the tasks
+- [Public proxy tunnel going stale after a host restart](runbooks/2026-11-17.public-proxy-tunnel.ref.md) —
+  a public dashboard URL that times out after a host restart while the local
+  `/healthz` is fine: stop the stale `sshd-session` listeners on the VPS, confirm
+  the public URL, and set `ClientAliveInterval` / `ClientAliveCountMax` as a
+  prevention note
 
 ### Reports
 
