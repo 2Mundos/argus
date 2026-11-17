@@ -10,6 +10,12 @@ from pathlib import Path
 
 import pytest
 
+TASK_ENV = {
+    "ARGUS_TASK_ID": "t1",
+    "ARGUS_ATTEMPT": "2",
+    "ARGUS_RUN_KEY": "r1:t1:abc",
+}
+
 ENGINES = Path(__file__).resolve().parents[1] / "engines"
 spec = importlib.util.spec_from_file_location(
     "repeat_guard", ENGINES / "repeat_guard.py"
@@ -23,6 +29,15 @@ spec.loader.exec_module(guard)
 def state_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "STATE_DIR", tmp_path / "state")
     return tmp_path / "state"
+
+
+@pytest.fixture
+def relay(tmp_path, monkeypatch):
+    file = tmp_path / "relay" / "argus-milestones.jsonl"
+    monkeypatch.setenv("ARGUS_MILESTONE_RELAY_FILE", str(file))
+    for k, v in TASK_ENV.items():
+        monkeypatch.setenv(k, v)
+    return file
 
 
 def run(monkeypatch, capsys, event: dict) -> tuple[dict | None, str]:
@@ -175,3 +190,64 @@ def test_hooks_are_registered():
 def test_image_installs_the_hook():
     assert "repeat_guard.py" in (ENGINES / "Dockerfile.tools-layer").read_text()
     assert "repeat_guard.py" in (ENGINES / "apply-tools-layer.sh").read_text()
+
+
+def lines(file):
+    return (
+        [json.loads(x) for x in file.read_text().splitlines()] if file.exists() else []
+    )
+
+
+def test_looping_line_only_at_eight(monkeypatch, capsys, relay):
+    seen = {}
+    for n in range(1, 11):
+        out, err = run(monkeypatch, capsys, call())
+        seen[n] = len(lines(relay))
+        if n in (3, 5, 8):  # reminder and stderr line are unchanged at 3, 5 and 8
+            assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
+            assert f"{n} times" in err
+    assert [seen[n] for n in (7, 8, 9)] == [0, 1, 1]
+    assert all(v == 0 for n, v in seen.items() if n < 8)
+    (record,) = lines(relay)
+    assert record["kind"] == "looping"
+    assert record["data"] == {"tool": "Bash", "count": 8}
+    assert (record["task_id"], record["attempt"], record["run_key"]) == (
+        "t1",
+        2,
+        "r1:t1:abc",
+    )
+    assert set(record) == {
+        "v",
+        "task_id",
+        "attempt",
+        "run_key",
+        "kind",
+        "data",
+        "message",
+        "at",
+    }
+    assert record["message"] == "Looping on Bash: 8 identical calls in a row"
+
+
+@pytest.mark.parametrize("missing", ["ARGUS_TASK_ID", "ARGUS_ATTEMPT", "ARGUS_RUN_KEY"])
+def test_looping_line_needs_the_run_identity(monkeypatch, capsys, relay, missing):
+    monkeypatch.delenv(missing)
+    for _ in range(8):
+        out, _err = run(monkeypatch, capsys, call())
+    assert out is not None and not relay.exists()
+
+
+def test_looping_line_falls_back_to_policy_dir(monkeypatch, capsys, relay, tmp_path):
+    monkeypatch.delenv("ARGUS_MILESTONE_RELAY_FILE")
+    monkeypatch.setenv("ARGUS_MODEL_POLICY_FILE", str(tmp_path / "grp" / "policy.json"))
+    for _ in range(8):
+        run(monkeypatch, capsys, call())
+    assert len(lines(tmp_path / "grp" / "argus-milestones.jsonl")) == 1
+
+
+def test_looping_relay_error_fails_open(monkeypatch, capsys, relay, tmp_path):
+    (tmp_path / "blocked").write_text("")
+    monkeypatch.setenv("ARGUS_MILESTONE_RELAY_FILE", str(tmp_path / "blocked" / "f"))
+    for _ in range(8):
+        out, err = run(monkeypatch, capsys, call())
+    assert out is not None and "8 times" in err

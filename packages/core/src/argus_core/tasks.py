@@ -124,10 +124,12 @@ class ProgressKind(StrEnum):
     CI_FAILED = "ci_failed"
     GATE_FAILED = "gate_failed"
     WAITING_INPUT = "waiting_input"
+    LOOPING = "looping"  # repeat guard, advisory only (repeat-call reminder draft)
     WAITING = "waiting"  # inside an argus-task wait (task-helpers spec 3.7)
 
 
 _SHA = re.compile(r"[0-9a-f]{7,40}")
+_TOOL_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 _MILESTONE_KEYS: dict[ProgressKind, frozenset[str]] = {
     ProgressKind.COMMIT_CREATED: frozenset({"branch", "sha"}),
     ProgressKind.PR_OPENED: frozenset({"number", "url"}),
@@ -136,6 +138,7 @@ _MILESTONE_KEYS: dict[ProgressKind, frozenset[str]] = {
     ProgressKind.CI_FAILED: frozenset({"sha"}),
     ProgressKind.GATE_FAILED: frozenset({"gate"}),
     ProgressKind.WAITING_INPUT: frozenset(),
+    ProgressKind.LOOPING: frozenset({"tool", "count"}),
     ProgressKind.WAITING: frozenset({"on", "ref", "since"}),
 }
 
@@ -172,6 +175,12 @@ def validate_milestone(kind: str | None, data: dict[str, Any] | None) -> None:
         _text(data, "branch", 250)
     if k is ProgressKind.GATE_FAILED:
         _text(data, "gate", 200)
+    if k is ProgressKind.LOOPING:
+        if not _TOOL_NAME.fullmatch(str(data["tool"])):
+            raise ValueError("data.tool must be a tool name of 1-100 safe characters")
+        count = data["count"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise ValueError("data.count must be a positive integer")
     if k is ProgressKind.WAITING:
         if data["on"] not in ("ci", "review"):
             raise ValueError("data.on must be ci or review")

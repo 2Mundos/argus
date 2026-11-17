@@ -69,6 +69,7 @@ describe("checkMilestoneRecord", () => {
       record("ci_passed", { sha: SHA }),
       record("ci_failed", { sha: SHA }),
       record("gate_failed", { gate: "lint" }),
+      record("looping", { tool: "Bash", count: 8 }),
     ];
     for (const r of ok) expect(checkMilestoneRecord(r, task, REPO).ok).toBe(true);
   });
@@ -85,6 +86,8 @@ describe("checkMilestoneRecord", () => {
     ["uppercase sha", record("ci_passed", { sha: "A".repeat(40) }), "bad_sha"],
     ["extra key", record("ci_passed", { sha: SHA, extra: 1 }), "bad_data"],
     ["missing key", record("commit_created", { sha: SHA }), "bad_data"],
+    ["looping with a note", record("looping", { tool: "Bash", count: 8, note: "x" }), "bad_data"],
+    ["looping tool with spaces", record("looping", { tool: "rm -rf", count: 8 }), "bad_data"],
     ["gate too long", record("gate_failed", { gate: "g".repeat(201) }), "bad_data"],
     ["gate with newline", record("gate_failed", { gate: "a\nb" }), "bad_data"],
     ["credential in gate", record("gate_failed", { gate: "Bearer abcdef" }), "credential_like"],
