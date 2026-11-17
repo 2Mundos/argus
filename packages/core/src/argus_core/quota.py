@@ -65,7 +65,7 @@ AUTH_EXPIRED_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
 # notices above, so the work's own words never count.
 PROVIDER_AUTH_NOTICES = re.compile(
     r"^(?:http\s*)?(?:401|403)\b"
-    r"|^(?:token_expired|credential_rejected|auth_rejected|auth_missing"
+    r"|^(?:token_expired|credential_rejected|auth_rejected|auth_missing|codex_credential_missing"
     r"|invalid[_ ]api[_ ]key)\b"
     r"|^(?:(?:codex|claude|cursor|copilot|opencode):\s*)?not logged in\b",
     re.I,

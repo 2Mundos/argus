@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -729,6 +729,10 @@ earlier tasks neither inflate its cost nor contaminate its replies
     (`buildCodexProcessEnv`, patched by `patch-codex-cli-path.py`) gets the same
     engine directory prepended to its forwarded `PATH` when that directory
     exists and is not already listed; no `PATH` is fabricated otherwise.
+    Before spawning it, the harness creates `CODEX_HOME` and refuses with
+    `codex_credential_missing` when the gateway's sentinel `auth.json` is not
+    there ([Codex accounts](codex-accounts.spec.md), `patch-codex-credential.py`),
+    instead of letting the CLI exit with no credential.
     Because the wrapper is first, `git commit`, `git push`,
     `argus-task deliver`, and delegated executors that inherit `PATH` hit the
     same wrapper. It refuses new commit messages that carry prohibited trailer

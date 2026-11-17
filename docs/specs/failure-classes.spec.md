@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-15
+updated: 2026-11-17
 ---
 
 # Failure classes
@@ -70,7 +70,8 @@ reasons and adds `failure_class` to each failure row and a count per class.
 
 - **Provider credential failures are environmental.** A `provider_failure` whose
   error starts (after the runner's own prefix) with HTTP 401 or 403, `token_expired`,
-  `credential_rejected`, `auth_rejected`, `auth_missing`, `invalid_api_key` or
+  `credential_rejected`, `auth_rejected`, `auth_missing`, `codex_credential_missing` (the Codex harness found no
+  sentinel credential, [Codex accounts](codex-accounts.spec.md) 3), `invalid_api_key` or
   "not logged in" is class `environment`, whatever the account: re-running the
   attempt cannot fix a credential the provider refused (`failure_class`
   `provider_auth`, or `auth_expired` for an expired login). Account failover
