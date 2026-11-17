@@ -16,9 +16,11 @@ export const KINDS = [
   "ci_failed",
   "gate_failed",
   "waiting_input",
+  "looping",
 ];
 
 const SHA = /^[0-9a-f]{7,40}$/;
+const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,100}$/;
 
 /** The host-read relay file in the agent group's directory; keep in step with argus-milestone-relay.ts. */
 export const MILESTONE_RELAY_FILE = "argus-milestones.jsonl";
@@ -60,6 +62,11 @@ export function milestone(kind, data = {}) {
     ci_failed: () => SHA.test(data.sha),
     gate_failed: () => typeof data.gate === "string" && data.gate && data.gate.length <= 200,
     waiting_input: () => Object.keys(data).length === 0,
+    looping: () =>
+      Object.keys(data).length === 2 &&
+      TOOL_NAME.test(data.tool) &&
+      Number.isSafeInteger(data.count) &&
+      data.count >= 1,
   }[kind]();
   return ok ? { kind, data } : null;
 }
@@ -81,6 +88,8 @@ export function describe({ kind, data }) {
       return `CI failed for ${short(data.sha)}`;
     case "gate_failed":
       return `Gate failed: ${data.gate}`;
+    case "looping":
+      return `Looping on ${data.tool}: ${data.count} identical calls in a row`;
     default:
       return "Waiting for input";
   }

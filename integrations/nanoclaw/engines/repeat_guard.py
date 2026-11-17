@@ -8,20 +8,26 @@ python3.
 The hook reads the hook JSON on stdin and dispatches on hook_event_name.
 PostToolUse counts consecutive identical calls per session and, at the counts in
 THRESHOLDS, prints additionalContext on stdout and one line on stderr.
+At the last threshold it also appends one `looping` line to the milestone relay file
+(advisory evidence only; see docs/specs/progress-milestones.spec.md 3.5).
 UserPromptSubmit clears the session's count. Any internal error does nothing.
 """
 
+import contextlib
 import json
 import os
 import re
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 STATE_DIR = Path("/tmp/argus-repeat-guard")  # noqa: S108 - container-local, not host temp
 THRESHOLDS = (3, 5, 8)
 EXCLUDED = {"heartbeat", "wait_for_events", "TodoWrite"}  # repetition is the point
 MAX_ARGS_CHARS = 500
+RELAY_FILE = "argus-milestones.jsonl"  # keep in step with engines/milestones.mjs
+TOOL_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 
 
 def _base_name(tool_name: str) -> str:
@@ -63,6 +69,40 @@ def reminder(tool_name: str, arguments: str, count: int) -> str:
     )
 
 
+def _relay_file() -> Path | None:
+    explicit = os.environ.get("ARGUS_MILESTONE_RELAY_FILE")
+    if explicit:
+        return Path(explicit)
+    policy = os.environ.get("ARGUS_MODEL_POLICY_FILE")
+    return Path(policy).parent / RELAY_FILE if policy else None
+
+
+def record_looping(tool_name: str, count: int) -> None:
+    """Append one `looping` milestone line: no token, no network, no free text."""
+    task_id = os.environ.get("ARGUS_TASK_ID", "")
+    run_key = os.environ.get("ARGUS_RUN_KEY", "")
+    attempt = os.environ.get("ARGUS_ATTEMPT", "")
+    path = _relay_file()
+    if not (path and task_id and run_key and attempt.isdigit() and int(attempt) >= 1):
+        return
+    if not TOOL_NAME.fullmatch(tool_name):
+        return
+    data = {"tool": tool_name, "count": count}
+    record = {
+        "v": 1,
+        "task_id": task_id,
+        "attempt": int(attempt),
+        "run_key": run_key,
+        "kind": "looping",
+        "data": data,
+        "message": f"Looping on {tool_name}: {count} identical calls in a row",
+        "at": datetime.now(UTC).isoformat(timespec="milliseconds"),
+    }
+    os.makedirs(path.parent, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 def post_tool_use(event: dict) -> None:
     tool_name = str(event["tool_name"])
     if _base_name(tool_name) in EXCLUDED:
@@ -84,6 +124,9 @@ def post_tool_use(event: dict) -> None:
         }
         sys.stdout.write(json.dumps(output))
         sys.stderr.write(f"repeat_guard: {tool_name} called {count} times in a row\n")
+        if count == THRESHOLDS[-1]:
+            with contextlib.suppress(Exception):  # the relay line is best effort
+                record_looping(tool_name, count)
 
 
 def main() -> int:

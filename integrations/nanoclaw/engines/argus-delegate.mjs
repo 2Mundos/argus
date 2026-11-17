@@ -1656,10 +1656,28 @@ async function runAttempt(
     ],
     selections: [selectionRecord],
   });
+  // The repeat guard hook (Claude only) appends its `looping` line to the milestone relay
+  // file; it needs the run's identity and the file. No token, no network.
+  const milestoneRelayFile =
+    e.ARGUS_MILESTONE_RELAY_FILE ||
+    path.join(
+      path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
+      MILESTONE_RELAY_FILE,
+    );
+  const childEnv =
+    executor === "claude" && taskIdEarly && Number.isSafeInteger(attemptEarly) && attemptEarly >= 1
+      ? {
+          ...e,
+          ARGUS_TASK_ID: taskIdEarly,
+          ARGUS_ATTEMPT: String(attemptEarly),
+          ARGUS_RUN_KEY: runKeyEarly,
+          ARGUS_MILESTONE_RELAY_FILE: milestoneRelayFile,
+        }
+      : e;
   // Own process group: one signal ends the CLI and everything it started.
   const child = spawn(cmd.bin, args, {
     cwd,
-    env: e,
+    env: childEnv,
     detached: true,
     stdio: ["pipe", outFd, errFd],
   });
@@ -1726,12 +1744,7 @@ async function runAttempt(
   const milestoneRelay =
     taskIdEarly && Number.isSafeInteger(attemptEarly) && attemptEarly >= 1
       ? {
-          file:
-            e.ARGUS_MILESTONE_RELAY_FILE ||
-            path.join(
-              path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-              MILESTONE_RELAY_FILE,
-            ),
+          file: milestoneRelayFile,
           taskId: taskIdEarly,
           attempt: attemptEarly,
           runKey: runKeyEarly,

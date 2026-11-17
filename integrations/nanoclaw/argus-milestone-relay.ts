@@ -26,6 +26,7 @@ const CLAIM_LOST = ["stale_attempt", "not_assignee", "not_claimed"];
 /** `r1:<task id>:...` or the hashed `r1:<sha256>` form of engines/usage.mjs runKey. */
 const RUN_KEY = /^r1:[A-Za-z0-9._:-]{1,196}$/;
 const SHA = /^[0-9a-f]{40}$/;
+const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,100}$/;
 /** waiting and waiting_input are the worker's own words (argus-task, the Claude denials), never relayed. */
 const KINDS = [
   "commit_created",
@@ -34,6 +35,7 @@ const KINDS = [
   "ci_passed",
   "ci_failed",
   "gate_failed",
+  "looping",
 ] as const;
 export type MilestoneKind = (typeof KINDS)[number];
 
@@ -76,6 +78,8 @@ function describe(kind: MilestoneKind, d: Record<string, string | number>): stri
       return `CI failed for ${short(String(d.sha))}`;
     case "gate_failed":
       return `Gate failed: ${d.gate}`;
+    case "looping":
+      return `Looping on ${d.tool}: ${d.count} identical calls in a row`;
   }
 }
 
@@ -133,6 +137,15 @@ export function checkMilestoneRecord(
       if (!gate || gate.length > 200 || /[\0-\x1f\x7f]/.test(gate))
         return { ok: false, why: "bad_data" };
       data = { gate };
+      break;
+    }
+    case "looping": {
+      const { tool, count } = d;
+      if (!exactly(d, ["tool", "count"]) || typeof tool !== "string" || !TOOL_NAME.test(tool))
+        return { ok: false, why: "bad_data" };
+      if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1)
+        return { ok: false, why: "bad_data" };
+      data = { tool, count };
       break;
     }
     case "pr_opened": {

@@ -19,6 +19,7 @@ const LABELS: Record<string, string> = {
   ci_failed: "CI failed",
   gate_failed: "Gate failed",
   waiting_input: "Waiting for input",
+  looping: "Looping",
 };
 
 export type Signal = Pick<

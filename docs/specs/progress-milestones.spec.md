@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-11
+updated: 2026-11-17
 ---
 
 # Progress milestones
@@ -39,6 +39,7 @@ has gone quiet.
 | `ci_running`, `ci_passed`, `ci_failed` | `sha` (7-40 hex) |
 | `gate_failed` | `gate` (string, at most 200 characters) |
 | `waiting_input` | none |
+| `looping` | `tool` (tool name, 1-100 of `A-Za-z0-9_.:-`), `count` (int >= 1); written by the repeat guard hook, see 3.5 |
 | `waiting` | `on` (`ci` or `review`), `ref` (string, at most 200 characters), `since` (ISO time); posted by the host for a pending `argus-task wait` ([task helpers](task-helpers.spec.md) 3.7) |
 
 Any other kind, or `data` that does not match its kind, is `422 validation_failed`.
@@ -99,7 +100,7 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   read again from the top. Every record is checked against what the host knows: task and
   attempt equal the claim (other tasks are ignored), `run_key` is `r1:<task id>:...`, the
   kind is one of `commit_created`, `pr_opened`, `ci_running`, `ci_passed`, `ci_failed`,
-  `gate_failed` (never `waiting` or `waiting_input`), `data` has exactly the keys of 3.1,
+  `gate_failed`, `looping` (never `waiting` or `waiting_input`), `data` has exactly the keys of 3.1,
   a SHA is 40 lowercase hex, a pull request belongs to the task's repository, and nothing
   credential-like is posted. The host builds the message itself. A rejected record is
   dropped with a reason code in the log. Valid records go to `POST
@@ -141,6 +142,24 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   current. A claimed task that never sent progress has no `progress_at` and shows
   nothing extra.
 - Tasks without a kind render as before.
+
+## 3.5 `looping` (advisory evidence only)
+
+- **Source.** The Claude `PostToolUse` repeat guard
+  ([repeat-call reminder](../drafts/2026-11-04.repeat-call-reminder.draft.md))
+  appends one `looping` line to the relay file when the same tool call is made 8 times
+  in a row. `argus-delegate` gives the Claude process `ARGUS_TASK_ID`, `ARGUS_ATTEMPT`,
+  `ARGUS_RUN_KEY` and `ARGUS_MILESTONE_RELAY_FILE`; without any of them the hook writes
+  nothing. The payload is the kind, the tool name and the count, plus the task, attempt
+  and run key. Nothing free-form: no arguments, no output, no note field. The host
+  builds the message.
+- **It is evidence, not a decision.** A `looping` milestone may not change task state,
+  a gate, a lease or a merge, and no automation may act on it. An operator who reads it
+  must check the tool calls themselves before acting.
+- **Forgery path.** The relay file writer is unauthenticated: any process in the
+  container can append a line, and the model can append a `looping` line with `Bash`
+  (or suppress the real one). The host's checks (3.3) bound the shape of a record, not
+  its truth. Treat the line as a claim by the worker, not as a measurement.
 
 # 4. Open Questions
 

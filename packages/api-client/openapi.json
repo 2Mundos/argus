@@ -17139,6 +17139,7 @@
           "ci_failed",
           "gate_failed",
           "waiting_input",
+          "looping",
           "waiting"
         ],
         "title": "ProgressKind",

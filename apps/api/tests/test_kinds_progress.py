@@ -312,6 +312,10 @@ async def test_free_text_note_keeps_the_milestone_and_is_limited(
         ("pr_opened", {"number": 0, "url": "https://git.example.com/pulls/1"}),
         ("ci_failed", {}),
         ("waiting_input", {"x": 1}),
+        ("looping", {"tool": "Bash"}),
+        ("looping", {"tool": "a b", "count": 8}),
+        ("looping", {"tool": "Bash", "count": 0}),
+        ("looping", {"tool": "Bash", "count": 8, "note": "x"}),
         ("waiting", {**WAITING, "on": "deploy"}),
         ("waiting", {**WAITING, "since": "yesterday"}),
         ("waiting", {"on": "ci", "ref": "#1"}),
@@ -323,6 +327,13 @@ async def test_invalid_milestones_are_refused(db: Database, kind, data) -> None:
     task = await claim(db)
     with pytest.raises(ValidationFailedError):
         await milestone(db, task, kind, data)
+
+
+async def test_looping_milestone_is_accepted(db: Database) -> None:
+    await create(db)
+    task = await claim(db)
+    after = await milestone(db, task, "looping", {"tool": "Bash", "count": 8})
+    assert after.progress_kind == "looping"
 
 
 async def test_retry_clears_the_milestone(db: Database) -> None:

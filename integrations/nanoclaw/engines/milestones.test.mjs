@@ -42,11 +42,15 @@ test("the kinds are a closed set", () => {
     ci_failed: { sha: SHA },
     gate_failed: { gate: "lint" },
     waiting_input: {},
+    looping: { tool: "Bash", count: 8 },
   };
   assert.deepEqual(Object.keys(samples), KINDS);
   for (const k of KINDS)
     assert.ok(milestone(k, samples[k]) && describe({ kind: k, data: samples[k] }));
   assert.equal(milestone("commit_created", { branch: "b", sha: "xyz" }), null);
+  for (const bad of [{ tool: "a b", count: 8 }, { tool: "Bash", count: 0 }, { tool: "Bash" }])
+    assert.equal(milestone("looping", bad), null);
+  assert.equal(milestone("looping", { tool: "Bash", count: 8, note: "x" }), null);
 });
 
 test("safeUrl accepts only http(s) without userinfo, query or fragment", () => {
