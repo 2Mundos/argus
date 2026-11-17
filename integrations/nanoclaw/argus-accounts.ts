@@ -13,6 +13,7 @@
  */
 
 import { localCredentialProblem } from "./argus-local-harness.js";
+import { OPENCODE_GATEWAY_PATHS, openRouterExecutorSettings } from "./engines/opencode-gateway.mjs";
 
 export interface CustomLeaseSettings {
   base_url: string;
@@ -464,6 +465,7 @@ const EXECUTOR_BY_PROVIDER: Record<string, string> = {
   cursor: "agent",
   copilot: "copilot",
   local: "opencode",
+  custom: "opencode",
 };
 
 /** The delegate CLI (`argus-delegate EXECUTOR`) that runs on a provider's account. */
@@ -472,8 +474,30 @@ export function executorFor(provider: string): string | null {
 }
 
 /** The provider whose account a named executor runs on (task models 3.1); null when unknown. */
-export function providerForExecutor(executor: string): string | null {
+export function providerForExecutor(
+  executor: string,
+  accountProvider?: string | null,
+): string | null {
+  if (executor === "opencode" && accountProvider === "custom") return "custom";
   return Object.entries(EXECUTOR_BY_PROVIDER).find(([, name]) => name === executor)?.[0] ?? null;
+}
+
+/** Custom engine bridges never authorize a CLI: only an explicit executor lease does. */
+function mappingForLease(lease: AccountLease): ProviderMapping | undefined {
+  if (lease.provider !== "custom" || lease.role !== "executor") return PROVIDERS[lease.provider];
+  if (!openRouterExecutorSettings(lease.settings) || !lease.settings?.model)
+    throw new Error("custom executor requires OpenRouter settings and an executor model");
+  return {
+    ...PROVIDERS.custom!,
+    host: "openrouter.ai",
+    secretSuffix: "-custom-executor",
+    harnessEnvOnly: false,
+    generic: {
+      headerName: "Authorization",
+      valueFormat: "Bearer {value}",
+      endpoints: OPENCODE_GATEWAY_PATHS.map((pathPattern, i) => ({ suffix: `-${i}`, pathPattern })),
+    },
+  };
 }
 
 /**
@@ -893,7 +917,7 @@ async function reconcileSecretAssignments(
   const names = new Set<string>();
   for (const lease of leases) {
     if (lease.role === "repository") continue;
-    const mapping = PROVIDERS[lease.provider];
+    const mapping = mappingForLease(lease);
     if (!mapping) throw new Error("unsupported active lease provider");
     // A harness-env-only account (local Strata) has no OneCLI secret.
     if (mapping.harnessEnvOnly) continue;
@@ -927,7 +951,7 @@ async function secretFor(
   lease: AccountLease,
   fetchImpl: typeof fetch,
 ): Promise<{ mapping: ProviderMapping; value: string; host: string }> {
-  const mapping = PROVIDERS[lease.provider];
+  const mapping = mappingForLease(lease);
   if (!mapping) {
     throw new Error(
       `provider ${JSON.stringify(lease.provider)} cannot be applied to OneCLI (known: ${Object.keys(PROVIDERS).join(", ")})`,
@@ -967,6 +991,21 @@ export interface AppliedLeases {
  * list is unassigned, so a released lease leaves no usable residual secret.
  */
 export async function applyLeasesDetailed(
+  onecli: OneCliClient,
+  target: ApplyTarget,
+  leases: AccountLease[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<AppliedLeases> {
+  try {
+    return await applyLeasesPrepared(onecli, target, leases, fetchImpl);
+  } catch (err) {
+    if (leases.some((l) => l.provider === "custom" && l.role === "executor"))
+      throw new Error("could not apply the custom executor lease to OneCLI");
+    throw err;
+  }
+}
+
+async function applyLeasesPrepared(
   onecli: OneCliClient,
   target: ApplyTarget,
   leases: AccountLease[],

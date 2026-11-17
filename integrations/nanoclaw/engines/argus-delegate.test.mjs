@@ -33,8 +33,93 @@ import {
   withCliToolsPath,
 } from "./argus-delegate.mjs";
 import { policySnapshot } from "./model-policy.mjs";
+import { OPENCODE_GATEWAY_SENTINEL, OPENCODE_GATEWAY_SETTINGS } from "./opencode-gateway.mjs";
+
+test("OpenRouter sentinel probes the leased endpoint only and fails closed on a redirected config", async (t) => {
+  const s = sandbox(t);
+  s.fake("opencode", 'echo "1.18.27"');
+  const env = {
+    ...s.env,
+    ARGUS_ACCOUNT_API_KEY: OPENCODE_GATEWAY_SENTINEL,
+    ARGUS_ACCOUNT_SETTINGS: JSON.stringify(OPENCODE_GATEWAY_SETTINGS),
+  };
+  for (const [status, code] of [
+    [200, 0],
+    [401, 79],
+    [403, 79],
+  ]) {
+    const calls = [];
+    const result = await authProbeWithProvider("opencode", env, {
+      request: async (url, headers) => {
+        calls.push({ url, headers });
+        return status;
+      },
+    });
+    assert.equal(result.code, code);
+    assert.equal(calls[0].url, "https://openrouter.ai/api/v1/models");
+    assert.equal(calls[0].headers.authorization, `Bearer ${OPENCODE_GATEWAY_SENTINEL}`);
+  }
+  for (const settings of [
+    null,
+    { ...OPENCODE_GATEWAY_SETTINGS, base_url: "https://evil.example/v1" },
+  ]) {
+    assert.equal(authStatus("opencode", env, s.home, settings).ok, false);
+  }
+  assert.equal(authStatus("agent", env, s.home, OPENCODE_GATEWAY_SETTINGS).ok, false);
+  assert.equal(authStatus("opencode", {}, s.home, OPENCODE_GATEWAY_SETTINGS).ok, false);
+});
 
 const DELEGATE = path.join(path.dirname(fileURLToPath(import.meta.url)), "argus-delegate.mjs");
+
+test("a managed custom pin requires separate executor settings, provider and sentinel even with a native login", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "opencode",
+    'if [ "$1" = "--version" ]; then echo 1.18.27; else echo \'{"result":"ok"}\'; fi',
+  );
+  const data = path.join(s.home, ".local/share");
+  fs.mkdirSync(path.join(data, "opencode"), { recursive: true });
+  fs.writeFileSync(path.join(data, "opencode/auth.json"), "{}");
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const settings = { ...OPENCODE_GATEWAY_SETTINGS, model: "deepseek/deepseek-v4.1-flash-1017" };
+  const file = path.join(s.dir, "policy.json");
+  for (const [provider, roleSettings, key, expected] of [
+    ["custom", settings, OPENCODE_GATEWAY_SENTINEL, 0],
+    ["local", settings, OPENCODE_GATEWAY_SENTINEL, 78],
+    ["custom", null, OPENCODE_GATEWAY_SENTINEL, 78],
+    ["custom", settings, "argus-local-harness", 78],
+    ["custom", settings, "", 78],
+  ]) {
+    fs.writeFileSync(
+      file,
+      JSON.stringify(
+        policySnapshot(policy, {
+          task_id: "t1",
+          attempt: 1,
+          executor_account_provider: provider,
+          executor_settings: roleSettings,
+          executor_model: {
+            executor: "opencode",
+            model: settings.model,
+            account_provider: "custom",
+          },
+        }),
+      ),
+    );
+    const { code, report } = await run(["opencode", "--cwd", s.work], {
+      env: {
+        ...s.env,
+        XDG_DATA_HOME: data,
+        ARGUS_ACCOUNT_API_KEY: key,
+        ARGUS_MODEL_POLICY_FILE: file,
+      },
+    });
+    assert.equal(code, expected, JSON.stringify(report));
+    if (expected === 78) assert.equal(report.blocked, "auth_missing");
+  }
+});
 
 /** A sandbox: a workspace root, a fake HOME, and fake executables first on PATH. */
 function sandbox(t) {
@@ -62,6 +147,7 @@ function sandbox(t) {
   const env = {
     PATH: `${bin}:${process.env.PATH}`,
     HOME: home,
+    CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     ARGUS_DELEGATE_ROOTS: work,
     ARGUS_ENGINE: "codex",
   };

@@ -411,7 +411,10 @@ export interface ArgusConfig {
    * executor in an ephemeral session. Returns the `env_executor_auth` block, or null to
    * proceed. Absent: not probed. `fromEnv` wires the ephemeral-session probe.
    */
-  probeExecutor?: (executor: string) => Promise<{ reason: string; error: string } | null>;
+  probeExecutor?: (
+    executor: string,
+    accountProvider?: string,
+  ) => Promise<{ reason: string; error: string } | null>;
   /**
    * The Kubernetes route (integrations spec 3.6, "Route"): grants the attempt a tunnel to
    * each cluster and proves it end to end before a kubeconfig is installed, and again
@@ -625,7 +628,11 @@ export interface ArgusTask {
   complexity?: "trivial" | "standard" | "hard";
   /** Pinned engine/executor and model (task models spec); null follows the policy. */
   harness_model?: { engine: string; model: string } | null;
-  executor_model?: { executor: string; model: string } | null;
+  executor_model?: {
+    executor: string;
+    model: string;
+    account_provider?: "local" | "custom" | null;
+  } | null;
   /** Engine providers the task may run on (local harness spec); null: any. */
   account_providers?: string[] | null;
   /** The one account its engine lease may use (task models spec 3.4); null: any. */
@@ -3567,7 +3574,11 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         // still names opencode and the engine settings apply.
         if (executorLease?.provider === "custom" || executorLease?.provider === "local")
           return executorLease.settings ?? null;
-        if (task.executor_model?.executor === "opencode" && engineLease?.provider === "local")
+        if (
+          task.executor_model?.executor === "opencode" &&
+          task.executor_model.account_provider !== "custom" &&
+          engineLease?.provider === "local"
+        )
           return engineLease.settings ?? null;
         return null;
       })(),
@@ -3746,7 +3757,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const cli = task.executor_model?.executor ?? preferredExecutorForLease(account, executor);
     if (!cli) return null;
     try {
-      return await cfg.probeExecutor(cli);
+      return cli === "opencode"
+        ? await cfg.probeExecutor(cli, task.executor_model?.account_provider ?? executor?.provider)
+        : await cfg.probeExecutor(cli);
     } catch (err) {
       log.warn("The executor probe was inconclusive; continuing", {
         task: task.id,
@@ -4560,7 +4573,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           runtime_providers,
           // The engine's own credential already serves its provider's CLI: if that
           // account is the best executor too, Argus returns it and takes no slot.
-          reuse_held: true,
+          reuse_held:
+            lease.provider !== "custom" && task.executor_model?.account_provider !== "custom",
           task_id: task.id,
           attempt: task.attempt,
         })
@@ -4577,7 +4591,9 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         let candidate: AccountLease | null = null;
         // A named executor pin leases that executor's provider only, never another's.
         const pinnedExecutor = task.executor_model?.executor;
-        const pinned = pinnedExecutor ? providerForExecutor(pinnedExecutor) : null;
+        const pinned = pinnedExecutor
+          ? providerForExecutor(pinnedExecutor, task.executor_model?.account_provider)
+          : null;
         const first = pinned ? null : executorFirst(lease.provider);
         if (first) {
           try {
@@ -4597,7 +4613,13 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             candidate = null;
           } else throw err;
         }
-        if (candidate && candidate.role === "executor" && candidate.provider !== lease.provider)
+        if (candidate && pinned && candidate.provider !== pinned)
+          throw new Error("executor lease provider does not match the task pin");
+        if (
+          candidate &&
+          candidate.role === "executor" &&
+          (candidate.provider !== lease.provider || candidate.provider === "custom")
+        )
           held.push(candidate);
       } catch (err) {
         if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
@@ -6204,7 +6226,14 @@ export function fromEnv(): ChannelAdapter | null {
     workerVersion: nanoclawVersion(),
     accounts: accountsFromEnv(),
     probeRepository: sessionRepositoryProbe(nanoclawPreflightRunner(argusGroup)),
-    probeExecutor: (cli) => runExecutorPreflight(nanoclawPreflightRunner(argusGroup), cli),
+    probeExecutor: (cli, provider) =>
+      runExecutorPreflight(
+        nanoclawPreflightRunner(argusGroup),
+        cli,
+        undefined,
+        undefined,
+        provider,
+      ),
     integrationRoute: nanoclawKubernetesRoute(process.env),
     integrationMcp: nanoclawMcpBroker(process.env, (e) =>
       log.warn("Task MCP integration blocked", { task: e.taskId, name: e.name, why: e.why }),

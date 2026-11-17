@@ -82,10 +82,19 @@ class ExecutorModel(BaseModel):
 
     executor: Literal["claude", "codex", "agent", "opencode", "copilot"]
     model: ModelId
+    account_provider: Literal["local", "custom"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def check_account_provider(self) -> "ExecutorModel":
+        if self.account_provider is not None and self.executor != "opencode":
+            raise ValueError("account_provider is supported only for opencode")
+        return self
 
     @property
     def provider(self) -> str:
-        return EXECUTOR_PROVIDERS[self.executor]
+        return self.account_provider or EXECUTOR_PROVIDERS[self.executor]
 
 
 def check_harness_providers(

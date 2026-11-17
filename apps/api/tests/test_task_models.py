@@ -67,6 +67,20 @@ def test_pins_are_validated() -> None:
         {"harness_model": {"engine": "claude"}},
         {"executor_model": {"executor": "gemini", "model": "x"}},
         {"executor_model": {"executor": "codex", "model": "x", "extra": 1}},
+        {
+            "executor_model": {
+                "executor": "codex",
+                "model": "x",
+                "account_provider": "custom",
+            }
+        },
+        {
+            "executor_model": {
+                "executor": "opencode",
+                "model": "x",
+                "account_provider": "cursor",
+            }
+        },
         # the pinned engine's provider is excluded by the restriction
         {"harness_model": OPUS, "account_providers": ["openai"]},
     ):
@@ -156,6 +170,81 @@ async def test_opencode_pin_narrows_executor_lease_to_local(
     assert executor.settings is not None
     assert executor.settings.label == "local"
     assert executor.settings.model == "qwen3"
+
+
+@pytest.mark.parametrize("shared_engine", [False, True])
+async def test_opencode_custom_pin_uses_executor_settings_and_its_own_slot(
+    db: Database, store, agent, shared_engine: bool
+) -> None:
+    model = "deepseek/deepseek-v4.1-flash-1017"
+    await add_account(db, store, "claude", "anthropic", priority=100)
+    await store.put("openrouter", {"api_key": "dummy-openrouter-key"})
+    async with db.write() as tx:
+        await accounts.create_account(
+            tx,
+            "openrouter",
+            AccountCreate(
+                name="openrouter",
+                provider="custom",
+                secret_ref="sops:openrouter",
+                max_leases=1,
+                config={
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "label": "openrouter",
+                    "engine": {"model": "harness-model"},
+                    "executor": {
+                        "model": model,
+                        "routing_options": {"only": ["example"]},
+                    },
+                },
+            ),
+            "sops:openrouter",
+            "admin:test",
+            store,
+        )
+    pin = ExecutorModel(executor="opencode", model=model, account_provider="custom")
+    assert pin.provider == "custom"
+    await make_task(db, executor_model=pin)
+    task = await claim(db)
+    assert task is not None and task.executor_model == pin
+    async with db.write() as tx:
+        engine = await accounts.lease(
+            tx,
+            A,
+            ["custom"] if shared_engine else ["anthropic"],
+            store,
+            task_id=task.id,
+            attempt=task.attempt,
+        )
+    if shared_engine:
+        with pytest.raises(ConflictError, match="no usable executor account"):
+            async with db.write() as tx:
+                await accounts.lease(
+                    tx,
+                    A,
+                    ["custom"],
+                    store,
+                    "executor",
+                    reuse_held=False,
+                    task_id=task.id,
+                    attempt=task.attempt,
+                )
+        return
+    async with db.write() as tx:
+        executor = await accounts.lease(
+            tx,
+            A,
+            [*RUNTIME, "custom", "local"],
+            store,
+            "executor",
+            reuse_held=False,
+            task_id=task.id,
+            attempt=task.attempt,
+        )
+    assert engine.provider == "anthropic"
+    assert executor.provider == "custom" and executor.role == "executor"
+    assert executor.settings.model == model
+    assert executor.settings.provider == {"only": ["example"]}
 
 
 async def test_harness_pin_yields_to_another_provider(

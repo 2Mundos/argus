@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-10-23
+updated: 2026-11-17
 ---
 
 # Custom OpenAI-compatible accounts
@@ -105,6 +105,9 @@ Make an OpenAI-compatible endpoint (presets: OpenRouter,
     reach it as `executor_settings` in the pinned task context or as the JSON in
     `ARGUS_ACCOUNT_SETTINGS`; neither holds a secret. The key is read only from the
     environment variable `ARGUS_ACCOUNT_API_KEY`, never from argv, a file or the report.
+    In managed NanoClaw sessions this variable holds only the gateway sentinel
+    described below, never the provider key. Standalone delegate callers retain
+    the existing explicit-key environment interface.
     - **OpenCode** gets `base_url`, `model` and the `provider` block through an inline
       config in `OPENCODE_CONFIG_CONTENT` (an `@ai-sdk/openai-compatible` provider
       `argus_custom`, `-m argus_custom/<model>`; the block sits in the model's
@@ -124,8 +127,25 @@ Make an OpenAI-compatible endpoint (presets: OpenRouter,
     lease uses a host loopback bridge (Anthropic Messages → OpenAI Chat Completions);
     the API key never enters the container. The channel copies lease `settings` into
     `engine_settings` / `executor_settings` on the pinned model-policy context.
-    `PROVIDERS.custom` is `harnessEnvOnly`; the executor lease stays separate (Cursor,
-    Codex, …).
+    The custom engine mapping remains `harnessEnvOnly`; the executor lease is separate.
+  - **Managed OpenCode executor (OpenRouter only)**: an explicit `custom` executor
+    lease with label `openrouter`, base URL exactly `https://openrouter.ai/api/v1`
+    and a configured executor model becomes two generic OneCLI secrets, scoped to
+    `openrouter.ai` at `/api/v1/models` and `/api/v1/chat/completions`. No wildcard,
+    other host, redirect, local bridge or Anthropic credential is authorized.
+    Reconciliation retains these alongside other leased secrets and unassigns them
+    when the executor is released. The host reads only assignment metadata and
+    requires the exact group-specific names, generic types, both paths and selective
+    mode before supplying a non-secret sentinel plus probe settings. It scrubs
+    ambient custom keys and stale sentinels. The task policy provides the actual
+    role model and routing block. OpenCode's existing inline provider config is
+    reused, not replaced; no key is copied to an agent environment, file or log.
+    The delegate rejects this sentinel with another endpoint or another executor.
+    The preflight session now probes this custom OpenCode lane using the same
+    sentinel, proxy and CA (`GET /api/v1/models`); 78, 79 and 127 block as usual.
+    Native/local OpenCode routes keep their existing probe behavior. Managed
+    custom executor endpoints other than OpenRouter remain unsupported, fail closed,
+    and do not receive a sentinel. No live provider run is implied by a metadata probe.
   - **Claude Code** cannot call an OpenAI-compatible URL directly; the bridge is the
     only supported harness path for `custom` engine accounts.
 
@@ -172,3 +192,35 @@ Make an OpenAI-compatible endpoint (presets: OpenRouter,
 - Not verified: a request to the real OpenRouter or Google AI Studio endpoint; quota
   or credit reads from either; leasing the account into a real worker; the dashboard in
   a real browser; any production node.
+
+The managed OpenCode lane additionally has channel, assignment, delegate and
+preflight tests in `argus-accounts.test.ts`, `argus-opencode-stub.test.ts`,
+`argus-repo-preflight.test.ts` and `engines/argus-delegate.test.mjs`.
+`ARGUS_NANOCLAW_STATE=<isolated-directory> ARGUS_NANOCLAW_ENGINES=1 integrations/nanoclaw/provision.sh check`
+builds and tests the pinned host without deployment. Rollout requires the updated
+API schema, rebuilt NanoClaw host and agent image, fresh sessions, a valid existing
+custom account with an executor model, free executor lease capacity and the scoped
+OneCLI assignment. None of those live mutations is part of local verification.
+
+Offline runtime verification (OpenCode 1.18.27, no external network or live
+credential): from the repository root, create an empty writable scratch directory
+and run the installed agent image with this checkout mounted read-only:
+
+```bash
+mkdir -p "$TMPDIR/opencode-smoke"
+docker run --rm --network none --entrypoint node -e TMPDIR=/smoke \
+  -v "$PWD:/repo:ro" -v "$TMPDIR/opencode-smoke:/smoke" \
+  argus-nanoclaw-agent:da636a6 \
+  /repo/integrations/nanoclaw/engines/opencode-custom-smoke.mjs
+```
+
+The reproducible dummy gateway serves the exact OpenRouter host through a local
+CONNECT proxy and a trusted test CA; TLS verification stays enabled. It accepts
+only the two scoped paths and replaces the public sentinel with a public dummy
+value in memory. The smoke verifies the delegate's metadata auth probe, OpenCode's
+actual wire model and routing block, the installed `read` tool and its real
+`fixture-ok` result, and that the dummy provider value is absent from artifacts.
+No permission, hook, sandbox or preflight setting is disabled. This proves
+OpenCode's runtime/config/tool/proxy compatibility, not a live Argus lease, real
+OneCLI injection or OpenRouter model availability. Managed authorization is
+covered separately by the assignment and channel tests.

@@ -267,6 +267,7 @@ async def _providers(
             RouteAccount(id=r["id"], name=r["name"], status=_status(r, now))
         )
     pins = {p: e for e, p in EXECUTOR_PROVIDERS.items()}
+    pins["custom"] = "opencode"
     names = sorted(ENGINE_PROVIDERS | EXECUTOR_ONLY | set(by_provider))
     return [
         RouteProvider(

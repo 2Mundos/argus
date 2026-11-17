@@ -31,6 +31,25 @@ const task = {
 } as unknown as Task;
 
 describe("buildChanges", () => {
+  it("keeps the custom executor lane when displaying and editing a model pin", () => {
+    const custom: Task = {
+      ...task,
+      executor_model: {
+        executor: "opencode",
+        model: "old-model",
+        account_provider: "custom",
+      },
+    };
+    const draft = toDraft(custom);
+    expect(draft.executor_model).toBe("opencode@custom old-model");
+    expect(buildChanges(custom, draft).changes).toEqual({});
+    draft.executor_model = "opencode@custom deepseek/deepseek-v4.1-flash-1017";
+    expect(buildChanges(custom, draft).changes.executor_model).toEqual({
+      executor: "opencode",
+      model: "deepseek/deepseek-v4.1-flash-1017",
+      account_provider: "custom",
+    });
+  });
   it("sends nothing when the draft equals the task", () => {
     expect(buildChanges(task, toDraft(task))).toEqual({ changes: {}, errors: {} });
   });

@@ -24,7 +24,11 @@ export interface PolicySnapshot {
     /** Task complexity (trivial | standard | hard); trivial prefers the local model. */
     complexity?: string | null;
     /** The task's pinned executor and model (task models spec); null follows the policy. */
-    executor_model?: { executor: string; model: string } | null;
+    executor_model?: {
+      executor: string;
+      model: string;
+      account_provider?: "local" | "custom" | null;
+    } | null;
     /** The harness pin fell back for this attempt (task models spec 3.3); null: it held. */
     model_switch?: object | null;
   } | null;

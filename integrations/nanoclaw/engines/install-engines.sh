@@ -71,7 +71,7 @@ fs.writeFileSync(file, `${JSON.stringify(tools, null, 2)}\n`);
 JS
 
 # 3. image: the Cursor agent, argus-delegate, the opt-in dsh install (ARGUS_DSH_ENABLED build arg), and a version smoke that fails the build
-cp "$here/install-cursor-agent.sh" "$here/install-copilot-cli.sh" "$here/../install-dsh.sh" "$here/argus-delegate.mjs" "$here/account-settings.mjs" "$here/anthropic-redirect.mjs" "$here/model-policy.mjs" "$here/model-policy.defaults.json" "$here/milestones.mjs" "$here/livelog.mjs" "$here/changes.mjs" "$here/usage.mjs" "$target/container/"
+cp "$here/install-cursor-agent.sh" "$here/install-copilot-cli.sh" "$here/../install-dsh.sh" "$here/argus-delegate.mjs" "$here/account-settings.mjs" "$here/opencode-gateway.mjs" "$here/anthropic-redirect.mjs" "$here/model-policy.mjs" "$here/model-policy.defaults.json" "$here/milestones.mjs" "$here/livelog.mjs" "$here/changes.mjs" "$here/usage.mjs" "$target/container/"
 bash "$here/../install-gitea-api.sh" stage-engines "$target"
 python3 "$here/patch-engines-dockerfile.py" "$target/container/Dockerfile"
 echo "engines overlay applied to $target"

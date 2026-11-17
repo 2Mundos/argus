@@ -111,6 +111,8 @@ cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub
 cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor-stub.test.ts"
 cp "$here/argus-copilot-stub.ts" "$target/src/gateway-providers/argus-copilot-stub.ts"
 cp "$here/argus-copilot-stub.test.ts" "$target/src/gateway-providers/argus-copilot-stub.test.ts"
+cp "$here/argus-opencode-stub.ts" "$target/src/gateway-providers/argus-opencode-stub.ts"
+cp "$here/argus-opencode-stub.test.ts" "$target/src/gateway-providers/argus-opencode-stub.test.ts"
 cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub.ts"
 cp "$here/argus-claude-stub.test.ts" "$target/src/gateway-providers/argus-claude-stub.test.ts"
 cp "$here/engines/anthropic-redirect.mjs" "$target/src/gateway-providers/anthropic-redirect.mjs"
@@ -118,8 +120,10 @@ mkdir -p "$target/src/gateway-providers/engines" "$target/dist/gateway-providers
 # cp takes one destination: copy into each directory separately.
 for dir in "$target/src/gateway-providers/engines" "$target/dist/gateway-providers/engines"; do
   cp "$here/engines/account-settings.mjs" "$here/engines/anthropic-openai-bridge.mjs" "$dir/"
+  cp "$here/engines/opencode-gateway.mjs" "$dir/"
 done
 cp "$here/engines/anthropic-openai-bridge.d.mts" "$target/src/gateway-providers/engines/"
+cp "$here/engines/opencode-gateway.d.mts" "$target/src/gateway-providers/engines/"
 cp "$here/argus-local-harness.ts" "$target/src/gateway-providers/argus-local-harness.ts"
 cp "$here/argus-local-harness.test.ts" "$target/src/gateway-providers/argus-local-harness.test.ts"
 cp "$here/argus-custom-harness.ts" "$target/src/gateway-providers/argus-custom-harness.ts"
@@ -133,6 +137,9 @@ for dir in channels gateway-providers; do
   cp "$here/engines/anthropic-redirect.mjs" "$target/src/$dir/engines/anthropic-redirect.mjs"
   cp "$here/engines/anthropic-redirect.mjs" "$target/dist/$dir/engines/anthropic-redirect.mjs"
   cp "$here/engines/anthropic-redirect.d.mts" "$target/src/$dir/engines/anthropic-redirect.d.mts"
+  cp "$here/engines/opencode-gateway.mjs" "$target/src/$dir/engines/"
+  cp "$here/engines/opencode-gateway.d.mts" "$target/src/$dir/engines/"
+  cp "$here/engines/opencode-gateway.mjs" "$target/dist/$dir/engines/"
 done
 # The channel imports the harness helpers from its own directory.
 printf '%s\n' "export * from '../gateway-providers/argus-local-harness.js';" > "$target/src/channels/argus-local-harness.ts"
@@ -284,6 +291,22 @@ s = s.replace(
 open(p, "w").write(s)
 PY
   echo "patched $onecli_ts (Copilot delegate sentinel env)"
+fi
+if [ -f "$onecli_ts" ] && ! grep -q "withOpencodeDelegateRuntime" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { copilotExecutorAssigned, withCopilotDelegateRuntime } from './argus-copilot-stub.js';"
+assert needle in s, "run install after the Copilot delegate hook is present"
+s = s.replace(needle, needle + "\nimport { opencodeExecutorAssigned, withOpencodeDelegateRuntime } from './argus-opencode-stub.js';", 1)
+head = "  const config = await withCopilotDelegateRuntime("
+tail = "onecliUrl ? copilotExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : false);"
+assert head in s and tail in s, "onecli.ts ensureSession shape changed upstream"
+s = s.replace(head, "  const config = await withOpencodeDelegateRuntime(await withCopilotDelegateRuntime(", 1)
+s = s.replace(tail, tail[:-2] + "), async () =>\n      onecliUrl ? opencodeExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : false);", 1)
+open(p, "w").write(s)
+PY
 fi
 onecli_test="$target/src/gateway-providers/onecli.test.ts"
 if [ -f "$onecli_test" ] && grep -q 'expect(fetchMock).toHaveBeenCalledTimes(1);' "$onecli_test"; then

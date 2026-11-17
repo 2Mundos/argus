@@ -25,6 +25,7 @@ SHIPPED = (
     "install-copilot-cli.sh",
     "argus-delegate.mjs",
     "account-settings.mjs",
+    "opencode-gateway.mjs",
     "anthropic-redirect.mjs",
     "model-policy.mjs",
     "model-policy.defaults.json",
@@ -62,7 +63,7 @@ RUN sh /tmp/argus-engines/install-cursor-agent.sh \\
  && sh /tmp/argus-engines/install-copilot-cli.sh \\
  && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \\
  && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \\
- && install -m 0644 /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/changes.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \\
+ && install -m 0644 /tmp/argus-engines/opencode-gateway.mjs /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/changes.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \\
  && install -m 0644 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/gitea-api.mjs \\
  && npm install --prefix /usr/local/lib/argus-gitea --omit=dev --no-audit --no-fund undici@8.12.2 \\
  && install -m 0755 /tmp/argus-engines/gitea-api.mjs /usr/local/bin/argus-gitea-api \\
@@ -84,6 +85,10 @@ CLEANUP = " && rm -rf /tmp/argus-engines \\\n"
 # releases after the first block added. Keyed on the install step, never on the name
 # alone: a name on the COPY line says nothing about whether it is installed.
 STEPS = (
+    (
+        f"{STAGE}opencode-gateway.mjs",
+        " && install -m 0644 /tmp/argus-engines/opencode-gateway.mjs /usr/local/bin/ \\\n",
+    ),
     (
         f"{STAGE}milestones.mjs",
         " && install -m 0644 /tmp/argus-engines/milestones.mjs /tmp/argus-engines/gitea-api.mjs /usr/local/bin/ \\\n",

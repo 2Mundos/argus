@@ -407,7 +407,9 @@ export function sessionRepositoryProbe(
  * Executors whose credential the preflight session can see. The session gets the gateway
  * contribution (onecli.ts `ensureSession`, keyed by the agent group): the Claude and Cursor
  * stubs, the Codex stub, and the Copilot sentinel, so `claude`, `codex`, `agent` and
- * `copilot` are probed. `opencode` is not: its credential is an `auth.json`, an attached
+ * `copilot` are probed. OpenCode on an explicit custom executor lease is also probed:
+ * its scoped OpenRouter sentinel and probe settings are part of the gateway contribution.
+ * Other `opencode` routes are not: their credential is an `auth.json`, an attached
  * server (`ARGUS_OPENCODE_ATTACH`), or a custom or local account whose base URL and key
  * come from the task's `executor_settings` in the policy context and from the worker's own
  * env (`ARGUS_ACCOUNT_API_KEY`), none of which a probe session has; a probe would block a
@@ -443,8 +445,10 @@ export async function runExecutorPreflight(
   executor: string,
   agentIdentifier?: string,
   timeoutMs = PREFLIGHT_TIMEOUT_MS,
+  accountProvider?: string,
 ): Promise<{ reason: "env_executor_auth"; error: string } | null> {
-  if (!PROBED_EXECUTORS.has(executor)) return null;
+  if (!PROBED_EXECUTORS.has(executor) && !(executor === "opencode" && accountProvider === "custom"))
+    return null;
   let result: PreflightChildResult;
   try {
     result = await run({
