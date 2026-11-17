@@ -335,6 +335,10 @@ runtime, adapter, provider, account (default "Any available account", optional p
 and allowed model-source selectors.
 Add/remove/reorder changes the **whole alternative**. Show source, effective
 inherited list, editable scoped list, save validation and per-level inherit/reset.
+Save validation lists every problem above the Save button, one line each, naming
+the difficulty and alternative (`hard, alternative 2: executor model ID is empty`),
+and Save is `aria-describedby` that list. A missing capability list, a legacy
+environment lock or a save in flight is listed the same way and also disables Save.
 A difficulty without a chain shows its built-in (or stored `difficulty.executors`)
 executor order, read only, labelled as legacy routing; Setup has no separate
 Difficulty executors card. Never present the `trivial` model-policy map as a
