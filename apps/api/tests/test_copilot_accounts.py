@@ -14,7 +14,7 @@ from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountCreate, AccountUpdate
-from argus_core.tasks import TaskCreate
+from argus_core.tasks import ExecutorModel, TaskCreate
 from fastapi.testclient import TestClient
 
 ADMIN_TOKEN = "t" * 40
@@ -198,10 +198,22 @@ async def add(db: Database, store, name: str, provider: str, credential: dict, *
         ).id
 
 
-async def lease(db: Database, store, role: str, providers: list[str]):
+async def lease(
+    db: Database,
+    store,
+    role: str,
+    providers: list[str],
+    executor_model: ExecutorModel | None = None,
+):
     async with db.write() as tx:
         await tasks.create_task(
-            tx, TaskCreate(project="demo", title="copilot lease test"), "admin:test"
+            tx,
+            TaskCreate(
+                project="demo",
+                title="copilot lease test",
+                executor_model=executor_model,
+            ),
+            "admin:test",
         )
         task = await tasks.claim(tx, A, [])
     assert task is not None
@@ -240,6 +252,29 @@ async def test_the_executor_role_leases_copilot_when_it_ranks_first(
         "copilot",
     )
     assert executor.credential == CREDENTIAL
+
+
+COPILOT_PIN = ExecutorModel(executor="copilot", model="gpt-5")
+
+
+async def test_a_copilot_executor_pin_leases_only_the_copilot_account(
+    db: Database, seeded: MemorySecretStore
+) -> None:
+    copilot = await add(db, seeded, "copilot-1", "copilot", CREDENTIAL, priority=1)
+    await add(db, seeded, "codex-1", "openai", {"OPENAI_API_KEY": "k"}, priority=10)
+    executor = await lease(db, seeded, "executor", ["copilot", "openai"], COPILOT_PIN)
+    assert (executor.account_id, executor.provider) == (copilot, "copilot")
+
+
+async def test_a_copilot_executor_pin_without_a_copilot_account_is_refused(
+    db: Database, seeded: MemorySecretStore
+) -> None:
+    await add(db, seeded, "codex-1", "openai", {"OPENAI_API_KEY": "k"})
+    with pytest.raises(NoAccountError, match="needs provider copilot"):
+        await lease(db, seeded, "executor", ["copilot", "openai"], COPILOT_PIN)
+    async with db.read() as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM account_leases")
+        assert (await cur.fetchone())[0] == 0
 
 
 async def test_a_disabled_or_exhausted_copilot_account_is_skipped(

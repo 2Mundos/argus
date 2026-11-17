@@ -6918,7 +6918,7 @@ export interface components {
              * Executor
              * @enum {string}
              */
-            executor: "claude" | "codex" | "agent" | "opencode";
+            executor: "claude" | "codex" | "agent" | "opencode" | "copilot";
             /** Model */
             model: string;
         };

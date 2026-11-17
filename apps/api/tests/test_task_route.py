@@ -148,7 +148,7 @@ async def test_copilot_is_unsupported_and_restriction_applies_to_engines(
     copilot = providers["copilot"]
     assert (copilot.engine, copilot.executor, copilot.engine_allowed) == (
         "unsupported",
-        None,
+        "copilot",
         False,
     )
     assert [a.id for a in copilot.accounts] == ["cop"]

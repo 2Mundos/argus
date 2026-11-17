@@ -51,6 +51,7 @@ EXECUTOR_PROVIDERS: dict[str, str] = {
     "codex": "openai",
     "agent": "cursor",
     "opencode": "local",
+    "copilot": "copilot",
 }
 # An account id or name: what a harness account pin names (task models spec 3.4).
 AccountRef = Annotated[
@@ -79,7 +80,7 @@ class ExecutorModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    executor: Literal["claude", "codex", "agent", "opencode"]
+    executor: Literal["claude", "codex", "agent", "opencode", "copilot"]
     model: ModelId
 
     @property

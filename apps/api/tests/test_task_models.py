@@ -65,7 +65,7 @@ def test_pins_are_validated() -> None:
         {"harness_model": {"engine": "agent", "model": "x"}},
         {"harness_model": {"engine": "claude", "model": "-bad"}},
         {"harness_model": {"engine": "claude"}},
-        {"executor_model": {"executor": "copilot", "model": "x"}},
+        {"executor_model": {"executor": "gemini", "model": "x"}},
         {"executor_model": {"executor": "codex", "model": "x", "extra": 1}},
         # the pinned engine's provider is excluded by the restriction
         {"harness_model": OPUS, "account_providers": ["openai"]},

@@ -447,8 +447,18 @@ async def lease(
         )
     if result is None:
         reset = await earliest_reset(tx, role, allowed)
+        pinned = (
+            await tasks.executor_provider(tx.conn, task_id)
+            if role == "executor" and task_id is not None
+            else None
+        )
         raise NoAccountError(
             f"no usable {role} account"
+            + (
+                f": the task's pinned executor needs provider {pinned}"
+                if pinned
+                else ""
+            )
             + (f"; earliest reset at {reset.isoformat()}" if reset else ""),
         )
     if task_id is not None and attempt is not None:
