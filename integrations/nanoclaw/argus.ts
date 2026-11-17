@@ -63,6 +63,7 @@ import {
   normalizeRepositoryUrl,
   OneCliClient,
   preferredExecutorForLease,
+  providerForExecutor,
   releaseRepositoryLease,
   runtimeProviders,
   verifyRepositoryAssignment,
@@ -4538,7 +4539,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         // applied to the vault until both are done, so a failed Cursor try leaves the
         // same end state (the fallback's lease, or none).
         let candidate: AccountLease | null = null;
-        const first = executorFirst(lease.provider);
+        // A named executor pin leases that executor's provider only, never another's.
+        const pinnedExecutor = task.executor_model?.executor;
+        const pinned = pinnedExecutor ? providerForExecutor(pinnedExecutor) : null;
+        const first = pinned ? null : executorFirst(lease.provider);
         if (first) {
           try {
             candidate = await leaseExecutor([first]);
@@ -4546,8 +4550,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
           }
         }
-        candidate ??= await leaseExecutor(runtimeProviders("executor"));
-        if (candidate.role === "executor" && candidate.provider !== lease.provider)
+        try {
+          candidate ??= await leaseExecutor(pinned ? [pinned] : runtimeProviders("executor"));
+        } catch (err) {
+          if (pinned && err instanceof ArgusError && err.code === "no_account") {
+            log.warn(
+              `No ${pinned} account is usable for the pinned executor ${pinnedExecutor}; no executor lease is held`,
+              { provider: pinned, executor: pinnedExecutor, message: err.message },
+            );
+            candidate = null;
+          } else throw err;
+        }
+        if (candidate && candidate.role === "executor" && candidate.provider !== lease.provider)
           held.push(candidate);
       } catch (err) {
         if (!(err instanceof ArgusError && err.code === "no_account")) throw err;

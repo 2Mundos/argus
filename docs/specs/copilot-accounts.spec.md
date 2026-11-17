@@ -73,7 +73,9 @@ on create and replace, and deliver it to the **delegated** GitHub Copilot CLI
   `engine` lease role never returns it, the `executor` role may. The `copilot`
   executor runs on the `copilot` provider ([task models](task-models.spec.md)
   3.1): an executor pin to it with no usable copilot account is refused with a
-  missing-provider reason, never leased from another provider.
+  missing-provider reason, never leased from another provider: the channel leases
+  `copilot` only for that pin, and with no usable account it holds no executor
+  lease and logs a warning naming `copilot` and the executor.
 - **Delivery** (`integrations/nanoclaw/argus-accounts.ts`): generic OneCLI
   secrets per agent group (`argus-<group>-copilot-…`), one per host and path
   family, same token value. There is no broad host wildcard: every host and

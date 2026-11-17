@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-15
+updated: 2026-11-17
 ---
 
 # Global account selection
@@ -93,7 +93,8 @@ isolation or sandbox/TLS restrictions.
   no extra slot, so a lower-priority executor (say Codex 0 beside a full Claude
   100) never displaces the engine-backed CLI. Proven contract: capacity counts
   rows, a separate executor lease of the same account still takes its own slot
-  (the default without `reuse_held`). The task text names the preferred
+  (the default without `reuse_held`). A named executor pin narrows the request to
+  that executor's provider only ([task models](task-models.spec.md) 3.2). The task text names the preferred
   `EXECUTOR` (claude | codex | agent) of the executor lease actually held (the
   engine's own account when none is: native reuse); the selected lease is
   authoritative over engine kind or task complexity, a local/custom engine with no

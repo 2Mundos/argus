@@ -39,6 +39,7 @@ import {
   jwtExpiryMs,
   OneCliClient,
   preferredExecutorForLease,
+  providerForExecutor,
   releaseRepositoryLease,
   runtimeProviders,
   sanitizeNotice,
@@ -1107,6 +1108,59 @@ describe("engine and executor leases in the channel", () => {
     );
     expect(w.calls.some((c) => c.path === "/accounts/release")).toBe(true);
   });
+
+  it("leases only the pinned executor's provider, and the engine lease never asks for copilot", async () => {
+    const w = world({
+      leases: [lease("claude-1", "sk-ant"), copilotLease()],
+      tasks: [{ ...task(), executor_model: { executor: "copilot", model: "gpt-5" } }],
+    });
+    const { adapter, setup } = harness(w, true);
+    live.push(adapter);
+    await adapter.setup(setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    const [engine, executor] = w.calls
+      .filter((c) => c.path === "/accounts/lease")
+      .map((c) => c.body);
+    expect(engine.runtime_providers).not.toContain("copilot");
+    expect(engine.runtime_providers).toContain("anthropic");
+    expect(executor).toMatchObject({
+      role: "executor",
+      runtime_providers: ["copilot"],
+      reuse_held: true,
+    });
+    // The applied executor lease is the copilot account: its secrets are in the vault.
+    const names = w.onecli.secrets.map((s) => s.name);
+    expect(names.some((n) => n.startsWith("argus-ag-group-1-copilot-"))).toBe(true);
+    expect(names).toContain("argus-ag-group-1");
+  });
+
+  it("holds no executor lease and warns, naming the provider, when the pinned provider has no account", async () => {
+    const warn = vi.spyOn(log, "warn");
+    const w = world({
+      leases: [lease("claude-1", "sk-ant"), "no_account"],
+      tasks: [{ ...task(), executor_model: { executor: "copilot", model: "gpt-5" } }],
+    });
+    const { adapter, setup } = harness(w, true);
+    live.push(adapter);
+    await adapter.setup(setup);
+    await until(() => w.calls.some((c) => c.path === "/engines/selected"));
+    const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease");
+    // One attempt, on the pinned provider only: no fallback to another provider's account.
+    expect(leaseCalls.map((c) => c.body.runtime_providers)).toEqual([
+      expect.arrayContaining(["anthropic"]),
+      ["copilot"],
+    ]);
+    expect(
+      w.calls.some((c) => c.path === "/accounts/release" && c.search === "?role=executor"),
+    ).toBe(true);
+    expect(w.onecli.secrets.map((s) => s.name)).toEqual(["argus-ag-group-1"]);
+    expect(
+      warn.mock.calls.some((c) =>
+        String(c[0]).includes("No copilot account is usable for the pinned executor copilot"),
+      ),
+    ).toBe(true);
+    warn.mockRestore();
+  });
 });
 
 describe("an unusable executor account", () => {
@@ -1329,6 +1383,7 @@ describe("copilot credential documents", () => {
     expect(runtimeProviders("engine")).not.toContain("copilot");
     expect(runtimeProviders("executor")).toContain("copilot");
     expect(executorFor("copilot")).toBe("copilot");
+    expect(providerForExecutor("copilot")).toBe("copilot");
     expect(preferredExecutorForLease(codexLease(), copilotLease())).toBe("copilot");
   });
 

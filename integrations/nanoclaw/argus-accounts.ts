@@ -457,17 +457,23 @@ export function runtimeProviders(role: "engine" | "executor"): string[] {
     .map(([provider]) => provider);
 }
 
+/** Provider to delegate CLI (`argus-delegate EXECUTOR`); the one table both directions derive from. */
+const EXECUTOR_BY_PROVIDER: Record<string, string> = {
+  anthropic: "claude",
+  openai: "codex",
+  cursor: "agent",
+  copilot: "copilot",
+  local: "opencode",
+};
+
 /** The delegate CLI (`argus-delegate EXECUTOR`) that runs on a provider's account. */
 export function executorFor(provider: string): string | null {
-  return (
-    {
-      anthropic: "claude",
-      openai: "codex",
-      cursor: "agent",
-      copilot: "copilot",
-      local: "opencode",
-    }[provider] ?? null
-  );
+  return EXECUTOR_BY_PROVIDER[provider] ?? null;
+}
+
+/** The provider whose account a named executor runs on (task models 3.1); null when unknown. */
+export function providerForExecutor(executor: string): string | null {
+  return Object.entries(EXECUTOR_BY_PROVIDER).find(([, name]) => name === executor)?.[0] ?? null;
 }
 
 /**

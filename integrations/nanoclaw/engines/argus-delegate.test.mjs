@@ -2119,6 +2119,7 @@ test("copilot: no sentinel, or a real token in the env, is auth_missing (78) and
     const { code, report } = await run(["copilot", "--cwd", s.work, "--model", "gpt-5"], { env });
     assert.equal(code, 78, String(token));
     assert.equal(report.blocked, "auth_missing");
+    assert.match(report.need, /no usable copilot account/);
     assert.equal(JSON.stringify(report).includes(FAKE_REAL_COPILOT), false);
   }
   assert.equal(fs.existsSync(`${s.seen}.argv`), false);
