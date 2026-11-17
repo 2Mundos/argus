@@ -229,3 +229,32 @@ test("hard tasks read the hard maps per engine; others and codex keep the normal
     for (const bad of [{ claude: [] }, { typo: ["x"] }, [], "x"])
       assert.throws(() => policySnapshot({ ...policy, [scope]: bad }), /hard|map/);
 });
+
+test("execution model is frozen across ordinary failures for every difficulty and harness", async () => {
+  const { selectHarnessModel } = await import("./model-policy.mjs");
+  const snapshot = loadPolicy();
+  for (const difficulty of ["trivial", "simple", "standard", "hard"]) {
+    for (const [engine, provider] of [
+      ["claude", "anthropic"],
+      ["claude", "local"],
+      ["claude", "custom"],
+      ["codex", "openai"],
+    ]) {
+      const task = {
+        spec: "fixture",
+        difficulty,
+        failures: 9,
+        execution: {
+          version: 1,
+          revision: "route-revision",
+          harness: { model: "fixture/exact", selector: { adapter: engine, provider } },
+        },
+      };
+      const selected = selectHarnessModel(snapshot, engine, task, provider);
+      assert.equal(selected.configured_model, "fixture/exact");
+      assert.equal(selected.has_next, false);
+      assert.equal(selected.model_attempt, 1);
+      assert.equal(selected.policy_revision, "route-revision");
+    }
+  }
+});

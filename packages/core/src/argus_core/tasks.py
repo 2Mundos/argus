@@ -24,6 +24,7 @@ from pydantic import (
 from argus_core.accounts import ENGINE_PROVIDERS, AccountLease, NativeSessionReport
 from argus_core.continuation import ChecklistReport, EffectiveContinuation
 from argus_core.difficulty import Difficulty, DifficultySource
+from argus_core.execution_chains import ExecutionSelection
 from argus_core.knowledge import KnowledgeRef
 from argus_core.model_trace import ModelsSummary
 from argus_core.quota import FailureClass
@@ -676,6 +677,12 @@ class ClaimedTask(Task):
     # The engine account reserved in the claim's own transaction, when the claimer
     # held none: the worker applies it instead of leasing again.
     engine_lease: AccountLease | None = None
+    execution: ExecutionSelection | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    executor_lease: AccountLease | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     # Effective model policy for the task's project at claim (settings.spec.md 3.4).
     # The channel prefers these over the host file; revision fences a stale snapshot.
     model_policy: dict[str, dict[str, list[str]]] | None = None

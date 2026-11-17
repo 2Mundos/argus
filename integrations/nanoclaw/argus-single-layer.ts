@@ -121,6 +121,7 @@ export function harnessSelection(
   accountProvider: string | null | undefined,
   singleLayer = false,
 ): ModelSelection {
+  if (task.execution) return selectHarnessModel(snapshot, engine, task, accountProvider);
   if (singleLayer && engine === "claude") {
     const scope = implementationScope(snapshot, "claude", {
       complexity: task.complexity ?? "standard",

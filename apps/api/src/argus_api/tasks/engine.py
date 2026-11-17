@@ -379,6 +379,9 @@ async def wake_waiting(tx: Tx, actor: str = "system") -> list[str]:
     engine accounts can serve now: each woken task takes one slot of an account its
     `account_providers` allow. No thundering herd: the rest keep waiting for the
     next release, refill or account change. Returns the woken task ids."""
+    from argus_api.tasks.execution_routes import wake
+
+    await wake(tx)
     capacity = await engine_capacity(tx)
     if not capacity:
         return []

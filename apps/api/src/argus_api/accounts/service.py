@@ -410,6 +410,16 @@ async def lease(
         scope = _Scope(runtime_providers, None, None)
         prefer_local = False
     else:
+        from argus_api.tasks.execution_routes import current
+
+        if await current(tx.conn, task_id, attempt) is not None and role in {
+            "engine",
+            "executor",
+        }:
+            raise ConflictError(
+                "execution chain leases are delivered atomically with the claim",
+                code="execution_lease_owned",
+            )
         await tasks.check_lease(tx, task_id, attempt, agent_id)
         scope = await _scope(tx, task_id, role, runtime_providers, agent_id)
         prefer_local = await _prefer_local(tx, task_id, role)
@@ -605,6 +615,26 @@ async def claim(
         tx, agent_id, store, local_served_models
     )
     reserve = bool(runtime_providers) and manages_accounts and not held_eligible
+    from argus_api.tasks import execution_routes
+
+    selected = None
+
+    async def admit_execution(tx: Tx, row: aiosqlite.Row) -> bool:
+        nonlocal selected
+        policy = await execution_routes.resolve(tx.conn, row)
+        if policy is None or policy.bypass:
+            return False
+        selected = await execution_routes.reserve(
+            tx,
+            row,
+            policy,
+            agent_id,
+            runtime_providers or [],
+            capabilities,
+            store,
+            local_served_models,
+        )
+        return selected is not None
 
     async def can_lease(tx: Tx, task: aiosqlite.Row) -> bool:
         return await _lease_available(
@@ -618,10 +648,15 @@ async def claim(
         default_timeout_s=default_timeout_s,
         runtime_providers=runtime_providers,
         can_lease=can_lease if reserve else None,
+        execution_admission=admit_execution,
         disk_guard=disk_guard,
     )
     if task is None:
         return task, None
+    if selected is not None:
+        selection, engine, _executor = selected
+        await execution_routes.snapshot(tx, task.id, task.attempt, selection)
+        return task, engine
     if not reserve:
         await _note_held(tx, agent_id, task, runtime_providers)
         return task, None
@@ -685,6 +720,14 @@ async def exhausted(
         )
     task_id = report.task_id
     attempt = report.attempt
+    if task_id is not None and attempt is not None:
+        from argus_api.tasks.execution_routes import current
+
+        if await current(tx.conn, task_id, attempt) is not None:
+            raise ConflictError(
+                "stop the runtime and report a complete execution route advance",
+                code="execution_report_required",
+            )
     # Fence before any write: a stale claim must not exhaust anything. An expired
     # one may, as for `fail`: the quota was hit while the lease still held.
     if task_id is not None and attempt is not None:
@@ -864,6 +907,16 @@ async def fail_task(
     `failures` unchanged. Anything else fails the attempt as before."""
     if reason == tasks.RUNTIME_SWITCH_FAILED:
         return await _switch_failed(tx, agent_id, task_id, attempt, error)
+    from argus_api.tasks.execution_routes import current
+
+    if (
+        reason in {"quota", "account_unavailable", "provider_failure"}
+        and await current(tx.conn, task_id, attempt) is not None
+    ):
+        raise ConflictError(
+            "explicit execution routes require a fenced report after stopping",
+            code="execution_report_required",
+        )
     held = None
     if reason == "provider_failure":
         async with tx.conn.execute(
@@ -943,7 +996,13 @@ async def _switch_failed(
     ) as cur:
         held = await cur.fetchone()
     note = sanitize_notice(error)
-    await release(tx, agent_id, "switch_failed", "engine")
+    from argus_api.tasks.execution_routes import current
+
+    if await current(tx.conn, task_id, attempt) is None:
+        await release(tx, agent_id, "switch_failed", "engine")
+    # Explicit tuples retain their capacity until the old runtime is confirmed
+    # stopped or the existing dead-agent reaper revokes it. A failed stop must
+    # not free capacity for another concurrent run.
     await record(
         tx,
         f"agent:{agent_id}",

@@ -18,6 +18,7 @@ const readiness = {
 };
 
 const catalog: EngineCatalog = {
+  execution_capabilities: [],
   engines: [
     {
       id: "codex",

@@ -101,6 +101,20 @@ const PIN_PROVIDERS = { claude: "anthropic", codex: "openai" };
  * pinned model is dropped for the attempt and the policy default applies.
  */
 export function selectHarnessModel(snapshot, engine, task, accountProvider) {
+  if (task.execution) {
+    const route = task.execution;
+    if (
+      route.version !== 1 ||
+      route.harness.selector.adapter !== engine ||
+      route.harness.selector.provider !== accountProvider
+    )
+      throw new Error("execution harness does not match the selected runtime/account");
+    return {
+      ...selectModel(snapshot, "harness", engine, 1, null, route.harness.model),
+      policy_map: "execution",
+      policy_revision: route.revision,
+    };
+  }
   const pin = task.harness_model;
   if (
     pin?.engine === engine &&

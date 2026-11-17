@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-16
+updated: 2026-11-17
 ---
 
 # Settings
@@ -21,6 +21,11 @@ Phase 1 ships the store, the API, the Settings tab and two settings:
   reviewed by a different model before the task succeeds (3.5).
 
 Readable by any valid token. Written by admins.
+
+Explicit complete per-difficulty routing is owned by
+[execution chains](execution-chains.spec.md). Those opt-in lists own both layers
+and models; the legacy selection rules below apply only without an effective
+explicit list, or when task model/account pins choose the whole legacy pin path.
 
 # 2. Non-Goals
 
@@ -160,6 +165,14 @@ defaults. `ARGUS_DIFFICULTY_EXECUTORS` (same JSON shape, validated at startup)
 wins over the store when set, reported as `source: env` like `models`. The
 Settings tab edits the map; claim sends the effective chain for the task's
 difficulty as `difficulty_executors`.
+
+This is a legacy executor-only setting, not a list of complete execution routes.
+An empty list removes delegation but leaves the harness account ranking unchanged,
+including trivial tasks' soft local preference and possible cloud fallback. The
+[Execution chains contract](execution-chains.spec.md) defines the opt-in general
+replacement: complete paired or single-layer alternatives for every difficulty,
+per-level inheritance, compatibility and explicit migration. Setup Settings and
+the shared settings API/MCP expose it; no automatic conversion is defined.
 
 ## 3.8 Git identity
 

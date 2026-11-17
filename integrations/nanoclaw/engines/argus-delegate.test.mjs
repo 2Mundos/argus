@@ -2947,3 +2947,59 @@ test("--auth-probe end to end: a local account's real GET maps 200 to accepted a
   ]);
   assert.equal(JSON.stringify(rejected.report).includes(SECRET), false);
 });
+
+test("explicit complete routes forbid delegation in single mode and executor/model substitution", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "opencode",
+    'if [ "$1" = "--version" ]; then echo 1.18.27; else echo \'{"result":"ok"}\'; fi',
+  );
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const file = path.join(s.dir, "explicit-policy.json");
+  const settings = { ...OPENCODE_GATEWAY_SETTINGS, model: "fixture/code" };
+  for (const [mode, model, expected] of [
+    ["single", null, 64],
+    ["paired", "other/model", 64],
+    ["paired", null, 0],
+  ]) {
+    fs.writeFileSync(
+      file,
+      JSON.stringify(
+        policySnapshot(policy, {
+          task_id: "t1",
+          attempt: 1,
+          executor_account_provider: "custom",
+          executor_settings: settings,
+          executor_model: {
+            executor: "opencode",
+            model: settings.model,
+            account_provider: "custom",
+          },
+          execution: {
+            version: 1,
+            generation: 1,
+            alternative: { mode },
+            executor:
+              mode === "paired"
+                ? { model: settings.model, selector: { adapter: "opencode", provider: "custom" } }
+                : null,
+          },
+        }),
+      ),
+    );
+    const { code, report } = await run(
+      ["opencode", "--cwd", s.work, ...(model ? ["--model", model] : [])],
+      {
+        env: {
+          ...s.env,
+          ARGUS_ACCOUNT_API_KEY: OPENCODE_GATEWAY_SENTINEL,
+          ARGUS_MODEL_POLICY_FILE: file,
+        },
+      },
+    );
+    assert.equal(code, expected, JSON.stringify(report));
+    if (expected === 64) assert.equal(report.error, "model_policy_invalid");
+  }
+});

@@ -713,6 +713,21 @@
         "title": "AccountLease",
         "type": "object"
       },
+      "AccountModel": {
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "const": "account",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "AccountModel",
+        "type": "object"
+      },
       "AccountState": {
         "enum": [
           "available",
@@ -4462,6 +4477,26 @@
               }
             ],
             "title": "Error"
+          },
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executor_lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountLease"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "executor_model": {
             "anyOf": [
@@ -8592,6 +8627,176 @@
             "title": "Engines",
             "type": "array"
           },
+          "execution_capabilities": {
+            "default": [
+              {
+                "adapter": "claude",
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:harness:claude:anthropic",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "single",
+                  "paired"
+                ],
+                "provider": "anthropic",
+                "role": "harness",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": false
+              },
+              {
+                "adapter": "claude",
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:harness:claude:local",
+                "model_sources": [
+                  "account"
+                ],
+                "modes": [
+                  "single",
+                  "paired"
+                ],
+                "provider": "local",
+                "role": "harness",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": false
+              },
+              {
+                "adapter": "claude",
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:harness:claude:custom",
+                "model_sources": [
+                  "account"
+                ],
+                "modes": [
+                  "single",
+                  "paired"
+                ],
+                "provider": "custom",
+                "role": "harness",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": false
+              },
+              {
+                "adapter": "codex",
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:harness:codex:openai",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "single",
+                  "paired"
+                ],
+                "provider": "openai",
+                "role": "harness",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": false
+              },
+              {
+                "adapter": "claude",
+                "excluded_harness_providers": [
+                  "local"
+                ],
+                "id": "nanoclaw:executor:claude:anthropic",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "anthropic",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
+                "adapter": "codex",
+                "excluded_harness_providers": [
+                  "local"
+                ],
+                "id": "nanoclaw:executor:codex:openai",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "openai",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
+                "adapter": "agent",
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:executor:agent:cursor",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "cursor",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
+                "adapter": "copilot",
+                "excluded_harness_providers": [
+                  "local"
+                ],
+                "id": "nanoclaw:executor:copilot:copilot",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "copilot",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
+                "adapter": "opencode",
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:executor:opencode:local",
+                "model_sources": [
+                  "account"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "local",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
+                "adapter": "opencode",
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:executor:opencode:custom",
+                "model_sources": [
+                  "account",
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "custom",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": false
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ExecutionCapability"
+            },
+            "title": "Execution Capabilities",
+            "type": "array"
+          },
           "local": {
             "anyOf": [
               {
@@ -8605,6 +8810,7 @@
         },
         "required": [
           "engines",
+          "execution_capabilities",
           "local"
         ],
         "title": "EngineCatalog",
@@ -8749,6 +8955,18 @@
             ],
             "title": "Engine",
             "type": "string"
+          },
+          "execution_generation": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Generation"
           },
           "provider": {
             "maxLength": 50,
@@ -9338,242 +9556,172 @@
         "title": "Execution",
         "type": "object"
       },
-      "ExecutionReport": {
-        "description": "One model run of a layer: a harness session, or one delegation attempt.\n\n`key` is chosen by the producer (stable across retries of the *report*, unique per\nrun). Re-sending it completes the record: values already stored are kept, only\ngaps, `state`, `ended_at`, `error_code` and the observation can be filled.",
+      "ExecutionCapability": {
+        "additionalProperties": false,
         "properties": {
-          "account_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Account Id"
-          },
-          "configured_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Configured Model"
-          },
-          "delegation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delegation Id"
-          },
-          "ended_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ended At"
-          },
-          "engine": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Engine"
-          },
-          "error_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Code"
-          },
-          "evidence": {
-            "default": "not_reported",
-            "enum": [
-              "reported_by_runtime",
-              "cli_output",
-              "provider_response",
-              "not_reported"
-            ],
-            "title": "Evidence",
+          "adapter": {
+            "title": "Adapter",
             "type": "string"
           },
-          "evidence_reason": {
-            "anyOf": [
+          "excluded_harness_providers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Excluded Harness Providers",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Model Sources",
+            "type": "array"
+          },
+          "modes": {
+            "items": {
+              "enum": [
+                "single",
+                "paired"
+              ],
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "harness",
+              "executor"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "runtime": {
+            "const": "nanoclaw",
+            "default": "nanoclaw",
+            "title": "Runtime",
+            "type": "string"
+          },
+          "same_provider_same_account": {
+            "default": false,
+            "title": "Same Provider Same Account",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "adapter",
+          "provider",
+          "model_sources",
+          "modes"
+        ],
+        "title": "ExecutionCapability",
+        "type": "object"
+      },
+      "ExecutionSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "alternative": {
+            "discriminator": {
+              "mapping": {
+                "paired": "#/components/schemas/PairedAlternative",
+                "single": "#/components/schemas/SingleAlternative"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
               {
-                "enum": [
-                  "engine_output_has_no_model",
-                  "executor_not_verified",
-                  "engine_not_verified",
-                  "run_not_started"
-                ],
-                "type": "string"
+                "$ref": "#/components/schemas/SingleAlternative"
               },
               {
-                "type": "null"
+                "$ref": "#/components/schemas/PairedAlternative"
               }
             ],
-            "title": "Evidence Reason"
+            "title": "Alternative"
+          },
+          "candidates": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "paired": "#/components/schemas/PairedAlternative",
+                  "single": "#/components/schemas/SingleAlternative"
+                },
+                "propertyName": "mode"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleAlternative"
+                },
+                {
+                  "$ref": "#/components/schemas/PairedAlternative"
+                }
+              ]
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/Difficulty"
           },
           "executor": {
             "anyOf": [
               {
-                "enum": [
-                  "claude",
-                  "codex",
-                  "opencode",
-                  "agent",
-                  "copilot"
-                ],
-                "type": "string"
+                "$ref": "#/components/schemas/ResolvedSelector"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Executor"
+            ]
           },
-          "key": {
-            "title": "Key",
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "harness": {
+            "$ref": "#/components/schemas/ResolvedSelector"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "revision": {
+            "title": "Revision",
             "type": "string"
           },
-          "layer": {
+          "source": {
             "enum": [
-              "harness",
-              "delegate"
+              "global",
+              "project"
             ],
-            "title": "Layer",
+            "title": "Source",
             "type": "string"
           },
-          "observed_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Observed Model"
-          },
-          "policy_revision": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Policy Revision"
-          },
-          "provider": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provider"
-          },
-          "requested_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Requested Model"
-          },
-          "resumed_from": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Resumed From"
-          },
-          "run_key": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Key"
-          },
-          "runtime": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runtime"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "state": {
-            "enum": [
-              "selected",
-              "running",
-              "succeeded",
-              "failed",
-              "cancelled"
-            ],
-            "title": "State",
-            "type": "string"
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
-          "key",
-          "layer",
-          "state"
+          "source",
+          "revision",
+          "difficulty",
+          "alternative",
+          "index",
+          "generation",
+          "harness"
         ],
-        "title": "ExecutionReport",
+        "title": "ExecutionSelection",
         "type": "object"
       },
       "ExecutorModel": {
@@ -9770,6 +9918,27 @@
           "runtime_providers"
         ],
         "title": "ExhaustedReport",
+        "type": "object"
+      },
+      "ExplicitModel": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "source": {
+            "const": "explicit",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "id"
+        ],
+        "title": "ExplicitModel",
         "type": "object"
       },
       "ExternalReads": {
@@ -14381,9 +14550,21 @@
             "title": "Attempt",
             "type": "integer"
           },
+          "execution_generation": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Generation"
+          },
           "executions": {
             "items": {
-              "$ref": "#/components/schemas/ExecutionReport"
+              "$ref": "#/components/schemas/argus_core__model_trace__ExecutionReport"
             },
             "maxItems": 20,
             "title": "Executions",
@@ -15340,6 +15521,41 @@
         ],
         "title": "PageState",
         "type": "string"
+      },
+      "PairedAlternative": {
+        "additionalProperties": false,
+        "properties": {
+          "executor": {
+            "$ref": "#/components/schemas/Selector"
+          },
+          "harness": {
+            "$ref": "#/components/schemas/Selector"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "const": "paired",
+            "title": "Mode",
+            "type": "string"
+          },
+          "runtime": {
+            "const": "nanoclaw",
+            "title": "Runtime",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "runtime",
+          "harness",
+          "executor"
+        ],
+        "title": "PairedAlternative",
+        "type": "object"
       },
       "PendingItem": {
         "properties": {
@@ -18976,6 +19192,34 @@
         "title": "RequiredGates",
         "type": "object"
       },
+      "ResolvedSelector": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "lease_id": {
+            "title": "Lease Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/Selector"
+          }
+        },
+        "required": [
+          "selector",
+          "account_id",
+          "model",
+          "lease_id"
+        ],
+        "title": "ResolvedSelector",
+        "type": "object"
+      },
       "ResumabilityCause": {
         "description": "Closed set of cause codes (spec 3.8).",
         "enum": [
@@ -19676,6 +19920,90 @@
           "error_code"
         ],
         "title": "RouteExecution",
+        "type": "object"
+      },
+      "RoutePolicy": {
+        "properties": {
+          "alternatives": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "paired": "#/components/schemas/PairedAlternative",
+                  "single": "#/components/schemas/SingleAlternative"
+                },
+                "propertyName": "mode"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleAlternative"
+                },
+                {
+                  "$ref": "#/components/schemas/PairedAlternative"
+                }
+              ]
+            },
+            "title": "Alternatives",
+            "type": "array"
+          },
+          "bypass": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bypass"
+          },
+          "cursor": {
+            "default": 0,
+            "title": "Cursor",
+            "type": "integer"
+          },
+          "generation": {
+            "default": 0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skips": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Skips",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "global",
+              "project"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "revision",
+          "alternatives"
+        ],
+        "title": "RoutePolicy",
         "type": "object"
       },
       "RouteProvider": {
@@ -20793,6 +21121,66 @@
         "title": "SelectionReport",
         "type": "object"
       },
+      "Selector": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "adapter": {
+            "enum": [
+              "claude",
+              "codex",
+              "agent",
+              "copilot",
+              "opencode"
+            ],
+            "title": "Adapter",
+            "type": "string"
+          },
+          "model": {
+            "discriminator": {
+              "mapping": {
+                "account": "#/components/schemas/AccountModel",
+                "explicit": "#/components/schemas/ExplicitModel"
+              },
+              "propertyName": "source"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccountModel"
+              },
+              {
+                "$ref": "#/components/schemas/ExplicitModel"
+              }
+            ],
+            "title": "Model"
+          },
+          "provider": {
+            "enum": [
+              "anthropic",
+              "openai",
+              "local",
+              "custom",
+              "cursor",
+              "copilot"
+            ],
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "adapter",
+          "provider",
+          "account_id",
+          "model"
+        ],
+        "title": "Selector",
+        "type": "object"
+      },
       "ServiceContract": {
         "properties": {
           "command": {
@@ -20937,6 +21325,34 @@
       },
       "SettingValue": {
         "properties": {
+          "difficulty_revisions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difficulty Revisions"
+          },
+          "difficulty_sources": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difficulty Sources"
+          },
           "key": {
             "title": "Key",
             "type": "string"
@@ -20962,6 +21378,9 @@
               }
             ],
             "title": "Revision"
+          },
+          "scoped_value": {
+            "title": "Scoped Value"
           },
           "source": {
             "enum": [
@@ -20999,6 +21418,14 @@
           },
           "value": {
             "title": "Value"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
@@ -21085,6 +21512,37 @@
           }
         },
         "title": "ShaFact",
+        "type": "object"
+      },
+      "SingleAlternative": {
+        "additionalProperties": false,
+        "properties": {
+          "harness": {
+            "$ref": "#/components/schemas/Selector"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "const": "single",
+            "title": "Mode",
+            "type": "string"
+          },
+          "runtime": {
+            "const": "nanoclaw",
+            "title": "Runtime",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "runtime",
+          "harness"
+        ],
+        "title": "SingleAlternative",
         "type": "object"
       },
       "Source": {
@@ -25134,6 +25592,16 @@
             ],
             "title": "Error"
           },
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutePolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "executor_model": {
             "anyOf": [
               {
@@ -25189,7 +25657,14 @@
             "type": "array"
           },
           "resolution": {
-            "$ref": "#/components/schemas/RouteResolution"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouteResolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "state": {
             "$ref": "#/components/schemas/TaskState"
@@ -27400,6 +27875,70 @@
         "title": "Readiness",
         "type": "object"
       },
+      "argus_core__execution_chains__ExecutionReport": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "applied",
+              "advance"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "failed_role": {
+            "default": "harness",
+            "enum": [
+              "harness",
+              "executor"
+            ],
+            "title": "Failed Role",
+            "type": "string"
+          },
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quota",
+                  "provider_unavailable",
+                  "auth_missing",
+                  "not_installed",
+                  "model_not_served",
+                  "provider_protocol",
+                  "provider_transport"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "stopped": {
+            "default": false,
+            "title": "Stopped",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "attempt",
+          "generation",
+          "action"
+        ],
+        "title": "ExecutionReport",
+        "type": "object"
+      },
       "argus_core__fleet__Fact": {
         "properties": {
           "source": {
@@ -27493,6 +28032,244 @@
           "images"
         ],
         "title": "Readiness",
+        "type": "object"
+      },
+      "argus_core__model_trace__ExecutionReport": {
+        "description": "One model run of a layer: a harness session, or one delegation attempt.\n\n`key` is chosen by the producer (stable across retries of the *report*, unique per\nrun). Re-sending it completes the record: values already stored are kept, only\ngaps, `state`, `ended_at`, `error_code` and the observation can be filled.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "configured_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured Model"
+          },
+          "delegation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delegation Id"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "evidence": {
+            "default": "not_reported",
+            "enum": [
+              "reported_by_runtime",
+              "cli_output",
+              "provider_response",
+              "not_reported"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "evidence_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "engine_output_has_no_model",
+                  "executor_not_verified",
+                  "engine_not_verified",
+                  "run_not_started"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Reason"
+          },
+          "executor": {
+            "anyOf": [
+              {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "agent",
+                  "copilot"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executor"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "harness",
+              "delegate"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "observed_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Model"
+          },
+          "policy_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Revision"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "requested_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Model"
+          },
+          "resumed_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resumed From"
+          },
+          "run_key": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Key"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "enum": [
+              "selected",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "layer",
+          "state"
+        ],
+        "title": "ExecutionReport",
         "type": "object"
       },
       "argus_core__model_trace__Selection": {
@@ -38027,6 +38804,57 @@
         ]
       }
     },
+    "/api/tasks/{task_id}/execution": {
+      "post": {
+        "description": "Acknowledge the exact selection, or advance after stopping the complete runtime.",
+        "operationId": "report_execution_api_tasks__task_id__execution_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/argus_core__execution_chains__ExecutionReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Execution",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/tasks/{task_id}/fail": {
       "post": {
         "description": "Fail the attempt. A `provider_failure` that is a known quota notice of the\nagent's engine account is not a failure: the account is exhausted, the task\nreturns to ready (or waits as `awaiting_quota`) and `failures` is unchanged.",
@@ -39025,6 +39853,16 @@
               "title": "Task Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "reset_execution_route",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Reset Execution Route",
+              "type": "boolean"
+            }
           }
         ],
         "requestBody": {
@@ -39356,6 +40194,16 @@
             "schema": {
               "title": "Task Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reset_execution_route",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Reset Execution Route",
+              "type": "boolean"
             }
           }
         ],

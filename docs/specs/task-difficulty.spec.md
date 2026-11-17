@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-06
+updated: 2026-11-17
 ---
 
 # Task difficulty, executor routing and the hard tier
@@ -9,13 +9,20 @@ updated: 2026-11-06
 # 1. Purpose and Scope
 
 Classify the easiest tasks (a copy change, a typo, a translation) as `trivial` and
-let them run on the node's own model: the `local` account (Strata,
-[local harness](local-harness.spec.md)) with Cursor (`agent`) on `composer-2.5`.
+soft-prefer the node's `local` account ([local harness](local-harness.spec.md)).
+The default cheap executor is Cursor (`agent`) on `composer-2.5`; an empty
+executor chain removes delegation but does not require a local harness.
 Classify the hardest tasks (architecture, data migration, security, several
 services at once) as `hard` and run their Claude harness and executor on Opus.
 Scope: the task `difficulty` field (four levels, replacing `complexity`), its
 inferred default, the executor chain per level, escalation, the lease ranking for
 the engine role, and the model-policy maps that pin the models.
+
+
+Explicit complete per-difficulty routing is owned by
+[execution chains](execution-chains.spec.md). Those opt-in lists own both layers
+and models; the legacy selection rules below apply only without an effective
+explicit list, or when task model/account pins choose the whole legacy pin path.
 
 # 2. Non-Goals
 
@@ -61,9 +68,11 @@ the engine role, and the model-policy maps that pin the models.
   JSON object of difficulty → ordered list of `claude` | `codex` | `opencode` |
   `agent`. An **empty list** (or the sole sentinel `none`) means **no delegated
   executor**: NanoClaw (the harness) does the work itself — no executor lease,
-  no mandatory `argus-delegate`. That pairs with `trivial`'s soft preference for
-  the `local` account so an operator can set
-  `{"trivial": []}` for “local model, harness does everything”. The model is the
+  no mandatory `argus-delegate`. That pairs with `trivial`'s **soft** preference
+  for the `local` account: `{"trivial": []}` means “harness does everything”,
+  not “local only”; a cloud harness may still win when local cannot serve.
+  A strict local engine restriction requires `account_providers: ["local"]`
+  on the task today. The model is the
   first of the model policy's `trivial` map for `trivial`/`simple`,
   `hard_implementation` for `hard`, else `implementation`; none means the CLI
   default (`auto` for Cursor). The decision and the `engine.routed` event record

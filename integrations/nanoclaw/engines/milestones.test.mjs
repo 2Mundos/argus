@@ -432,7 +432,7 @@ for (const executor of EXECUTORS) {
       path.join(bin, executor),
       `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 1.0; exit 0; fi\ncat >/dev/null\n` +
         `git -C ${work} checkout -q feat/x\n` +
-        `echo '{"result":"opened ${PR}"}'\n`,
+        `echo '${JSON.stringify(executor === "dsh" ? { type: "final", text: `opened ${PR}`, reason: { kind: "completed" } } : { result: `opened ${PR}` })}'\n`,
       { mode: 0o755 },
     );
     const policy = JSON.parse(
@@ -454,7 +454,18 @@ for (const executor of EXECUTORS) {
       ARGUS_API_URL: "http://127.0.0.1:9", // unreachable: the delegate must not need it
       ARGUS_TASK_ID: "task-1",
       ARGUS_TASK_ATTEMPT: "3",
-      ...AUTH[executor](s),
+      // dsh has no provider of its own (custom account contract): the lease carries the
+      // base URL and model, and the key names the overlay's env indirection.
+      ...(executor === "dsh"
+        ? {
+            ARGUS_ACCOUNT_API_KEY: "fixture-dsh-key",
+            ARGUS_ACCOUNT_SETTINGS: JSON.stringify({
+              base_url: "http://127.0.0.1:9/v1",
+              model: "fixture/model",
+              label: "custom",
+            }),
+          }
+        : AUTH[executor](s)),
     };
     for (const k of ["ARGUS_AGENT_TOKEN", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]) delete env[k];
     const delegate = path.join(path.dirname(fileURLToPath(import.meta.url)), "argus-delegate.mjs");
@@ -470,7 +481,7 @@ for (const executor of EXECUTORS) {
           "30",
           "--out",
           path.join(dir, "out"),
-          ...(executor === "copilot" ? ["--model", "gpt-5"] : []),
+          ...(["copilot", "dsh"].includes(executor) ? ["--model", "fixture/model"] : []),
         ],
         { env },
       );

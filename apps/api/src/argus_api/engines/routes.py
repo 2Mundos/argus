@@ -166,6 +166,7 @@ class EngineSelected(BaseModel):
     # The claim the switch serves: marks that attempt's failover `applied`.
     task_id: str | None = None
     attempt: int | None = Field(default=None, ge=1)
+    execution_generation: int | None = Field(default=None, ge=1)
 
 
 @router.post("/engines/selected", status_code=204)
@@ -173,6 +174,27 @@ async def engine_selected(body: EngineSelected, db: DbDep, agent_id: AgentDep) -
     """A worker's channel switched its harness to follow a leased account
     (codex accounts spec 3). Recorded for the audit trail; credentials never ride here."""
     async with db.write() as tx:
+        if body.task_id is not None and body.attempt is not None:
+            from argus_api.tasks import execution_routes
+            from argus_api.tasks import service as tasks
+
+            selection = await execution_routes.current(
+                tx.conn, body.task_id, body.attempt
+            )
+            if selection is not None:
+                await tasks.check_lease(tx, body.task_id, body.attempt, agent_id)
+                await execution_routes.check_generation(
+                    tx, body.task_id, body.attempt, body.execution_generation
+                )
+                if (body.account_id, body.provider, body.engine) != (
+                    selection.harness.account_id,
+                    selection.harness.selector.provider,
+                    selection.harness.selector.adapter,
+                ):
+                    raise ConflictError(
+                        "engine selection contradicts execution contract",
+                        code="execution_selection_mismatch",
+                    )
         await events.record(
             tx,
             f"agent:{agent_id}",
