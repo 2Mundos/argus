@@ -83,9 +83,13 @@ the attempt snapshot keeps them.
   rules are unchanged.
 - **Executor.** An executor pin narrows the executor lease to its provider. The
   executor stays outside the claim gate, as today ([account
-  selection](account-selection.spec.md) 3): when no account of that provider is
-  usable the channel logs it and `argus-delegate` for the pinned executor stops
-  with `auth_missing`; it never substitutes another executor.
+  selection](account-selection.spec.md) 3): the channel asks for that provider
+  only (`runtime_providers: [provider]`), still reusing a held engine account of
+  it. When no account of that provider is usable it holds no executor lease and
+  logs a warning naming the provider and the executor, and `argus-delegate` for
+  the pinned executor stops with `auth_missing` whose `need` names that provider
+  (no executor lease for it); it never substitutes another provider's account or
+  another executor.
 
 ## 3.3 Models
 

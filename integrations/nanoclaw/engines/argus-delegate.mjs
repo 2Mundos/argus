@@ -233,7 +233,7 @@ export function authStatus(executor, e = process.env, home = os.homedir(), setti
         ? { ok: true }
         : {
             ok: false,
-            need: "the gateway's COPILOT_GITHUB_TOKEN sentinel (an Argus copilot executor lease)",
+            need: "no usable copilot account: the copilot provider has no executor lease for this task (the gateway's COPILOT_GITHUB_TOKEN sentinel is absent); Argus leases copilot only for an executor pin to copilot",
           };
     case "dsh":
       return env(e, CUSTOM_KEY_ENV)
