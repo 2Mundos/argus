@@ -1,7 +1,7 @@
 ---
-status: implemented
+status: partial
 created: 2026-10-27
-updated: 2026-11-11
+updated: 2026-11-17
 ---
 
 # Task workspace: a stable per-task git workspace, checked before the model
@@ -127,6 +127,15 @@ exactly); HEAD is
 `refs/heads/<branch>` (an unborn branch is fine). The workspaces root itself
 must be a real directory that resolves to `<real group dir>/task-workspaces`.
 
+When HEAD is not the task branch, one more read decides the reason: the commits of
+`refs/heads/<branch>`, and of a detached HEAD, that no remote-tracking ref reaches
+(`git rev-list <ref> --not --remotes`). Any such commit is work that exists only in this
+workspace, so the prepare is refused with `env_workspace_unpreserved_commits`, naming the
+branch and up to ten commit SHAs. Without any, the reason is `env_workspace_branch_mismatch`.
+The workspace is never reset, switched, archived or deleted either way. When HEAD is the task
+branch the workspace is reused as it is: the branch stays checked out and its unpublished
+commits stay reachable.
+
 Every reason is in `ENV_BLOCK_REASONS`: the task is **blocked**, never
 **failed**, maps to the `environment` class and spends no attempt.
 
@@ -137,6 +146,7 @@ Every reason is in `ENV_BLOCK_REASONS`: the task is **blocked**, never
 | `env_workspace_invalid` | Not a directory, a symlink, resolves outside the root, not a git repository, or a malformed task id |
 | `env_workspace_remote_mismatch` | Origin missing, different or set more than once, or a URL with credentials. The error names both URLs (without credentials) and, for GitHub, that letter case alone may differ |
 | `env_workspace_branch_mismatch` | HEAD is not the task branch (another branch, or detached) |
+| `env_workspace_unpreserved_commits` | HEAD is not the task branch (another branch, or detached) and commits of the task branch or of a detached HEAD are on no remote-tracking ref. The error names the branch and the SHAs |
 | `env_workspace_limit` | A new workspace would exceed `ARGUS_TASK_WORKSPACE_MAX` |
 
 A missing repository lease keeps `env_repository_unavailable`; the workspace
@@ -174,6 +184,17 @@ MCP `get_task` tool (a pass-through) show the same single-task read only. The
 dashboard's task detail "Workspace" row shows the owner, its node id when reported,
 and its status.
 
+## 3.6 The continuation's WIP claim comes from git
+
+After the workspace is prepared, the channel probes the task branch (exists? which
+commits are on no remote-tracking ref?) and reports the result with
+`POST /tasks/{id}/observations` as the contract's `wip` when the contract already holds a `wip`
+claim or the probe finds unpublished commits. A missing branch is stated as missing; a branch
+with every commit published is stated as having no unpublished commits; otherwise the claim
+names the commits. It replaces an earlier agent's prose. A `wip` that is a checkpoint or
+required-input reference is not a branch claim and is left alone
+([task continuation](task-continuation.spec.md) 3.3).
+
 # 4. Open Questions
 
 - Retention: when should a finished task's workspace go, given that cleanup
@@ -184,6 +205,17 @@ and its status.
   session container exists.
 - P4: answered for one node by [task checkpoint](task-checkpoint.spec.md); the
   cross-node case stays open there.
+
+## Open items
+
+- **Cross-instance residual risk.** Everything above is per instance directory. A
+  retry claimed by another instance finds no workspace, creates an empty one and
+  starts from nothing; unpublished commits left on the first instance are neither
+  detected nor preserved there (the WIP claim then says the branch does not exist,
+  which is true of the new workspace). Closing this needs the API to record where
+  work lives, a schema change, and is out of scope here.
+- **No archive or publish fallback.** A refused workspace waits for an operator:
+  there is no push (no grant for new refs) and no archive at the recorded path.
 
 # 5. Constraints
 

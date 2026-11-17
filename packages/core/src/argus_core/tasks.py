@@ -327,6 +327,7 @@ ENV_BLOCK_REASONS = frozenset(
         "env_checkpoint_busy",
         "env_checkpoint_limit",
         "env_workspace_branch_mismatch",
+        "env_workspace_unpreserved_commits",
         "env_workspace_limit",
         "env_executor_auth",
         "env_workspace_missing",

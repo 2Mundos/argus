@@ -13,6 +13,8 @@ export const BLOCK_COPY: Record<string, string> = {
   env_checkpoint_busy: "another worker holds the saved work",
   env_checkpoint_limit: "its saved work exceeds the size limit",
   env_workspace_branch_mismatch: "the task workspace is on another branch",
+  env_workspace_unpreserved_commits:
+    "the task workspace is on another branch and holds commits that exist nowhere else",
   env_workspace_limit: "the worker holds too many task workspaces",
   env_executor_auth: "the executor could not log in",
   env_workspace_missing: "its agent group directory is missing on the worker host",

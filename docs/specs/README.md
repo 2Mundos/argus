@@ -90,7 +90,7 @@ Every spec in this directory with its status, kept in sync by
 | [Task models](task-models.spec.md) | `implemented` |
 | [Task resumability preflight](task-resumability-preflight.spec.md) | `implemented` |
 | [Task steering](task-steering.spec.md) | `implemented` |
-| [Task workspace: a stable per-task git workspace, checked before the model](task-workspace.spec.md) | `implemented` |
+| [Task workspace: a stable per-task git workspace, checked before the model](task-workspace.spec.md) | `partial` |
 | [Test hygiene checks](test-hygiene.spec.md) | `implemented` |
 | [Desktop Tray](tray.spec.md) | `implemented` |
 | [Worker launch and node capabilities](worker-launch.spec.md) | `implemented` |

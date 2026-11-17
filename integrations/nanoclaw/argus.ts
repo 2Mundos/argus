@@ -209,7 +209,13 @@ import {
   waitingMilestone,
 } from "./argus-task-signals.js";
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
-import { prepareTaskWorkspace, taskBranch, type WorkspaceResult } from "./argus-workspace.js";
+import {
+  branchWipClaim,
+  prepareTaskWorkspace,
+  probeTaskBranch,
+  taskBranch,
+  type WorkspaceResult,
+} from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
 
 export { taskAuthorizesMerge } from "./argus-merge-auth.js";
@@ -735,6 +741,8 @@ export function heldAccountFits(
 
 /** The prepared task workspace the prompt points the model at (task workspace spec). */
 export interface TaskWorkspace {
+  /** Host path of the checkout. */
+  path: string;
   containerPath: string;
   branch: string;
 }
@@ -3052,6 +3060,33 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     });
   }
 
+  /**
+   * The contract's WIP claim, from git instead of an earlier agent's prose (continuation
+   * spec 3.3): whether the task branch exists in the prepared workspace and which commits
+   * only it holds. A checkpoint or required-input reference is not a branch claim and stays.
+   * Best effort like `preflight`: a failed probe leaves the recorded claim.
+   */
+  async function deriveWorkspaceWip(task: ArgusTask, workspace: TaskWorkspace): Promise<void> {
+    const wip = task.continuation?.wip;
+    if (wip?.ref && (parseCheckpointRef(wip.ref) || parseInputRef(wip.ref))) return;
+    try {
+      const probe = await probeTaskBranch({ path: workspace.path, branch: workspace.branch });
+      // Nothing claimed and nothing found is nothing to say.
+      if (!wip && probe.unpublished.length === 0) return;
+      const { data } = await client.call("POST", `/tasks/${task.id}/observations`, {
+        attempt: task.attempt,
+        wip: branchWipClaim(workspace.branch, probe),
+      });
+      const updated = (data as { continuation?: ContinuationContract } | null)?.continuation;
+      if (updated) task.continuation = updated;
+    } catch (err) {
+      log.warn("Could not derive the WIP claim from git; keeping the recorded contract", {
+        task: task.id,
+        err: String(err),
+      });
+    }
+  }
+
   async function preflight(task: ArgusTask): Promise<void> {
     const c = task.continuation;
     if (!c || (c.phase === "implement" && c.artifacts.length === 0)) return;
@@ -4253,6 +4288,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         return;
       }
       step = "continuation preflight";
+      if (workspace) await deriveWorkspaceWip(task, workspace);
       await preflight(task);
       step = "knowledge pages";
       const pages = await inlinePages(task);
