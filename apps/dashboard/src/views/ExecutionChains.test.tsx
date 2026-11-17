@@ -10,29 +10,31 @@ vi.mock("../settings", async (original) => ({
   putSetting: saved.put,
   resetSetting: saved.reset,
 }));
+const capabilities = vi.hoisted(() => {
+  const all = [
+    {
+      id: "nanoclaw:harness:claude:local",
+      role: "harness",
+      adapter: "claude",
+      provider: "local",
+      model_sources: ["account"],
+      modes: ["single", "paired"],
+    },
+    {
+      id: "nanoclaw:executor:opencode:custom",
+      role: "executor",
+      adapter: "opencode",
+      provider: "custom",
+      model_sources: ["account", "explicit"],
+      modes: ["paired"],
+    },
+  ];
+  return { all, list: all };
+});
 vi.mock("../live", () => ({
   useLiveData: (load: unknown) => ({
     data: String(load).includes("engines")
-      ? {
-          execution_capabilities: [
-            {
-              id: "nanoclaw:harness:claude:local",
-              role: "harness",
-              adapter: "claude",
-              provider: "local",
-              model_sources: ["account"],
-              modes: ["single", "paired"],
-            },
-            {
-              id: "nanoclaw:executor:opencode:custom",
-              role: "executor",
-              adapter: "opencode",
-              provider: "custom",
-              model_sources: ["account", "explicit"],
-              modes: ["paired"],
-            },
-          ],
-        }
+      ? { execution_capabilities: capabilities.list }
       : [
           { id: "local", name: "Local fixture", provider: "local", state: "available" },
           {
@@ -75,7 +77,10 @@ const base = {
   onChanged: vi.fn(),
 };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  capabilities.list = capabilities.all;
+});
 afterEach(cleanup);
 describe("execution chain editor", () => {
   it("preserves per-level inheritance without materializing it on project save", async () => {
@@ -155,6 +160,54 @@ describe("execution chain editor", () => {
     fireEvent.change(screen.getByLabelText("harness account"), { target: { value: "local" } });
     fireEvent.change(screen.getByLabelText("harness account"), { target: { value: "" } });
     expect(screen.getByRole("button", { name: "Save execution chains" })).toBeTruthy();
+  });
+  it("names an empty explicit model ID, blocks Save until it is fixed", async () => {
+    render(<ExecutionChains {...base} setting={setting} />);
+    fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add hard alternative" }));
+    fireEvent.change(screen.getByLabelText("hard alternative 2 mode"), {
+      target: { value: "paired" },
+    });
+    fireEvent.change(screen.getByLabelText("executor adapter / provider"), {
+      target: { value: "nanoclaw:executor:opencode:custom" },
+    });
+    fireEvent.change(screen.getByLabelText("executor model source"), {
+      target: { value: "explicit" },
+    });
+    const save = screen.getByRole("button", { name: "Save execution chains" }) as HTMLButtonElement;
+    const list = screen.getByRole("status");
+    expect(list.textContent).toBe("hard, alternative 2: executor model ID is empty");
+    expect(save.disabled).toBe(true);
+    expect(save.getAttribute("aria-describedby")).toBe(list.id);
+    fireEvent.change(screen.getByLabelText("executor model ID"), {
+      target: { value: "fixture/code" },
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(save.disabled).toBe(false);
+    expect(save.getAttribute("aria-describedby")).toBeNull();
+  });
+  it("reports an invalid alternative ID", () => {
+    render(<ExecutionChains {...base} setting={setting} />);
+    fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
+    fireEvent.change(screen.getByLabelText("hard alternative 1 ID"), {
+      target: { value: "bad id!" },
+    });
+    expect(screen.getByRole("status").textContent).toBe(
+      "hard, alternative 1: alternative ID must match [A-Za-z0-9_-]{1,64}",
+    );
+    expect(
+      (screen.getByRole("button", { name: "Save execution chains" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+  it("shows the capability line when no capabilities are loaded", () => {
+    capabilities.list = [];
+    render(<ExecutionChains {...base} setting={setting} />);
+    expect(screen.getByRole("status").textContent).toBe(
+      "No execution capabilities loaded from /api/engines",
+    );
+    expect(
+      (screen.getByRole("button", { name: "Save execution chains" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
   it("shows each level's built-in executor order where no chain exists", () => {
     render(<ExecutionChains {...base} setting={undefined} />);

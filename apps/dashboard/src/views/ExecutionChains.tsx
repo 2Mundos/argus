@@ -1,5 +1,5 @@
 import type { components } from "@argus/api-client";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { type Account, api, call } from "../api";
 import { useLiveData } from "../live";
 import {
@@ -50,6 +50,26 @@ function describeCapabilities(caps: Capability[]) {
     const harness = set.has("harness");
     return `${key}: ${harness ? "harness or executor" : "executor only"}`;
   });
+}
+
+/** Every reason the draft cannot be saved, one line each; empty when it is valid. */
+function draftProblems(draft: Policy): string[] {
+  const problems: string[] = [];
+  for (const level of DIFFICULTY_LEVELS) {
+    const list = draft.difficulties[level];
+    if (!list) continue;
+    if (!list.length) problems.push(`${level}: list is empty`);
+    list.forEach((a, index) => {
+      const where = `${level}, alternative ${index + 1}`;
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(a.id))
+        problems.push(`${where}: alternative ID must match [A-Za-z0-9_-]{1,64}`);
+      if (a.harness.model.source === "explicit" && !a.harness.model.id)
+        problems.push(`${where}: harness model ID is empty`);
+      if (a.mode === "paired" && a.executor.model.source === "explicit" && !a.executor.model.id)
+        problems.push(`${where}: executor model ID is empty`);
+    });
+  }
+  return problems;
 }
 
 function accountModel(account: Account | undefined, role: "harness" | "executor") {
@@ -243,17 +263,18 @@ export function ExecutionChains({
   }, [project, setting]);
   const effective = (setting?.value as Policy | undefined) ?? empty();
   const caps = catalog?.execution_capabilities ?? [];
-  const invalid = Object.values(draft.difficulties).some(
-    (list) =>
-      !list?.length ||
-      list.some(
-        (a) =>
-          !/^[A-Za-z0-9_-]{1,64}$/.test(a.id) ||
-          [a.harness, ...(a.mode === "paired" ? [a.executor] : [])].some(
-            (s) => s.model.source === "explicit" && !s.model.id,
-          ),
-      ),
-  );
+  const notesId = useId();
+  const problems = draftProblems(draft);
+  const notes = [
+    ...problems,
+    ...(caps.length ? [] : ["No execution capabilities loaded from /api/engines"]),
+    ...(setting?.notice
+      ? [
+          `${setting.notice}: explicit chains cannot be saved or admitted while legacy environment locks are set.`,
+        ]
+      : []),
+    ...(busy ? ["Saving…"] : []),
+  ];
   function change(level: DifficultyLevel, list: Alternative[] | undefined) {
     const difficulties = { ...draft.difficulties };
     if (list?.length) difficulties[level] = list;
@@ -496,9 +517,17 @@ export function ExecutionChains({
           </fieldset>
         );
       })}
+      {notes.length > 0 && (
+        <ul id={notesId} role="status" className="small">
+          {notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      )}
       <button
         type="button"
-        disabled={busy || invalid || !caps.length || !!setting?.notice}
+        aria-describedby={notes.length > 0 ? notesId : undefined}
+        disabled={busy || problems.length > 0 || !caps.length || !!setting?.notice}
         onClick={() => void save()}
       >
         Save execution chains
