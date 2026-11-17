@@ -11107,7 +11107,7 @@ export interface components {
         /** Selector */
         Selector: {
             /** Account Id */
-            account_id: string;
+            account_id?: string | null;
             /**
              * Adapter
              * @enum {string}

@@ -33,12 +33,19 @@ class ExplicitModel(ClosedModel):
 class Selector(ClosedModel):
     adapter: Literal["claude", "codex", "agent", "copilot", "opencode"]
     provider: Literal["anthropic", "openai", "local", "custom", "cursor", "copilot"]
-    account_id: Annotated[str, Field(min_length=1, max_length=64)]
+    # None = any available account of this provider that can serve the role; admission
+    # picks one and records it. A value pins that exact account.
+    account_id: Annotated[str, Field(min_length=1, max_length=64)] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     model: Annotated[AccountModel | ExplicitModel, Field(discriminator="source")]
 
 
 # Closed static target matrix, NOT an advertised list of validated worker features.
 # Runtime conformance/readiness and account-role validation remain API concerns.
+# It mirrors what the NanoClaw worker can run: harness engines are claude (anthropic,
+# local, custom) and codex (openai); executors are the delegate CLIs, one per
+# provider (`EXECUTOR_BY_PROVIDER` in integrations/nanoclaw/argus-accounts.ts).
 _SELECTOR_SOURCES = {
     ("harness", "claude", "anthropic"): {"explicit"},
     ("harness", "claude", "local"): {"account"},
@@ -93,9 +100,13 @@ class PairedAlternative(ClosedModel):
             raise ValueError(
                 "local_pair_restriction: requires agent or opencode executor"
             )
+        # Two pins that differ can never be satisfied; an unpinned side adopts the
+        # other's account at selection time (one native identity per provider).
         if (
             self.harness.provider == self.executor.provider
             and self.harness.provider != "custom"
+            and self.harness.account_id is not None
+            and self.executor.account_id is not None
             and self.harness.account_id != self.executor.account_id
         ):
             raise ValueError(

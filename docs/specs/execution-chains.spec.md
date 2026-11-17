@@ -87,11 +87,14 @@ The account IDs and model above are illustrative, not production values or
 recommendations. `simple`, `standard` and `hard` take exactly the same lists and
 selectors, including a single-layer first choice and mixed fallback modes.
 
-- A selector always names **one existing account ID**, its exact provider, an
-  adapter, and a model source. Account names can be displayed, but the wire and
-  persistence use IDs. No `auto`, provider-wide wildcard, absent account, model
-  chain or native default is allowed in an explicit alternative. This minimal
-  first version avoids priority synthesizing a different pair.
+- A selector names its exact provider, an adapter, and a model source, and may
+  pin **one existing account ID**. `account_id` is optional: omitted (or null) means
+  "any available account of this provider that can serve the role", and admission
+  picks the best usable one (priority, then least leased) inside the same
+  transaction and records it. A pin forces exactly that account and never falls
+  back. Account names can be displayed, but the wire and persistence use IDs. No
+  `auto` provider, model chain or native default is allowed in an alternative, and
+  an unpinned selector never crosses providers or roles.
 - Model is a closed union: `{source: explicit, id: <model-id>}` or
   `{source: account}`. Explicit IDs use the existing opaque model-ID validator.
   The latter means that account's configured model, or its own known discovered
@@ -128,6 +131,17 @@ The initial implementation targets these existing adapter combinations:
 | NanoClaw | `claude` | `custom` | target | target |
 | NanoClaw | `codex` | `openai` | target | target |
 | Any | `agent`, `opencode`, `copilot` | any | unsupported | not harnesses |
+
+The matrix mirrors what the NanoClaw worker runs: harness engines are `claude`
+(anthropic, local, custom) and `codex` (openai); each provider has exactly one
+delegate CLI (`EXECUTOR_BY_PROVIDER` in `integrations/nanoclaw/argus-accounts.ts`).
+Intentionally unsupported, because the worker cannot run them: `codex` on
+local/custom (the Codex harness speaks only OpenAI), `opencode`/`agent`/`copilot` as
+harnesses (executor-only CLIs), and an executor adapter on a provider other than
+its own (for example `claude` on `custom`). A local harness with a `claude`, `codex`
+or `copilot` executor stays refused: those CLIs would run on the redirected local
+endpoint. Setup shows each adapter/provider as harness-capable or executor-only and
+disables an executor option with its reason.
 | Built-in orchestrator | any | any | unsupported as task worker | unsupported |
 
 “Target” is a required adapter conformance test, **not a claim of shipped chain
@@ -220,6 +234,16 @@ must leave no first lease, claim, gateway grant or spent attempt. Reserve a
 single-layer route's engine only: never probe, wait for, lease, configure or
 invoke an executor. No request with an omitted task/attempt can reserve a chain.
 
+Unpinned selectors are resolved at selection time: the harness takes the best
+usable account of its provider that can serve the role and name a model (a local
+account whose discovered models exclude its model is skipped for the next one); an
+executor does the same. A same-provider native pair runs on one account: an
+unpinned side adopts the other side's pin, or both adopt the harness's resolved
+account. Save rejects only two different pins. Availability and wake evidence try
+the same assignments. The concrete account and lease are in
+`ExecutionSelection.harness/executor.account_id`, which the
+`task.execution_route_selected` event and the attempt snapshot keep.
+
 Native same-account reuse follows existing safe role semantics; distinct
 providers/accounts use distinct leases. A custom harness bridge does not grant
 executor access: OpenCode/custom always requires its separately issued scoped
@@ -307,11 +331,14 @@ unknown observation is unknown, not proof that the configured model ran.
 `#setup` currently defaults to Settings (`#setup/settings`); both must expose
 **Execution chains**, with a global/project picker and all four difficulties.
 Each difficulty has ordered cards: Single layer / Harness + executor, supported
-runtime, adapter, provider, exact account and allowed model-source selectors.
+runtime, adapter, provider, account (default "Any available account", optional pin)
+and allowed model-source selectors.
 Add/remove/reorder changes the **whole alternative**. Show source, effective
 inherited list, editable scoped list, save validation and per-level inherit/reset.
-Legacy difficulties show legacy controls/readiness with an explicit label;
-never present the `trivial` model-policy map as a local harness selector.
+A difficulty without a chain shows its built-in (or stored `difficulty.executors`)
+executor order, read only, labelled as legacy routing; Setup has no separate
+Difficulty executors card. Never present the `trivial` model-policy map as a
+local harness selector.
 
 Show local/custom configured account model next to discovered/observed model
 facts and their timestamps, plus existing stale-model warnings. No hardcoded
@@ -325,8 +352,7 @@ last recorded selection versus current eligibility, pins/locks and resets.
 
 # 4. Open Questions
 
-No unresolved question blocks the contract above. Later extensions (provider-wide
-account selectors, standalone OpenCode/Cursor harness adapters, alternative-level
+No unresolved question blocks the contract above. Later extensions (standalone OpenCode/Cursor harness adapters, alternative-level
 retry policies, or controlled model overrides for local harnesses) need separate
 capabilities and conformance tests. They are not implicit behavior in version 1.
 

@@ -112,7 +112,8 @@ async def readiness(conn: aiosqlite.Connection, levels: Mapping[str, Any]) -> li
             if executor is not None:
                 selectors.append(("executor", executor))
             for role, selector in selectors:
-                wanted.setdefault(selector["account_id"], set()).add(role)
+                if selector.get("account_id") is not None:
+                    wanted.setdefault(selector["account_id"], set()).add(role)
     warnings: list[str] = []
     for account_id in sorted(wanted):
         async with conn.execute(
@@ -150,6 +151,8 @@ async def validate_references(
             if isinstance(alternative, PairedAlternative):
                 selectors.append(("executor", alternative.executor))
             for role, selector in selectors:
+                if selector.account_id is None:
+                    continue  # any account: admission picks one and reports why not
                 async with conn.execute(
                     "SELECT * FROM accounts WHERE id = ?", (selector.account_id,)
                 ) as cur:
@@ -244,50 +247,116 @@ class Unavailable(Exception):
     pass
 
 
+class AccountRejected(Unavailable):
+    """The leased account cannot run the selector; an unpinned selector tries the next."""
+
+    def __init__(self, reason: str, account_id: str) -> None:
+        super().__init__(reason)
+        self.account_id = account_id
+
+
+def shared_native(alternative: Alternative) -> bool:
+    """One native identity per provider: a same-provider pair runs on one account."""
+    return (
+        isinstance(alternative, PairedAlternative)
+        and alternative.harness.provider == alternative.executor.provider
+        and alternative.harness.provider != "custom"
+    )
+
+
+def pins(alternative: Alternative) -> tuple[str | None, str | None]:
+    """Configured harness/executor account pins; a shared native pair adopts either."""
+    harness = alternative.harness.account_id
+    if not isinstance(alternative, PairedAlternative):
+        return harness, None
+    executor = alternative.executor.account_id
+    if shared_native(alternative):
+        harness = executor = harness or executor
+    return harness, executor
+
+
 async def _reserve_selector(
     tx: Tx,
     agent_id: str,
     selector: Selector,
+    account_id: str | None,
     role: LeaseRole,
     store: SecretStore,
     served: Mapping[str, tuple[str, ...] | None] | None,
     *,
     reuse: bool = False,
 ) -> tuple[AccountLease, ResolvedSelector]:
+    """Lease the pinned account, or the best usable one when `account_id` is None.
+
+    An unpinned selector moves on to the next account when the best one cannot name
+    a served model; a pin never does. The concrete account is returned in
+    `ResolvedSelector.account_id`, which the selection event and attempt record keep.
+    """
+    rejected: set[str] = set()
+    last: Unavailable | None = None
+    while True:
+        try:
+            async with tx.savepoint():
+                return await _reserve_account(
+                    tx,
+                    agent_id,
+                    selector,
+                    account_id,
+                    role,
+                    store,
+                    served,
+                    reuse,
+                    rejected,
+                )
+        except AccountRejected as exc:
+            if account_id is not None:
+                raise
+            last = exc
+            rejected.add(exc.account_id)
+        except Unavailable as exc:
+            raise (last or exc) from None
+
+
+async def _reserve_account(
+    tx: Tx,
+    agent_id: str,
+    selector: Selector,
+    account_id: str | None,
+    role: LeaseRole,
+    store: SecretStore,
+    served: Mapping[str, tuple[str, ...] | None] | None,
+    reuse: bool,
+    rejected: set[str],
+) -> tuple[AccountLease, ResolvedSelector]:
     from argus_api.accounts import service as accounts
 
-    # Exact-account narrowing is mandatory; never use a provider's priority winner.
+    # A pin narrows to exactly that account; never fall back to the priority winner.
     lease = await accounts._try_lease(
         tx,
         agent_id,
         store,
         role,
         [selector.provider],
-        only_account=selector.account_id,
+        only_account=account_id,
+        exclude=rejected,
         reuse_held=reuse,
         local_served_models=served,
     )
     if lease is None:
         raise Unavailable(f"{role}_account_unavailable")
+    known = (served or {}).get(lease.account_id)
     if selector.model.source == "explicit":
         model = selector.model.id
     else:
         model = (
             lease.settings.model if lease.settings else None
         ) or lease.credential.get("model")
-        if not model and selector.provider == "local" and served:
-            known = served.get(selector.account_id)
-            if known and len(known) == 1:
-                model = known[0]
+        if not model and selector.provider == "local" and known and len(known) == 1:
+            model = known[0]
     if not isinstance(model, str) or not model:
-        raise Unavailable(f"{role}_model_unknown")
-    if (
-        selector.provider == "local"
-        and served
-        and served.get(selector.account_id) is not None
-        and model not in (served.get(selector.account_id) or ())
-    ):
-        raise Unavailable("model_not_served")
+        raise AccountRejected(f"{role}_model_unknown", lease.account_id)
+    if selector.provider == "local" and known is not None and model not in known:
+        raise AccountRejected("model_not_served", lease.account_id)
     lease = lease.model_copy(update={"model": model})
     if lease.settings is not None:
         lease = lease.model_copy(
@@ -363,8 +432,15 @@ async def reserve(
                     and alternative.harness.provider not in restriction
                 ):
                     raise Unavailable("harness_provider_restricted")
+                harness_pin, executor_pin = pins(alternative)
                 engine, harness = await _reserve_selector(
-                    tx, agent_id, alternative.harness, "engine", store, served
+                    tx,
+                    agent_id,
+                    alternative.harness,
+                    harness_pin,
+                    "engine",
+                    store,
+                    served,
                 )
                 executor_lease = None
                 executor = None
@@ -373,6 +449,9 @@ async def reserve(
                         tx,
                         agent_id,
                         alternative.executor,
+                        harness.account_id
+                        if shared_native(alternative)
+                        else executor_pin,
                         "executor",
                         store,
                         served,
@@ -732,8 +811,6 @@ async def eligible(
     The same exact tuple checks gate wake and reservation. Unknown secrets or local
     discovery are not claimed as proof of reachability.
     """
-    from argus_api.accounts import service as accounts
-    from argus_api.accounts.eligibility import LEASE_BLOCK_SQL
 
     if locked():
         return False
@@ -747,41 +824,64 @@ async def eligible(
             restriction is not None and alternative.harness.provider not in restriction
         ):
             continue
-        selectors: list[tuple[LeaseRole, Selector]] = [("engine", alternative.harness)]
+        harness_pin, executor_pin = pins(alternative)
+        harness_rows = await _usable_accounts(
+            conn, now, alternative.harness, harness_pin, "engine"
+        )
         if isinstance(alternative, PairedAlternative):
-            selectors.append(("executor", alternative.executor))
-        demand: dict[str, int] = {}
-        usable = True
-        for role, selector in selectors:
-            async with conn.execute(
-                "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id=a.id AND l.released_at IS NULL) AS active "  # noqa: S608
-                "FROM accounts a WHERE id=? AND (state='available' OR (state='exhausted' AND exhausted_until<=?)) "
-                f"AND {LEASE_BLOCK_SQL} IS NULL",
-                (selector.account_id, ts(now)),
-            ) as cur:
-                account = await cur.fetchone()
-            if (
-                account is None
-                or account["provider"] != selector.provider
-                or not accounts._serves(account, role)
-            ):
-                usable = False
-                break
-            reuse = (
-                role == "executor"
-                and selector.account_id == alternative.harness.account_id
-                and selector.provider != "custom"
+            executor_rows = await _usable_accounts(
+                conn, now, alternative.executor, executor_pin, "executor"
             )
-            demand[selector.account_id] = demand.get(selector.account_id, 0) + (
-                0 if reuse else 1
-            )
-            if (
-                account["max_leases"] is not None
-                and account["active"] + demand[selector.account_id]
-                > account["max_leases"]
-            ):
-                usable = False
-                break
-        if usable:
-            return True
+        else:
+            executor_rows = [None]
+        # Any assignment of concrete accounts that fits capacity makes it eligible.
+        for harness in harness_rows:
+            for executor in executor_rows:
+                if (
+                    executor is not None
+                    and shared_native(alternative)
+                    and executor["id"] != harness["id"]
+                ):
+                    continue
+                if _fits(alternative, harness, executor):
+                    return True
     return False
+
+
+async def _usable_accounts(
+    conn: aiosqlite.Connection,
+    now: Any,
+    selector: Selector,
+    pin: str | None,
+    role: LeaseRole,
+) -> list[aiosqlite.Row]:
+    """Accounts of the selector's provider (just the pin, when pinned) that are
+    available and serve `role`, ordered by id for deterministic evidence."""
+    from argus_api.accounts import service as accounts
+    from argus_api.accounts.eligibility import LEASE_BLOCK_SQL
+
+    async with conn.execute(
+        "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id=a.id AND l.released_at IS NULL) AS active "  # noqa: S608
+        "FROM accounts a WHERE provider=? AND (? IS NULL OR id=?) "
+        "AND (state='available' OR (state='exhausted' AND exhausted_until<=?)) "
+        f"AND {LEASE_BLOCK_SQL} IS NULL ORDER BY id",
+        (selector.provider, pin, pin, ts(now)),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [a for a in rows if accounts._serves(a, role)]
+
+
+def _fits(
+    alternative: Alternative, harness: aiosqlite.Row, executor: aiosqlite.Row | None
+) -> bool:
+    """Slot demand of one concrete harness/executor assignment. A shared native
+    executor reuses the harness lease; any other same-account pair needs two slots."""
+    demand = {harness["id"]: 1}
+    if executor is not None and not shared_native(alternative):
+        demand[executor["id"]] = demand.get(executor["id"], 0) + 1
+    return all(
+        row["max_leases"] is None
+        or row["active"] + demand[row["id"]] <= row["max_leases"]
+        for row in (harness, executor)
+        if row is not None
+    )

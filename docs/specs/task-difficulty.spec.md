@@ -63,7 +63,15 @@ explicit list, or when task model/account pins choose the whole legacy pin path.
   *executor layer* is usable ([engines](engines.spec.md)), with every one passed
   over named in `executor_reason`. Defaults: `trivial` and `simple` use
   `agent, claude, codex`; `standard` and `hard` use `claude, codex`.
-  An operator overrides a level via the setting `difficulty.executors`
+  The built-in order is the legacy default used where a level has no
+  [execution chain](execution-chains.spec.md); an operator replaces it by
+  configuring a chain (complete harness/executor or single-layer alternatives)
+  in Setup. Setup no longer edits `difficulty.executors`: the stored setting,
+  its API/MCP writes and `ARGUS_DIFFICULTY_EXECUTORS` remain only as the legacy
+  fallback for levels without a chain, are not migrated automatically (a chain
+  needs account and model decisions the executor list does not carry), and the
+  Execution chains card shows the effective legacy order and any env lock.
+  Routing with no chain configured is unchanged. The legacy override is the setting `difficulty.executors`
   ([settings](settings.spec.md)) or `ARGUS_DIFFICULTY_EXECUTORS` (env wins), a
   JSON object of difficulty → ordered list of `claude` | `codex` | `opencode` |
   `agent`. An **empty list** (or the sole sentinel `none`) means **no delegated

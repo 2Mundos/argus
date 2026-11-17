@@ -64,11 +64,22 @@ const setting: SettingValue = {
   difficulty_sources: { hard: "global" },
 };
 
+const base = {
+  project: "demo",
+  legacyExecutors: {
+    trivial: ["agent", "claude", "codex"],
+    simple: ["agent", "claude", "codex"],
+    standard: ["claude", "codex"],
+    hard: ["claude", "codex"],
+  },
+  onChanged: vi.fn(),
+};
+
 beforeEach(() => vi.clearAllMocks());
 afterEach(cleanup);
 describe("execution chain editor", () => {
   it("preserves per-level inheritance without materializing it on project save", async () => {
-    render(<ExecutionChains project="demo" setting={setting} onChanged={vi.fn()} />);
+    render(<ExecutionChains {...base} setting={setting} />);
     expect(
       screen.getByText("Source: global · revision — · inherited (read only until overridden)"),
     ).toBeTruthy();
@@ -84,7 +95,7 @@ describe("execution chain editor", () => {
     );
   });
   it("saves exact mixed alternatives and reorders the entire pair", async () => {
-    render(<ExecutionChains project="demo" setting={setting} onChanged={vi.fn()} />);
+    render(<ExecutionChains {...base} setting={setting} />);
     fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
     fireEvent.click(screen.getByRole("button", { name: "Add hard alternative" }));
     fireEvent.change(screen.getByLabelText("hard alternative 2 mode"), {
@@ -108,21 +119,48 @@ describe("execution chain editor", () => {
     expect(value[1].difficulties.hard[1]).not.toHaveProperty("executor");
   });
   it("per-level reset restores inheritance and env locks prevent saving", async () => {
-    const view = render(<ExecutionChains project="demo" setting={setting} onChanged={vi.fn()} />);
+    const view = render(<ExecutionChains {...base} setting={setting} />);
     fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
     fireEvent.click(screen.getByRole("button", { name: "Inherit / reset hard" }));
     expect(screen.getByRole("button", { name: "Override hard" })).toBeTruthy();
     view.rerender(
-      <ExecutionChains
-        project="demo"
-        setting={{ ...setting, notice: "legacy_env_lock" }}
-        onChanged={vi.fn()}
-      />,
+      <ExecutionChains {...base} setting={{ ...setting, notice: "legacy_env_lock" }} />,
     );
     expect(
       (screen.getByRole("button", { name: "Save execution chains" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Reset execution chains" }));
     await waitFor(() => expect(saved.reset).toHaveBeenCalledWith("execution.chains", "demo"));
+  });
+  it("saves a single-layer local route with no account chosen", async () => {
+    render(<ExecutionChains {...base} setting={undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add trivial alternative" }));
+    expect((screen.getByLabelText("harness account") as HTMLSelectElement).value).toBe("");
+    const save = screen.getByRole("button", { name: "Save execution chains" });
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(saved.put).toHaveBeenCalled());
+    const [, value] = saved.put.mock.calls[0] as unknown as [string, { difficulties: object }];
+    expect(value.difficulties).toEqual({
+      trivial: [
+        {
+          id: "alternative-1",
+          mode: "single",
+          runtime: "nanoclaw",
+          harness: { adapter: "claude", provider: "local", model: { source: "account" } },
+        },
+      ],
+    });
+    // Pinning is optional and unpinning removes the key again.
+    fireEvent.change(screen.getByLabelText("harness account"), { target: { value: "local" } });
+    fireEvent.change(screen.getByLabelText("harness account"), { target: { value: "" } });
+    expect(screen.getByRole("button", { name: "Save execution chains" })).toBeTruthy();
+  });
+  it("shows each level's built-in executor order where no chain exists", () => {
+    render(<ExecutionChains {...base} setting={undefined} />);
+    expect(screen.getAllByText(/executor order agent → claude → codex/)).toHaveLength(2);
+    expect(screen.getAllByText(/executor order claude → codex/)).toHaveLength(2);
+    expect(screen.getByText("claude / local: harness or executor")).toBeTruthy();
+    expect(screen.getByText("opencode / custom: executor only")).toBeTruthy();
   });
 });
