@@ -77,9 +77,10 @@ why you are here.
   request a worker from the dashboard or MCP; Argus reports what the node can run
 - [Project runtime images](specs/project-runtime.spec.md) — per-project agent
   images, build cache, probes, disposable PostgreSQL/Valkey, and worker contract
-- [Execution chains](specs/execution-chains.spec.md) — draft contract and implementation
+- [Execution route implementation handoff](2026-11-17.execution-routes-handoff.ref.md) — preserved prototype assessment and remaining dependency-ordered implementation.
+- [Execution chains](specs/execution-chains.spec.md) — partial typed contract and implementation
   decomposition for ordered complete paired/single-layer alternatives per difficulty;
-  not implemented
+  runtime and Setup are not implemented
 - [Engines, executors and the local model](specs/engines.spec.md) —
   who runs the worker loop vs. who gets delegated work; real readiness; local routing
 - [Local Strata harness](specs/local-harness.spec.md) — NanoClaw failover to the

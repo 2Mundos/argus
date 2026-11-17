@@ -21,7 +21,7 @@ the engine role, and the model-policy maps that pin the models.
 **Contract boundary.** This spec describes the implemented, independently ranked
 harness and executor settings. The proposed replacement is
 [Execution chains](execution-chains.spec.md): for every difficulty, an ordered
-list of complete paired or single-layer alternatives. That draft is the owning
+list of complete paired or single-layer alternatives. That partial spec is the owning
 contract for the replacement, not a shipped capability. Do not implement it as a
 local-only preference or infer harness/executor pairs from account priority.
 

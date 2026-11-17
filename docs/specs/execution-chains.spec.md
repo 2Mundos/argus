@@ -1,5 +1,5 @@
 ---
-status: draft
+status: partial
 created: 2026-11-17
 updated: 2026-11-17
 ---
@@ -16,9 +16,11 @@ never the Cartesian product of independent harness and executor rankings.
 
 This is the owning contract for replacing the legacy routing described in
 [task difficulty](task-difficulty.spec.md), [settings](settings.spec.md) and
-[task models](task-models.spec.md). **It is not implemented.** This document and
-its implementation decomposition are the deliverable of this design slice;
-current runtime behavior and stored settings are unchanged.
+[task models](task-models.spec.md). **Runtime routing is not implemented.** The
+pure typed policy and per-difficulty inheritance resolver are implemented in
+`argus_core.execution_chains`; no API, settings registry or worker imports them.
+The remaining cross-layer implementation is specified below. Current runtime
+behavior and stored settings are unchanged.
 
 Scope: typed policy, global/project inheritance, capability validation, account
 reservation, claim fencing, persisted fallback, REST/MCP, Setup, diagnostics,
@@ -140,7 +142,13 @@ Paired executors are `claude`/`anthropic`, `codex`/`openai`, `agent`/`cursor`,
 existing account role and harness pairing restrictions. In particular a local
 harness must not run `argus-delegate claude` on its redirected endpoint; the
 initial local pair accepts `agent` or `opencode`, matching current pinned-route
-validation. Do not weaken redirect guards to expand the matrix.
+validation. Do not weaken redirect guards to expand the matrix. Custom harnesses
+have their own bridge-environment stripping in `argus-delegate.mjs`; do not copy
+local-only pair restrictions to them. Native same-provider pairs must name the
+same account: the existing gateway has one native identity per provider in a
+session, not separate harness/executor identities. Distinct custom accounts are
+allowed through their existing separately scoped role lanes. These static rules
+are implemented in the core contract, not proof of runtime conformance.
 
 One API capability catalogue, exposed as `execution_capabilities` on
 `GET /api/engines`, describes supported runtime/mode/adapter/provider/model-source
@@ -169,8 +177,9 @@ authorization, installed CLI readiness or successful model tool calling.
   scoped row. An empty map at project scope inherits every global difficulty.
 - Effective responses include each difficulty's source (`project`, `global`,
   `legacy`) and revision. A stored scope map is returned separately so an editor
-  does not materialize inherited values on Save. Revisions hash canonical policy
-  JSON using existing policy conventions; they are not updated by account health.
+  does not materialize inherited values on Save. Each revision hashes canonical
+  JSON of contract version, difficulty, source and its complete effective list.
+  Account health and unrelated difficulty edits do not change that revision.
 - Without an explicit chain the existing `difficulty.executors`, model maps,
   provider ranking, soft local preference, env locks and task-pin fallback are
   byte-for-byte compatible. `difficulty.executors: {trivial: []}` alone still
@@ -403,13 +412,28 @@ unadvertised/unset until slices 1–7 pass; do not activate partial behavior.
    Update affected living specs to implemented only after evidence. Keep live
    rollout/real inference a separately authorized operator task.
 
+## Open items
+
+- Slice 1 policy union, static selector compatibility and pure per-difficulty
+  inheritance are implemented and unit tested. The capability catalogue on the
+  API, account-reference validation and runtime conformance remain open.
+- Slices 2–7 remain open in full. No executable setting, API/MCP route protocol,
+  admission, traversal migration, worker change or Setup editor is implemented
+  by this revision. Do not expose or enable the policy before their joint gates.
+
 ## Verification boundary
 
-- This revision changes specifications only. No new setting, route, migration,
-  capability or chain execution exists yet. Narrow local-only test edits made
-  before the owner correction were removed; no narrow runtime patch remains.
-- Design checks: `python3 scripts/validate_docs.py`,
-  `python3 scripts/check_specs.py`, `make language-lint`, and `make lint`.
+- New code is confined to `argus_core.execution_chains` and its unit tests; no
+  runtime imports it. The old worktree and its uncommitted prototype remain
+  untouched. See the [implementation handoff](../2026-11-17.execution-routes-handoff.ref.md)
+  for inspected prototype risks and the remaining dependency-ordered slices.
+- Core verification: `uv run pytest -q packages/core/tests/test_execution_chains.py`
+  tests mixed alternatives in either order at all four difficulties, forbidden
+  executor fields in single mode, provider/adapter/model-source rejection,
+  bounds, lossless JSON roundtrip, inheritance/reset, defensive copying and
+  deterministic per-difficulty revisions. It does not exercise leases.
+- Repository gates: `make check` and `make build`; concrete results are recorded
+  in the implementation handoff, not inferred from the design.
 - Future executable acceptance: exact-account paired and direct routes for every
   difficulty; mixed-order fallback across restart; no cross-pair synthesis;
   project inheritance; pin/lock compatibility; unsupported capability rejection;

@@ -164,7 +164,7 @@ difficulty as `difficulty_executors`.
 This is a legacy executor-only setting, not a list of complete execution routes.
 An empty list removes delegation but leaves the harness account ranking unchanged,
 including trivial tasks' soft local preference and possible cloud fallback. The
-[Execution chains draft](execution-chains.spec.md) defines the proposed general
+[Execution chains contract](execution-chains.spec.md) defines the proposed general
 replacement: complete paired or single-layer alternatives for every difficulty,
 per-level inheritance, compatibility and explicit migration. It is not available
 through the current Settings UI/API/MCP; no automatic conversion is defined.
