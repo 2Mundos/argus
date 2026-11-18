@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { copilotAuthRejected } from "./engines/argus-delegate.mjs";
 import { parseUsage } from "./engines/usage.mjs";
@@ -106,6 +108,62 @@ export function deriveCopilot(run: string | { stdout?: string; stderr?: string }
     authRejected: copilotAuthRejected(`${stdout}\n${stderr}`),
     usage: parseUsage("copilot", stdout),
   };
+}
+
+/** The host-side facts of one claim, as the `tasks` row and its attempt carry them (stall visibility 3.7). */
+export interface StallRow {
+  state: "claimed" | "queued";
+  quiet_at: string | null;
+  activity_at?: string | null;
+  progress_at?: string | null;
+  output_at?: string | null;
+  claimed_at: string | null;
+  /** JSON of a LeaseObservation, or null when the host sent none. */
+  observation: string | null;
+  observation_at: string | null;
+  paused_disk_at?: string | null;
+}
+
+export interface StallFacts {
+  stall_cause: string | null;
+  quiet: boolean;
+  last_signal_source: string | null;
+}
+
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+
+// Runs the production classifier unchanged: `argus_api.tasks.expiry.quiet_facts_from_row`
+// (the function behind GET /api/tasks/{id} and the inbox) over a dict row. Needs the Python
+// environment from `uv sync --all-packages --group dev`; no Docker, no network, no database.
+const STALL_SCRIPT = `
+import json, sys
+from datetime import datetime
+from argus_api.tasks.expiry import quiet_facts_from_row
+req = json.load(sys.stdin)
+f = quiet_facts_from_row(req["row"], datetime.fromisoformat(req["now"]))
+print(json.dumps({"stall_cause": f.stall_cause, "quiet": f.quiet_at is not None,
+                  "last_signal_source": f.last_signal_source}))
+`;
+
+function pythonCommand(): [string, string[]] {
+  if (process.env.ARGUS_PYTHON) return [process.env.ARGUS_PYTHON, []];
+  const venv = join(REPO_ROOT, ".venv", "bin", "python");
+  if (existsSync(venv)) return [venv, []];
+  return ["uv", ["run", "--no-sync", "python"]];
+}
+
+/** What the production stall classifier derives for one claim row at `now` (ISO-8601 UTC). */
+export function deriveStall(row: StallRow, now: string): StallFacts {
+  const [cmd, args] = pythonCommand();
+  const out = execFileSync(cmd, [...args, "-c", STALL_SCRIPT], {
+    cwd: REPO_ROOT,
+    input: JSON.stringify({
+      row: { activity_at: null, progress_at: null, output_at: null, paused_disk_at: null, ...row },
+      now,
+    }),
+    encoding: "utf8",
+  });
+  return JSON.parse(out) as StallFacts;
 }
 
 export const DERIVE = {

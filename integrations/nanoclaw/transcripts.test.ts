@@ -3,7 +3,13 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseUsage } from "./engines/usage.mjs";
-import { DERIVE, deriveCopilot, readEvents } from "./transcripts-derive.js";
+import {
+  DERIVE,
+  deriveCopilot,
+  deriveStall,
+  readEvents,
+  type StallRow,
+} from "./transcripts-derive.js";
 
 const ROOT = join(import.meta.dir, "fixtures", "transcripts");
 
@@ -107,5 +113,89 @@ describe("copilot 1.0.105 failure signals", () => {
     expect(derived.authRejected).toBe(false);
     expect(derived.usage).toEqual(parseUsage("copilot", "OK"));
     expect(derived.usage).toMatchObject({ reason: "no_usage_output" });
+  });
+});
+
+// The production stall classifier is Python (argus_api.tasks.expiry), fed by what the worker
+// host observes for a lease, not by engine output. So a recording cannot say *why* a claim went
+// quiet; expected.json deliberately has no stall field, and nothing below edits a recording.
+const NOW = "2026-10-20T22:06:00+00:00";
+const CLAIMED_AT = "2026-10-20T20:00:00+00:00";
+const FRESH = "2026-10-20T22:05:30+00:00"; // 30 s before NOW: inside the 90 s window
+const STALE = "2026-10-20T22:00:00+00:00"; // 6 min before NOW: older than three heartbeats
+const obs = (workspace: string, session: string, delegate: string) =>
+  JSON.stringify({ workspace, session, delegate });
+const quietClaim = (observation: string | null, observation_at: string | null): StallRow => ({
+  state: "claimed",
+  quiet_at: "2026-10-20T21:40:00+00:00",
+  claimed_at: CLAIMED_AT,
+  observation,
+  observation_at,
+});
+
+describe("stall classifier on authentic recordings", () => {
+  // A recording holds engine output only, never a lease observation, so the contract-correct
+  // input for a quiet claim built from it is "no observation", which the classifier calls
+  // `unknown` (stall-visibility.spec.md 3.7). That is the whole claim; no cause is inferred.
+  it.each(cases)("%s: no recorded observation is an unknown cause", (_label, engine, name) => {
+    expect(existsSync(join(ROOT, engine, name, "expected.json"))).toBe(true);
+    expect(deriveStall(quietClaim(null, null), NOW)).toMatchObject({
+      quiet: true,
+      stall_cause: "unknown",
+    });
+  });
+});
+
+describe("stall classifier on SYNTHETIC inputs (not recordings)", () => {
+  // Hand-built rows: nothing here was recorded from a real host or engine.
+  const synthetic: [string, StallRow, string | null][] = [
+    [
+      "no stall: claim with recent signals is not quiet",
+      { ...quietClaim(null, null), quiet_at: null },
+      null,
+    ],
+    [
+      "no stall: a queued task reports no cause",
+      { ...quietClaim(obs("missing", "gone", "silent"), FRESH), state: "queued" },
+      null,
+    ],
+    [
+      "workspace missing wins over everything",
+      quietClaim(obs("missing", "gone", "active"), FRESH),
+      "workspace_missing",
+    ],
+    ["session gone", quietClaim(obs("ok", "gone", "active"), FRESH), "session_gone"],
+    [
+      "delegate active but silent in the log",
+      quietClaim(obs("ok", "running", "active"), FRESH),
+      "silent_delegate_active",
+    ],
+    [
+      "healthy session, no progress",
+      quietClaim(obs("ok", "running", "silent"), FRESH),
+      "no_progress",
+    ],
+    ["partly unobserved", quietClaim(obs("ok", "unknown", "silent"), FRESH), "unknown"],
+    ["stale observation", quietClaim(obs("missing", "gone", "silent"), STALE), "unknown"],
+    [
+      "observation from before the claim",
+      quietClaim(obs("missing", "gone", "silent"), "2026-10-20T19:59:00+00:00"),
+      "unknown",
+    ],
+    [
+      "disk guard pause beats the observation",
+      {
+        ...quietClaim(obs("ok", "running", "silent"), FRESH),
+        quiet_at: null,
+        paused_disk_at: FRESH,
+      },
+      "paused_disk",
+    ],
+  ];
+
+  it.each(synthetic)("%s", (_label, row, cause) => {
+    const facts = deriveStall(row, NOW);
+    expect(facts.stall_cause).toBe(cause);
+    expect(facts.quiet).toBe(row.state === "claimed" && row.quiet_at !== null);
   });
 });
