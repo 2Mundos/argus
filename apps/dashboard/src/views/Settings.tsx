@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { ActionButton, useAction } from "../ActionButton";
 import { ApiError } from "../api";
 import { useLiveData } from "../live";
@@ -183,16 +183,54 @@ export function Settings({
               Separate from the review by a different model below.
             </ToggleSection>
           </div>
-          <div className="card">
+          <div className="card" id={REVIEW_GATE_ID}>
             <IndependentReviewSection
               project={project}
               setting={review}
               onChanged={() => reload()}
             />
           </div>
+          <div id={REVIEW_MODELS_ID}>
+            <ExecutionChains
+              key={scope}
+              project={project}
+              setting={byKey.get("review.chains")}
+              settingKey="review.chains"
+              title="Review models"
+              intro={
+                <p>
+                  Which model reviews a code task, per difficulty of the reviewed task, used when{" "}
+                  <JumpTo target={REVIEW_GATE_ID}>independent code review</JumpTo> is on. Author
+                  models are skipped automatically: an alternative whose model wrote the task (or,
+                  when a different provider is required, whose provider did) is never used. The
+                  order is the fallback order; the first remaining alternative with a usable account
+                  reviews and the rest follow if it cannot run. When only authors remain, the task
+                  waits in review.
+                </p>
+              }
+              unconfigured="No review models: the reviewer is the first non-author model in the model preferences."
+              onChanged={() => reload()}
+            />
+          </div>
         </>
       )}
     </section>
+  );
+}
+
+const REVIEW_GATE_ID = "settings-independent-review";
+const REVIEW_MODELS_ID = "settings-review-models";
+
+/** In-page link; the hash is the router's, so scroll instead of navigating. */
+function JumpTo({ target, children }: { target: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      className="link"
+      onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: "smooth" })}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -463,7 +501,8 @@ function IndependentReviewSection(props: {
       </div>
       <p className="muted small">
         Require review by a different model before a code task succeeds. Stored setting:{" "}
-        <strong>{setting ? sourceLabel(setting.source) : "…"}</strong>
+        <strong>{setting ? sourceLabel(setting.source) : "…"}</strong>. Choose which models review
+        in <JumpTo target={REVIEW_MODELS_ID}>Review models</JumpTo>.
       </p>
       <div className="review-fields">
         <label>

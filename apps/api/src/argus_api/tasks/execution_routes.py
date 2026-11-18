@@ -32,6 +32,8 @@ from argus_api.events import record
 from argus_api.secrets import SecretStore
 
 KEY = "execution.chains"
+# Independent reviewers: same shape, keyed by the reviewed task's difficulty.
+REVIEW_KEY = "review.chains"
 WAIT = "awaiting_execution_route"
 EXHAUSTED = "execution_chain_exhausted"
 
@@ -49,10 +51,12 @@ def locked() -> bool:
     )
 
 
-async def policy_setting(conn: aiosqlite.Connection, scope: str) -> SettingValue:
+async def policy_setting(
+    conn: aiosqlite.Connection, scope: str, key: str = KEY
+) -> SettingValue:
     async with conn.execute(
         "SELECT scope, value FROM settings WHERE key = ? AND scope IN ('global', ?)",
-        (KEY, scope),
+        (key, scope),
     ) as cur:
         stored = {r["scope"]: json.loads(r["value"]) for r in await cur.fetchall()}
     base = stored.get("global", {"version": 1, "difficulties": {}})
@@ -70,7 +74,7 @@ async def policy_setting(conn: aiosqlite.Connection, scope: str) -> SettingValue
     }
     value = {"version": 1, "difficulties": levels}
     return SettingValue(
-        key=KEY,
+        key=key,
         value=value,
         scoped_value=own or {"version": 1, "difficulties": {}},
         source="project"
@@ -173,8 +177,23 @@ async def validate_references(
                     )
 
 
+class SkippedAlternative(BaseModel):
+    id: str
+    reason: Literal["author", "unavailable"]
+
+
+class ReviewRoute(BaseModel):
+    """Why an independent reviewer runs on this route (settings.spec.md 3.5)."""
+
+    parent_id: str
+    difficulty: str
+    chain_source: Literal["global", "project"]
+    selected: str
+    skipped: list[SkippedAlternative] = []
+
+
 class RoutePolicy(BaseModel):
-    source: Literal["global", "project"]
+    source: Literal["global", "project", "review"]
     revision: str
     alternatives: list[Alternative]
     bypass: str | None = None
@@ -182,29 +201,43 @@ class RoutePolicy(BaseModel):
     generation: int = 0
     skips: list[dict[str, Any]] = []
     selection: ExecutionSelection | None = None
+    review: ReviewRoute | None = None
+
+
+def explicit_route(alternatives: list[Alternative], review: ReviewRoute) -> str:
+    """The `tasks.execution_route` value; the generic chain never re-routes it."""
+    value = {
+        "source": "review",
+        "alternatives": [a.model_dump(mode="json") for a in alternatives],
+        "review": review.model_dump(mode="json"),
+    }
+    return json.dumps({**value, "revision": revision(value)})
 
 
 async def resolve(conn: aiosqlite.Connection, row: aiosqlite.Row) -> RoutePolicy | None:
-    setting = await policy_setting(conn, row["project"])
-    alternatives = setting.value["difficulties"].get(row["difficulty"])
-    if alternatives is None:
-        return None
-    bypass = (
-        "legacy_task_pin"
-        if any(
-            row[k] is not None
-            for k in ("harness_model", "harness_account", "executor_model")
+    if row["execution_route"]:
+        policy = RoutePolicy.model_validate_json(row["execution_route"])
+    else:
+        setting = await policy_setting(conn, row["project"])
+        alternatives = setting.value["difficulties"].get(row["difficulty"])
+        if alternatives is None:
+            return None
+        bypass = (
+            "legacy_task_pin"
+            if any(
+                row[k] is not None
+                for k in ("harness_model", "harness_account", "executor_model")
+            )
+            else None
         )
-        else None
-    )
-    policy = RoutePolicy(
-        source="project"
-        if (setting.difficulty_sources or {})[row["difficulty"]] == "project"
-        else "global",
-        revision=(setting.difficulty_revisions or {})[row["difficulty"]],
-        alternatives=alternatives,
-        bypass=bypass,
-    )
+        policy = RoutePolicy(
+            source="project"
+            if (setting.difficulty_sources or {})[row["difficulty"]] == "project"
+            else "global",
+            revision=(setting.difficulty_revisions or {})[row["difficulty"]],
+            alternatives=alternatives,
+            bypass=bypass,
+        )
     async with conn.execute(
         "SELECT * FROM task_execution_routes WHERE task_id = ?", (row["id"],)
     ) as cur:
@@ -818,33 +851,48 @@ async def eligible(
         json.loads(row["account_providers"]) if row["account_providers"] else None
     )
     for alternative in policy.alternatives[policy.cursor :]:
-        if not required_capabilities(alternative) <= set(capabilities):
-            continue
-        if alternative.harness.provider not in providers or (
-            restriction is not None and alternative.harness.provider not in restriction
+        if await alternative_eligible(
+            conn, now, alternative, restriction, capabilities, providers
         ):
-            continue
-        harness_pin, executor_pin = pins(alternative)
-        harness_rows = await _usable_accounts(
-            conn, now, alternative.harness, harness_pin, "engine"
+            return True
+    return False
+
+
+async def alternative_eligible(
+    conn: aiosqlite.Connection,
+    now: Any,
+    alternative: Alternative,
+    restriction: list[str] | None,
+    capabilities: list[str],
+    providers: list[str],
+) -> bool:
+    if not required_capabilities(alternative) <= set(capabilities):
+        return False
+    if alternative.harness.provider not in providers or (
+        restriction is not None and alternative.harness.provider not in restriction
+    ):
+        return False
+    harness_pin, executor_pin = pins(alternative)
+    harness_rows = await _usable_accounts(
+        conn, now, alternative.harness, harness_pin, "engine"
+    )
+    if isinstance(alternative, PairedAlternative):
+        executor_rows = await _usable_accounts(
+            conn, now, alternative.executor, executor_pin, "executor"
         )
-        if isinstance(alternative, PairedAlternative):
-            executor_rows = await _usable_accounts(
-                conn, now, alternative.executor, executor_pin, "executor"
-            )
-        else:
-            executor_rows = [None]
-        # Any assignment of concrete accounts that fits capacity makes it eligible.
-        for harness in harness_rows:
-            for executor in executor_rows:
-                if (
-                    executor is not None
-                    and shared_native(alternative)
-                    and executor["id"] != harness["id"]
-                ):
-                    continue
-                if _fits(alternative, harness, executor):
-                    return True
+    else:
+        executor_rows = [None]
+    # Any assignment of concrete accounts that fits capacity makes it eligible.
+    for harness in harness_rows:
+        for executor in executor_rows:
+            if (
+                executor is not None
+                and shared_native(alternative)
+                and executor["id"] != harness["id"]
+            ):
+                continue
+            if _fits(alternative, harness, executor):
+                return True
     return False
 
 

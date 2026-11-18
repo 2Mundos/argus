@@ -97,13 +97,13 @@ async def fleet(db):
     return store
 
 
-async def policy(db, alternatives, scope="global", difficulty="hard"):
+async def policy(db, alternatives, scope="global", difficulty="hard", key=routes.KEY):
     async with db.write() as tx:
         return await settings.put_setting(
             tx,
             Path(),
             scope,
-            routes.KEY,
+            key,
             {"version": 1, "difficulties": {difficulty: alternatives}},
             "admin:test",
         )
@@ -264,8 +264,9 @@ async def test_inheritance_scoped_map_locks_and_pin_bypass(db, fleet, monkeypatc
     _, route = await state(db, task.id)
     assert route.bypass == "legacy_task_pin"
     monkeypatch.setenv("ARGUS_MODEL_POLICY", "{}")
-    with pytest.raises(ValidationFailedError, match="legacy_env_lock"):
-        await policy(db, [direct()])
+    for key in (routes.KEY, routes.REVIEW_KEY):
+        with pytest.raises(ValidationFailedError, match="legacy_env_lock"):
+            await policy(db, [direct()], key=key)
 
 
 async def test_old_worker_cannot_claim_chain_and_missing_model_waits(db, fleet):
@@ -520,10 +521,13 @@ async def test_capability_and_provider_restrictions_never_use_hidden_legacy(db, 
 
 
 async def test_reference_validation_and_role_change(db, fleet):
-    with pytest.raises(ValidationFailedError):
-        await policy(db, [direct(harness=selector("missing"))])
-    with pytest.raises(ValidationFailedError):
-        await policy(db, [direct(harness=selector("cloud"))])
+    for key in (routes.KEY, routes.REVIEW_KEY):
+        with pytest.raises(ValidationFailedError):
+            await policy(db, [direct(harness=selector("missing"))], key=key)
+        with pytest.raises(ValidationFailedError):
+            await policy(db, [direct(harness=selector("cloud"))], key=key)
+        with pytest.raises(ValidationFailedError, match="duplicate_alternative_id"):
+            await policy(db, [direct(), direct()], key=key)
     await policy(db, [paired()])
     task = await make_task(db)
     async with db.write() as tx:
@@ -667,3 +671,218 @@ async def test_pinned_pair_keeps_working_and_unpinned_default_is_unchanged(db, f
     claimed, engine = await claim(db, fleet)
     assert claimed.id == task.id and engine.account_id == "local"
     assert (await state(db, task.id))[1].selection.executor.account_id == "custom"
+
+
+# Independent reviewers on `review.chains` (settings.spec.md 3.5).
+
+OPUS = {"source": "explicit", "id": "claude-opus-5-5"}
+
+
+def explicit(id, provider, adapter, model, account=None):
+    harness = anyone(provider, adapter, {"source": "explicit", "id": model})
+    if account:
+        harness["account_id"] = account
+    return direct(id, harness)
+
+
+OPUS_ALT = explicit("opus", "anthropic", "claude", "claude-opus-5-5")
+SONNET_ALT = explicit("sonnet", "anthropic", "claude", "claude-sonnet-5-5")
+CODEX_ALT = explicit("codex", "openai", "codex", "gpt-5.5")
+
+
+async def reviewed_parent(db, store, *executions):
+    """An in_review hard parent whose model_executions are (model, provider, account)."""
+    await add_account(db, store, "codex", "openai", {"api_key": "fixture-openai"})
+    parent = await make_task(db)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET state = 'in_review' WHERE id = ?", (parent.id,)
+        )
+        await tx.conn.execute(
+            "UPDATE agents SET capabilities = ?, runtime_providers = ? WHERE id = ?",
+            (json.dumps(CAPS), json.dumps(PROVIDERS), A),
+        )
+        for i, (model, provider, account) in enumerate(executions):
+            await record_execution(tx, parent.id, i, model, provider, account)
+    return parent
+
+
+async def record_execution(tx, task_id, key, model, provider, account):
+    await tx.conn.execute(
+        "INSERT INTO model_executions (id, task_id, key, attempt, layer, state,"
+        " provider, configured_model, account_id, recorded_at, updated_at)"
+        " VALUES (?, ?, ?, 1, 'harness', 'succeeded', ?, ?, ?, ?, ?)",
+        (
+            f"{task_id}-{key}",
+            task_id,
+            str(key),
+            provider,
+            model,
+            account,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+        ),
+    )
+
+
+async def review_policy(db, alternatives, difficulty="hard"):
+    await policy(db, alternatives, difficulty=difficulty, key=routes.REVIEW_KEY)
+
+
+async def spawn(db, parent_id, mode="different_model", policy=None, **kw):
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+
+    async with db.write() as tx:
+        return await review.spawn_reviewer(
+            tx,
+            await tasks.task_row(tx.conn, parent_id),
+            pr=None,
+            head_sha="abc1234",
+            setting=IndependentReviewSetting(mode=mode),
+            policy=policy or {},
+            actor="system",
+            **kw,
+        )
+
+
+async def parent_events(db, parent_id, kind):
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT data FROM events WHERE subject_id = ? AND kind = ? ORDER BY rowid",
+            (parent_id, kind),
+        ) as cur,
+    ):
+        return [json.loads(r[0]) for r in await cur.fetchall()]
+
+
+async def test_review_chain_skips_author_and_child_runs_on_fallback(db, fleet):
+    await review_policy(db, [OPUS_ALT, CODEX_ALT])
+    # The generic chain for every level must not re-route the reviewer.
+    async with db.write() as tx:
+        await settings.put_setting(
+            tx,
+            Path(),
+            "global",
+            routes.KEY,
+            {
+                "version": 1,
+                "difficulties": {
+                    d: [direct()] for d in ("trivial", "simple", "standard", "hard")
+                },
+            },
+            "admin:test",
+        )
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child_id = await spawn(db, parent.id)
+    [selected] = await parent_events(db, parent.id, "review.independent_selected")
+    assert selected["selected"] == "codex" and selected["fallbacks"] == []
+    assert selected["skipped"] == [{"id": "opus", "reason": "author"}]
+    row, route = await state(db, child_id)
+    assert row["harness_model"] is None and row["executor_model"] is None
+    assert route.source == "review" and route.bypass is None
+    assert [a.id for a in route.alternatives] == ["codex"]
+    assert route.review.selected == "codex" and route.review.parent_id == parent.id
+    claimed, engine = await claim(db, fleet)
+    assert claimed.id == child_id and engine.account_id == "codex"
+    _, route = await state(db, child_id)
+    assert route.selection.source == "review"
+    assert route.selection.harness.model == "gpt-5.5"
+
+
+async def test_review_chain_of_only_authors_blocks(db, fleet):
+    await review_policy(db, [OPUS_ALT, direct()])
+    # A local account whose model is unknown until lease authored the parent.
+    parent = await reviewed_parent(
+        db,
+        fleet,
+        ("claude-opus-5-5", "anthropic", "cloud"),
+        ("served-model", "local", "local"),
+    )
+    assert await spawn(db, parent.id) is None
+    row, _ = await state(db, parent.id)
+    assert row["block_reason"] == "no_independent_reviewer"
+    [blocked] = await parent_events(db, parent.id, "review.independent_blocked")
+    assert blocked["skipped"] == [
+        {"id": "opus", "reason": "author"},
+        {"id": "direct", "reason": "author"},
+    ]
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT count(*) FROM tasks WHERE parent_id = ?", (parent.id,)
+        ) as cur,
+    ):
+        assert (await cur.fetchone())[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "chosen"), [("different_model", "sonnet"), ("different_provider", "codex")]
+)
+async def test_review_chain_different_provider_skips_by_provider(
+    db, fleet, mode, chosen
+):
+    await review_policy(db, [OPUS_ALT, SONNET_ALT, CODEX_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child_id = await spawn(db, parent.id, mode=mode)
+    _, route = await state(db, child_id)
+    assert route.review.selected == chosen
+
+
+async def test_unconfigured_review_level_uses_policy_picker(db, fleet):
+    await review_policy(db, [CODEX_ALT], difficulty="simple")
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    policy = {"harness": {"claude": ["claude-opus-5-5", "claude-sonnet-5-5"]}}
+    child_id = await spawn(db, parent.id, policy=policy)
+    row, _ = await state(db, child_id)
+    assert row["execution_route"] is None
+    assert json.loads(row["harness_model"]) == {
+        "engine": "claude",
+        "model": "claude-sonnet-5-5",
+    }
+    assert await parent_events(db, parent.id, "review.independent_selected") == []
+
+
+async def test_review_chain_falls_back_past_unusable_account(db, fleet):
+    pinned = explicit("sonnet", "anthropic", "claude", "claude-sonnet-5-5", "cloud")
+    await review_policy(db, [pinned, CODEX_ALT])
+    parent = await reviewed_parent(db, fleet, ("served-model", "local", "local"))
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, "cloud", AccountUpdate(enabled=False), "admin:test"
+        )
+    child_id = await spawn(db, parent.id)
+    _, route = await state(db, child_id)
+    assert route.review.selected == "codex"
+    assert [s.model_dump() for s in route.review.skipped] == [
+        {"id": "sonnet", "reason": "unavailable"}
+    ]
+
+
+async def test_void_review_reselects_without_the_void_model(db, fleet):
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+    from argus_core.tasks import TaskResult
+
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    first = await spawn(db, parent.id)
+    async with db.write() as tx:
+        # The reviewer delegated to the author model: its verdict proves nothing.
+        await record_execution(tx, first, 0, "gpt-5.5", "openai", "codex")
+        await record_execution(tx, first, 1, "claude-opus-5-5", "anthropic", "cloud")
+        await review.on_review_child_complete(
+            tx,
+            await tasks.task_row(tx.conn, first),
+            TaskResult(
+                summary="ok", data={"verdict": "approve", "head_sha": "abc1234"}
+            ),
+            setting=IndependentReviewSetting(mode="different_model"),
+            policy={},
+            actor="system",
+        )
+    assert await parent_events(db, parent.id, "review.independent_void")
+    _, second = await parent_events(db, parent.id, "review.independent_selected")
+    assert second["selected"] == "sonnet"
+    assert second["skipped"] == [{"id": "codex", "reason": "author"}]

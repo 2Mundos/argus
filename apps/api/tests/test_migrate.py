@@ -97,6 +97,7 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
         )
         await tx.conn.execute("ALTER TABLE tasks ADD COLUMN budget_usd REAL")
         await tx.conn.execute("ALTER TABLE tasks ADD COLUMN review_disposition TEXT")
+        await tx.conn.execute("ALTER TABLE tasks ADD COLUMN execution_route TEXT")
         await tx.conn.execute(
             "CREATE TABLE task_integrations (task_id TEXT, integration_id TEXT)"
         )
@@ -109,6 +110,7 @@ async def test_0057_marks_pending_steers_dispatched(tmp_path: Path) -> None:
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN deliverable")
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN budget_usd")
         await tx.conn.execute("ALTER TABLE tasks DROP COLUMN review_disposition")
+        await tx.conn.execute("ALTER TABLE tasks DROP COLUMN execution_route")
         await tx.conn.execute("DROP TABLE task_integrations")
         await tx.conn.execute(
             "UPDATE agents SET runtime = '{\"features\": [\"steer\"]}' WHERE id = 'a'"
