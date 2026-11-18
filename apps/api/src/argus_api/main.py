@@ -66,7 +66,7 @@ from argus_api.runtime.routes import router as runtime_router
 from argus_api.runtime.service import RuntimeManager
 from argus_api.secrets import open_store
 from argus_api.settings.routes import router as settings_router
-from argus_api.tasks import independent_review
+from argus_api.tasks import independent_review, review_settle
 from argus_api.tasks.delivery import PrChecker
 from argus_api.tasks.draft_routes import router as task_drafts_router
 from argus_api.tasks.graph import router as task_graph_router
@@ -250,6 +250,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                 [
                     asyncio.create_task(
                         merge_supersede.run(
+                            db,
+                            app.state.pr_checker,
+                            settings.merge_supersede_interval_s,
+                        )
+                    )
+                ]
+                if settings.merge_supersede_interval_s > 0
+                else []
+            ),
+            *(
+                [
+                    asyncio.create_task(
+                        review_settle.run(
                             db,
                             app.state.pr_checker,
                             settings.merge_supersede_interval_s,
