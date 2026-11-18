@@ -606,7 +606,10 @@ describe("renderTask", () => {
     ]) {
       const text = renderTask(task({ ...repo, ...over }) as any, new Map());
       expect(text, JSON.stringify(over)).not.toContain("argus-task merge --pr N");
-      expect(text, JSON.stringify(over)).toContain("wait merge --pr N (it only observes");
+      // A read-only task gets no helper guidance at all, so only the writable ones name the observation.
+      if (!("required_capabilities" in over)) {
+        expect(text, JSON.stringify(over)).toContain("wait merge --pr N (it only observes");
+      }
     }
   });
 
