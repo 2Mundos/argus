@@ -26,6 +26,11 @@ import { policySnapshot } from "./model-policy.mjs";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const PR = "https://git.example.com/org/repo/pulls/12";
 
+/** The test process's environment minus the task's ARGUS_* (a live session's API, token, policy). */
+function hermeticEnv() {
+  return Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("ARGUS_")));
+}
+
 function tracker(probes, repository) {
   const emitted = [];
   const t = createTracker({ probes, emit: (m) => emitted.push(m), repository });
@@ -256,13 +261,14 @@ test("argus-delegate emits milestones for a real commit and PR and keeps its rep
   t.after(() => server.close());
 
   const env = {
-    ...process.env,
+    ...hermeticEnv(),
     ...gitEnv,
     NO_PROXY: "127.0.0.1",
     no_proxy: "127.0.0.1",
     PATH: `${bin}:${process.env.PATH}`,
     HOME: home,
     ARGUS_DELEGATE_ROOTS: work,
+    ARGUS_MODEL_POLICY_FILE: path.join(dir, "argus-model-policy.json"),
     ANTHROPIC_API_KEY: "placeholder",
     ARGUS_API_URL: `http://127.0.0.1:${server.address().port}`,
     ARGUS_TASK_ID: "task-1",
@@ -445,7 +451,7 @@ for (const executor of EXECUTORS) {
       JSON.stringify(policySnapshot(policy, { task_id: "task-1", attempt: 3 })),
     );
     const env = {
-      ...process.env,
+      ...hermeticEnv(),
       PATH: `${bin}:${process.env.PATH}`,
       HOME: s.home,
       ARGUS_DELEGATE_ROOTS: work,

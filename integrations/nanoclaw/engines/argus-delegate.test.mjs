@@ -144,12 +144,21 @@ function sandbox(t) {
   const fake = (name, script) => {
     fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
   };
+  // The policy snapshot lives in the sandbox, never at the default path a task session uses.
+  // It holds the built-in defaults with no context: what a run without a snapshot selects.
+  const policyFile = path.join(dir, "argus-model-policy.json");
+  const defaults = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  fs.writeFileSync(policyFile, JSON.stringify(policySnapshot(defaults)));
   const env = {
     PATH: `${bin}:${process.env.PATH}`,
     HOME: home,
     CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     ARGUS_DELEGATE_ROOTS: work,
     ARGUS_ENGINE: "codex",
+    ARGUS_DELEGATE_TEST: "1",
+    ARGUS_MODEL_POLICY_FILE: policyFile,
   };
   return { dir, work, home, bin, fake, env };
 }
@@ -183,6 +192,53 @@ test("a successful run reports engine and executor identity and keeps artifacts"
   assert.equal(report.timed_out, false);
   assert.equal(fs.readFileSync(report.artifacts[0], "utf8").trim(), '{"result":"hi"}');
   assert.ok(report.artifacts[0].startsWith(fs.realpathSync(s.work)));
+});
+
+// The live task session's policy file: no test may read or write it.
+const LIVE_POLICY = "/workspace/agent/argus-model-policy.json";
+
+test("under the test runner a delegate with no ARGUS_MODEL_POLICY_FILE refuses and writes nothing", async (t) => {
+  const s = sandbox(t);
+  s.fake("claude", 'cat >/dev/null; echo \'{"result":"hi"}\'');
+  const env = { ...s.env, ANTHROPIC_API_KEY: "placeholder" };
+  delete env.ARGUS_MODEL_POLICY_FILE;
+  const before = fs.existsSync(LIVE_POLICY);
+  const result = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [DELEGATE, "claude", "--cwd", s.work], { env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => (stdout += c));
+    child.stderr.on("data", (c) => (stderr += c));
+    child.stdin.end("do the thing");
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /ARGUS_MODEL_POLICY_FILE/);
+  assert.equal(result.stdout, "");
+  assert.deepEqual(fs.readdirSync(s.dir).sort(), [
+    "argus-model-policy.json",
+    "bin",
+    "home",
+    "work",
+  ]);
+  assert.equal(fs.existsSync(LIVE_POLICY), before);
+});
+
+test("a normal run with a temp policy file writes only inside the sandbox, never the live policy root", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "claude",
+    'if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\ncat >/dev/null; echo \'{"result":"hi"}\'',
+  );
+  const before = fs.existsSync(LIVE_POLICY);
+  const { code, report } = await run(["claude", "--cwd", s.work, "--timeout", "20"], {
+    env: { ...s.env, ANTHROPIC_API_KEY: "placeholder" },
+  });
+  assert.equal(code, 0);
+  assert.equal(report.executor, "claude");
+  assert.equal(fs.existsSync(LIVE_POLICY), before);
+  for (const name of fs.readdirSync(s.dir))
+    assert.ok(["argus-model-policy.json", "bin", "home", "work"].includes(name), name);
 });
 
 // A proxy that refuses connections: the provider request of a probe fails open, offline.
@@ -817,8 +873,11 @@ test("invalid policies and invalid retry requests fail before CLI execution", as
   ]) {
     assert.equal((await run(["claude", "--cwd", s.work, ...args], { env })).code, 64);
   }
+  const invalid = path.join(s.dir, "invalid-policy.json");
+  fs.writeFileSync(invalid, "{}");
   assert.equal(
-    (await run(["claude", "--cwd", s.work], { env: { ...env, ARGUS_MODEL_POLICY: "{}" } })).code,
+    (await run(["claude", "--cwd", s.work], { env: { ...env, ARGUS_MODEL_POLICY_FILE: invalid } }))
+      .code,
     64,
   );
   assert.equal(fs.existsSync(marker), false);
