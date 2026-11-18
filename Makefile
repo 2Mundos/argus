@@ -52,6 +52,7 @@ lint: ## Ruff + Biome + docs validation.
 	$(PNPM) lint
 	python3 scripts/validate_docs.py
 	python3 scripts/check_specs.py
+	python3 scripts/check_paths.py --all
 	python3 scripts/validate_language.py
 	$(UV) run python scripts/check_tests.py --strict
 	$(MAKE) check-engine-transcripts

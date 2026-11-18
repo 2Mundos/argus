@@ -33,6 +33,11 @@ Instructions for AI agents working in this repo.
   (next number, no gaps). Never edit a migration that has shipped. All writes go
   through `Database.write()`; use `tx.now` for time, never a clock read elsewhere,
   and make no network calls inside a write transaction.
+- **Only the task's files.** Scratch text, PR bodies and logs go under `/tmp`, never in
+  the worktree; commit only files the task is about. `scripts/check_paths.py` rejects
+  stray or misplaced new files in pre-push, `argus-task deliver` and CI
+  ([spec](docs/specs/path-gate.spec.md)); the only override is editing
+  `scripts/path_policy.json` in the same PR.
 - **Ruff is the formatting authority** for Python, Biome for TS. `make format` fixes both.
 - **Tool-token cost.** A PR that changes MCP tool descriptions, tool input schemas, or
   `mcp_server.INSTRUCTIONS` puts the `make tool-tokens` difference from `main` in its

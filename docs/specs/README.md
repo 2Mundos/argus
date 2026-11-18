@@ -56,6 +56,7 @@ Every spec in this directory with its status, kept in sync by
 | [Onboarding](onboarding.spec.md) | `implemented` |
 | [OneCLI cleanup: vault entries of terminated NanoClaw instances](onecli-cleanup.spec.md) | `implemented` |
 | [Operations Spec](operations.spec.md) | `implemented` |
+| [Path and type gate](path-gate.spec.md) | `implemented` |
 | [Pool delete](pool-delete.spec.md) | `implemented` |
 | [Pool editor](pool-editor.spec.md) | `implemented` |
 | [Progress milestones](progress-milestones.spec.md) | `implemented` |

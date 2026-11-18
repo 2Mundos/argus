@@ -1,0 +1,161 @@
+{
+  "root_files": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "Makefile",
+    "README.md",
+    "SECURITY.md",
+    "biome.json",
+    "mise.toml",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "pyproject.toml",
+    "tsconfig.base.json",
+    "uv.lock",
+    ".dockerignore",
+    ".editorconfig",
+    ".gitignore",
+    ".gitleaks.toml",
+    ".ignore",
+    ".npmrc"
+  ],
+  "root_message": "{path} is not an allowed file at the repository root. Move it under the directory it belongs to, or delete it; scratch text, PR bodies and logs go under /tmp, never in the worktree. If the root file is intended, add it to root_files in scripts/path_policy.json in this PR",
+  "deny_patterns": [
+    "pr-body*",
+    "*-body.md",
+    ".argus-*",
+    "*.log",
+    "*.tmp",
+    "*.bak",
+    "*.orig",
+    "*.rej",
+    "*.swp",
+    "*~",
+    "nohup.out",
+    ".DS_Store",
+    "core.[0-9]*",
+    "scratch*",
+    "notes*.txt",
+    "output*.txt"
+  ],
+  "deny_dirs": ["__pycache__/", "node_modules/", ".venv/", ".pytest_cache/"],
+  "deny_exceptions": [
+    "integrations/nanoclaw/fixtures/cursor-gateway/scratch-agent-secret-ids.json"
+  ],
+  "deny_message": "{path} is a scratch, log or generated file and does not belong in a change. Remove it from the commit (git rm --cached {path}) and keep such files under /tmp",
+  "extension_message": "{path} has a type that {where} does not hold (allowed: {allowed}). Put the file in the directory for its type, or delete it; if the type is intended there, add it to extensions in scripts/path_policy.json in this PR",
+  "unknown_dir_message": "{path} is in a top-level directory the policy does not list. Move it into an existing directory, or add the directory to extensions in scripts/path_policy.json in this PR",
+  "extensions": {
+    ".githooks/": ["commit-msg", "pre-push"],
+    ".github/": [".md", ".png", ".yaml", ".yml"],
+    "apps/api/": [".bin", ".json", ".py", ".toml"],
+    "apps/api/src/": [".json", ".md", ".py", ".sql"],
+    "apps/dashboard/": [".html", ".ico", ".json", ".png", ".ts", ".webmanifest"],
+    "apps/dashboard/src/": [".css", ".ts", ".tsx"],
+    "assets/": [".ico", ".png", ".svg", ".webmanifest"],
+    "deploy/": [
+      ".api",
+      ".json",
+      ".mjs",
+      ".py",
+      ".release",
+      ".sh",
+      ".yaml",
+      ".yml",
+      "Dockerfile",
+      "argus"
+    ],
+    "docs/": [".gitkeep", ".json", ".md", ".png", ".svg", ".yaml"],
+    "docs/reports/artifacts/": [".json", ".out"],
+    "evals/": [".json", ".md", ".py"],
+    "examples/": [".md", ".py", "Dockerfile"],
+    "integrations/nanoclaw/": [
+      ".Dockerfile",
+      ".apparmor",
+      ".bin",
+      ".cjs",
+      ".engines2-layer",
+      ".json",
+      ".jsonl",
+      ".md",
+      ".mjs",
+      ".mts",
+      ".py",
+      ".sh",
+      ".tools-layer",
+      ".ts",
+      ".txt",
+      "argus-git",
+      "commit-msg"
+    ],
+    "packages/api-client/": [".json", ".md"],
+    "packages/api-client/src/": [".ts"],
+    "packages/core/": [".json", ".py", ".toml"],
+    "packages/core/src/": [".py", "argus-test-services"],
+    "scripts/": [".json", ".jsonl", ".mjs", ".py", ".sh", ".ts"],
+    "skills/": [".md", "argus-orchestrator"]
+  },
+  "names": [
+    {
+      "prefix": "docs/",
+      "pattern": "(README\\.md|logo\\.svg|\\d{4}-\\d{2}-\\d{2}\\.[a-z0-9-]+\\.(draft|research|ref)\\.md|[^/]+/.+)",
+      "message": "{path} breaks the docs naming convention: a file directly in docs/ is README.md, logo.svg or YYYY-MM-DD.name.type.md with type draft, research or ref (docs/README.md). Rename it, or move it into the docs subdirectory it belongs to"
+    },
+    {
+      "prefix": "docs/runbooks/",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}\\.[a-z0-9-]+\\.ref\\.md|\\.gitkeep",
+      "message": "{path} breaks the runbook convention docs/runbooks/YYYY-MM-DD.<slug>.ref.md (lowercase slug). Rename it"
+    },
+    {
+      "prefix": "docs/specs/",
+      "pattern": "[a-z0-9-]+\\.spec\\.md|README\\.md|\\.gitkeep",
+      "message": "{path} breaks the spec convention docs/specs/<slug>.spec.md (lowercase slug, no date). Rename it"
+    },
+    {
+      "prefix": "docs/drafts/",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}\\.[a-z0-9-]+\\.draft\\.md|README\\.md|\\.gitkeep",
+      "message": "{path} breaks the draft convention docs/drafts/YYYY-MM-DD.<slug>.draft.md. Rename it"
+    },
+    {
+      "prefix": "docs/research/",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}\\.[a-z0-9-]+\\.research\\.md|\\.gitkeep",
+      "message": "{path} breaks the research convention docs/research/YYYY-MM-DD.<slug>.research.md. Rename it"
+    },
+    {
+      "prefix": "docs/reports/",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}\\.[a-z0-9-]+\\.ref\\.md|artifacts/.+",
+      "message": "{path} breaks the report convention docs/reports/YYYY-MM-DD.<slug>.ref.md. Rename it"
+    },
+    {
+      "prefix": "docs/postmortems/",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}\\.[a-z0-9-]+\\.ref\\.md",
+      "message": "{path} breaks the postmortem convention docs/postmortems/YYYY-MM-DD.<slug>.ref.md. Rename it"
+    },
+    {
+      "prefix": "docs/releases/",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}\\.v\\d+-\\d+-\\d+\\.ref\\.md",
+      "message": "{path} breaks the release note convention docs/releases/YYYY-MM-DD.vX-Y-Z.ref.md. Rename it"
+    }
+  ],
+  "max_bytes": 524288,
+  "large_files": [
+    "assets/social-preview.png",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/schema.d.ts",
+    "uv.lock"
+  ],
+  "size_message": "{path} is {size} bytes, over the {limit} byte limit for a new file. Do not commit it; if it is a real asset, add its path to large_files in scripts/path_policy.json in this PR",
+  "binary_dirs": [
+    ".github/pr-screenshots/",
+    "apps/api/tests/fixtures/",
+    "apps/dashboard/public/",
+    "assets/",
+    "docs/",
+    "integrations/nanoclaw/fixtures/"
+  ],
+  "binary_message": "{path} is a binary file outside the directories that hold binaries (binary_dirs: {allowed}). Do not commit it; images belong in assets/ or docs/, anything else is generated and stays out of the repo"
+}

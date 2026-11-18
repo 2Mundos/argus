@@ -78,6 +78,12 @@ class Result:
     output: str = field(repr=False, default="")
 
 
+# Always runs, before the pass record is consulted: it judges the commits, not the file
+# contents the record fingerprints (docs/specs/path-gate.spec.md).
+PATH_CHECK = Step("path check", ("python3", "scripts/check_paths.py"), 60)
+PATH_CHECK_ALL = Step("path check", ("python3", "scripts/check_paths.py", "--all"), 60)
+
+
 # ---------------------------------------------------------------- import graph
 
 
@@ -502,21 +508,29 @@ def main(argv: list[str]) -> int:
             Step("make build", ("make", "build"), 900, 2),
         ]
         key = None
+        path_step = PATH_CHECK_ALL
     else:
         changed = changed_files(base)
         if not changed:
             print(f"check-changed: no changes against {base[:12]}; nothing to check")
             return 0
         key = fingerprint(base, changed)
+        path_step = PATH_CHECK
         files = read_graph_files()
         steps = plan(changed, sorted(files), Graph(files), cpus)
         print(f"check-changed: {len(changed)} changed files against {base[:12]}")
         if not steps:
             print("check-changed: no checks apply to these files")
     if plan_only:
-        for s in steps:
+        for s in (path_step, *steps):
             print(f"  {s.name}: {' '.join(s.cmd)[:200]}")
         return 0
+    path_result = run_step(path_step)
+    if path_result.output.strip():
+        print(path_result.output.rstrip(), flush=True)
+    if path_result.status != "ok":
+        print(f"check-changed: FAILED -> {path_step.name}", file=sys.stderr)
+        return 1
     record = passed_file()
     if key and record.exists():
         for line in record.read_text().splitlines():
