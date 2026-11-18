@@ -360,6 +360,10 @@ why you are here.
   only when its pool `capabilities` declare `execution-chains-v1` plus the
   adapter `nanoclaw:harness`/`nanoclaw:executor` capability IDs; PATCH the pool
   `capabilities` and recycle idle instances one at a time (see the runbook)
+- [Independent review gate failures and manual acceptance](runbooks/2026-11-18.independent-review-gate.ref.md) —
+  a parent stuck `in_review` under `review.independent`: reviewer `401 token_expired`,
+  `422` result shape, `no_review_head`; read-only diagnosis, switching the project
+  override, and answering the manual review decision
 
 ### Reports
 
