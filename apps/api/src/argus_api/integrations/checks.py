@@ -27,6 +27,7 @@ MAX_BODY = 64 * 1024
 MCP_PROTOCOL = "2026-07-28"
 LEGACY_PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26")
 MCP_SUCCESS = "MCP response valid; credentials not explicitly rejected."
+MCP_OAUTH = "MCP server requires OAuth sign-in, which Argus does not support."
 REVIEWS = "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
 _THIS_NETWORK = ipaddress.ip_network("0.0.0.0/8")
 
@@ -76,6 +77,64 @@ class _Refused(Exception):
         self.status = status
 
 
+class _OAuthRequired(Exception):
+    """The server answered 401/403 with an RFC 9728 OAuth challenge instead of
+    rejecting the token: sign-in, which Argus does not offer, not a bad token."""
+
+
+def _split_challenges(value: str) -> list[str]:
+    """Split a WWW-Authenticate header on commas outside quoted strings, where a
+    backslash escapes the next character (RFC 7230 quoted-string)."""
+    parts: list[str] = []
+    current: list[str] = []
+    quoted = escaped = False
+    for ch in value:
+        if escaped:
+            escaped = False
+        elif quoted and ch == "\\":
+            escaped = True
+        elif ch == '"':
+            quoted = not quoted
+        elif ch == "," and not quoted:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def oauth_challenge(value: str | None) -> bool:
+    """Whether a WWW-Authenticate value carries an RFC 9728 OAuth challenge: a
+    Bearer challenge naming the protected-resource metadata URL. A bare Bearer
+    challenge (or none) means the token itself was rejected.
+
+    Mirrored by `oauthChallenge` in `integrations/nanoclaw/argus-integrations-mcp.ts`;
+    keep their test cases in step."""
+    if not value:
+        return False
+    scheme: str | None = None
+    params: set[str] = set()
+    for raw in _split_challenges(value):
+        part = raw.strip()
+        if not part:
+            continue
+        token, space, rest = part.partition(" ")
+        if space and "=" not in token:
+            # A new challenge: `Scheme params...`; continuation params carry no
+            # scheme of their own.
+            if scheme == "bearer" and "resource_metadata" in params:
+                return True
+            scheme, params = token.lower(), set()
+            part = rest.strip()
+            if not part:
+                continue
+        name, eq, _ = part.partition("=")
+        if eq:
+            params.add(name.strip().lower())
+    return scheme == "bearer" and "resource_metadata" in params
+
+
 def internal_address(host: str) -> bool:
     """Loopback, link-local (cloud metadata), unspecified, multicast or reserved,
     IPv4-mapped forms included: never a target. Private ranges are allowed: an
@@ -116,7 +175,7 @@ class _Pinned:
 
     async def send(
         self, method: str, headers: dict[str, str], body: dict | None = None
-    ) -> tuple[int, bytes, str]:
+    ) -> tuple[int, bytes, str, str | None]:
         request = self.client.build_request(
             method,
             self.url,
@@ -143,7 +202,15 @@ class _Pinned:
                         pass
                     else:
                         break
-            return res.status_code, data, content_type
+            # The challenge header only decides between two fixed details; it is
+            # never quoted into one.
+            www_auth = res.headers.get("www-authenticate")
+            return (
+                res.status_code,
+                data,
+                content_type,
+                (www_auth if isinstance(www_auth, str) else None),
+            )
         finally:
             await res.aclose()
 
@@ -184,6 +251,8 @@ async def check(
             if kind == "mcp"
             else "invalid Kubernetes authorization response"
         )
+    except _OAuthRequired:
+        return "failed", MCP_OAUTH
     except _Refused as exc:
         if exc.status in (401, 403):
             return "failed", f"token rejected (HTTP {exc.status})"
@@ -282,7 +351,7 @@ async def _mcp(pinned: _Pinned, token: str) -> Result:
             }
         },
     }
-    status, data, content_type = await pinned.send("POST", headers, body)
+    status, data, content_type, www_auth = await pinned.send("POST", headers, body)
     # Streamable HTTP's era fallback: a legacy server commonly rejects modern
     # metadata or an unknown method with 400/404/405. Authentication rejection and
     # recognized modern errors must never trigger a legacy request.
@@ -290,6 +359,8 @@ async def _mcp(pinned: _Pinned, token: str) -> Result:
         legacy_version = LEGACY_PROTOCOLS[0]
     else:
         if not 200 <= status < 300:
+            if status in (401, 403) and oauth_challenge(www_auth):
+                raise _OAuthRequired
             raise _Refused(status)
         result = _rpc(data, content_type, body["id"]).get("result")
         if not isinstance(result, dict) or not isinstance(
@@ -324,8 +395,10 @@ async def _mcp(pinned: _Pinned, token: str) -> Result:
             "clientInfo": {"name": "argus", "version": "1"},
         },
     }
-    status, data, content_type = await pinned.send("POST", headers, body)
+    status, data, content_type, www_auth = await pinned.send("POST", headers, body)
     if not 200 <= status < 300:
+        if status in (401, 403) and oauth_challenge(www_auth):
+            raise _OAuthRequired
         raise _Refused(status)
     result = _rpc(data, content_type, body["id"]).get("result")
     if not isinstance(result, dict) or not isinstance(result.get("capabilities"), dict):
@@ -361,7 +434,7 @@ async def _kubernetes(
             "kind": "SelfSubjectAccessReview",
             "spec": {"resourceAttributes": attrs},
         }
-        status, data, _ = await pinned.send("POST", headers, review)
+        status, data, _, _ = await pinned.send("POST", headers, review)
         if not 200 <= status < 300:
             raise _Refused(status)
         try:

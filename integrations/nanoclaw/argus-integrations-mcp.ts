@@ -29,6 +29,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { networkInterfaces } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import tls from "node:tls";
 import type {
@@ -38,7 +39,12 @@ import type {
   McpServerEntry,
   McpTransport,
 } from "./argus-integrations.js";
-import { internalAddress, type Lookup } from "./argus-integrations-route.js";
+import {
+  type Interfaces,
+  internalAddress,
+  type Lookup,
+  routeBindAddress,
+} from "./argus-integrations-route.js";
 
 /**
  * How long a grant lives unless renewed: each heartbeat recheck that keeps the install
@@ -54,6 +60,60 @@ const MAX_REQUEST = 1024 * 1024;
 const MAX_MESSAGE = 8 * 1024 * 1024;
 /** JSON-RPC error code of every policy refusal (the implementation-defined range). */
 export const POLICY_ERROR = -32003;
+
+/**
+ * Whether a WWW-Authenticate value carries an RFC 9728 OAuth challenge: a
+ * Bearer challenge naming the protected-resource metadata URL. A bare Bearer
+ * challenge (or none) means the token itself was rejected.
+ *
+ * Mirrored by `oauth_challenge` in `apps/api/src/argus_api/integrations/checks.py`;
+ * keep their test cases in step.
+ */
+export function oauthChallenge(value: string | string[] | undefined): boolean {
+  if (!value) return false;
+  const text = Array.isArray(value) ? value.join(", ") : value;
+  // Split on commas outside quoted strings, where a backslash escapes the next
+  // character (RFC 7230 quoted-string).
+  const parts: string[] = [];
+  let current = "";
+  let quoted = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (escaped) escaped = false;
+    else if (quoted && ch === "\\") escaped = true;
+    else if (ch === '"') quoted = !quoted;
+    else if (ch === "," && !quoted) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  parts.push(current);
+  let scheme: string | null = null;
+  let params = new Set<string>();
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part) continue;
+    const space = part.indexOf(" ");
+    const head = space < 0 ? part : part.slice(0, space);
+    if (space >= 0 && !head.includes("=")) {
+      // A new challenge: `Scheme params...`; continuation params that follow
+      // carry no scheme of their own.
+      if (scheme === "bearer" && params.has("resource_metadata")) return true;
+      scheme = head.toLowerCase();
+      params = new Set();
+      const rest = part.slice(space + 1).trim();
+      if (!rest) continue;
+      const eq = rest.indexOf("=");
+      if (eq >= 0) params.add(rest.slice(0, eq).trim().toLowerCase());
+    } else {
+      const eq = part.indexOf("=");
+      if (eq >= 0) params.add(part.slice(0, eq).trim().toLowerCase());
+    }
+  }
+  return scheme === "bearer" && params.has("resource_metadata");
+}
 const MODERN = "2026-07-28";
 const LEGACY = "2025-03-26";
 
@@ -231,8 +291,9 @@ export interface McpBrokerOptions {
   bindHost: () => Promise<string | null>;
   /** A fixed port (for a host firewall rule), or 0 for any free port. */
   port?: number;
-  /** The host name sessions use for the listener in their MCP config. */
-  publicHost?: string;
+  /** The host sessions use for the listener in their MCP config; a function is
+   * read when a grant is built, after listening, so it can name the bound host. */
+  publicHost?: string | (() => string);
   lookup?: Lookup;
   /** Trust roots for upstream TLS: the bundled public roots unless a test gives its own. */
   ca?: string | readonly string[];
@@ -257,7 +318,9 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
   const grantTtlMs = opts.grantTtlMs ?? GRANT_TTL_MS;
   const streamMaxMs = opts.streamMaxMs ?? STREAM_MAX_MS;
   const probeTimeoutMs = opts.probeTimeoutMs ?? MCP_PROBE_TIMEOUT_MS;
-  const publicHost = opts.publicHost ?? "host.docker.internal";
+  const publicHost = opts.publicHost;
+  const host = () =>
+    typeof publicHost === "function" ? publicHost() : (publicHost ?? "host.docker.internal");
   const grants = new Map<string, Grant>();
   let server: http.Server | null = null;
   let listening: Promise<{ port: number }> | null = null;
@@ -702,14 +765,18 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
           r.end(data);
         },
       );
-    const refuse = (status: number): never => {
+    const refuse = (status: number, res?: http.IncomingMessage): never => {
+      const oauth =
+        (status === 401 || status === 403) && oauthChallenge(res?.headers["www-authenticate"]);
       throw new McpRefusal(
         "env_integration_unavailable",
-        status === 401 || status === 403
-          ? `${name}: the MCP server refused the credential (HTTP ${status})`
-          : status >= 300 && status < 400
-            ? `${name}: the MCP server redirected (HTTP ${status}); redirects are not followed`
-            : `${name}: the MCP server answered HTTP ${status}`,
+        oauth
+          ? `${name}: the MCP server requires OAuth sign-in, which Argus does not support`
+          : status === 401 || status === 403
+            ? `${name}: the MCP server refused the credential (HTTP ${status})`
+            : status >= 300 && status < 400
+              ? `${name}: the MCP server redirected (HTTP ${status}); redirects are not followed`
+              : `${name}: the MCP server answered HTTP ${status}`,
       );
     };
     const json = {
@@ -724,7 +791,7 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
       );
       discover.res.destroy();
       if (discover.status >= 200 && discover.status < 300) return "http";
-      if (![400, 404, 405].includes(discover.status)) refuse(discover.status);
+      if (![400, 404, 405].includes(discover.status)) refuse(discover.status, discover.res);
       const init = await ask("POST", json, {
         jsonrpc: "2.0",
         id: "argus-probe",
@@ -746,11 +813,11 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
           );
         return "http";
       }
-      if (![400, 404, 405].includes(init.status)) refuse(init.status);
+      if (![400, 404, 405].includes(init.status)) refuse(init.status, init.res);
       const stream = await ask("GET", { accept: "text/event-stream" });
       if (stream.status < 200 || stream.status >= 300) {
         stream.res.destroy();
-        refuse(stream.status);
+        refuse(stream.status, stream.res);
       }
       if (stream.type !== "text/event-stream") {
         stream.res.destroy();
@@ -858,7 +925,7 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
     };
     extend(grant);
     grants.set(grant.key, grant);
-    return { type: transport, url: `http://${publicHost}:${port}/mcp/${secret}` };
+    return { type: transport, url: `http://${host()}:${port}/mcp/${secret}` };
   }
 
   return {
@@ -919,18 +986,47 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
 class Blocked extends Error {}
 
 /**
- * The production broker: listen on the docker bridge, which sessions reach as
- * `host.docker.internal`, on `ARGUS_INTEGRATION_MCP_PORT` or any free port. The
- * operator's environment sets the port only; nothing turns the checks off.
+ * The production broker, on `ARGUS_INTEGRATION_MCP_PORT` or any free port. Without
+ * `ARGUS_INTEGRATION_ROUTE_BIND` it listens on the docker bridge, which sessions
+ * reach as `host.docker.internal`. With the bind set (the socket-mode topology,
+ * where sessions run on the outer daemon) it listens at that address instead, with
+ * no `docker0` fallback, and the grant URLs name the bind address literally, which
+ * sessions on the operator's network resolve without DNS. The operator's
+ * environment sets the port and the bind only; nothing turns the checks off.
  */
 export function nanoclawMcpBroker(
   env: NodeJS.ProcessEnv,
   onBlocked?: McpBrokerOptions["onBlocked"],
+  interfaces: Interfaces = networkInterfaces,
 ): McpBroker {
   const raw = env.ARGUS_INTEGRATION_MCP_PORT?.trim();
+  const port = raw ? (/^\d{1,5}$/.test(raw) ? Number(raw) : -1) : 0;
+  const bind = env.ARGUS_INTEGRATION_ROUTE_BIND;
+  if (bind === undefined)
+    return createMcpBroker({
+      bindHost: async () => (await import("./argus-local-forward.js")).dockerBridgeIpv4(interfaces),
+      port,
+      onBlocked,
+    });
+  // Resolved once and shared by the listener and the grant URLs, so the advertised
+  // host is always the bound one even if the interface set changes in between. An
+  // invalid bind never reaches a grant URL because listening fails closed first.
+  let resolved: string | null | undefined;
+  const host = () => {
+    if (resolved === undefined) resolved = routeBindAddress(bind.trim(), interfaces);
+    return resolved;
+  };
   return createMcpBroker({
-    bindHost: async () => (await import("./argus-local-forward.js")).dockerBridgeIpv4(),
-    port: raw ? (/^\d{1,5}$/.test(raw) ? Number(raw) : -1) : 0,
+    bindHost: async () => {
+      const address = host();
+      if (address) return address;
+      throw new McpRefusal(
+        "env_integration_route_unavailable",
+        "ARGUS_INTEGRATION_ROUTE_BIND does not name one IPv4 address of a local non-internal interface",
+      );
+    },
+    publicHost: () => host() ?? "unresolved",
+    port,
     onBlocked,
   });
 }

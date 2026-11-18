@@ -35,7 +35,13 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_CHANGED = 3; // re-reads after a rotation raced the fetch
 /** Providers whose sessions the attempt's kubeconfig can be confined to (spec 3.6). */
-const SUPPORTED_PROVIDERS = new Set(["anthropic"]);
+// Harness providers the channel installs for without fetching first. The API
+// enforces the per-kind rule at credential fetch (spec 3.6 delivery binding):
+// MCP servers additionally need the Claude harness session, so the API refuses
+// them for Codex while the kubeconfig is CLI-level and goes to every harness.
+// A delegated executor is confined only for Claude.
+const ENGINE_PROVIDERS = new Set(["anthropic", "local", "custom", "openai"]);
+const EXECUTOR_PROVIDERS = new Set(["anthropic"]);
 /** The prefix of the session MCP servers this module owns; nothing else is touched. */
 export const MCP_SERVER_PREFIX = "argus-integration-";
 const TOOL = /^[A-Za-z0-9_.\/-]{1,128}$/;
@@ -646,10 +652,15 @@ export async function installTaskIntegrations(
       ["executor", opts.executorProvider],
     ] as const) {
       if (role === "executor" && provider === null) continue;
-      if (!provider || !SUPPORTED_PROVIDERS.has(provider))
+      const allowed = role === "engine" ? ENGINE_PROVIDERS : EXECUTOR_PROVIDERS;
+      const want =
+        role === "engine"
+          ? "a harness engine (anthropic, local, custom or openai)"
+          : "a Claude executor";
+      if (!provider || !allowed.has(provider))
         throw new IntegrationError(
           "env_integration_unsupported",
-          `Task integrations need a Claude ${role}; this worker's is ${provider ?? "unknown"}`,
+          `Task integrations need ${want}; this worker's ${role} is ${provider ?? "unknown"}`,
         );
     }
     const { creds } = await fetchAll(source, taskId, attempt);
@@ -823,6 +834,8 @@ export function integrationLines(installed: InstalledIntegrations): string[] {
       ),
       "Only these tools work, and only tool calls (no resources or prompts). A call Argus denies",
       '("denied by Argus policy") is final: do not retry it or reach the server another way.',
+      "These servers reach only this session: a delegated run does not inherit them,",
+      "so call their tools here instead of delegating that work.",
       "If the tools are missing or every call fails, stop and reply FAIL: with the error.",
     );
   return lines;

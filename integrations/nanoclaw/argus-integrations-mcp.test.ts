@@ -7,7 +7,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { McpRoute } from "./argus-integrations.js";
-import { createMcpBroker, type McpBroker, POLICY_ERROR } from "./argus-integrations-mcp.js";
+import {
+  createMcpBroker,
+  type McpBroker,
+  nanoclawMcpBroker,
+  oauthChallenge,
+  POLICY_ERROR,
+} from "./argus-integrations-mcp.js";
 
 /**
  * The MCP broker against real TLS: fake MCP servers (HTTPS on loopback, a test CA, fake
@@ -56,6 +62,8 @@ const behaviour = {
   /** An HTTP status every request gets instead of an answer. */
   status: 0,
   location: "",
+  /** A WWW-Authenticate challenge sent with a 401/403 status. */
+  wwwAuthenticate: "",
   /** Legacy: the endpoint the server announces. */
   endpoint: "/messages?sessionId=s1",
 };
@@ -66,6 +74,7 @@ function reset() {
   behaviour.discover = true;
   behaviour.status = 0;
   behaviour.location = "";
+  behaviour.wwwAuthenticate = "";
   behaviour.endpoint = "/messages?sessionId=s1";
 }
 
@@ -117,7 +126,10 @@ function modern(seen: Seen[]) {
       body: parsed,
     });
     if (behaviour.status) {
-      res.writeHead(behaviour.status, behaviour.location ? { location: behaviour.location } : {});
+      res.writeHead(behaviour.status, {
+        ...(behaviour.location ? { location: behaviour.location } : {}),
+        ...(behaviour.wwwAuthenticate ? { "www-authenticate": behaviour.wwwAuthenticate } : {}),
+      });
       return res.end();
     }
     if (req.url !== "/mcp") return res.writeHead(404).end();
@@ -595,6 +607,17 @@ describe("opening", () => {
     });
   });
 
+  it("reports an OAuth challenge as unsupported, not as a rejected credential", async () => {
+    behaviour.status = 401;
+    behaviour.wwwAuthenticate =
+      'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"';
+    expect(await open(broker())).toMatchObject({
+      ok: false,
+      reason: "env_integration_unavailable",
+      error: "radar: the MCP server requires OAuth sign-in, which Argus does not support",
+    });
+  });
+
   it("refuses a read-only server without an allowlist", async () => {
     expect(await open(broker(), route({ tools: [], tool_policy: "allowlist" }))).toMatchObject({
       ok: false,
@@ -758,8 +781,109 @@ describe("legacy HTTP+SSE", () => {
   });
 });
 
+describe("oauthChallenge", () => {
+  it.each([
+    [undefined, false],
+    ["Bearer", false],
+    ["Bearer realm=", false],
+    ['Bearer realm="x", error="invalid_token"', false],
+    [
+      'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
+      true,
+    ],
+    ['Basic realm="x", Bearer resource_metadata="https://m.example/x"', true],
+    ['bearer resource_metadata="https://m.example/x"', true],
+    ['Bearer error="a, b", resource_metadata="https://m.example/x"', true],
+    ['Bearer error_description="resource_metadata is missing", realm="x"', false],
+    // A backslash escapes the next character: the comma stays inside the quoted
+    // value and does not start a new challenge.
+    ['Bearer error="a \\"one, two three\\"", resource_metadata="https://m.example/x"', true],
+    ['Bearer resource_metadata="https://m.example/x?a=\\"1,2\\""', true],
+  ])("needs a Bearer metadata challenge (%s)", (header, oauth) => {
+    expect(oauthChallenge(header as string | undefined)).toBe(oauth);
+  });
+});
+
 describe("redaction", () => {
   it("keeps the token out of the process environment", () => {
     expect(JSON.stringify(process.env)).not.toContain(TOKEN);
   });
+});
+
+describe("nanoclawMcpBroker topology", () => {
+  // os.networkInterfaces() throws where interface enumeration is blocked; then
+  // the live-bind case below skips, like a host with no non-loopback IPv4.
+  const HOST_IP = (() => {
+    try {
+      return (
+        Object.values(os.networkInterfaces())
+          .flat()
+          .find((a) => a && a.family === "IPv4" && !a.internal)?.address ?? null
+      );
+    } catch {
+      return null;
+    }
+  })();
+  const nic = (address: string) =>
+    ({ address, family: "IPv4", internal: false }) as os.NetworkInterfaceInfo;
+  const NICS = () => ({ docker0: [nic("172.17.0.1")], session0: [nic("172.30.0.9")] });
+  const someRoute = (): McpRoute => ({
+    integration_id: "mcp-0",
+    name: "radar",
+    url: "https://127.0.0.1:1/mcp",
+    tools: ["search"],
+    tool_policy: "allowlist",
+    token: TOKEN,
+    expires_at: null,
+    authorize: async () => true,
+  });
+  const BIND_ERROR =
+    "ARGUS_INTEGRATION_ROUTE_BIND does not name one IPv4 address of a local non-internal interface";
+
+  it.each([
+    [
+      "a set ARGUS_INTEGRATION_ROUTE_BIND that is not local never falls back to docker0",
+      { ARGUS_INTEGRATION_ROUTE_BIND: "172.30.0.6" },
+      BIND_ERROR,
+    ],
+    [
+      "a wildcard ARGUS_INTEGRATION_ROUTE_BIND",
+      { ARGUS_INTEGRATION_ROUTE_BIND: "0.0.0.0" },
+      BIND_ERROR,
+    ],
+    ["an empty ARGUS_INTEGRATION_ROUTE_BIND", { ARGUS_INTEGRATION_ROUTE_BIND: "" }, BIND_ERROR],
+  ])("fails closed with no listener: %s", async (_what, env, error) => {
+    const b = nanoclawMcpBroker(env, undefined, NICS);
+    brokers.push(b);
+    expect(await b.open({ taskId: TASK, attempt: 1 }, [someRoute()])).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error,
+    });
+  });
+
+  it("socket mode without ARGUS_INTEGRATION_ROUTE_BIND and no docker0 fails closed", async () => {
+    const { docker0: _dropped, ...noBridge } = NICS();
+    const b = nanoclawMcpBroker({}, undefined, () => noBridge);
+    brokers.push(b);
+    expect(await b.open({ taskId: TASK, attempt: 1 }, [someRoute()])).toEqual({
+      ok: false,
+      reason: "env_integration_route_unavailable",
+      error: "this worker has no docker bridge address for the MCP broker",
+    });
+  });
+
+  it.skipIf(!HOST_IP)(
+    "a set bind gets past listening to the probe: an undialable server fails there, not at the bind",
+    async () => {
+      const b = nanoclawMcpBroker({ ARGUS_INTEGRATION_ROUTE_BIND: HOST_IP! });
+      brokers.push(b);
+      const got = await b.open({ taskId: TASK, attempt: 1 }, [someRoute()]);
+      expect(got).toEqual({
+        ok: false,
+        reason: "env_integration_route_unavailable",
+        error: "radar: the server resolves to a loopback or link-local address",
+      });
+    },
+  );
 });

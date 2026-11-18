@@ -94,7 +94,8 @@ function Choices({
 }
 
 const HELP =
-  "Claude engines only. Each attempt gets an ephemeral kubeconfig pinned to each namespace, and a" +
+  "Kubernetes works on Claude-harness (anthropic, local, custom) and Codex (openai) engines; MCP on Claude-harness engines only." +
+  " Each attempt gets an ephemeral kubeconfig pinned to each namespace, and a" +
   " broker URL per MCP server that passes only the listed tools; the session never sees a token.";
 
 /**
@@ -124,7 +125,8 @@ export function NewTaskIntegrations({
 
 /**
  * The task's opt-in to Kubernetes and MCP connections of its project (integrations spec
- * 3.6). Each attempt gets a kubeconfig or broker URL per selection, Claude engines only.
+ * 3.6). Each attempt gets a kubeconfig (Claude-harness and Codex engines) or
+ * broker URL (Claude-harness engines) per selection.
  */
 export function TaskIntegrations({ task, onSaved }: { task: Task; onSaved: () => void }) {
   const items = useProjectIntegrations(task.project);

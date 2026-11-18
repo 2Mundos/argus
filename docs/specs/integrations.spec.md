@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-12
-updated: 2026-11-14
+updated: 2026-11-18
 ---
 
 # Integrations: MCP connections and Kubernetes clusters
@@ -113,7 +113,11 @@ judgment, not something Argus checks.
 
 **OAuth is not available.** The MCP authorization flow needs a registered redirect
 URL, a refresh loop, and re-delivery of refreshed tokens to an attempt that is
-already running; none exists. The screen does not offer it.
+already running; none exists. The screen does not offer it. A server that answers
+401/403 with an RFC 9728 OAuth challenge (a `Bearer` challenge naming the
+protected-resource metadata URL) therefore fails validation and the broker probe
+as OAuth-unsupported — "requires OAuth sign-in, which Argus does not support" —
+never as a rejected credential; any other 401/403 is a rejected credential.
 
 ## 3.3 Kubernetes clusters
 
@@ -207,7 +211,9 @@ HTTP logging remains enabled.
   Success detail is **"MCP response valid; credentials not explicitly rejected."**
   A public server or one ignoring Authorization can return a valid response, so
   this does not prove token acceptance or authorization. `401`/`403` means the
-  credentialed request was rejected. No upstream text is copied into details.
+  credentialed request was rejected, unless the response carries an RFC 9728
+  OAuth challenge (3.2), which fails as OAuth-unsupported instead. No upstream
+  text is copied into details.
 - **Kubernetes**: `SelfSubjectAccessReview`s with the token, verifying TLS with
   `ca_data` (else the system store). It must be allowed to `list pods` in the
   configured target namespace. The following checks omit `namespace` and must
@@ -271,8 +277,11 @@ checks in order:
 
 1. The integration is selected by the task and of the task's project (`403
    integration_not_selected` otherwise).
-2. The worker's leased engine account, and its leased executor if any, are Claude
-   (`anthropic`); otherwise `409 integration_engine_unsupported`.
+2. The worker's leased engine account runs a supported harness for the
+   integration's kind — Kubernetes: the Claude harness (`anthropic`, `local`,
+   `custom`) or Codex (`openai`); MCP: the Claude harness only — and its leased
+   executor, if any, is Claude (`anthropic`);
+   otherwise `409 integration_engine_unsupported`.
 3. Readiness: `revoked` (`409 integration_revoked`), `expired` (`409
    integration_expired`), an MCP `tool_policy` of `unknown`, from an edit after
    selection (`409 integration_tools_unknown`; readiness `tools_unknown`),
@@ -342,13 +351,17 @@ service-account token there too.
 
 | Engine | Kubernetes integration | MCP integration |
 | --- | --- | --- |
-| Claude (NanoClaw harness) | supported | supported: the session's MCP config |
-| Claude executor via `argus-delegate` | supported: gets the attempt's kubeconfig as `KUBECONFIG` | delivered to the session; whether a delegated run sees the session's MCP servers is unverified (Open items) |
-| Codex, Cursor, Copilot, custom, local (as engine or executor) | not supported: delivery refuses and the task blocks with `env_integration_unsupported`; `argus-delegate` refuses a non-Claude executor when a kubeconfig is installed and strips any inherited `KUBECONFIG` | not supported: the same refusal and block |
+| Claude harness (`anthropic`, `local` or `custom` provider: the same session) | supported | supported: the session's MCP config |
+| Codex harness (`openai` provider) | supported: the kubeconfig is CLI-level and reads the same on every harness; a paired Codex executor still blocks at delegation (`integration_engine_unsupported`), since only a Claude executor receives `KUBECONFIG` | not supported: MCP servers need the Claude harness session to consume the session config, which is unverified for Codex, so delivery refuses and the task blocks with `env_integration_unsupported` |
+| Claude executor via `argus-delegate` | supported: gets the attempt's kubeconfig as `KUBECONFIG` | harness-session-only: the session's MCP config is applied, but a delegated run does not inherit it (the delegate spawn carries no MCP configuration and reads no grant), so MCP tools must be called from the session, not delegated |
+| Cursor, Copilot engines; any non-Claude executor | not supported: delivery refuses and the task blocks with `env_integration_unsupported`; `argus-delegate` refuses a non-Claude executor when a kubeconfig is installed and strips any inherited `KUBECONFIG` | not supported: the same refusal and block |
 | Built-in orchestrator | none | none |
 
-The channel refuses as soon as the leased executor is not Claude, even if the task
-would not have delegated.
+A task's selections are all-or-nothing: one undeliverable selection blocks the
+attempt and installs none, so a Codex worker whose task selects both a Kubernetes
+and an MCP integration gets neither (the MCP credential fetch refuses). The channel
+refuses as soon as the leased executor is not Claude, even if the task would not
+have delegated.
 
 **Limits.** The model's session can read the file: the [command
 guard](command-guard.spec.md) blocks Bash commands that print, copy or decode it
@@ -446,15 +459,19 @@ let the sessions' network reach the port (see the
 
 **MCP broker.** An MCP token never enters a session: no environment variable, file,
 prompt, task text, log or artifact holds it. The channel keeps it in the memory of
-its MCP broker (`argus-integrations-mcp.ts`), a plain-HTTP listener on the host's
-`docker0` address, at `ARGUS_INTEGRATION_MCP_PORT` or a free port, and gives the
-session a server URL instead. It does not read `ARGUS_INTEGRATION_ROUTE_BIND`: its
-grant URLs name `host.docker.internal`, so a socket-mode worker still has no broker,
-and its MCP tasks block with `env_integration_route_unavailable` (Open items):
+its MCP broker (`argus-integrations-mcp.ts`), a plain-HTTP listener, at
+`ARGUS_INTEGRATION_MCP_PORT` or a free port, and gives the
+session a server URL instead. Without `ARGUS_INTEGRATION_ROUTE_BIND` it listens on
+the host's `docker0` address and its grant URLs name `host.docker.internal`. With
+the bind set (the socket-mode topology, where sessions run on the outer daemon) it
+listens at that address instead, with no `docker0` fallback, and the grant URLs name
+the bind address literally. An invalid bind fails closed with
+`env_integration_route_unavailable` and no listener, exactly as the Kubernetes route:
 
 - **Grants.** For each selected MCP integration the channel opens a grant bound to
   the task, the attempt and the integration: 32 random bytes in the path of
-  `http://host.docker.internal:<port>/mcp/<grant>`. The broker keeps only its SHA-256.
+  `http://<broker-host>:<port>/mcp/<grant>`, where `<broker-host>` is
+  `host.docker.internal` without the bind and the bind address with it. The broker keeps only its SHA-256.
   The session's MCP config (NanoClaw's `mcp_servers` for the worker's group) gets one
   server named `argus-integration-<name>` per grant, of type `http` (Streamable HTTP)
   or `sse` (legacy HTTP+SSE), whichever the probe found; the channel replaces only
@@ -503,13 +520,16 @@ and its MCP tasks block with `env_integration_route_unavailable` (Open items):
 Before granting, the broker probes each server with the token: modern
 `server/discover`, else legacy `initialize` (whose session it deletes), else an
 HTTP+SSE `GET` that must announce a same-origin endpoint. A `401`/`403`, a redirect
-or neither transport blocks with `env_integration_unavailable`; no bridge, a bad
-port, an unresolvable or internal host, or a refused or timed-out connection with
-`env_integration_route_unavailable`; an untrusted certificate with
-`env_integration_gateway_intercepts`. Either leaves no grant and no session server.
+or neither transport blocks with `env_integration_unavailable`. An RFC 9728 OAuth
+challenge blocks as OAuth-unsupported instead of a refused credential (3.2).
+No bridge, a bad port, an unresolvable or internal host, or a refused or timed-out
+connection blocks with `env_integration_route_unavailable`; an untrusted certificate
+with `env_integration_gateway_intercepts`. Either leaves no grant and no session server.
 
-The worker prompt lists each server and its allowed tools (`mcp__<server>__<tool>`)
-and says a policy denial is final: do not retry it or reach the server another way;
+The worker prompt lists each server and its allowed tools (`mcp__<server>__<tool>`),
+never the grant URL, and says a policy denial is final: do not retry it or reach
+the server another way; that the servers reach only the session and a delegated
+run does not inherit them, so their tools must be called from the session;
 if the tools are missing or every call fails, stop and reply `FAIL:`.
 
 **Limits of the broker.** A grant URL is a capability for its attempt: whoever on
@@ -549,7 +569,8 @@ record get fixed messages. MCP rows show their tool policy: the allowlist size,
 disabled. Revoked rows remain visible without these actions. Each row shows its
 expiry; the add and rotate forms take an optional expiry in local time. The screen
 shows secret-store readiness and explains that connections reach only attempts of
-tasks that select them (Claude engines): a Kubernetes one as a kubeconfig, an MCP
+tasks that select them (Kubernetes: Claude-harness and Codex engines; MCP:
+Claude-harness engines): a Kubernetes one as a kubeconfig, an MCP
 one as a broker URL that adds the token and passes only allowed tools, so the
 session never sees the token; that removing access in Argus does not revoke the
 token; and that OAuth is unavailable. It links to Accounts, Settings and worker pools without
@@ -570,11 +591,15 @@ project's active integrations, none chosen by default, and sends the choice as
 
 ## Open items
 
-- MCP OAuth sign-in (3.2).
-- Kubernetes and MCP delivery for engines other than Claude (3.6 engine matrix).
-- MCP routing for socket-mode workers (3.6 MCP broker): the broker would need the
-  bind address and a grant URL host that sessions on the operator's network
-  resolve.
+- MCP delivery for the Codex (`openai`) harness: NanoClaw's Codex provider
+  (upstream `providers` branch) writes the session's MCP servers into Codex's
+  `config.toml`, but only `http` (Streamable HTTP) entries map; `sse` entries
+  have no Codex representation. Enabling it needs a per-transport refusal for
+  `sse` under Codex plus a live Codex-harness receipt, neither of which exists.
+  Cursor and Copilot providers are executor-only (never harnesses) and non-Claude
+  executors are deliberately refused (the delegate carries no MCP configuration
+  and only a Claude executor receives `KUBECONFIG`); those are decided boundaries,
+  not open work.
 - Verify the socket-mode Kubernetes route on an installed socket host: a sibling
   session on the dedicated network running kubectl through it against a fake API
   with a private CA. No such receipt exists yet (it needs a container daemon). The
@@ -584,8 +609,9 @@ project's active integrations, none chosen by default, and sends the choice as
 - Verify the MCP broker live on a worker, after the operator enables it: that the
   session's MCP client reaches the grant URL directly rather than through the OneCLI
   gateway (`HTTP_PROXY`/`NO_PROXY`; through the gateway it would see the grant URL,
-  not the token), that NanoClaw applies `mcp_servers` to a session spawned after
-  preflight, and whether a Claude executor's delegated run sees those servers.
+  not the token) and that NanoClaw applies `mcp_servers` to a session spawned after
+  preflight. Delegated runs are out of scope for that check: they inherit no MCP
+  servers by construction (3.6 engine matrix).
 - Verify authentication and tool scope live against the MCP server an operator
   first connects (for example `https://agent-gateway.radar2m.com/mcp`): neither has
   been tested, and Argus claims no particular upstream scope for it (in particular
@@ -624,7 +650,10 @@ project's active integrations, none chosen by default, and sends the choice as
   positive controls and indeterminate negative-probe responses. MCP coverage
   includes modern JSON/SSE, negotiated legacy versions and preference order,
   unknown-method fallback, initialize headers and exact-version validation,
-  authentication and modern errors, malformed responses, and credential echoes through real HTTP core tracing with
+  authentication and modern errors, an RFC 9728 OAuth challenge failing as
+  OAuth-unsupported (never as a rejected credential; bare `401` still is; modern
+  discovery and the legacy `initialize` fallback, with backslash-escaped quotes in
+  the header), malformed responses, and credential echoes through real HTTP core tracing with
   an in-memory network backend. Store readiness, missing references and deterministic
   cancellation immediately before/after COMMIT cover database/secret/audit
   consistency. Edits cover the kept credential and id, `stale_version`, revoked and
@@ -644,7 +673,9 @@ project's active integrations, none chosen by default, and sends the choice as
   confirmation and unavailable actions on revoked records.
 - Delivery: `uv run pytest apps/api/tests/test_integration_delivery.py` covers
   selection validation (MCP included; unknown, foreign, revoked and `unknown`-policy
-  ids refused) and versioning, the lease binding, the engine matrix, every readiness
+  ids refused) and versioning, the lease binding, the engine matrix (Kubernetes
+  delivered to `openai` as well as Claude-harness engines, MCP refused for
+  `openai`, non-Claude executors refused for both kinds), every readiness
   refusal (`tools_unknown` included), the MCP credential shape, the version race,
   config-edit fencing and the secret-free audit event.
 - MCP broker: vitest `argus-integrations-mcp.test.ts` runs the broker against fake
@@ -653,11 +684,19 @@ project's active integrations, none chosen by default, and sends the choice as
   filtering, allowed and denied calls (batches included), denied methods, dropped
   server requests, pinning blocks for a changed schema or tool set, ignored
   annotation changes, path, query, method and header widening, redirects and `401`
-  as `502`, probe failures and their reasons, authorization per request,
+  as `502`, probe failures and their reasons (an OAuth challenge probes as
+  OAuth-unsupported, a bare `401` as a refused credential), authorization per request,
   revocation cutting a stream, attempt fencing, rotation, expiry and TTL renewal,
-  and no token in anything the session receives or in the environment.
+  and no token in anything the session receives or in the environment. Topology:
+  an invalid or wildcard `ARGUS_INTEGRATION_ROUTE_BIND` and a missing bridge
+  without the bind fail closed with `env_integration_route_unavailable` and no
+  listener; a set bind reaches the probe stage instead of failing at the bind.
 - Channel: vitest `argus-integrations.test.ts` (paths, permissions, symlinks, atomic
-  writes, rendering with a `proxy-url` per cluster, recheck, cleanup, grant
+  writes, rendering with a `proxy-url` per cluster, the engine allowlist
+  (`local`/`custom`/`openai` install; missing, Cursor and non-Claude executors
+  refused before fetching; an MCP credential the API refuses for the engine
+  blocks before any grant, and a mixed Codex selection leaves neither half
+  installed), recheck, cleanup, grant
   authorization per attempt, secret and config version, re-granting after a
   config edit, and the broker over real TLS: splice with
   ciphertext only, `407`/`405`/`403`, refused authorization, DNS pinning, internal
@@ -669,8 +708,10 @@ fallback, and a listener bound only at that address with it in `proxy-url`) and
   missing route or MCP broker, re-granting on rotation, revocation on completion,
   revocation and lease loss, cleanup on every path, delegate passthrough, the MCP
   server in the session config with neither token nor URL in the prompt or logs),
-  plus
-  `argus-delegate.test.mjs` and `tests/test_command_guard.py`.
+  the `integrationLines` prompt stating delegated runs do not inherit MCP servers
+  with no grant URL or token in the rendered text, plus
+  `node --test integrations/nanoclaw/engines/argus-delegate.test.mjs` (no executor
+  spawn carries MCP configuration) and `tests/test_command_guard.py`.
 - End to end: `ARGUS_TEST_KUBECTL=<kubectl> uv run pytest
   apps/api/tests/test_integration_kubectl_e2e.py` runs the API, the channel module and
   a real kubectl against a local fake Kubernetes API over TLS with a test CA and a

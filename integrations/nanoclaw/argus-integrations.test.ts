@@ -298,17 +298,40 @@ describe("installTaskIntegrations", () => {
   });
 
   it.each([
-    [{ engineProvider: "openai" }, "engine"],
-    [{ engineProvider: null }, "engine"],
-    [{ executorProvider: "openai" }, "executor"],
-  ])("refuses an engine it cannot confine (%o) before fetching", async (over, role) => {
+    [{ engineProvider: "cursor" }, "a harness engine"],
+    [{ engineProvider: null }, "a harness engine"],
+    [{ executorProvider: "openai" }, "a Claude executor"],
+    [{ executorProvider: "local" }, "a Claude executor"],
+  ])("refuses an engine it cannot confine (%o) before fetching", async (over, want) => {
     const g = group();
     const argus = fakeArgus();
     const got = await install(g, argus.source, over);
     expect(got).toMatchObject({ ok: false, reason: "env_integration_unsupported" });
     if (got.ok) throw new Error("installed");
-    expect(got.error).toContain(`Claude ${role}`);
+    expect(got.error).toContain(want);
     expect(argus.calls).toEqual([]);
+  });
+
+  it.each(["local", "custom"])("installs for a Claude-harness engine on %s", async (provider) => {
+    const g = group();
+    const argus = fakeArgus();
+    const got = await install(g, argus.source, { engineProvider: provider });
+    expect(got.ok).toBe(true);
+    if (!got.ok || !got.installed) throw new Error("not installed");
+    expect(got.installed.kubeconfig).toContain(TASK_INTEGRATIONS_DIR);
+  });
+
+  it("installs Kubernetes for a Codex engine; MCP there is refused by the API, not the channel", async () => {
+    // The kubeconfig is CLI-level and reads the same on every harness. MCP
+    // servers need the Claude harness session, so delivery refuses them for
+    // openai at credential fetch (delivery tests); the channel never grants
+    // what the API does not deliver.
+    const g = group();
+    const argus = fakeArgus();
+    const got = await install(g, argus.source, { engineProvider: "openai" });
+    expect(got.ok).toBe(true);
+    if (!got.ok || !got.installed) throw new Error("not installed");
+    expect(got.installed.kubeconfig).toContain(TASK_INTEGRATIONS_DIR);
   });
 
   it("maps API refusals to reasons with the code only, never the message", async () => {
@@ -751,18 +774,52 @@ describe("MCP integrations", () => {
     expect(b.sets).toEqual([{}]);
   });
 
-  it("refuses an engine that cannot be confined, before any credential is fetched", async () => {
+  it("an MCP credential the API refuses for the engine blocks before any grant", async () => {
+    // The channel's pre-fetch gate allows every harness engine; the kind rule
+    // lives at the API credential fetch (delivery tests refuse MCP for openai).
+    // The source below mirrors that refusal: no grant opens and the session
+    // config stays empty.
     const argus = fakeArgus([MCP]);
     const b = fakeBroker();
-    const got = await install(group(), argus.source, {
+    const source = {
+      ...argus.source,
+      credential: async () => {
+        throw new ApiError(409, "integration_engine_unsupported");
+      },
+    };
+    const got = await install(group(), source, {
       selected: ["mcp-0"],
       engineProvider: "openai",
       mcp: b.broker,
       sessionMcp: b.sessionMcp,
     });
     expect(got).toMatchObject({ ok: false, reason: "env_integration_unsupported" });
-    expect(argus.calls).toEqual([]);
     expect(b.opened).toEqual([]);
+    expect(b.sets).toEqual([{}]);
+  });
+
+  it("a mixed Codex selection installs nothing: the refused MCP blocks the kubeconfig too", async () => {
+    // A task's selections are all-or-nothing (spec 3.6 engine matrix): one
+    // undeliverable selection must not leave the other half installed.
+    const g = group();
+    const argus = fakeArgus([{}, MCP]);
+    const b = fakeBroker();
+    const source: IntegrationsSource = {
+      ...argus.source,
+      credential: async (taskId, id, attempt, version) => {
+        if (id === MCP.integration_id) throw new ApiError(409, "integration_engine_unsupported");
+        return argus.source.credential(taskId, id, attempt, version);
+      },
+    };
+    const got = await install(g, source, {
+      selected: ["int-0", MCP.integration_id],
+      engineProvider: "openai",
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_unsupported" });
+    expect(b.opened).toEqual([]);
+    expect(existsSync(taskIntegrationsPath(g, TASK))).toBe(false);
   });
 
   it("refuses an allowlist removed after selection (tools_unknown)", async () => {
@@ -838,7 +895,13 @@ describe("MCP integrations", () => {
     expect(Object.keys(b.sets[0]!)).toEqual(["argus-integration-radar"]);
     const lines = integrationLines(got.installed);
     expect(lines).toContain("Kubernetes access (this attempt only):");
-    expect(lines.join("\n")).toContain("argus-integration-radar");
+    const text = lines.join("\n");
+    expect(text).toContain("argus-integration-radar");
+    // The harness is told MCP servers are session-only, and the prompt carries
+    // no grant URL a delegated run could reuse.
+    expect(text).toContain("a delegated run does not inherit them");
+    expect(text).not.toContain("/mcp/");
+    expect(text).not.toContain(SECRET);
   });
 });
 
@@ -1014,10 +1077,18 @@ describe("nanoclawKubernetesRoute topology", () => {
 });
 
 /** A host address the route may dial (it refuses loopback), or null on a host without one. */
-const HOST_IP =
-  Object.values(os.networkInterfaces())
-    .flat()
-    .find((a) => a && a.family === "IPv4" && !a.internal)?.address ?? null;
+const HOST_IP = (() => {
+  try {
+    return (
+      Object.values(os.networkInterfaces())
+        .flat()
+        .find((a) => a && a.family === "IPv4" && !a.internal)?.address ?? null
+    );
+  } catch {
+    // Interface enumeration is blocked in some sandboxes; treat as no address.
+    return null;
+  }
+})();
 
 /**
  * The route against real TLS. The cluster (an HTTPS server on loopback) is reached through

@@ -1,10 +1,15 @@
 ---
-status: implemented
+status: superseded
 created: 2026-11-04
-updated: 2026-11-05
+updated: 2026-11-18
 ---
 
 # Single-layer experiment: the Claude harness codes without the delegate hop
+
+Superseded by [execution chains](execution-chains.spec.md): single-layer and
+paired alternatives are per-difficulty configuration now, so there is no
+standalone A/B to run and no global decision to remove the delegate hop.
+Delegates stay for model combinations that need a separate executor.
 
 # 1. Purpose and Scope
 

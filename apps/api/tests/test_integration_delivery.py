@@ -48,6 +48,42 @@ async def account(db: Database, store, account_id: str, provider: str) -> None:
         )
 
 
+LOCAL_CRED = {
+    "base_url": "http://host.docker.internal:8080",
+    "auth_token": "argus-local-harness",
+}
+CUSTOM_CONFIG = {
+    "base_url": "https://openrouter.ai/api/v1",
+    "label": "openrouter",
+    "engine": {"model": "anthropic/claude-sonnet-4"},
+    "executor": {"model": "deepseek/deepseek-chat"},
+}
+
+
+async def engine_account(db: Database, store, account_id: str, provider: str) -> None:
+    """An account shaped the way its provider requires: local carries its
+    base_url as the credential and custom carries its bridge config."""
+    if provider == "local":
+        await store.put(account_id, dict(LOCAL_CRED))
+        body = AccountCreate(
+            name=account_id, provider=provider, credential=dict(LOCAL_CRED)
+        )
+    elif provider == "custom":
+        await store.put(account_id, {"api_key": "key-custom"})
+        body = AccountCreate(
+            name=account_id,
+            provider=provider,
+            secret_ref=f"sops:{account_id}",
+            config=dict(CUSTOM_CONFIG),
+        )
+    else:
+        return await account(db, store, account_id, provider)
+    async with db.write() as tx:
+        await accounts.create_account(
+            tx, account_id, body, f"sops:{account_id}", "admin:test", store
+        )
+
+
 async def integration(
     db: Database,
     store,
@@ -500,15 +536,68 @@ async def test_a_config_edit_fences_the_delivered_attempt(
     assert '\\"config_version\\": 2' in await events(db)
 
 
-@pytest.mark.parametrize("kind", ["kubernetes", "mcp"])
-async def test_engines_that_cannot_be_confined_are_refused(
-    db: Database, store: MemorySecretStore, world: str, kind: str
+async def test_codex_harness_gets_kubernetes_but_not_mcp(
+    db: Database, store: MemorySecretStore, world: str
 ) -> None:
-    if kind == "mcp":
-        world = await integration(db, store, kind="mcp", name="docs")
+    # The kubeconfig is CLI-level and reads the same on every harness; MCP
+    # servers need the Claude harness session.
     await account(db, store, "acc-codex", "openai")
     task_id = await make_task(db, world)
     await start(db, store, runtime=("openai",))
+    cred = await deliver(db, store, task_id, world)
+    assert cred.kind == "kubernetes"
+    assert "task.integration_delivered" in await events(db)
+    mcp = await integration(db, store, kind="mcp", name="docs")
+    other = await make_task(db, mcp)
+    await start(db, store, runtime=("openai",))
+    before = await events(db)
+    with pytest.raises(ConflictError) as err:
+        await deliver(db, store, other, mcp)
+    assert err.value.code == "integration_engine_unsupported"
+    assert await events(db) == before
+
+
+@pytest.mark.parametrize("kind", ["kubernetes", "mcp"])
+@pytest.mark.parametrize("provider", ["local", "custom"])
+async def test_claude_harness_providers_receive_delivery(
+    db: Database, store: MemorySecretStore, world: str, kind: str, provider: str
+) -> None:
+    # Local and custom providers run the same Claude harness session, so the
+    # kubeconfig and the MCP servers confine the same way as on anthropic.
+    if kind == "mcp":
+        world = await integration(db, store, kind="mcp", name="docs")
+    await engine_account(db, store, f"acc-{provider}", provider)
+    task_id = await make_task(db, world)
+    await start(db, store, runtime=(provider,))
+    cred = await deliver(db, store, task_id, world)
+    assert cred.kind == kind
+    assert "task.integration_delivered" in await events(db)
+
+
+@pytest.mark.parametrize("kind", ["kubernetes", "mcp"])
+@pytest.mark.parametrize("executor_provider", ["openai", "local"])
+async def test_non_claude_executors_are_refused(
+    db: Database,
+    store: MemorySecretStore,
+    world: str,
+    kind: str,
+    executor_provider: str,
+) -> None:
+    if kind == "mcp":
+        world = await integration(db, store, kind="mcp", name="docs")
+    await engine_account(db, store, "acc-exec", executor_provider)
+    task_id = await make_task(db, world)
+    task = await start(db, store)
+    async with db.write() as tx:
+        await accounts.lease(
+            tx,
+            A,
+            [executor_provider],
+            store,
+            role="executor",
+            task_id=task.id,
+            attempt=task.attempt,
+        )
     with pytest.raises(ConflictError) as err:
         await deliver(db, store, task_id, world)
     assert err.value.code == "integration_engine_unsupported"
