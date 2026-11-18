@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-17
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 # Execution chains
@@ -353,6 +353,19 @@ without claiming a spend cap; no paid alternative is preselected or appended.
 A direct route shows “No executor”; a paired route shows both accounts/models.
 Task detail/route diagnostic shows selected ID, cursor, all skip/advance reasons,
 last recorded selection versus current eligibility, pins/locks and resets.
+
+## 3.7 Independent reviewer routes
+
+`review.chains` has this setting's contract (3.1, 3.3: same shape, validation,
+inheritance and env lock), keyed by the reviewed task's difficulty
+([settings](settings.spec.md) 3.5). When an independent `code_review` child is
+created, Argus drops the author alternatives and stores the remaining ordered list
+in `tasks.execution_route` (migration `0086_task_execution_route.sql`) with source
+`review` and the parent ID, difficulty, chosen ID and skipped alternatives. That
+explicit route replaces the generic chain for the child's own difficulty; admission,
+fallback, exhaustion, reset and diagnostics then work as above on that list. A new
+`review.chains` edit does not re-route an existing child. A void verdict creates a
+new child with the void model's accounts treated as authors.
 
 # 4. Open Questions
 

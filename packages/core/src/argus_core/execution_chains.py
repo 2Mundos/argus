@@ -192,7 +192,8 @@ class ResolvedSelector(ClosedModel):
 
 class ExecutionSelection(ClosedModel):
     version: Literal[1] = 1
-    source: Literal["global", "project"]
+    # "review": an independent reviewer's route, chosen from `review.chains`.
+    source: Literal["global", "project", "review"]
     revision: str
     difficulty: Difficulty
     alternative: Alternative

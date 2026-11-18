@@ -7098,7 +7098,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "global" | "project";
+            source: "global" | "project" | "review";
             /**
              * Version
              * @default 1
@@ -10544,6 +10544,28 @@ export interface components {
              */
             unmet?: string[];
         };
+        /**
+         * ReviewRoute
+         * @description Why an independent reviewer runs on this route (settings.spec.md 3.5).
+         */
+        ReviewRoute: {
+            /**
+             * Chain Source
+             * @enum {string}
+             */
+            chain_source: "global" | "project";
+            /** Difficulty */
+            difficulty: string;
+            /** Parent Id */
+            parent_id: string;
+            /** Selected */
+            selected: string;
+            /**
+             * Skipped
+             * @default []
+             */
+            skipped?: components["schemas"]["SkippedAlternative"][];
+        };
         /** Revision */
         Revision: {
             /** Author */
@@ -10676,6 +10698,7 @@ export interface components {
              * @default 0
              */
             generation?: number;
+            review?: components["schemas"]["ReviewRoute"] | null;
             /** Revision */
             revision: string;
             selection?: components["schemas"]["ExecutionSelection"] | null;
@@ -10690,7 +10713,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "global" | "project";
+            source: "global" | "project" | "review";
         };
         /** RouteProvider */
         RouteProvider: {
@@ -11252,6 +11275,16 @@ export interface components {
              * @constant
              */
             runtime: "nanoclaw";
+        };
+        /** SkippedAlternative */
+        SkippedAlternative: {
+            /** Id */
+            id: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "author" | "unavailable";
         };
         /**
          * Source

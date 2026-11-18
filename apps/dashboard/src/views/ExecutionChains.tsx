@@ -1,5 +1,5 @@
 import type { components } from "@argus/api-client";
-import { useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { type Account, api, call } from "../api";
 import { useLiveData } from "../live";
 import {
@@ -233,14 +233,25 @@ function SelectorEditor({
 export function ExecutionChains({
   project,
   setting,
+  settingKey = "execution.chains",
+  title = "Execution chains",
+  intro,
+  unconfigured,
   legacyExecutors,
   legacyNotice,
   onChanged,
 }: {
   project: string | null;
   setting?: SettingValue;
+  /** Another key with the same shape, such as `review.chains`. */
+  settingKey?: string;
+  title?: string;
+  /** Replaces the execution-chain explanation. */
+  intro?: ReactNode;
+  /** What a level without a chain does; defaults to the built-in executor order. */
+  unconfigured?: string;
   /** Executor order a difficulty uses where no chain exists (built-in default or stored). */
-  legacyExecutors: Record<DifficultyLevel, string[]>;
+  legacyExecutors?: Record<DifficultyLevel, string[]>;
   /** Environment lock on the legacy executor order, shown beside it. */
   legacyNotice?: string;
   onChanged: () => void;
@@ -285,8 +296,8 @@ export function ExecutionChains({
     setBusy(true);
     setError(undefined);
     try {
-      if (reset) await resetSetting("execution.chains", project);
-      else await putSetting("execution.chains", draft, project);
+      if (reset) await resetSetting(settingKey, project);
+      else await putSetting(settingKey, draft, project);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -296,18 +307,22 @@ export function ExecutionChains({
   }
   return (
     <section className="card execution-chains">
-      <h3>Execution chains</h3>
-      <p>
-        Ordered complete alternatives for every difficulty. Single layer has no executor. Fallback
-        never mixes accounts between cards. Runtime capabilities describe adapter support, not
-        installed CLI, endpoint or model readiness.
-      </p>
-      <p>
-        Task model/account pins bypass the entire chain using legacy_task_pin. Where no chain is
-        configured a difficulty keeps its built-in executor order, shown on that level, and the
-        model preferences above. Leave the account on <em>Any available account</em> to let
-        admission pick one; pin it only to force that account.
-      </p>
+      <h3>{title}</h3>
+      {intro ?? (
+        <>
+          <p>
+            Ordered complete alternatives for every difficulty. Single layer has no executor.
+            Fallback never mixes accounts between cards. Runtime capabilities describe adapter
+            support, not installed CLI, endpoint or model readiness.
+          </p>
+          <p>
+            Task model/account pins bypass the entire chain using legacy_task_pin. Where no chain is
+            configured a difficulty keeps its built-in executor order, shown on that level, and the
+            model preferences above. Leave the account on <em>Any available account</em> to let
+            admission pick one; pin it only to force that account.
+          </p>
+        </>
+      )}
       <ul className="small" aria-label="Adapter and provider capabilities">
         {describeCapabilities(caps).map((line) => (
           <li key={line}>{line}</li>
@@ -348,8 +363,8 @@ export function ExecutionChains({
             </p>
             {!list && (
               <p>
-                No chain: built-in routing, harness chosen from the model preferences, executor
-                order {legacyExecutors[level].length ? legacyExecutors[level].join(" → ") : "none"}.
+                {unconfigured ??
+                  `No chain: built-in routing, harness chosen from the model preferences, executor order ${legacyExecutors?.[level]?.length ? legacyExecutors[level].join(" → ") : "none"}.`}{" "}
                 Add an alternative to replace it; a single layer is a harness with no executor.
               </p>
             )}
@@ -530,10 +545,10 @@ export function ExecutionChains({
         disabled={busy || problems.length > 0 || !caps.length || !!setting?.notice}
         onClick={() => void save()}
       >
-        Save execution chains
+        Save {title.toLowerCase()}
       </button>
       <button type="button" disabled={busy} onClick={() => void save(true)}>
-        Reset execution chains
+        Reset {title.toLowerCase()}
       </button>
     </section>
   );

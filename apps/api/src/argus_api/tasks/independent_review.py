@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any
 
 import aiosqlite
+from argus_core.accounts import LeaseRole
 from argus_core.continuation import ArtifactKind
 from argus_core.decisions import REVIEW_OPTIONS, Audience, DecisionKind
+from argus_core.execution_chains import Alternative, Chain, PairedAlternative, Selector
 from argus_core.settings import IndependentReviewSetting, ReviewMode
 from argus_core.tasks import (
     FORGE_DELIVERABLES,
@@ -34,6 +37,7 @@ from argus_api.decisions import store as decisions
 from argus_api.events import record
 from argus_api.tasks import continuation as cont
 from argus_api.tasks import delivery
+from argus_api.tasks import execution_routes as routes
 
 NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
 NO_REVIEW_HEAD = "no_review_head"
@@ -140,6 +144,144 @@ async def authors(
     return models, providers
 
 
+async def _accounts(conn: aiosqlite.Connection, task_id: str) -> set[str]:
+    """Accounts that served the task, across all attempts."""
+    async with conn.execute(
+        "SELECT DISTINCT account_id FROM model_executions"
+        " WHERE task_id = ? AND account_id IS NOT NULL",
+        (task_id,),
+    ) as cur:
+        return {r[0] for r in await cur.fetchall()}
+
+
+async def _may_author(
+    conn: aiosqlite.Connection,
+    selector: Selector,
+    pin: str | None,
+    role: LeaseRole,
+    *,
+    mode: ReviewMode,
+    models: set[str],
+    providers: set[str],
+    accounts: set[str],
+) -> bool:
+    """Whether this selector could run an author model (settings.spec.md 3.5).
+
+    An account-sourced model is the account's configured one; where that is unknown
+    until lease (a local account), the account is a possible author when it served
+    the task. An unpinned selector may land on any account of its provider.
+    """
+    from argus_api.accounts import service as accounts_svc
+
+    if mode == "different_provider":
+        return selector.provider in providers
+    if selector.model.source == "explicit":
+        return selector.model.id in models
+    async with conn.execute(
+        "SELECT * FROM accounts WHERE provider = ? AND (? IS NULL OR id = ?)",
+        (selector.provider, pin, pin),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        if not accounts_svc._serves(row, role):
+            continue
+        settings = accounts_svc._settings(row, role)
+        model = settings.model if settings is not None else None
+        if (model in models) if model else (row["id"] in accounts):
+            return True
+    return False
+
+
+async def _authored(
+    conn: aiosqlite.Connection, alternative: Alternative, **authors: Any
+) -> bool:
+    harness_pin, executor_pin = routes.pins(alternative)
+    if await _may_author(conn, alternative.harness, harness_pin, "engine", **authors):
+        return True
+    return isinstance(alternative, PairedAlternative) and await _may_author(
+        conn, alternative.executor, executor_pin, "executor", **authors
+    )
+
+
+async def review_route(
+    conn: aiosqlite.Connection,
+    now: datetime,
+    parent: aiosqlite.Row,
+    *,
+    mode: ReviewMode,
+    models: set[str],
+    providers: set[str],
+    accounts: set[str],
+) -> tuple[list[Alternative], routes.ReviewRoute] | None:
+    """The reviewer's route from `review.chains` for the parent's difficulty.
+
+    None when that level is not configured (the policy-chain picker applies). Author
+    alternatives are dropped; of the rest, those no active worker can admit now
+    follow as fallbacks only when none can. An empty list means only authors remain.
+    """
+    from pydantic import TypeAdapter
+
+    setting = await routes.policy_setting(conn, parent["project"], routes.REVIEW_KEY)
+    difficulty = parent["difficulty"]
+    raw = setting.value["difficulties"].get(difficulty)
+    if raw is None:
+        return None
+    chain = TypeAdapter(Chain).validate_python(raw)
+    skipped: list[routes.SkippedAlternative] = []
+    independent = []
+    for alternative in chain:
+        if await _authored(
+            conn,
+            alternative,
+            mode=mode,
+            models=models,
+            providers=providers,
+            accounts=accounts,
+        ):
+            skipped.append(
+                routes.SkippedAlternative(id=alternative.id, reason="author")
+            )
+        else:
+            independent.append(alternative)
+    async with conn.execute(
+        "SELECT capabilities, runtime_providers FROM agents WHERE state = 'active'"
+    ) as cur:
+        workers = await cur.fetchall()
+    ready = [
+        a
+        for a in independent
+        if any(
+            [
+                await routes.alternative_eligible(
+                    conn,
+                    now,
+                    a,
+                    None,
+                    json.loads(w["capabilities"]),
+                    json.loads(w["runtime_providers"] or "[]"),
+                )
+                for w in workers
+            ]
+        )
+    ]
+    if ready:
+        skipped += [
+            routes.SkippedAlternative(id=a.id, reason="unavailable")
+            for a in independent
+            if a not in ready
+        ]
+        independent = ready
+    return independent, routes.ReviewRoute(
+        parent_id=parent["id"],
+        difficulty=difficulty,
+        chain_source="project"
+        if (setting.difficulty_sources or {})[difficulty] == "project"
+        else "global",
+        selected=independent[0].id if independent else "",
+        skipped=skipped,
+    )
+
+
 async def usable_providers(conn: aiosqlite.Connection, now_iso: str) -> set[str]:
     """Account providers that can serve a lease right now."""
     async with conn.execute(
@@ -234,7 +376,9 @@ def _findings_text(findings: list[Any]) -> str:
     return "\n".join(lines) if lines else "- (no details)"
 
 
-async def _block(tx: Tx, parent: aiosqlite.Row, reason: str, actor: str) -> None:
+async def _block(
+    tx: Tx, parent: aiosqlite.Row, reason: str, actor: str, **data: Any
+) -> None:
     """Leave the parent in_review with a visible block_reason (no silent skip)."""
     await tx.conn.execute(
         "UPDATE tasks SET block_reason = ?, updated_at = ? WHERE id = ?",
@@ -246,7 +390,7 @@ async def _block(tx: Tx, parent: aiosqlite.Row, reason: str, actor: str) -> None
         "task",
         parent["id"],
         "review.independent_blocked",
-        {"reason": reason},
+        {"reason": reason, **data},
     )
 
 
@@ -260,6 +404,7 @@ async def spawn_reviewer(
     policy: model_policy.Policy,
     actor: str,
     exclude_models: set[str] | None = None,
+    exclude_accounts: set[str] | None = None,
 ) -> str | None:
     """Create a code_review child, or set block_reason when none is eligible.
 
@@ -273,18 +418,42 @@ async def spawn_reviewer(
         await _block(tx, parent, NO_REVIEW_HEAD, actor)
         return None
     author_models, author_providers = await authors(tx.conn, parent["id"])
-    usable = await usable_providers(tx.conn, ts(tx.now))
-    harness, executor = pick_reviewer(
-        policy,
+    route = await review_route(
+        tx.conn,
+        tx.now,
+        parent,
         mode=setting.mode,
-        author_models=author_models,
-        author_providers=author_providers,
-        usable=usable,
-        exclude_models=exclude_models,
+        models=author_models | (exclude_models or set()),
+        providers=author_providers,
+        accounts=await _accounts(tx.conn, parent["id"]) | (exclude_accounts or set()),
     )
-    if harness is None and executor is None:
-        await _block(tx, parent, NO_INDEPENDENT_REVIEWER, actor)
-        return None
+    harness: HarnessModel | None = None
+    executor: ExecutorModel | None = None
+    if route is not None:
+        alternatives, review = route
+        if not alternatives:
+            # Never fall back to an author: the operator decides from the inbox.
+            await _block(
+                tx,
+                parent,
+                NO_INDEPENDENT_REVIEWER,
+                actor,
+                skipped=[s.model_dump() for s in review.skipped],
+            )
+            return None
+    else:
+        usable = await usable_providers(tx.conn, ts(tx.now))
+        harness, executor = pick_reviewer(
+            policy,
+            mode=setting.mode,
+            author_models=author_models,
+            author_providers=author_providers,
+            usable=usable,
+            exclude_models=exclude_models,
+        )
+        if harness is None and executor is None:
+            await _block(tx, parent, NO_INDEPENDENT_REVIEWER, actor)
+            return None
     # Clear a prior gate block if we found a reviewer this time.
     if parent["block_reason"] in (NO_INDEPENDENT_REVIEWER, NO_REVIEW_HEAD):
         await tx.conn.execute(
@@ -313,6 +482,26 @@ async def spawn_reviewer(
         deliverable=Deliverable.RESPONSE,
     )
     child = await tasks_svc.create_task(tx, body, actor)
+    if route is not None:
+        await tx.conn.execute(
+            "UPDATE tasks SET execution_route = ? WHERE id = ?",
+            (routes.explicit_route(alternatives, review), child.id),
+        )
+        await record(
+            tx,
+            actor,
+            "task",
+            parent["id"],
+            "review.independent_selected",
+            {
+                "child_id": child.id,
+                "selected": review.selected,
+                "fallbacks": [a.id for a in alternatives[1:]],
+                "skipped": [s.model_dump() for s in review.skipped],
+                "chain_source": review.chain_source,
+                "difficulty": review.difficulty,
+            },
+        )
     await record(
         tx,
         actor,
@@ -443,6 +632,8 @@ async def on_review_child_complete(
         # Prefer a different model next time.
         child_input = json.loads(child["input"] or "{}")
         child_models, _ = await authors(tx.conn, child["id"])
+        # The void reviewer's accounts may serve an author model under another
+        # name; do not pick them again.
         await spawn_reviewer(
             tx,
             parent,
@@ -452,6 +643,7 @@ async def on_review_child_complete(
             policy=policy,
             actor=actor,
             exclude_models=author_models | child_models,
+            exclude_accounts=await _accounts(tx.conn, child["id"]),
         )
         return
 

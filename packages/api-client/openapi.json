@@ -9700,7 +9700,8 @@
           "source": {
             "enum": [
               "global",
-              "project"
+              "project",
+              "review"
             ],
             "title": "Source",
             "type": "string"
@@ -19526,6 +19527,47 @@
         "title": "ReviewDisposition",
         "type": "object"
       },
+      "ReviewRoute": {
+        "description": "Why an independent reviewer runs on this route (settings.spec.md 3.5).",
+        "properties": {
+          "chain_source": {
+            "enum": [
+              "global",
+              "project"
+            ],
+            "title": "Chain Source",
+            "type": "string"
+          },
+          "difficulty": {
+            "title": "Difficulty",
+            "type": "string"
+          },
+          "parent_id": {
+            "title": "Parent Id",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "string"
+          },
+          "skipped": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SkippedAlternative"
+            },
+            "title": "Skipped",
+            "type": "array"
+          }
+        },
+        "required": [
+          "parent_id",
+          "difficulty",
+          "chain_source",
+          "selected"
+        ],
+        "title": "ReviewRoute",
+        "type": "object"
+      },
       "Revision": {
         "properties": {
           "author": {
@@ -19966,6 +20008,16 @@
             "title": "Generation",
             "type": "integer"
           },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewRoute"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "title": "Revision",
             "type": "string"
@@ -19992,7 +20044,8 @@
           "source": {
             "enum": [
               "global",
-              "project"
+              "project",
+              "review"
             ],
             "title": "Source",
             "type": "string"
@@ -21549,6 +21602,28 @@
           "harness"
         ],
         "title": "SingleAlternative",
+        "type": "object"
+      },
+      "SkippedAlternative": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "author",
+              "unavailable"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ],
+        "title": "SkippedAlternative",
         "type": "object"
       },
       "Source": {

@@ -34,6 +34,8 @@ COMMAND_GUARD_KEY = "command_guard.enabled"
 AUTO_MERGE_KEY = "delivery.auto_merge"
 FORGE_AGENTIC_KEY = "review.forge_agentic"
 ACCEPTANCE_KEY = "review.acceptance"
+# Execution and independent-reviewer chains share one shape and resolver.
+CHAIN_KEYS = frozenset({"execution.chains", "review.chains"})
 
 
 class GitIdentity(NamedTuple):
@@ -64,7 +66,7 @@ def _normalize(key: str, value: Any) -> Any:
         # A full policy (global) needs both required maps; a project override is partial.
         return value  # caller picks validate vs validate_partial
     _check_schema(defn, value)
-    if key == "execution.chains":
+    if key in CHAIN_KEYS:
         try:
             return ExecutionChains.model_validate(value).model_dump(mode="json")
         except ValueError as exc:
@@ -155,10 +157,10 @@ async def _setting(
         if scope == GLOBAL:
             return _models_from_file(path)
         return await _models_for_project(conn, path, scope)
-    if key == "execution.chains":
+    if key in CHAIN_KEYS:
         from argus_api.tasks.execution_routes import policy_setting
 
-        return await policy_setting(conn, scope)
+        return await policy_setting(conn, scope, key)
     if (
         key == DIFFICULTY_EXECUTORS_KEY
         and os.environ.get("ARGUS_DIFFICULTY_EXECUTORS", "").strip()
@@ -407,7 +409,7 @@ async def put_setting(
 
     row = await _row(tx.conn, scope, key)
     previous_value = json.loads(row["value"]) if row else None
-    if key == "execution.chains":
+    if key in CHAIN_KEYS:
         from argus_api.tasks.execution_routes import validate_references
 
         await validate_references(tx.conn, ExecutionChains.model_validate(normalised))

@@ -347,6 +347,15 @@ export function TaskDetail({
                 Last recorded selection is not a claim of current eligibility. Task pins bypass the
                 whole chain; resets and classified advances are recorded in activity.
               </p>
+              {executionRoute.execution.review && (
+                <p>
+                  Independent review of {executionRoute.execution.review.parent_id}: chose{" "}
+                  {executionRoute.execution.review.selected}
+                  {executionRoute.execution.review.skipped?.map(
+                    (s) => `; skipped ${s.id} (${s.reason})`,
+                  )}
+                </p>
+              )}
               <pre>{JSON.stringify(executionRoute.execution, null, 2)}</pre>
             </details>
           )}
