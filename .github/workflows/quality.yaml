@@ -41,6 +41,10 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run python scripts/check_tests.py --strict
       - run: uv run ty check
+      - name: Git identity for the temp repos the path-gate tests commit in
+        run: |
+          git config --global user.name "Argus CI"
+          git config --global user.email "ci@example.invalid"
       - run: uv run pytest -n auto
       - name: OpenAPI contract drift
         run: uv run python scripts/export_openapi.py --check

@@ -11,14 +11,18 @@ REAL_ROOT = SCRIPT.parent.parent
 POLICY = REAL_ROOT / "scripts" / "path_policy.json"
 
 
+def clean_env() -> dict[str, str]:
+    """The caller's environment without GIT_* (a hook's), so git acts on the temp repo."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def run_git(repo: Path, *args: str) -> str:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     done = subprocess.run(
         ("git", "-C", str(repo), *args),
         capture_output=True,
         text=True,
         check=True,
-        env=env,
+        env=clean_env(),
     )
     return done.stdout
 
@@ -238,6 +242,6 @@ def test_the_real_tree_has_no_violations() -> None:
         capture_output=True,
         text=True,
         check=False,
-        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+        env=clean_env(),
     )
     assert (done.returncode, done.stdout) == (0, "")
