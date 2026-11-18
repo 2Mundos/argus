@@ -759,7 +759,9 @@ def _behind_remote(tmp_path: Path) -> tuple[Path, str]:
         capture_output=True,
     )
     other = tmp_path / "other"
-    subprocess.run([REAL, "clone", str(bare), str(other)], check=True, capture_output=True)
+    subprocess.run(
+        [REAL, "clone", str(bare), str(other)], check=True, capture_output=True
+    )
     _git_ok(other, "config", "user.email", "a@e.com")
     _git_ok(other, "config", "user.name", "A")
     _git_ok(other, "checkout", "-b", "main")
@@ -768,7 +770,9 @@ def _behind_remote(tmp_path: Path) -> tuple[Path, str]:
     _git_ok(other, "commit", "-m", "base")
     _git_ok(other, "push", "origin", "main")
     worker = tmp_path / "worker"
-    subprocess.run([REAL, "clone", str(bare), str(worker)], check=True, capture_output=True)
+    subprocess.run(
+        [REAL, "clone", str(bare), str(worker)], check=True, capture_output=True
+    )
     _git_ok(worker, "config", "user.email", "w@e.com")
     _git_ok(worker, "config", "user.name", "W")
     _git_ok(worker, "checkout", "-b", "feature")
