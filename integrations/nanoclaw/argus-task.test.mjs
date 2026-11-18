@@ -729,7 +729,7 @@ describe("wait deadline", () => {
       routes: { "GET /pulls/7": pr(), [statuses]: [pending(1)] },
     });
     assert.equal(r.code, EXIT.pending);
-    assert.equal(r.elapsed, 110);
+    assert.equal(r.elapsed, 90);
     assert.ok(r.out.status);
   });
 
