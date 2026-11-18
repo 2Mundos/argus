@@ -155,11 +155,21 @@ different model**, with `different_provider` shown as "…from a different provi
   `review.independent_void {reason: same_model}`, and a new reviewer is chosen.
 - **No silent skip.** If no eligible reviewer model has a usable account, the task
   stays `in_review` with `block_reason: no_independent_reviewer` and appears in the
-  inbox. A delivery that names a PR but no commit SHA cannot name the reviewed head
-  (`code_review` input requires `head_sha`), so the task stays `in_review` with
-  `block_reason: no_review_head` and `review.independent_blocked {reason:
-  no_review_head}`, and no child is created. After `max_rounds` of `request_changes`, a `review` decision for a human
-  is opened instead of another round.
+  inbox.
+- **Reviewed head.** The head is the commit the reviewer reads (`code_review` input
+  requires `head_sha`). It comes from the task's own record (a PR artifact's or
+  commit's `head_sha`, a reported `head_sha`/`sha`/`commit`), or, when the worker
+  named a PR without a head, from the forge: the head the forge reports for that PR,
+  read before the completion write (like the deliverable search) and matched to the
+  same PR. A PR's bound artifact is read back after the completion's own write, so
+  the gate sees it. **A merged PR is reviewed too**, at the head that merged: a
+  merge never skips the gate, so the parent always gets a reviewer, a decision or a
+  verdict. If no head can be read, the task stays `in_review` with `block_reason:
+  no_review_head`, `review.independent_blocked {reason: no_review_head}`, and one
+  open `review` decision (payload `{gate: review_failed, reason: no_review_head,
+  failed: []}`) with the choices `retry_reviewer`, `approve_without_review` and
+  `cancel`; a second block adds no decision. `retry_reviewer` reads the forge head
+  again, before its write. No child is created while the head is unknown.
 - **Reviewer failure.** A `code_review` child that ends `failed` or `cancelled`
   without a verdict does not strand the parent. Argus records
   `review.independent_child_failed {child_id, state, error_class, account, model,

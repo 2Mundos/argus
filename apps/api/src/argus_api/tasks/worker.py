@@ -53,6 +53,7 @@ async def complete(
     model_policy_path: Path | None = None,
     pr_search: deliverable.PrSearch | None = None,
     pr_gate: deliverable.ForgeGate | None = None,
+    forge: deliverable.ForgeRead | None = None,
 ) -> Task:
     """Complete with the result envelope; `data` must match the kind's result
     schema and every listed artifact must belong to this task (3.11).
@@ -113,6 +114,8 @@ async def complete(
         # result is reviewed (assisted reconciliation) instead of auto-accepted.
         open_items = ["acceptance_not_structured"]
 
+    # The stored artifacts (a PR bound at completion) are read back for the gate.
+    row = await _row(tx.conn, task_id)
     actor = f"agent:{agent_id}"
     path = model_policy_path or Path("data/model-policy.json")
     review_setting = await settings_svc.get_review(tx.conn, path, row["project"])
@@ -144,6 +147,7 @@ async def complete(
         setting=review_setting,
         policy=policy,
         actor=actor,
+        forge=forge,
     ):
         return await get_task(tx.conn, task_id)
 

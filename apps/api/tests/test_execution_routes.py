@@ -927,7 +927,7 @@ async def open_decisions(db, parent_id):
         return [await store.get(conn, i) for i in ids]
 
 
-async def answer(db, decision_id, choice, text=""):
+async def answer(db, decision_id, choice, text="", forge=None):
     from argus_api.auth import Identity
     from argus_api.decisions import service as decisions
     from argus_core.auth import Scope
@@ -939,6 +939,7 @@ async def answer(db, decision_id, choice, text=""):
             decision_id,
             DecisionAnswer(choice=choice, text=text),
             Identity("t-admin", Scope.ADMIN, None, "test"),
+            forge,
         )
 
 
@@ -1130,3 +1131,178 @@ async def test_auth_expired_advances_chain_blocks_account_and_spends_no_failure(
     row, diagnostic = await state(db, task.id)
     assert row["state"] == "blocked" and row["block_reason"] == routes.EXHAUSTED
     assert row["failures"] == 0
+
+
+# A delivered PR whose head the worker never reported (settings.spec.md 3.5).
+
+PR_URL = "https://github.com/2Mundos/argus/pull/416"
+HEAD = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+
+
+def forge_read(state="open", head=HEAD):
+    from datetime import UTC, datetime
+
+    from argus_api.tasks import deliverable
+    from argus_core.delivery import Delivery, FactOrigin, PrState, ShaFact
+
+    now = datetime(2026, 11, 18, tzinfo=UTC)
+    delivery = Delivery(
+        pr=PR_URL,
+        pr_state=PrState(state),
+        merged_at=now if state == "merged" else None,
+        checked_at=now,
+        flags=[],
+        accept_decision_id=None,
+        accept_blocked=None,
+        head=ShaFact(sha=head, source=FactOrigin.FORGE),
+    )
+    return deliverable.ForgeRead(delivery)
+
+
+async def pr_only_result(db, task_id):
+    """The task's row and a result that names the PR by URL, with no head."""
+    from argus_core.tasks import TaskResult
+
+    async with db.read() as conn:
+        row = await tasks.task_row(conn, task_id)
+    return row, TaskResult(summary="opened the PR", data={"pr": PR_URL})
+
+
+async def claimed_parent(db, fleet, *executions):
+    """A hard task still running: its completion is what the gate sees."""
+    parent = await make_task(db)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET state = 'claimed', assignee_agent_id = ?, attempt = 1,"
+            " lease_expires_at = '2099-01-01T00:00:00Z' WHERE id = ?",
+            (A, parent.id),
+        )
+        await tx.conn.execute(
+            "UPDATE agents SET capabilities = ?, runtime_providers = ? WHERE id = ?",
+            (json.dumps(CAPS), json.dumps(PROVIDERS), A),
+        )
+        for i, (model, provider, account) in enumerate(executions):
+            await record_execution(tx, parent.id, i, model, provider, account)
+    return parent
+
+
+async def gate_on_parent_complete(db, parent_id, forge=None):
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+    from argus_core.tasks import TaskResult
+
+    result = TaskResult(summary="opened the PR", data={"pr": PR_URL})
+    async with db.write() as tx:
+        row = await tasks.task_row(tx.conn, parent_id)
+        return await review.on_parent_complete(
+            tx,
+            row,
+            result,
+            setting=IndependentReviewSetting(mode="different_model"),
+            policy={},
+            actor="agent:test",
+            forge=forge,
+        )
+
+
+async def test_pr_url_without_head_takes_the_forge_head(db, fleet):
+    """Observed: parents 8163a01a and 3cf3cb77 blocked `no_review_head` although the
+    PR was delivered and had a head; the forge read supplies it."""
+    from argus_api.tasks import independent_review as review
+
+    parent = await make_task(db)
+    row, result = await pr_only_result(db, parent.id)
+    async with db.read() as conn:
+        assert await review.has_code_delivery(conn, row, result) == (PR_URL, None)
+        assert await review.has_code_delivery(conn, row, result, forge_read()) == (
+            PR_URL,
+            HEAD,
+        )
+
+
+async def test_forge_head_of_another_pr_is_not_used(db, fleet):
+    from argus_api.tasks import independent_review as review
+
+    parent = await make_task(db)
+    row, result = await pr_only_result(db, parent.id)
+    from argus_api.tasks import deliverable
+
+    other_pr = forge_read().delivery.model_copy(update={"pr": PR_URL + "9"})
+    other = deliverable.ForgeRead(other_pr)
+    async with db.read() as conn:
+        assert await review.has_code_delivery(conn, row, result, other) == (
+            PR_URL,
+            None,
+        )
+
+
+async def test_a_merged_pr_still_gets_its_review_on_the_head(db, fleet):
+    """Decision: a merged PR is reviewed at the head that merged, never skipped."""
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    assert await gate_on_parent_complete(db, parent.id, forge_read("merged"))
+    child = await latest_child(db, parent.id)
+    async with db.read() as conn:
+        child_row = await tasks.task_row(conn, child)
+    assert json.loads(child_row["input"])["head_sha"] == HEAD
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "in_review" and row["block_reason"] is None
+    assert not await open_decisions(db, parent.id)
+
+
+async def test_no_head_opens_one_decision_not_a_silent_block(db, fleet):
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    for _ in range(2):
+        async with db.write() as tx:
+            assert (
+                await review.spawn_reviewer(
+                    tx,
+                    await tasks.task_row(tx.conn, parent.id),
+                    pr=PR_URL,
+                    head_sha=None,
+                    setting=IndependentReviewSetting(mode="different_model"),
+                    policy={},
+                    actor="system",
+                )
+                is None
+            )
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "in_review" and row["block_reason"] == "no_review_head"
+    [decision] = await open_decisions(db, parent.id)
+    assert decision.options == ["retry_reviewer", "approve_without_review", "cancel"]
+    assert decision.payload["gate"] == "review_failed"
+    assert decision.payload["reason"] == "no_review_head"
+    assert len(await parent_events(db, parent.id, "review.independent_blocked")) == 2
+
+
+async def test_no_head_parent_completes_with_its_gate_decision(db, fleet):
+    """The observed shape end to end at the gate: no forge head, so the parent waits
+    on one operator decision and cancel still ends it."""
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    assert await gate_on_parent_complete(db, parent.id) is True
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "in_review" and row["block_reason"] == "no_review_head"
+    [decision] = await open_decisions(db, parent.id)
+    await answer(db, decision.id, "cancel")
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "cancelled"
+
+
+async def test_retry_after_no_head_uses_the_forge_head(db, fleet):
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    await gate_on_parent_complete(db, parent.id)
+    [decision] = await open_decisions(db, parent.id)
+    await answer(db, decision.id, "retry_reviewer", forge=forge_read())
+    child = await latest_child(db, parent.id)
+    async with db.read() as conn:
+        child_row = await tasks.task_row(conn, child)
+    assert json.loads(child_row["input"])["head_sha"] == HEAD
+    assert json.loads(child_row["input"])["pr"] == PR_URL
+    row, _ = await state(db, parent.id)
+    assert row["block_reason"] is None and not await open_decisions(db, parent.id)
