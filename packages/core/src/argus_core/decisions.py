@@ -30,6 +30,14 @@ class Audience(StrEnum):
 ACCEPT_WITH_DEVIATION = "accept_with_deviation"
 REVIEW_OPTIONS = ("accept", ACCEPT_WITH_DEVIATION, "reject")
 
+# The review decision opened when no independent reviewer could deliver a verdict
+# (settings spec 3.5): its payload is `{"gate": "review_failed"}` and its choices are
+# these, not REVIEW_OPTIONS.
+REVIEW_FAILED_GATE = "review_failed"
+RETRY_REVIEWER = "retry_reviewer"
+APPROVE_WITHOUT_REVIEW = "approve_without_review"
+REVIEW_FAILED_OPTIONS = (RETRY_REVIEWER, APPROVE_WITHOUT_REVIEW, "cancel")
+
 
 class DecisionState(StrEnum):
     OPEN = "open"

@@ -10078,6 +10078,58 @@
         "title": "FailRequest",
         "type": "object"
       },
+      "FailedReviewer": {
+        "description": "A reviewer child that ended without a verdict (settings spec 3.5).",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account"
+          },
+          "child_task_id": {
+            "title": "Child Task Id",
+            "type": "string"
+          },
+          "error_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Class"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child_task_id",
+          "state"
+        ],
+        "title": "FailedReviewer",
+        "type": "object"
+      },
       "Failover": {
         "description": "The last switch of the account serving a task (account selection 3.6).",
         "properties": {
@@ -11368,6 +11420,14 @@
               }
             ],
             "title": "Child Task Id"
+          },
+          "failed_reviewers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FailedReviewer"
+            },
+            "title": "Failed Reviewers",
+            "type": "array"
           },
           "head_sha": {
             "anyOf": [
@@ -21613,7 +21673,8 @@
           "reason": {
             "enum": [
               "author",
-              "unavailable"
+              "unavailable",
+              "failed"
             ],
             "title": "Reason",
             "type": "string"

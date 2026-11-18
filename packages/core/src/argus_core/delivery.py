@@ -102,10 +102,21 @@ class RequiredGates(BaseModel):
     checked_at: datetime
 
 
+class FailedReviewer(BaseModel):
+    """A reviewer child that ended without a verdict (settings spec 3.5)."""
+
+    child_task_id: str
+    state: str  # failed | cancelled
+    error_class: str | None = None
+    account: str | None = None
+    model: str | None = None
+
+
 class IndependentReviewSummary(BaseModel):
     child_task_id: str | None = None
     verdict: str | None = None  # approve | request_changes | pending | unknown
     head_sha: str | None = None
+    failed_reviewers: list[FailedReviewer] = []  # since the last operator retry
     source: Literal["task"] = "task"
 
 

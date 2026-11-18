@@ -201,6 +201,13 @@ async def _apply(
         await _promote_dependents(tx, row["id"])
     elif new in (S.FAILED, S.CANCELLED):
         await _flag_dependents(tx, row["id"], new)
+        if row["kind"] == "code_review" and row["parent_id"]:
+            # Imported here: the review gate imports the task service, which imports us.
+            from argus_api.tasks import independent_review
+
+            await independent_review.on_review_child_ended(
+                tx, await _row(tx.conn, row["id"]), new, actor
+            )
     if new in (S.SUCCEEDED, S.FAILED, S.CANCELLED) and row["origin_conversation_id"]:
         # Imported here: conversations import the orchestrator, which imports us.
         from argus_api.conversations import service as conversations

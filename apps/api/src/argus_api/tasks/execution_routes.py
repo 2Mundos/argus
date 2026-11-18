@@ -179,7 +179,7 @@ async def validate_references(
 
 class SkippedAlternative(BaseModel):
     id: str
-    reason: Literal["author", "unavailable"]
+    reason: Literal["author", "unavailable", "failed"]
 
 
 class ReviewRoute(BaseModel):

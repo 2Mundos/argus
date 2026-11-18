@@ -35,6 +35,8 @@ export const BLOCK_COPY: Record<string, string> = {
     "the provider refused the credential (401/403, expired or rejected login); fix the account, then unblock",
   worker_env: "the worker reported a missing workspace, tool or credential",
   worker_gave_up: "the worker gave up; retry or cancel it",
+  review_failed:
+    "no independent reviewer delivered a verdict; retry the reviewer, approve without review, or cancel",
   budget_exhausted: "its budget is spent; raise the budget or cancel it",
 };
 

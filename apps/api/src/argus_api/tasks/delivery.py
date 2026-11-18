@@ -1089,8 +1089,15 @@ async def _independent_review(
         "awaiting_approval",
     ):
         verdict = "pending"
+    from argus_api.tasks import independent_review
+
     return IndependentReviewSummary(
-        child_task_id=child_id, verdict=verdict, head_sha=head_sha
+        child_task_id=child_id,
+        verdict=verdict,
+        head_sha=head_sha,
+        failed_reviewers=await independent_review.failed_reviewer_summaries(
+            conn, task.id
+        ),
     )
 
 

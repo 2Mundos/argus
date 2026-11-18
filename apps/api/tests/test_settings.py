@@ -46,7 +46,11 @@ def test_registry_lists_phase1_keys(client: TestClient) -> None:
     assert "orchestrator.enabled" in keys
     assert "orchestrator.daily_budget_usd" in keys
     review = next(d for d in body if d["key"] == "review.independent")
-    assert review["default"] == {"mode": "off", "max_rounds": 3}
+    assert review["default"] == {
+        "mode": "off",
+        "max_rounds": 3,
+        "max_reviewer_failures": 2,
+    }
     assert "schema" in review
     assert set(review["scopes"]) == {"global", "project"}
     executors = next(d for d in body if d["key"] == "difficulty.executors")

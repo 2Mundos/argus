@@ -47,6 +47,7 @@ _REVIEW_SCHEMA: dict[str, Any] = {
             "enum": ["off", "different_model", "different_provider"],
         },
         "max_rounds": {"type": "integer", "minimum": 1, "maximum": 20},
+        "max_reviewer_failures": {"type": "integer", "minimum": 0, "maximum": 20},
     },
 }
 
