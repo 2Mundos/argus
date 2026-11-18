@@ -220,12 +220,16 @@ async def report_progress(
     percent: int | None = None,
     kind: str | None = None,
     data: dict[str, Any] | None = None,
+    pr_rejection: str | None = None,
 ) -> Task:
     """Record a progress note. It is a worker write, so it also renews the lease.
 
     A note with a `kind` is a milestone (progress-milestones spec): it replaces the
     stored one and is not rate limited unless the kind repeats. A note without a kind
-    leaves the stored milestone alone.
+    leaves the stored milestone alone. `pr_rejection` is the reason a `pr_opened`
+    milestone names a PR that is not the task's (read from the forge by the caller,
+    outside this write): it renews the lease and records `progress.pr_rejected`, and
+    stores neither the milestone nor a PR artifact.
     """
     try:
         validate_milestone(kind, data)
@@ -233,6 +237,20 @@ async def report_progress(
         raise ValidationFailedError(str(err)) from None
     message = readable_progress(message, kind)
     row = await _owned(tx, task_id, attempt, agent_id)
+    if pr_rejection is not None:
+        await tx.conn.execute(
+            "UPDATE tasks SET lease_expires_at = ?, quiet_at = NULL WHERE id = ?",
+            (_deadline(tx.now, row["lease_ttl_s"]), task_id),
+        )
+        await record(
+            tx,
+            f"agent:{agent_id}",
+            "task",
+            task_id,
+            "progress.pr_rejected",
+            {"attempt": attempt, "reason": pr_rejection[:500], "data": data or {}},
+        )
+        return await get_task(tx.conn, task_id)
     percent = percent if percent is not None else row["progress_percent"]
     if row["progress_at"] is not None and (
         kind is None or kind == row["progress_kind"]

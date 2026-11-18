@@ -105,24 +105,122 @@ test("absence: no git, no output and no CI emit nothing and do not throw", async
   assert.deepEqual(emitted, []);
 });
 
-test("pr_opened comes from executor output, only for the configured repository", async () => {
-  const output = `see https://git.example.com/other/repo/pulls/9 and ${PR}`;
-  const { t, emitted } = tracker(
-    { head: () => null, output: () => output },
+const BRANCH = "argus/task-e836344d";
+const STARTED = Date.parse("2026-11-18T10:00:05Z");
+const onBranch = { branch: BRANCH, createdAt: "2026-11-18T10:00:07Z" };
+
+/** A tracker started at STARTED whose HEAD is on the task branch; `pr` reads the forge. */
+async function prTracker(output, pr, repository) {
+  const emitted = [];
+  const t = createTracker({
+    probes: { head: () => ({ branch: BRANCH, sha: SHA }), output: () => output, pr },
+    emit: (m) => emitted.push(m),
+    repository,
+    now: () => new Date(STARTED),
+  });
+  await t.start();
+  return { t, emitted };
+}
+
+test("pr_opened needs the forge to show the PR on the task branch, in the configured repository", async () => {
+  const asked = [];
+  const { t, emitted } = await prTracker(
+    `see https://git.example.com/other/repo/pulls/9 and ${PR}`,
+    (pr) => (asked.push(pr.number), onBranch),
     "https://git.example.com/org/repo.git",
   );
   await t.poll();
-  assert.deepEqual(emitted, [{ kind: "pr_opened", data: { number: 12, url: PR } }]);
+  await t.poll();
+  assert.deepEqual(
+    emitted.filter((m) => m.kind === "pr_opened"),
+    [{ kind: "pr_opened", data: { number: 12, url: PR } }],
+  );
+  assert.deepEqual(asked, [12]); // the other repository's PR is never read; a seen one is not re-read
 });
 
 test("pr_opened matches the repository whatever the owner's casing (2Mundos/argus #255)", async () => {
   const url = "https://github.com/2Mundos/argus/pull/255";
-  const { t, emitted } = tracker(
-    { head: () => null, output: () => `opened ${url}` },
+  const { t, emitted } = await prTracker(
+    `opened ${url}`,
+    () => onBranch,
     "https://github.com/2mundos/argus.git",
   );
   await t.poll();
-  assert.deepEqual(emitted, [{ kind: "pr_opened", data: { number: 255, url } }]);
+  assert.deepEqual(
+    emitted.filter((m) => m.kind === "pr_opened"),
+    [{ kind: "pr_opened", data: { number: 255, url } }],
+  );
+});
+
+test("a scraped PR URL that is not the task's emits nothing", async (t) => {
+  const prs = (m) => m.filter((x) => x.kind === "pr_opened");
+  const cases = {
+    "another branch": () => ({ branch: "docs/other", createdAt: "2026-11-18T10:00:07Z" }),
+    "created before the task started": () => ({
+      branch: BRANCH,
+      createdAt: "2026-11-18T09:00:00Z",
+    }),
+    "the probe throws": () => {
+      throw new Error("forge down");
+    },
+    "the forge cannot read it": () => null,
+    "no probe": undefined,
+  };
+  for (const [name, pr] of Object.entries(cases)) {
+    const { t: tr, emitted } = await prTracker(`opened ${PR}`, pr);
+    await tr.poll();
+    assert.deepEqual(prs(emitted), [], name);
+  }
+});
+
+test("a rejected PR is not read again, an error is, and an in-second PR counts", async () => {
+  let calls = 0;
+  let answer = { branch: "docs/other", createdAt: "2026-11-18T10:00:07Z" };
+  const { t, emitted } = await prTracker(`opened ${PR}`, () => (calls++, answer));
+  await t.poll();
+  await t.poll();
+  assert.equal(calls, 1);
+  answer = onBranch;
+  await t.poll();
+  assert.equal(calls, 1); // the rejection stands
+  let tries = 0;
+  const flaky = await prTracker(`opened ${PR}`, () => {
+    if (tries++ < 1) throw new Error("timeout");
+    return { branch: BRANCH, createdAt: "2026-11-18T10:00:05Z" }; // same second as start
+  });
+  await flaky.t.poll();
+  await flaky.t.poll();
+  assert.deepEqual(
+    flaky.emitted.map((m) => m.kind),
+    ["pr_opened"],
+  );
+  assert.deepEqual(emitted, []);
+});
+
+test("the ed8b5081 sequence: output names another branch's PR #416, then the task's #426", async () => {
+  const prs = {
+    416: { branch: "feat/other", createdAt: "2026-11-18T09:00:00Z" },
+    426: onBranch,
+  };
+  let output = "context: https://git.example.com/org/repo/pulls/416";
+  const emitted = [];
+  const t = createTracker({
+    probes: {
+      head: () => ({ branch: BRANCH, sha: SHA }),
+      output: () => output,
+      pr: ({ number }) => prs[number],
+    },
+    emit: (m) => emitted.push(m),
+    now: () => new Date(STARTED),
+  });
+  await t.start();
+  await t.poll();
+  output += "\nopened https://git.example.com/org/repo/pulls/426";
+  await t.poll();
+  assert.deepEqual(
+    emitted.filter((m) => m.kind === "pr_opened").map((m) => m.data.number),
+    [426],
+  );
 });
 
 test("CI states map to milestones and a failing context is a gate_failed", async () => {
@@ -223,7 +321,7 @@ test("the sink writes stderr and jsonl, posts only with the full environment, an
   await failing(m); // best effort: does not throw
 });
 
-test("argus-delegate emits milestones for a real commit and PR and keeps its report contract", async (t) => {
+test("argus-delegate emits milestones for a real commit and keeps its report contract", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "milestones-run-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const work = path.join(dir, "work");
@@ -299,16 +397,12 @@ test("argus-delegate emits milestones for a real commit and PR and keeps its rep
     .map((l) => JSON.parse(l));
   assert.deepEqual(
     lines.map((l) => l.kind),
-    ["commit_created", "pr_opened"],
+    ["commit_created"], // no forge client here, so the URL in the output is not verified
   );
-  assert.deepEqual(lines[1].data, { number: 12, url: PR });
   assert.match(result.stderr, /argus-milestone /);
   assert.deepEqual(
     posts.map((p) => [p.url, p.auth, p.body.kind]),
-    [
-      ["/api/tasks/task-1/progress", "Bearer agent-token-value", "commit_created"],
-      ["/api/tasks/task-1/progress", "Bearer agent-token-value", "pr_opened"],
-    ],
+    [["/api/tasks/task-1/progress", "Bearer agent-token-value", "commit_created"]],
   );
   assert.equal((result.stderr + JSON.stringify(lines)).includes("agent-token-value"), false);
   assert.equal(JSON.stringify(lines).includes("SECRET"), false);
@@ -506,11 +600,11 @@ for (const executor of EXECUTORS) {
       .trim()
       .split("\n")
       .map(JSON.parse);
-    // No ARGUS_REPOSITORIES_JSON: the CI probe is absent, so no ci_* is invented; and a pull
-    // request needs no repository filter here (the host filters by the task's repository).
+    // No ARGUS_REPOSITORIES_JSON: the CI and pull-request probes are absent, so no ci_* is
+    // invented and the PR URL in the output is not a milestone (nothing verified it).
     assert.deepEqual(
       lines.map((l) => l.kind),
-      ["commit_created", "pr_opened"],
+      ["commit_created"],
     );
     for (const l of lines) {
       assert.equal(l.task_id, "task-1");

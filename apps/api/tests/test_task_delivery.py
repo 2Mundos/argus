@@ -941,6 +941,73 @@ def test_rest_a_foreign_branch_is_rejected(client) -> None:
     assert client.get(f"/api/tasks/{tid}/delivery").json() is None
 
 
+def test_rest_pr_opened_is_recorded_only_for_the_tasks_own_pr(client) -> None:
+    """The ed8b5081 sequence: a worker names PR 416 (another branch), PR 417 (older
+    than the task) and then its own PR 426. Only the last is the task's milestone and
+    PR artifact; the others are `progress.pr_rejected` and renew the lease."""
+    setup_repository(client)
+    prs = {
+        "416": open_pr(head={"sha": HEAD, "ref": "feat/other"}, created_at=SOON),
+        "417": open_pr(
+            head={"sha": HEAD, "ref": "PLACEHOLDER"}, created_at="2020-01-01T00:00:00Z"
+        ),
+        "426": open_pr(head={"sha": HEAD, "ref": "PLACEHOLDER"}, created_at=SOON),
+    }
+    inner = full_forge(prs["426"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        number = request.url.path.rsplit("/pulls/", 1)[-1]
+        if request.url.path.endswith(f"/pulls/{number}") and number in prs:
+            return httpx.Response(200, json=prs[number])
+        return inner(request)
+
+    forge(client, handler)
+    tid = client.post("/api/tasks", json={"project": "demo", "title": "mine"}).json()[
+        "id"
+    ]
+    boot = client.post("/api/agents/bootstrap-tokens", json={"role": "worker"}).json()
+    token = client.post(
+        "/api/agents/register", json={"bootstrap_token": boot["token"]}
+    ).json()["token"]
+    worker = {"Authorization": f"Bearer {token}"}
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    mine = f"argus/task-{tid[:8]}"
+    for n in ("417", "426"):
+        prs[n]["head"]["ref"] = mine
+
+    def report(number: str):
+        url = f"https://{HOST}/{OWNER}/{REPO}/pulls/{number}"
+        return client.post(
+            f"/api/tasks/{tid}/progress",
+            json={
+                "attempt": claimed["attempt"],
+                "message": "PR up",
+                "kind": "pr_opened",
+                "data": {"number": int(number), "url": url},
+            },
+            headers=worker,
+        )
+
+    for number in ("416", "417"):
+        res = report(number)
+        assert res.status_code == 200, res.text
+        assert res.json()["progress_kind"] is None
+    res = report("426")
+    assert res.status_code == 200, res.text
+    assert res.json()["progress_data"]["number"] == 426
+    artifacts = client.get(f"/api/tasks/{tid}/continuation").json()["artifacts"]
+    assert [a["ref"] for a in artifacts if a["kind"] == "pr"] == ["426"]
+    rejected = [
+        e
+        for e in client.get("/api/events", params={"subject_id": tid}).json()
+        if e["kind"] == "progress.pr_rejected"
+    ]
+    reasons = {e["data"]["data"]["number"]: e["data"]["reason"] for e in rejected}
+    assert sorted(reasons) == [416, 417]
+    assert "feat/other" in reasons[416]
+    assert "before the task" in reasons[417]
+
+
 def test_rest_a_pr_on_the_tasks_own_branch_is_bound(client) -> None:
     """The counterpart: the same shape with the task's own head branch projects."""
     setup_repository(client)

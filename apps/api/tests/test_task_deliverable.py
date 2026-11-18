@@ -114,6 +114,8 @@ def pr_opened(client: TestClient, w: dict[str, str], t: dict) -> dict:
         headers=w,
     )
     assert res.status_code in (200, 201), res.text
+    # The report read the forge, which no test has mocked yet: do not keep that failure.
+    client.app.state.pr_checker._cache.clear()  # ty: ignore[unresolved-attribute]
     return {}
 
 

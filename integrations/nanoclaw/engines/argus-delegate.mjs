@@ -107,8 +107,8 @@ const readTail = (file) => {
   }
 };
 
-/** CI statuses for a commit through the credential-free forge client, or undefined when not configured. */
-export async function giteaCiProbe(e) {
+/** The credential-free forge client for the task repository, or undefined when not configured. */
+async function forgeClient(e) {
   const repository = (e.ARGUS_REPOSITORY_URL ?? "").trim();
   if (!repository || !e.ARGUS_REPOSITORIES_JSON) return undefined;
   try {
@@ -121,11 +121,30 @@ export async function giteaCiProbe(e) {
       ).href
     );
     const allowlist = Object.values(JSON.parse(e.ARGUS_REPOSITORIES_JSON));
-    const api = mod.repositoryClient(repository, allowlist);
-    return (sha) => api.ciStatuses(sha);
+    return mod.repositoryClient(repository, allowlist);
   } catch {
     return undefined;
   }
+}
+
+/** CI statuses for a commit through the credential-free forge client, or undefined when not configured. */
+export async function giteaCiProbe(e) {
+  const api = await forgeClient(e);
+  return api && ((sha) => api.ciStatuses(sha));
+}
+
+/** A pull request's head branch and creation time through the same client, or undefined when not configured. */
+export async function pullRequestProbe(e) {
+  const api = await forgeClient(e);
+  return (
+    api &&
+    (async ({ number }) => {
+      const pr = await api.getPullRequest(number);
+      return pr?.head?.ref && pr.created_at
+        ? { branch: pr.head.ref, createdAt: pr.created_at }
+        : null;
+    })
+  );
 }
 const USAGE_POST_TIMEOUT_MS = 5000;
 
@@ -1788,6 +1807,7 @@ async function runAttempt(
       head: () => gitHead(cwd),
       output: () => `${scannable(executor, readTail(stdoutFile))}\n${readTail(stderrFile)}`,
       ci: await giteaCiProbe(e),
+      pr: await pullRequestProbe(e),
     },
     emit: (m) => pending.push(sink(m)),
   });

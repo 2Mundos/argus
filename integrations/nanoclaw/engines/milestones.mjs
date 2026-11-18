@@ -118,12 +118,21 @@ export function ciState(statuses) {
  *   probes.head()    -> { branch, sha } | null
  *   probes.output()  -> executor output so far (string)
  *   probes.ci(sha)   -> statuses array | null        (optional)
+ *   probes.pr({number, url}) -> { branch, createdAt } | null   (optional)
  * `repository` (optional URL) limits pull requests to that repository.
+ * A PR URL named in output is only a candidate: `pr_opened` needs `probes.pr` to read
+ * the PR and find its head branch equal to the task's branch (`probes.head().branch`)
+ * and its creation at or after `start()`. Without the probe, or when it returns null or
+ * throws, nothing is emitted (`argus-task deliver` prints the authoritative URL). A
+ * definite rejection is remembered per URL; an error is not.
  * A probe that throws is skipped for that poll. Each distinct milestone is emitted once.
+ * `now` is injectable for tests.
  */
-export function createTracker({ probes, emit, repository }) {
+export function createTracker({ probes, emit, repository, now = () => new Date() }) {
   const seen = new Set();
+  const rejected = new Set();
   let baseline = null;
+  let startedAt = null;
   const once = (kind, data) => {
     const m = milestone(kind, data);
     if (!m) return;
@@ -142,6 +151,7 @@ export function createTracker({ probes, emit, repository }) {
   return {
     /** Record HEAD before the executor starts: only later commits are milestones. */
     async start() {
+      startedAt = now().getTime();
       baseline = (await safely(() => probes.head(), null))?.sha ?? null;
     },
     once,
@@ -153,8 +163,19 @@ export function createTracker({ probes, emit, repository }) {
       const prefix = repository
         ? `${repository.replace(/(\.git)?\/*$/, "")}/pull`.toLowerCase()
         : null;
-      for (const pr of pullRequestsIn(await safely(() => probes.output(), "")))
-        if (!prefix || pr.url.toLowerCase().startsWith(prefix)) once("pr_opened", pr);
+      for (const pr of pullRequestsIn(await safely(() => probes.output(), ""))) {
+        if (prefix && !pr.url.toLowerCase().startsWith(prefix)) continue;
+        const m = milestone("pr_opened", pr);
+        if (!m || seen.has(JSON.stringify(m)) || rejected.has(pr.url)) continue;
+        if (!probes.pr || !head?.branch) continue;
+        const found = await safely(() => probes.pr(pr), null);
+        if (!found) continue;
+        // The forge stamps whole seconds, so compare from the second the executor started in.
+        const created = Date.parse(found.createdAt);
+        if (found.branch === head.branch && created >= Math.floor((startedAt ?? 0) / 1000) * 1000)
+          once("pr_opened", pr);
+        else rejected.add(pr.url);
+      }
       if (head && head.sha !== baseline && probes.ci) {
         const ci = ciState(await safely(() => probes.ci(head.sha), null));
         if (ci?.state === "pending") once("ci_running", { sha: head.sha });
