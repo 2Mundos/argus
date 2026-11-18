@@ -225,3 +225,92 @@ def test_non_utf8_stderr_does_not_crash(
 ) -> None:
     case = record_case(tmp_path, monkeypatch, b"bad \xff byte\n")
     assert "bad" in (case / "stderr.txt").read_text()
+
+
+def test_db_name_with_uri_reserved_characters_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(record_transcript, "derive", lambda engine, events: "{}\n")
+    db = make_db(
+        tmp_path / "copy?of#argus.db",
+        [("t1", 1, "delegate", json.dumps({"type": "user"}))],
+    )
+    root = tmp_path / "root"
+    argv = [
+        "t1",
+        "1",
+        "claude",
+        "c",
+        "--source",
+        "s",
+        "--db",
+        str(db),
+        "--root",
+        str(root),
+    ]
+    assert main(argv) == 0
+    assert json.loads((root / "claude" / "c" / "events.jsonl").read_text()) == {
+        "type": "user"
+    }
+
+
+def test_connection_is_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = make_db(
+        tmp_path / "copy?of#argus.db",
+        [("t1", 1, "delegate", json.dumps({"type": "user"}))],
+    )
+    writes_refused: list[bool] = []
+    original = record_transcript.record
+
+    def record_then_write(
+        conn: sqlite3.Connection, task_id: str, attempt: int
+    ) -> list[str]:
+        lines = original(conn, task_id, attempt)
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("DELETE FROM task_log")
+        writes_refused.append(True)
+        return lines
+
+    monkeypatch.setattr(record_transcript, "record", record_then_write)
+    monkeypatch.setattr(record_transcript, "derive", lambda engine, events: "{}\n")
+    argv = [
+        "t1",
+        "1",
+        "claude",
+        "c",
+        "--source",
+        "s",
+        "--db",
+        str(db),
+        "--root",
+        str(tmp_path / "root"),
+    ]
+    assert main(argv) == 0
+    assert writes_refused == [True]
+    assert len(sqlite3.connect(db).execute("SELECT * FROM task_log").fetchall()) == 1
+
+
+def test_absent_database_is_refused_and_not_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(record_transcript, "derive", lambda engine, events: "{}\n")
+    absent = tmp_path / "missing?copy#argus.db"
+    argv = [
+        "t1",
+        "1",
+        "claude",
+        "c",
+        "--source",
+        "s",
+        "--db",
+        str(absent),
+        "--root",
+        str(tmp_path / "root"),
+    ]
+    with pytest.raises(SystemExit) as refused:
+        main(argv)
+    assert refused.value.code == 2
+    assert "database not found" in capsys.readouterr().err
+    assert sorted(p.name for p in tmp_path.iterdir()) == []

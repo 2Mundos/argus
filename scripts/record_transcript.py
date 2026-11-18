@@ -180,7 +180,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"cannot read --stderr: {e}")
         if not stderr.strip():
             stderr = ""
-    db = sqlite3.connect(f"file:{Path(args.db).resolve()}?mode=ro", uri=True)
+    db_path = Path(args.db).resolve()
+    if not db_path.is_file():
+        parser.error(f"database not found: {db_path}")
+    # as_uri() percent-encodes ? # and % in the name; a raw path would end at the first ?
+    db = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
     try:
         text = render(
             record(db, args.task_id, args.attempt),
