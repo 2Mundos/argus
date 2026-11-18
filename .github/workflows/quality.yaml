@@ -1,7 +1,7 @@
 name: Quality
-# Release notes alone (`docs/releases/`) are cut with a tag; Release CI owns that
-# push. Skip Quality when the diff is only those files so a `make release --push`
-# does not re-run the full suite next to the publish workflow.
+# Release notes alone (`docs/releases/`) land through a pull request, then a tag;
+# Release CI owns the tag push. Skip Quality when the diff is only those files so
+# the notes PR and its merge commit do not re-run the full suite next to publish.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]

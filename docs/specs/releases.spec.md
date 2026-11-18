@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-11
+updated: 2026-11-18
 ---
 
 # Releases
@@ -9,13 +9,19 @@ updated: 2026-11-11
 # 1. Purpose and Scope
 
 A release is a SemVer tag `vX.Y.Z` on `main`, a notes document committed with
-it, and one container image (`linux/amd64` and `linux/arm64`) built from that tag. One command cuts it; pushing
-the tag builds and publishes everything else.
+it, and one container image (`linux/amd64` and `linux/arm64`) built from that
+tag. A notes pull request and one tag cut it; pushing the tag builds and
+publishes everything else.
 
 - `make release` (`scripts/release.py`) infers the next version from the
   history since the last tag, writes `docs/releases/YYYY-MM-DD.vX-Y-Z.ref.md`,
-  commits it, and creates an annotated tag on that commit. `ARGS=--push` pushes
-  `main` and the tag in one atomic push; `ARGS=--dry-run` only prints.
+  commits it on `release/vX.Y.Z`, pushes that branch and opens a pull request
+  (`gh` when installed, otherwise it prints the command). It does not touch
+  `main` and creates no tag. `ARGS=--dry-run` only prints; `ARGS=--version`
+  chooses the version.
+- After the notes PR is squash-merged, `make release ARGS=--tag` tags the commit
+  that added the notes on `main` and pushes only that tag. The release workflow
+  builds from the tag.
 - `.github/workflows/release.yaml` runs on a `v*` tag push (or by hand for an
   existing tag). It builds `deploy/Dockerfile.api` with the version baked in,
   pushes `ghcr.io/<owner>/argus:vX.Y.Z` to the GitHub container registry, and,
@@ -70,11 +76,11 @@ cut deliberately with `--version v1.0.0`. `--version` always overrides inference
 
 ## 3.2 Notes are built from the first-parent history
 
-Work lands on `main` as PR merge commits plus the occasional direct commit. A
-merge commit carries the PR title in its subject (Gitea) or as the first body
-line (GitHub). The notes list first-parent entries only: a PR appears once,
-under its title, with `(#N)`; the commits inside it (formatting fixes, review rounds) do not. Other
-merge commits (`Merge main into …`) are skipped. Entries are grouped by
+Work lands on `main` as PR merge commits. A merge commit carries the PR title in
+its subject (Gitea) or as the first body line (GitHub). The notes list
+first-parent entries only: a PR appears once, under its title, with `(#N)`; the
+commits inside it (formatting fixes, review rounds) do not. Other merge commits
+(`Merge main into …`) are skipped. Entries are grouped by
 Conventional Commit type into Features (`feat`), Fixes (`fix`) and Maintenance
 (everything else), with the scope kept as a prefix (`accounts: …`).
 
@@ -98,9 +104,13 @@ release page and 404s, and a tag-pinned link shows the spec as it shipped.
 The script refuses, before changing anything, when: the branch is not `main`;
 the worktree is dirty (except `--dry-run`); `HEAD` differs from `origin/main`
 after a fetch (a release is cut from what is published, nothing more and nothing
-stale); the range is empty; or the tag already exists. The workflow refuses a
-tag that is not `vX.Y.Z`, whose commit is not on `origin/main`, or that has no
-notes file.
+stale); a merged release's notes are still untagged; the range is empty; the tag
+is already published; or the `release/vX.Y.Z` branch already exists.
+
+`--tag` refuses when no merged notes are untagged, when several are (pass
+`--version`), or when the tag is already published. The workflow refuses a tag
+that is not `vX.Y.Z`, whose commit is not on `origin/main`, or that has no notes
+file.
 
 ## 3.5 The version reaches the binary through the image
 
@@ -124,12 +134,13 @@ because pulling `latest` can apply migrations that make the upgrade one-way (3.3
 without the operator reading the notes first. The README names no version: its
 `docker run` uses `latest` and says to replace it with a `vX.Y.Z` tag to pin.
 
-## 3.8 Notes-only commits skip Quality
+## 3.8 Notes-only changes skip Quality
 
-`make release` commits only the new notes file and pushes `main` with the tag
-atomically. Quality's `on.push` / `on.pull_request` use
-`paths-ignore: docs/releases/**`, so that notes commit does not start Quality;
-only the Release workflow runs for the tag. A commit that touches anything
+`make release` commits only the new notes file to `release/vX.Y.Z` and opens the
+PR; after the squash merge, `make release ARGS=--tag` pushes only the tag.
+Quality's `on.push` / `on.pull_request` use `paths-ignore:
+docs/releases/**`, so neither the notes PR nor the merge commit starts Quality;
+only the Release workflow runs for the tag. A commit or PR that touches anything
 outside `docs/releases/` still runs Quality as usual. CodeQL default setup is
 configured in the repository's Advanced Security settings (not in this tree) and
 still runs on the notes push unless that setup is given a path filter or moved
@@ -169,17 +180,21 @@ None.
 # 5. Constraints
 
 - `scripts/release.py` uses the standard library only, like
-  `scripts/validate_docs.py`, so it runs without `make setup`.
-- The release commit touches only the new notes file; the tag points at it, so
-  the image contains its own notes.
+  `scripts/validate_docs.py`, so it runs without `make setup`; `gh` is optional
+  and only opens the pull request.
+- The notes commit touches only the new notes file; the tag points at the
+  commit that added it on `main`, so the image contains its own notes even when
+  `main` moves on before the tag is pushed. The tag push skips the local
+  pre-push hook (`--no-verify`): it carries no new code and Release CI owns it.
 - The workflow's own `GITHUB_TOKEN` (`contents: write`, `packages: write`)
   pushes the image and creates the release; no repository secrets are needed,
   and nothing else in the repository changes per release.
 
 # 6. Implementation Consequences
 
-- `scripts/release.py`, `scripts/test_release.py` (unit tests plus one run
-  against a throwaway repository with a bare remote), `make release`.
+- `scripts/release.py`, `scripts/test_release.py` (unit tests plus runs against
+  a throwaway repository with a bare remote, covering both phases), `make
+  release`.
 - `.github/workflows/release.yaml`, `scripts/test_release_workflow.py` (job ordering
   and permissions, with negative cases).
 - `.github/workflows/quality.yaml`: `paths-ignore` for `docs/releases/**` (3.8).
