@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from api_support import FakeClock, insert_agent
 from argus_api.config import Settings
-from argus_api.db import Database
+from argus_api.db import Database, ts
 from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.runtime import service
 from argus_api.runtime.docker import (
@@ -22,6 +22,7 @@ from argus_api.runtime.docker import (
 )
 from argus_api.runtime.service import RuntimeManager
 from argus_api.tasks import service as tasks
+from argus_api.tasks.reasons import RUNTIME_PREPARING_NOTE
 from argus_core.runtime import (
     ComponentRef,
     PrepareRequest,
@@ -317,6 +318,7 @@ async def test_build_verifies_with_probes_then_task_is_released_and_ready(
     row = await task_row(db, task.id)
     assert row["state"] == "claimed" and row["failures"] == 0
     assert row["attempt"] == 1  # preparing -> ready cost exactly one attempt
+    assert row["progress_message"] is None  # the hold's note never outlives it
     async with db.read() as conn:
         selected = await service.task_runtime(conn, task.id)
     assert (
@@ -545,6 +547,69 @@ async def test_changed_declaration_wakes_failed_holds(db, manager, docker) -> No
             tx, "radar", RuntimeSpec(components=[ComponentRef(id="git")]), "human:test"
         )
     assert (await task_row(db, t.id))["state"] == "ready"
+
+
+async def set_progress(db: Database, task_id: str, message: str | None) -> None:
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET progress_message = ?, progress_percent = 40,"
+            " progress_at = ? WHERE id = ?",
+            (message, ts(tx.now), task_id),
+        )
+
+
+async def test_wake_clears_the_runtime_note_only(db, manager, docker) -> None:
+    await create(db, "radar")
+    held = await claim(db)
+    await manager.prepare(A, req(held))
+    assert (await task_row(db, held.id))["progress_message"] == RUNTIME_PREPARING_NOTE
+    await manager.work_once()
+    row = await task_row(db, held.id)
+    assert row["state"] == "ready" and row["progress_message"] is None
+    assert row["progress_percent"] is None and row["progress_at"] is None
+
+
+async def test_wake_keeps_a_worker_written_message(db, manager, docker) -> None:
+    await create(db, "radar")
+    held = await claim(db)
+    await manager.prepare(A, req(held))
+    await set_progress(db, held.id, "worker wrote this")
+    await manager.work_once()
+    row = await task_row(db, held.id)
+    assert row["state"] == "ready" and row["progress_message"] == "worker wrote this"
+    assert row["progress_percent"] == 40
+
+
+async def test_claim_clears_a_leftover_runtime_note(db) -> None:
+    t = await create(db, "radar")
+    await set_progress(db, t.id, RUNTIME_PREPARING_NOTE)
+    assert await claim(db, B) is not None  # B never prepared: nothing gates it
+    row = await task_row(db, t.id)
+    assert row["state"] == "claimed" and row["progress_message"] is None
+    assert row["progress_percent"] is None and row["progress_at"] is None
+
+
+async def test_claim_keeps_a_worker_written_message(db) -> None:
+    t = await create(db, "radar")
+    await set_progress(db, t.id, "worker wrote this")
+    assert await claim(db, B) is not None
+    assert (await task_row(db, t.id))["progress_message"] == "worker wrote this"
+
+
+async def test_runtime_failed_message_survives_a_wake(db, manager, docker) -> None:
+    docker.fail_build = True
+    await create(db, "radar")
+    t = await claim(db)
+    await manager.prepare(A, req(t))
+    await manager.work_once()
+    before = (await task_row(db, t.id))["progress_message"]
+    assert before and before != RUNTIME_PREPARING_NOTE
+    async with db.write() as tx:
+        await service.put_spec(
+            tx, "radar", RuntimeSpec(components=[ComponentRef(id="git")]), "human:test"
+        )
+    row = await task_row(db, t.id)
+    assert row["state"] == "ready" and row["progress_message"] == before
 
 
 async def test_daemon_mismatch_is_an_actionable_failure(db, manager, docker) -> None:

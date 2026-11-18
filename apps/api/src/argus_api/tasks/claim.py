@@ -30,7 +30,12 @@ from argus_api.tasks.engine import (
     wake_waiting,
 )
 from argus_api.tasks.reads import _TICK, _agent_state, _deadline, get_task
-from argus_api.tasks.reasons import AWAITING_QUOTA, NO_COMPATIBLE_WORKER, RUNTIME_FAILED
+from argus_api.tasks.reasons import (
+    AWAITING_QUOTA,
+    NO_COMPATIBLE_WORKER,
+    RUNTIME_FAILED,
+    RUNTIME_PREPARING_NOTE,
+)
 from argus_api.tasks.transitions import _apply, _budget_block
 
 
@@ -210,6 +215,13 @@ async def claim(
     if row is None:
         return None
     attempt = row["attempt"] + 1
+    # The runtime-preparing note outlives its hold only if no wake cleared it: a
+    # claim drops it too, and any other message is the worker's and stays.
+    held_note = (
+        {"progress_message": None, "progress_percent": None, "progress_at": None}
+        if row["progress_message"] == RUNTIME_PREPARING_NOTE
+        else {}
+    )
     await _apply(
         tx,
         row,
@@ -221,6 +233,7 @@ async def claim(
             "progress_kind": None,  # a milestone belongs to one attempt
             "progress_data": None,
             "output_at": None,
+            **held_note,
             "session_gone_at": None,
             "paused_disk_at": None,
             "lease_expires_at": _deadline(tx.now, row["lease_ttl_s"]),
