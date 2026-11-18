@@ -1306,3 +1306,146 @@ async def test_retry_after_no_head_uses_the_forge_head(db, fleet):
     assert json.loads(child_row["input"])["pr"] == PR_URL
     row, _ = await state(db, parent.id)
     assert row["block_reason"] is None and not await open_decisions(db, parent.id)
+
+
+async def manual_gate(db, parent_id):
+    [decision] = await open_decisions(db, parent_id)
+    assert decision.options == ["accept", "accept_with_deviation", "reject"]
+    return decision.payload["gate"], decision
+
+
+async def test_no_eligible_reviewer_opens_one_manual_review(db, fleet):
+    await review_policy(db, [OPUS_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    assert await spawn(db, parent.id) is None
+    assert await spawn(db, parent.id) is None  # a repeated attempt adds nothing
+    gate, _ = await manual_gate(db, parent.id)
+    assert gate == "no_reviewer"
+
+
+async def test_missing_review_head_opens_one_manual_review(db, fleet):
+    parent = await reviewed_parent(db, fleet)
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+
+    async with db.write() as tx:
+        row = await tasks.task_row(tx.conn, parent.id)
+        for _ in range(2):
+            await review.spawn_reviewer(
+                tx,
+                row,
+                pr=None,
+                head_sha=None,
+                setting=IndependentReviewSetting(mode="different_model"),
+                policy={},
+                actor="system",
+            )
+    [decision] = await open_decisions(db, parent.id)
+    assert decision.options == ["retry_reviewer", "approve_without_review", "cancel"]
+    assert decision.payload["reason"] == "no_review_head"
+
+
+async def test_active_reviewer_means_no_manual_review(db, fleet):
+    await review_policy(db, [CODEX_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    assert await spawn(db, parent.id)
+    assert not await open_decisions(db, parent.id)
+
+
+async def test_reviewer_without_a_verdict_opens_one_manual_review(db, fleet):
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+    from argus_core.tasks import TaskResult
+
+    await review_policy(db, [CODEX_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child = await spawn(db, parent.id)
+    async with db.write() as tx:
+        await record_execution(tx, child, 0, "gpt-5.5", "openai", "codex")
+        await tx.conn.execute(
+            "UPDATE tasks SET state = 'succeeded' WHERE id = ?", (child,)
+        )
+        row = await tasks.task_row(tx.conn, child)
+        for _ in range(2):
+            await review.on_review_child_complete(
+                tx,
+                row,
+                TaskResult(summary="?", data={"verdict": "maybe"}),
+                setting=IndependentReviewSetting(mode="different_model"),
+                policy={},
+                actor="system",
+            )
+    gate, _ = await manual_gate(db, parent.id)
+    assert gate == "reviewer_failed"
+
+
+async def test_gate_off_opens_manual_review_for_waiting_parents(db, fleet):
+    await review_policy(db, [CODEX_ALT])
+    await review_setting(db)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child = await spawn(db, parent.id)
+    assert not await open_decisions(db, parent.id)
+    await review_setting(db, mode="off")
+    gate, _ = await manual_gate(db, parent.id)
+    assert gate == "gate_disabled"
+    row, _ = await state(db, child)
+    assert row["state"] == "cancelled"
+    await review_setting(db, mode="off")  # a repeated change adds nothing
+    assert len(await open_decisions(db, parent.id)) == 1
+
+
+async def test_accepting_the_manual_review_succeeds_the_parent(db, fleet):
+    await review_policy(db, [OPUS_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    await spawn(db, parent.id)
+    _, decision = await manual_gate(db, parent.id)
+    await answer(db, decision.id, "accept")
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "succeeded" and row["block_reason"] is None
+
+
+async def test_backfill_repairs_only_orphaned_in_review_tasks(db, fleet):
+    from argus_api.tasks import independent_review as review
+
+    await review_policy(db, [CODEX_ALT])
+    orphan = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    failed_reviewer = await make_task(db)
+    waiting = await make_task(db)
+    decided = await make_task(db)
+    pending = await make_task(db)
+    async with db.write() as tx:
+        for t in (failed_reviewer, waiting, decided):
+            await tx.conn.execute(
+                "UPDATE tasks SET state = 'in_review' WHERE id = ?", (t.id,)
+            )
+    gone = await spawn(db, failed_reviewer.id)
+    await spawn(db, waiting.id)
+    async with db.write() as tx:
+        await tx.conn.execute("UPDATE tasks SET state = 'failed' WHERE id = ?", (gone,))
+        from argus_api.decisions import store
+        from argus_core.decisions import Audience, DecisionKind
+
+        await store.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=decided.id,
+            kind=DecisionKind.REVIEW,
+            question="q",
+            options=["accept", "reject"],
+            audience=Audience.HUMAN,
+            requested_by="system",
+        )
+    async with db.write() as tx:
+        first = await review.backfill_manual_reviews(tx)
+    async with db.write() as tx:
+        second = await review.backfill_manual_reviews(tx)
+    assert sorted(first) == sorted([orphan.id, failed_reviewer.id]) and second == []
+    assert (await manual_gate(db, orphan.id))[0] == "no_reviewer"
+    assert (await manual_gate(db, failed_reviewer.id))[0] == "reviewer_failed"
+    assert not await open_decisions(db, waiting.id)
+    assert len(await open_decisions(db, decided.id)) == 1
+    assert not await open_decisions(db, pending.id)
+    for t, expected in ((orphan, "in_review"), (pending, "ready")):
+        row, _ = await state(db, t.id)
+        assert row["state"] == expected
+    assert len(await parent_events(db, orphan.id, "review.decision_backfilled")) == 1

@@ -18,9 +18,12 @@ import aiosqlite
 from argus_core.accounts import LeaseRole
 from argus_core.continuation import ArtifactKind
 from argus_core.decisions import (
+    GATE_DISABLED_GATE,
+    NO_REVIEWER_GATE,
     REVIEW_FAILED_GATE,
     REVIEW_FAILED_OPTIONS,
     REVIEW_OPTIONS,
+    REVIEWER_FAILED_GATE,
     Audience,
     DecisionKind,
 )
@@ -53,6 +56,11 @@ NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
 NO_REVIEW_HEAD = "no_review_head"
 REVIEW_FAILED = "review_failed"
 _GATE_BLOCKS = (NO_INDEPENDENT_REVIEWER, NO_REVIEW_HEAD, REVIEW_FAILED)
+_GATE_WHY = {
+    NO_REVIEWER_GATE: "no independent reviewer could be selected",
+    REVIEWER_FAILED_GATE: "the reviewer failed to deliver a verdict",
+    GATE_DISABLED_GATE: "independent review was switched off",
+}
 CHILD_FAILED_EVENT = "review.independent_child_failed"
 RETRY_EVENT = "review.independent_retry"
 # Where the global model policy lives; the app sets it at startup (main.py), as the
@@ -498,6 +506,73 @@ async def _no_head(tx: Tx, parent: aiosqlite.Row, pr: str | None, actor: str) ->
     )
 
 
+async def has_active_reviewer(conn: aiosqlite.Connection, parent_id: str) -> bool:
+    async with conn.execute(
+        "SELECT 1 FROM tasks WHERE parent_id = ? AND kind = ? AND state NOT IN (?, ?, ?)"
+        " LIMIT 1",
+        (
+            parent_id,
+            CODE_REVIEW_KIND,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+        ),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def open_manual_review(
+    tx: Tx, parent: aiosqlite.Row, gate: str, actor: str
+) -> str | None:
+    """Keep the in_review invariant: a parent waits on an open review decision or an
+    active reviewer, never neither. Opens the regular review decision, with `gate`
+    (`MANUAL_REVIEW_GATES`) in its payload, when the parent has neither; otherwise a
+    no-op, so every loss path may call it. Returns the new decision id."""
+    if parent["state"] != TaskState.IN_REVIEW:
+        return None
+    if await decisions.open_ids(tx.conn, "task", parent["id"], (DecisionKind.REVIEW,)):
+        return None
+    if await has_active_reviewer(tx.conn, parent["id"]):
+        return None
+    failed = [
+        {k: a.get(k) for k in ("child_id", "state", "error_class", "alternative")}
+        for a in await failed_reviewers(tx.conn, parent["id"])
+    ]
+    return await decisions.open_decision(
+        tx,
+        subject_type="task",
+        subject_id=parent["id"],
+        kind=DecisionKind.REVIEW,
+        question=(
+            f"Review the result of {parent['title']!r} (attempt {parent['attempt']})."
+            f" The independent review did not complete ({_GATE_WHY[gate]}); review it"
+            " manually."
+        ),
+        options=list(REVIEW_OPTIONS),
+        audience=Audience.HUMAN,
+        requested_by=actor,
+        payload={"gate": gate, "failed": failed},
+    )
+
+
+async def clear_gate_block(tx: Tx, task_id: str) -> None:
+    """Drop a gate block_reason once the operator's review decision settled the task."""
+    await tx.conn.execute(
+        "UPDATE tasks SET block_reason = NULL WHERE id = ? AND block_reason IN (?, ?, ?)",
+        (task_id, *_GATE_BLOCKS),
+    )
+
+
+async def _manual_unless_escalating(
+    tx: Tx, parent: aiosqlite.Row, none_eligible: str, actor: str
+) -> None:
+    """A blocked spawn leaves the parent with the manual review decision, except where
+    the caller escalates itself (`none_eligible` is REVIEW_FAILED): that decision
+    carries the retry choices."""
+    if none_eligible != REVIEW_FAILED:
+        await open_manual_review(tx, parent, NO_REVIEWER_GATE, actor)
+
+
 async def spawn_reviewer(
     tx: Tx,
     parent: aiosqlite.Row,
@@ -549,6 +624,7 @@ async def spawn_reviewer(
                 actor,
                 skipped=[s.model_dump() for s in review.skipped],
             )
+            await _manual_unless_escalating(tx, parent, none_eligible, actor)
             return None
     else:
         usable = await usable_providers(tx.conn, ts(tx.now))
@@ -562,6 +638,7 @@ async def spawn_reviewer(
         )
         if harness is None and executor is None:
             await _block(tx, parent, none_eligible, actor)
+            await _manual_unless_escalating(tx, parent, none_eligible, actor)
             return None
     # Clear a prior gate block if we found a reviewer this time.
     if parent["block_reason"] in _GATE_BLOCKS:
@@ -838,6 +915,19 @@ async def on_review_child_complete(
             )
         return
 
+    if verdict != "request_changes":
+        # No usable verdict: a manual review settles the parent.
+        await record(
+            tx,
+            actor,
+            "task",
+            parent_id,
+            "review.independent_void",
+            {"reason": "no_verdict", "child_id": child["id"]},
+        )
+        await open_manual_review(tx, parent, REVIEWER_FAILED_GATE, actor)
+        return
+
     if verdict == "request_changes":
         # Count prior request_changes rounds plus this one.
         rounds = await review_rounds(tx.conn, parent_id)
@@ -1048,6 +1138,9 @@ async def on_review_child_ended(
     await record(tx, actor, "task", parent_id, CHILD_FAILED_EVENT, attempt)
     attempts = await failed_reviewers(tx.conn, parent_id)
     setting, policy = await _load_settings(tx.conn, parent["project"])
+    if setting.mode == "off":
+        await open_manual_review(tx, parent, GATE_DISABLED_GATE, actor)
+        return
     if len(attempts) > setting.max_reviewer_failures:
         await _escalate(tx, parent, attempts, actor, blocked=False)
         return
@@ -1165,3 +1258,61 @@ async def approve_without_review(
         "UPDATE tasks SET block_reason = NULL WHERE id = ? AND block_reason = ?",
         (parent_id, REVIEW_FAILED),
     )
+
+
+async def on_gate_changed(tx: Tx, actor: str) -> None:
+    """`review.independent` changed: a parent still waiting on a reviewer in a project
+    where the gate is now off loses that reviewer (cancelled), which opens its manual
+    review decision through `on_review_child_ended`."""
+    from argus_api.tasks import manage
+
+    async with tx.conn.execute(
+        "SELECT c.id AS child_id, p.project AS project FROM tasks c"
+        " JOIN tasks p ON p.id = c.parent_id"
+        " WHERE c.kind = ? AND p.state = ? AND c.state NOT IN (?, ?, ?)",
+        (
+            CODE_REVIEW_KIND,
+            TaskState.IN_REVIEW,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+        ),
+    ) as cur:
+        waiting = list(await cur.fetchall())
+    for row in waiting:
+        setting, _ = await _load_settings(tx.conn, row["project"])
+        if setting.mode == "off":
+            await manage.cancel(tx, row["child_id"], actor)
+
+
+async def backfill_manual_reviews(tx: Tx) -> list[str]:
+    """Startup repair: every `in_review` task with neither an open review decision nor
+    an active reviewer gets the manual review decision (`reviewer_failed` when a
+    reviewer child ever existed, else `no_reviewer`) and a `review.decision_backfilled`
+    event. State is untouched; a second run finds nothing. Returns the task ids."""
+    from argus_api.tasks import service as tasks_svc
+
+    async with tx.conn.execute(
+        "SELECT id FROM tasks WHERE state = ? ORDER BY rowid", (TaskState.IN_REVIEW,)
+    ) as cur:
+        ids = [r["id"] for r in await cur.fetchall()]
+    repaired: list[str] = []
+    for task_id in ids:
+        async with tx.conn.execute(
+            "SELECT 1 FROM tasks WHERE parent_id = ? AND kind = ? LIMIT 1",
+            (task_id, CODE_REVIEW_KIND),
+        ) as cur:
+            had_reviewer = await cur.fetchone() is not None
+        gate = REVIEWER_FAILED_GATE if had_reviewer else NO_REVIEWER_GATE
+        parent = await tasks_svc._row(tx.conn, task_id)
+        if decision_id := await open_manual_review(tx, parent, gate, "system"):
+            await record(
+                tx,
+                "system",
+                "task",
+                task_id,
+                "review.decision_backfilled",
+                {"decision_id": decision_id, "gate": gate},
+            )
+            repaired.append(task_id)
+    return repaired

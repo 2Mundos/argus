@@ -392,6 +392,7 @@ async def _apply_answer(
                 forge=forge,
                 deviation=effect is Effect.REVIEW_ACCEPT_DEVIATION,
             )
+            await independent_review.clear_gate_block(tx, task_id)
 
 
 def check_answer(decision: Decision, body: DecisionAnswer) -> None:
