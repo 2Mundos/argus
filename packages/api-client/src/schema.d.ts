@@ -13402,7 +13402,7 @@ export interface components {
             /** Generation */
             generation: number;
             /** Reason */
-            reason?: ("quota" | "provider_unavailable" | "auth_missing" | "not_installed" | "model_not_served" | "provider_protocol" | "provider_transport") | null;
+            reason?: ("quota" | "provider_unavailable" | "auth_missing" | "auth_expired" | "not_installed" | "model_not_served" | "provider_protocol" | "provider_transport") | null;
             /**
              * Stopped
              * @default false

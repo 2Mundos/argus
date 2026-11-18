@@ -1076,3 +1076,57 @@ async def test_review_failed_decision_refuses_plain_review_choices(db, fleet):
     [decision] = await open_decisions(db, parent.id)
     with pytest.raises(ValidationFailedError):
         await answer(db, decision.id, "accept")
+
+
+async def test_auth_expired_advances_chain_blocks_account_and_spends_no_failure(
+    db, fleet
+):
+    second = direct("second", selector("custom", "custom", "claude"))
+    await policy(db, [direct(), second])
+    task = await make_task(db)
+    claimed, _engine = await claim(db, fleet)
+    _, diagnostic = await state(db, task.id)
+    assert diagnostic.selection.harness.account_id == "local"
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=diagnostic.selection.generation,
+                action="advance",
+                stopped=True,
+                reason="auth_expired",
+            ),
+        )
+    row, _ = await state(db, task.id)
+    assert row["state"] == "ready" and row["failures"] == 0
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT count(*) FROM events WHERE kind='account.auth_expired'"
+            " AND subject_id='local'"
+        ) as cur,
+    ):
+        assert (await cur.fetchone())[0] == 1
+    claimed, engine = await claim(db, fleet)
+    _, diagnostic = await state(db, task.id)
+    assert engine.account_id == "custom" and claimed.failures == 0
+    assert diagnostic.selection.alternative.id == "second"
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=diagnostic.selection.generation,
+                action="advance",
+                stopped=True,
+                reason="auth_expired",
+            ),
+        )
+    row, diagnostic = await state(db, task.id)
+    assert row["state"] == "blocked" and row["block_reason"] == routes.EXHAUSTED
+    assert row["failures"] == 0

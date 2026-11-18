@@ -667,6 +667,7 @@ type ExecutionFailureReason =
   | "quota"
   | "provider_unavailable"
   | "auth_missing"
+  | "auth_expired"
   | "not_installed"
   | "model_not_served"
   | "provider_protocol"
@@ -684,6 +685,7 @@ export function executionFailureReason(
   const allowed: ExecutionFailureReason[] = [
     "provider_unavailable",
     "auth_missing",
+    "auth_expired",
     "not_installed",
     "model_not_served",
     "provider_protocol",

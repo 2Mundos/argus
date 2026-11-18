@@ -102,9 +102,13 @@ reasons and adds `failure_class` to each failure row and a count per class.
   (`awaiting_quota` when no other account of its providers is left) with `failures`
   and `attempt` unchanged. The blocked account is no candidate at the next claim,
   so another account of the same provider, or the next chain alternative, serves
-  it. Not covered: a task on an explicit execution route records the block and the
-  notice, then fails as any `provider_failure` does, until the route advance
-  carries the class.
+  it. A task on an explicit execution route reaches the same result through
+  `POST /tasks/{id}/execution` with `action` `advance` and reason `auth_expired`
+  ([execution chains](execution-chains.spec.md)): the failed alternative's account is blocked with the same
+  events and notice, the attempt is requeued with `failures` and `attempt`
+  unchanged, and the cursor moves to the next alternative. With no alternative
+  left the task blocks as `execution_chain_exhausted` (not failed) until an
+  account is marked available.
 - **Backoff.** A `transient` fail that requeues sets `tasks.retry_at` to
   `tx.now + min(60 · 2^(failures − 1), 900)` s, `failures` counted after this
   fail (60 s, 120 s, 240 s, …, at most 15 min). `claim()` skips a ready task
