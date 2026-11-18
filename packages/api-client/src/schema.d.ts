@@ -3503,7 +3503,9 @@ export interface paths {
         put?: never;
         /**
          * Report Progress
-         * @description Post a progress note (at most one per 10 s). Also renews the lease.
+         * @description Post a progress note (at most one per 10 s). Also renews the lease. A
+         *     `pr_opened` that names a PR the task did not open is recorded as
+         *     `progress.pr_rejected`, not as the task's PR.
          */
         post: operations["report_progress_api_tasks__task_id__progress_post"];
         delete?: never;

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 # Progress milestones
@@ -76,8 +76,14 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   discovery, CI status). `argus-delegate` polls it every 15 s while the executor runs
   and once more when it exits.
 - Sources: `HEAD` of `--cwd` differing from `HEAD` at start -> `commit_created`; an
-  `http(s)` pull-request URL in the executor's output whose path is `/pulls/N` ->
-  `pr_opened`; the commit-status API for the current `HEAD` through the credential-free
+  `http(s)` pull-request URL in the executor's output whose path is `/pulls/N`, once the
+  forge shows that pull request has its head on the task's branch (`HEAD`'s branch in
+  `--cwd`) and was created at or after the executor started -> `pr_opened`. A URL in
+  output is only a candidate: executors print links to PRs they merely read. The
+  emitter reads the PR through the same credential-free gateway client; without it, or
+  when the read fails or returns nothing, nothing is emitted (`argus-task deliver`
+  prints the authoritative URL). A definite rejection is remembered per URL; a failed
+  read is retried on the next poll. The commit-status API for the current `HEAD` through the credential-free
   gateway client (`gitea-api.mjs`), when `ARGUS_REPOSITORY_URL` is allowlisted ->
   `ci_running` (pending), `ci_passed` (success), `ci_failed` (failure, error), the
   last also naming each failing status context as `gate_failed`; `waiting_input` when
@@ -109,6 +115,15 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   post twice. A network error, `408`, `425`, `429` and `5xx` back off (2-30 s) and keep
   the record; `401` or `409` `stale_attempt`, `not_assignee`, `not_claimed` stop the
   relay; any other `4xx` drops that record. The pending queue holds 200 records.
+- **`pr_opened` is verified by the API.** `POST /api/tasks/{id}/progress` with a
+  `pr_opened` reads the named PR from the forge, outside the write, when the project has
+  a configured repository. The PR must be open or merged (not closed), sit on the task's
+  branch (or at a head the task pushed), and not predate the task. If it is not the
+  task's, the call still succeeds and renews the lease, but records a
+  `progress.pr_rejected` event (`attempt`, `reason`, `data`) and stores neither the
+  milestone nor a PR artifact. A PR the forge cannot show, one of another repository, and
+  any PR of a project with no repository configured are recorded as before (an outage
+  must not drop a real PR).
 - `ci_failed` for a head SHA is followed by one `gate_failed` per failing status
   context of that same SHA.
 - Where a provider gives no signal (no repository allowlist, no commit status), the

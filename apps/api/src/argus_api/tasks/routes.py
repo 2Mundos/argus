@@ -536,9 +536,24 @@ async def complete_task(
 
 @router.post("/{task_id}/progress")
 async def report_progress(
-    task_id: str, body: ProgressRequest, db: DbDep, agent_id: AgentDep
+    task_id: str,
+    body: ProgressRequest,
+    request: Request,
+    db: DbDep,
+    agent_id: AgentDep,
 ) -> Task:
-    """Post a progress note (at most one per 10 s). Also renews the lease."""
+    """Post a progress note (at most one per 10 s). Also renews the lease. A
+    `pr_opened` that names a PR the task did not open is recorded as
+    `progress.pr_rejected`, not as the task's PR."""
+    rejection = await pr_binding.reported_pr_rejection(
+        db,
+        request.app.state.pr_checker,
+        task_id,
+        agent_id,
+        body.attempt,
+        body.kind,
+        body.data,
+    )
     async with db.write() as tx:
         return await service.report_progress(
             tx,
@@ -549,6 +564,7 @@ async def report_progress(
             body.percent,
             body.kind,
             body.data,
+            pr_rejection=rejection,
         )
 
 

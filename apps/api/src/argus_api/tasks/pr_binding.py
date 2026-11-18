@@ -112,6 +112,54 @@ async def find_pr(
     )
 
 
+async def reported_pr_rejection(
+    db: Database,
+    checker: delivery.PrChecker,
+    task_id: str,
+    agent_id: str,
+    attempt: int,
+    kind: str | None,
+    data: dict | None,
+) -> str | None:
+    """Why a `pr_opened` milestone is not this task's PR, or None to record it
+    (progress milestones spec 3.3). One forge read, outside the write. The PR must be
+    in the project's repository (another one is not judged), on the task's branch or at a head the task pushed,
+    and created at or after the task. A PR the forge cannot show is not judged (an
+    outage must not drop a real PR), nor is a project with no repository configured."""
+    if kind != "pr_opened" or not data:
+        return None
+    async with db.read() as conn:
+        row = await service.task_row(conn, task_id)
+        if (
+            row["state"] != "claimed"
+            or row["assignee_agent_id"] != agent_id
+            or row["attempt"] != attempt
+        ):
+            return None  # the write refuses a caller that does not hold the task
+        proven = (await delivery.repositories(conn)).get(row["project"])
+        if proven is None:
+            return None
+        ref = delivery.url_ref(str(data.get("url")), proven)
+        if ref is None:
+            return None  # another repository: the project's forge cannot judge it
+        if ref.number != data.get("number"):
+            return f"{data.get('url')} is not pull request #{data.get('number')}"
+        pushed = _pushed_heads(cont.load(row))
+        snap = await checker.snapshot(conn, ref)
+    if snap.pr_state is PrState.UNKNOWN or snap.head_sha is None:
+        return None
+    branch = task_branch(task_id)
+    # `_verdict`'s "not one you pushed" is for a bind: a PR reported while the worker
+    # keeps pushing is ahead of the heads recorded so far, so it is not judged here.
+    why = _verdict(snap, branch, pushed if snap.head_ref != branch else set())
+    if why is None and (
+        snap.created_at is not None
+        and snap.created_at < datetime.fromisoformat(row["created_at"])
+    ):
+        why = "was created before the task"
+    return None if why is None else f"#{ref.number} {why}"
+
+
 async def read_gate(
     db: Database,
     checker: delivery.PrChecker,
