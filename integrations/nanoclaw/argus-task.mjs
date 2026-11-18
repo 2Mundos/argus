@@ -31,7 +31,8 @@ import {
 } from "./gitea-api.mjs";
 import { repositoryClient } from "./github-api.mjs";
 
-const { usage, policy, positiveNumber, plainText, timestamp } = internals;
+const { usage, policy, positiveNumber, plainText, timestamp, commitSha, token, requireMergeAuthorization } =
+  internals;
 
 export const EXIT = Object.freeze({
   ok: 0,
@@ -502,6 +503,18 @@ export function reviewPolicy(env) {
   return v === "off" ? "off" : "required";
 }
 
+/** Logins whose latest non-comment, non-dismissed review requests changes. */
+async function changeRequesters(api, number) {
+  const latest = new Map();
+  const reviews = (await api.listReviews(number, { all: true, limit: 50 })).items;
+  for (const r of reviews) {
+    if (r.dismissed || !r.user?.login || r.state === "COMMENTED" || r.state === "COMMENT") continue;
+    const prev = latest.get(r.user.login);
+    if (!prev || (reviewTime(r) ?? "") >= (reviewTime(prev) ?? "")) latest.set(r.user.login, r);
+  }
+  return [...latest.values()].filter((r) => CHANGES_REQUESTED.has(r.state)).map((r) => r.user.login);
+}
+
 async function prReady(api, o, ctx) {
   const policy = reviewPolicy(ctx.env);
   // Missing review is a reason only when policy requires one; an existing review is always read.
@@ -548,16 +561,7 @@ async function prReadyPass(api, o, ctx, { policy, needsReview, readsReview }) {
     else if (needsReview && (!review.matches_head || review.finding_count === null))
       reasons.push("review_missing");
   }
-  const latest = new Map();
-  const reviews = (await api.listReviews(pr.number, { all: true, limit: 50 })).items;
-  for (const r of reviews) {
-    if (r.dismissed || !r.user?.login || r.state === "COMMENTED" || r.state === "COMMENT") continue;
-    const prev = latest.get(r.user.login);
-    if (!prev || (reviewTime(r) ?? "") >= (reviewTime(prev) ?? "")) latest.set(r.user.login, r);
-  }
-  const requesters = [...latest.values()]
-    .filter((r) => CHANGES_REQUESTED.has(r.state))
-    .map((r) => r.user.login);
+  const requesters = await changeRequesters(api, pr.number);
   if (requesters.length) reasons.push("changes_requested");
   if (pr.mergeable === false) reasons.push("not_mergeable");
   // A push during any read above leaves evidence for an old head: check the head once more.
@@ -583,6 +587,254 @@ async function prReadyPass(api, o, ctx, { policy, needsReview, readsReview }) {
       changes_requested_by: requesters,
     },
   };
+}
+
+// ---- merge ----
+
+const MERGEABLE_STATES = new Set(["clean", "has_hooks"]);
+// GitHub's mergeable_state values that no wait can fix: the author or a reviewer must act.
+const MERGE_BLOCKED = {
+  blocked: "branch protection or required reviews block the merge; satisfy them, then run merge again",
+  behind: "the branch is behind its base; run argus-task deliver to rebase and push, then merge again",
+  dirty: "the branch conflicts with its base; run argus-task deliver to rebase, then merge again",
+  draft: "the pull request is a draft; mark it ready, then run merge again",
+};
+
+/**
+ * CI states of the head with contradictory check runs reconciled. A check run that is not
+ * `completed` but already carries a conclusion (PR 428: in_progress, success, completed_at) is
+ * believed only when its own workflow run, read from the forge, is completed and successful for
+ * this exact head. Anything else stays `unknown`, never success.
+ */
+async function authoritativeCi(api, sha) {
+  const statuses = await api.ciStatuses(sha);
+  const runs = new Map();
+  const resolved = [];
+  for (const s of Array.isArray(statuses) ? statuses : []) {
+    if (!s?.contradictory) {
+      resolved.push(s);
+      continue;
+    }
+    let ok = false;
+    if (s.run_id) {
+      if (!runs.has(s.run_id)) runs.set(s.run_id, await api.getRun(s.run_id));
+      const run = runs.get(s.run_id);
+      ok =
+        run?.status === "completed" &&
+        run.conclusion === "success" &&
+        typeof run.head_sha === "string" &&
+        run.head_sha.toLowerCase() === sha.toLowerCase();
+    }
+    resolved.push({ ...s, state: ok ? "success" : "unknown", contradictory: !ok });
+  }
+  return {
+    ...ciSummary(resolved),
+    contradictory: resolved.filter((s) => s.contradictory).map((s) => contextName(s.context)),
+  };
+}
+
+/** One look at the PR head: `blockers` end the call, `waiting` keeps it going, none means merge. */
+async function mergeGates(api, pr, head, { needsReview }) {
+  const blockers = [];
+  const waiting = [];
+  const ci = await authoritativeCi(api, head);
+  if (ci.state === "failure") blockers.push("ci_failed");
+  else if (ci.state === "skipped") blockers.push("ci_not_executed");
+  else if (ci.state === "pending") waiting.push("ci_running");
+  else if (ci.state === "missing") waiting.push("ci_missing");
+  else if (ci.state === "unknown")
+    waiting.push(ci.contradictory.length ? "ci_contradictory" : "ci_unknown");
+  const evidence = { ci };
+  if (blockers.length) return { blockers, waiting, evidence };
+  const review = await api.reviewFindings(pr.number);
+  evidence.review = {
+    matches_head: review.matches_head,
+    finding_count: review.finding_count,
+    reason: review.reason,
+  };
+  if (review.head_sha !== head) waiting.push("head_moved");
+  else if (review.matches_head && review.finding_count > 0) blockers.push("review_findings");
+  else if (needsReview && (!review.matches_head || review.finding_count === null))
+    waiting.push("review_missing");
+  const requesters = await changeRequesters(api, pr.number);
+  if (requesters.length) {
+    blockers.push("changes_requested");
+    evidence.changes_requested_by = requesters;
+  }
+  if (blockers.length || waiting.length) return { blockers, waiting, evidence };
+  // Branch rules last: GitHub reports `blocked` while checks or reviews are still outstanding.
+  const state = typeof pr.mergeable_state === "string" ? pr.mergeable_state : null;
+  evidence.mergeable_state = state;
+  if (state !== null && Object.hasOwn(MERGE_BLOCKED, state)) blockers.push(`merge_${state}`);
+  else if (pr.mergeable === false) blockers.push("not_mergeable");
+  else if (state !== null ? !MERGEABLE_STATES.has(state) : pr.mergeable !== true)
+    waiting.push("mergeability_unknown");
+  return { blockers, waiting, evidence };
+}
+
+const BLOCKER_ACTION = {
+  ci_failed:
+    "read the failing job log with argus-task ci-digest --pr N, fix, push with argus-task deliver, then run merge again",
+  ci_not_executed: "every check was skipped, which is not execution; make the required checks run",
+  review_findings: "resolve the agentic review findings for this head, push, then run merge again",
+  changes_requested: "address the standing changes-requested review, push, then run merge again",
+  not_mergeable: "the forge reports the PR as not mergeable; fix it, then run merge again",
+};
+
+/**
+ * `merge`: wait for the exact head's checks, apply the review policy and the forge's branch rules,
+ * merge once at that head and read the forge back. It only acts on the channel's per-attempt
+ * merge authorization (argus-merge-auth.ts), checked before any request; `wait merge` stays an
+ * observation. A merged PR is reported as it is, so a re-run after a cap, a steer or an ambiguous
+ * PUT never merges twice.
+ */
+async function mergePr(api, o, ctx) {
+  const number = positiveNumber(o.number);
+  const method = token(o["merge-method"] ?? "merge", "merge-method", /^(merge|squash|rebase)$/);
+  const pinned = o.sha === undefined ? null : commitSha(o.sha).toLowerCase();
+  requireMergeAuthorization(ctx.env);
+  // An unset or unknown forge review policy counts as required: it never drops a gate.
+  const needsReview = reviewPolicy(ctx.env) !== "off";
+  const intervalMs =
+    seconds(o.interval, "interval", DEFAULT_INTERVAL_S, MIN_INTERVAL_S, CEILING_MAX_S) * 1000;
+  const start = ctx.now();
+  const deadline = start + waitCap(o.max, ctx.env) * 1000;
+  const ref = `#${number}`;
+  const file = ctx.dir ? join(ctx.dir, "waiting.json") : null;
+  const previous = file ? readJson(file) : null;
+  const since =
+    previous?.on === "merge" && previous?.ref === ref && !previous?.outcome
+      ? previous.since
+      : new Date(start).toISOString();
+  const note = (write) => {
+    if (!file) return;
+    try {
+      if (write) {
+        mkdirSync(ctx.dir, { recursive: true });
+        writeJson(file, { on: "merge", ref, since });
+      } else rmSync(file, { force: true });
+    } catch {
+      // best effort, like the wait record
+    }
+  };
+  const base = () => ({ on: "merge", ref, waited_s: (ctx.now() - start) / 1000 });
+  const done = (pr, extra) => {
+    note(false);
+    return {
+      code: EXIT.ok,
+      result: {
+        ...base(),
+        merged: true,
+        pr_head_sha: pr.head?.sha ?? null,
+        merge_commit_sha: pr.merge_commit_sha ?? null,
+        ...(pr.merged_at ? { merged_at: pr.merged_at } : {}),
+        ...extra,
+      },
+    };
+  };
+  const stop = (code, result) => {
+    note(code === EXIT.pending);
+    return { code, result: { ...base(), merged: false, ...result } };
+  };
+  api.maxRetries = 0;
+  api.timeoutMs = PROBE_REQUEST_MS;
+  api.deadline = { at: deadline, now: ctx.now };
+  note(true);
+  let attempt = 0;
+  let status = "starting";
+  try {
+    for (;;) {
+      if (interruptAfter(ctx.dir, start)) {
+        note(false);
+        return { code: EXIT.interrupted, result: { on: "merge", ref, merged: false, interrupted: "steer" } };
+      }
+      let observation = null;
+      let gatedHead = null;
+      let merging = false;
+      try {
+        const pr = await api.getPullRequest(number);
+        const head = prHead(pr);
+        const terminal = prTerminal(pr);
+        if (terminal === "merged") {
+          if (!pr.merge_commit_sha)
+            throw new GiteaError("bad_response", "merged PR has no merge commit SHA");
+          return done(pr, { already_merged: true });
+        }
+        if (terminal)
+          return stop(EXIT.not_ready, {
+            blocked: ["pr_closed"],
+            pr_head_sha: head,
+            action: "the PR was closed without a merge; do not recreate it, report it to the orchestrator",
+          });
+        if (pinned && !head.startsWith(pinned))
+          return stop(EXIT.not_ready, {
+            blocked: ["head_moved"],
+            pr_head_sha: head,
+            action: `the PR head is no longer ${short(pinned)}; re-run the gates on the new head and call merge without --sha`,
+          });
+        gatedHead = head;
+        const gates = await mergeGates(api, pr, head, { needsReview });
+        if (gates.blockers.length)
+          return stop(EXIT.not_ready, {
+            blocked: gates.blockers,
+            pr_head_sha: head,
+            ...gates.evidence,
+            action: BLOCKER_ACTION[gates.blockers[0]] ?? MERGE_BLOCKED[gates.evidence.mergeable_state],
+          });
+        if (gates.waiting.length) {
+          observation = { waiting: gates.waiting, pr_head_sha: head, ...gates.evidence };
+        } else {
+          // Every gate holds for `head`; merge only if it still is the head and time is left.
+          const confirmed = await api.getPullRequest(number);
+          if (confirmed.head?.sha !== head || prTerminal(confirmed)) {
+            observation = { waiting: ["head_moved"], pr_head_sha: prHead(confirmed) };
+          } else if (interruptAfter(ctx.dir, start) || ctx.now() >= deadline) {
+            observation = { waiting: ["budget_spent"], pr_head_sha: head };
+          } else {
+            api.deadline = { at: ctx.now() + 30_000, now: ctx.now };
+            merging = true;
+            const readback = await api.mergePullRequest(number, { sha: head, merge_method: method });
+            return done(readback, { merged_this_call: true, merge_method: method, ...gates.evidence });
+          }
+        }
+      } catch (error) {
+        if (!(error instanceof GiteaError)) throw error;
+        if (error.code === "deadline_exceeded") observation = { waiting: ["budget_spent"] };
+        else if (TRANSIENT.has(error.code)) observation = { waiting: [`forge_${error.code}`] };
+        else if (merging) {
+          // The forge refused the PUT or the PR changed under it: read it before deciding.
+          api.deadline = { at: ctx.now() + PROBE_REQUEST_MS, now: ctx.now };
+          const now = await api.getPullRequest(number);
+          if (now.merged === true && now.merge_commit_sha)
+            return done(now, { already_merged: true });
+          const moved = prTerminal(now) === null && gatedHead !== null && prHead(now) !== gatedHead;
+          if (!moved)
+            return stop(EXIT.not_ready, {
+              blocked: ["merge_refused"],
+              error: errorPayload(error),
+              action:
+                "the forge refused the merge at this head; read the PR, re-run the gates, then run merge again",
+            });
+          observation = { waiting: ["head_moved"], pr_head_sha: prHead(now) };
+        } else throw error;
+      }
+      status = observation.waiting.join(", ");
+      if (ctx.now() >= deadline) return stop(EXIT.pending, { ...observation, status, next: `still pending, nothing is lost: run the same command again (argus-task merge --pr ${number})` });
+      api.deadline = { at: deadline, now: ctx.now };
+      const nextCheck = ctx.now() + pollDelay(attempt++, intervalMs);
+      for (;;) {
+        if (ctx.now() >= deadline)
+          return stop(EXIT.pending, { ...observation, status, next: `still pending, nothing is lost: run the same command again (argus-task merge --pr ${number})` });
+        if (ctx.now() >= nextCheck || interruptAfter(ctx.dir, start)) break;
+        await ctx.sleep(MARKER_TICK_MS);
+      }
+    }
+  } catch (error) {
+    note(false);
+    throw error;
+  } finally {
+    api.deadline = null;
+  }
 }
 
 // ---- ci-digest ----
@@ -1447,6 +1699,12 @@ const COMMANDS = {
     positional: "on",
     run: wait,
   },
+  merge: {
+    summary:
+      "merge --pr N [--sha S] [--merge-method M] [--max S]: only with the attempt's merge authorization; waits for the head's checks, review policy and branch rules, merges once at that head and reads the forge back; 0 merged, 12 blocked (the result names why), 10 pending (run it again), 11 steer",
+    options: { sha: "string", "merge-method": "string", interval: "int", max: "int" },
+    run: mergePr,
+  },
   "pr-ready": {
     summary:
       "--pr N: ready (0) or not (12) with reasons; never merges; returns within 60 s (10 = run it again). Review per ARGUS_FORGE_REVIEW (required|off, from the Argus claim); --skip-review only when it is unset",
@@ -1476,7 +1734,9 @@ function usageText() {
 ${lines.join("\n")}
 
 Global options: --repository URL (default ARGUS_REPOSITORY_URL, else the task's only allowed repository).
-Delivery path, no raw git push: commit, then \`argus-task deliver\`, then \`argus-task wait merge --pr N\`.
+Delivery path, no raw git push: commit, then \`argus-task deliver\`, then, when the task carries a merge grant (pr_merged
+with merge=yes), \`argus-task merge --pr N\` (exit 10: run it again); otherwise \`argus-task wait merge --pr N\`, which only observes
+and never merges.
 \`wait\` returns after at most the cap with exit 10: that is not a failure, run the same command again.
 There is no completion subcommand: finish by sending COMPLETE: with the send_message tool to
 the argus destination (plain text, then the JSON object). On a task run the runner delivers only

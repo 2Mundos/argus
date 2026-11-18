@@ -83,6 +83,11 @@ function combinedState(statuses, checkRuns) {
   return states.some((s) => s === "success" || s === "neutral") ? "success" : "skipped";
 }
 
+/** The Actions workflow run id in a check run's details URL (`.../actions/runs/<id>/job/<id>`). */
+function workflowRunId(url) {
+  return typeof url === "string" ? (/\/actions\/runs\/(\d+)(?:\/|$)/.exec(url)?.[1] ?? null) : null;
+}
+
 /** The logins in a PR's requested_reviewers (empty when the field is missing). */
 function loginsOf(pr) {
   return Array.isArray(pr?.requested_reviewers) ? pr.requested_reviewers.map((r) => r?.login) : [];
@@ -200,6 +205,11 @@ export class GitHubApi extends GiteaApi {
       id: r.id,
       context: r.name,
       state: checkState(r),
+      // A run that reports a conclusion or completion time while its status is not `completed`
+      // contradicts itself; `state` stays pending and the reader must find the authority.
+      ...(r.status !== "completed" && (r.conclusion || r.completed_at)
+        ? { contradictory: true, run_id: workflowRunId(r.details_url) }
+        : {}),
     }));
     const statuses = (await this.latestStatuses(sha)).map((s) => ({
       ...s,

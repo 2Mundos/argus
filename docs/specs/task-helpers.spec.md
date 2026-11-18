@@ -38,8 +38,9 @@ visibility](stall-visibility.spec.md), [task steering](task-steering.spec.md),
   with `WAIT: <condition>` and letting Argus wake a new turn on the event is a separate
   spec (4).
 - **No REST or MCP surface.** `pr-ready` and `ci-digest` are worker-only here (4).
-- **No merge, approve or conflict resolution.** `pr-ready` reports; `deliver` stops on a
-  rebase conflict.
+- **No approve, conflict resolution or merge outside a grant.** `pr-ready` and `wait` only
+  report; `deliver` stops on a rebase conflict. Only `merge` (3.11) can merge, and only for
+  an attempt the channel issued a merge authorization for.
 - **No waiting on tasks.** A claimed task's dependencies have all `succeeded`
   ([task dependencies](task-dependencies.spec.md) 3.1), so there is nothing to wait for.
 - **No enforcement.** Agents are told to prefer the helper; nothing blocks the old way.
@@ -58,7 +59,7 @@ It picks the forge client from the repository URL (`repositoryClient`), reads th
 forge helpers, and adds no HTTP client of its own. It is on `PATH` for the harness and for
 every delegated executor.
 
-Commands: `wait`, `pr-ready`, `ci-digest`, `deliver`, `attach`. `attach` talks to the Argus channel's files, not to the forge, and needs no repository (3.10). Every other command is stateless: it
+Commands: `wait`, `pr-ready`, `ci-digest`, `deliver`, `merge`, `attach`. `attach` talks to the Argus channel's files, not to the forge, and needs no repository (3.10). Every other command is stateless: it
 derives everything from the forge, git and its arguments, so a call killed by an engine
 timeout loses nothing and the next call carries on.
 
@@ -121,7 +122,7 @@ argus-task wait merge --pr N
   further check can ever finish on that PR, so spinning to the cap would leave the worker
   stale exactly when the owner merged. A `wait ci` therefore also reacts to the merge. That
   end carries no CI state, so it writes no terminal record (3.4); the pending one is cleared.
-- `merge` waits for the PR to become terminal: `merged` (exit 0, `status` `merged`) or
+- `wait merge` only observes; it never merges (the authorized step is `argus-task merge`, 3.11). It waits for the PR to become terminal: `merged` (exit 0, `status` `merged`) or
   `closed without merge` (exit 0, `merged: false` — terminal, not success). It carries the
   head it read, and takes no `--sha`: it follows the PR, not a commit.
 - The first checks are fast — 3, 6, 12 and 24 s — and then settle on `--interval` (default
@@ -312,9 +313,12 @@ Workers have no skill file; their guidance is the task prompt. For a task that c
 to its repository, the repository section gains one line: prefer `argus-task` to sleeping
 and re-polling the forge helper, the four commands, exit codes 10, 11 and 12, and the
 shell timeout. Images built before this change have no `argus-task`, so the line says to
-check `command -v argus-task` first.
+check `command -v argus-task` first. The delivery-end sentence depends on the grant: a task
+the channel may authorize to merge (`taskMayMerge`) is told to finish with `argus-task merge
+--pr N` (exit 10 means run it again) and to complete only once the forge shows the PR merged;
+any other task is told `wait merge` only observes and never merges.
 
-`argus-task` has no completion subcommand (only `wait`, `pr-ready`, `ci-digest`, `deliver`, `attach`).
+`argus-task` has no completion subcommand (only `wait`, `pr-ready`, `ci-digest`, `deliver`, `merge`, `attach`).
 A worker completes by sending `COMPLETE:` followed by the JSON object with the send_message tool to
 the `argus` destination; the Argus channel submits it to `/tasks/{id}/complete`. On a task run the
 runner delivers only explicit tool sends, so a `COMPLETE:` written as plain reply text stays in the
@@ -400,6 +404,61 @@ stored. `argus-task attach --help` carries the examples and the exit codes. Nano
 `send_file` is unchanged: it posts a chat attachment to the user, is not a receipt, and
 does not create an artifact.
 
+## 3.11 `merge`: the authorized delivery end
+
+`wait merge` only observes (3.3); PR 428 showed a worker that ran `deliver` and `wait merge` and
+then waited for a merge nobody performed. `argus-task merge --pr N [--sha S] [--merge-method
+merge|squash|rebase] [--interval S] [--max S]` is the one step that merges, in one bounded call.
+
+**Authorization.** Before any forge request it verifies the channel's per-attempt merge
+authorization (`ARGUS_MERGE_AUTH_KEY`, `_TASK`, `_ATTEMPT` and the HMAC `ARGUS_MERGE_AUTHORIZED`,
+[GitHub repositories](github-repositories.spec.md) 3.4), the check `argus-github-api merge`
+makes. The channel mints it only for a task that may merge (`taskMayMerge`): `auto_merge` with
+deliverable `pr_merged`, or an orchestrator-authored `delivery.allow_merge`, plus
+`repository:write`. A missing, bare, forged, stale or other-attempt token ends the call with an
+error and no request; a `pr_open` or `pr_green` task, a read-only task and a worker-authored
+input never get one. A flag or an unverifiable variable is not a grant. The prompt names `merge`
+only for such a task (3.9); every other task is told that `wait merge` never merges.
+
+**Gates, re-evaluated on every poll against the current head** (first checks 3 s apart, settling
+on `--interval`, cap as in 3.3):
+
+| Observation | Result |
+| --- | --- |
+| Merged | exit 0, `already_merged`; never a second PUT. A merged PR without a merge commit is an error |
+| Closed without merge | exit 12, `blocked: ["pr_closed"]` |
+| `--sha` is not the head | exit 12, `head_moved` |
+| Failed check | exit 12 at once, `ci_failed`, `action` points at `ci-digest` |
+| Every check skipped | exit 12, `ci_not_executed` (skipped is not execution) |
+| Running, no checks yet, unknown state, forge error, rate limit | waiting; at the cap exit 10, `waiting` names why |
+| Review policy `required` (or unset or unknown) and no zero-finding agentic review of the exact head | waiting `review_missing` |
+| Agentic review findings on the head, even with policy `off` | exit 12, `review_findings` |
+| Standing changes-requested review | exit 12, `changes_requested` |
+| `mergeable_state` `blocked`, `behind`, `dirty`, `draft`, or `mergeable: false` | exit 12, `merge_<state>` or `not_mergeable` |
+| `mergeable_state` not `clean`/`has_hooks` (unknown, null) | waiting `mergeability_unknown` |
+
+The forge review policy is `ARGUS_FORGE_REVIEW` (settings 3.12). The independent task review
+(`review.independent`, run by Argus after `COMPLETE`), manual task acceptance and the forge
+agentic review are different gates: `merge` neither waits for nor substitutes the first two, and
+a disabled task review never relaxes branch protection, required reviews or checks, all of which
+GitHub enforces on the PUT too.
+
+**Contradictory check runs.** GitHub can report a check run as `in_progress` while it carries a
+`conclusion` and `completed_at` (PR 428). The client marks such a run `contradictory` and keeps it
+pending; `merge` accepts it only when its own workflow run (from `details_url`), read from the
+forge, is `completed`/`success` for this exact head. Otherwise the state is unknown (`ci_contradictory`):
+waiting, never success. Fixture: `argus-task-merge.test.mjs`.
+
+**Merge.** When every gate holds, it re-reads the PR, confirms the head is unchanged, checks the
+steer marker and the budget, then calls `mergePullRequest` (PUT `/pulls/N/merge` with the head
+SHA, 30 s grace) and reads the PR back: merged, with a merge commit. The output is `{merged: true,
+merged_this_call, pr_head_sha, merge_commit_sha, merged_at}`. A head that moves before the PUT is
+re-gated, not merged. If the forge refuses the PUT, the PR is read again: merged means success,
+otherwise exit 12 `merge_refused` with the error and no retry. A transient error during the PUT
+is retried by the next poll, which sees the PR merged if the first request landed, so a re-run
+after a cap, a steer or an ambiguous response never merges twice. A steer ends the call with exit
+11 before any further request; the `waiting.json` record is `on: merge` while pending.
+
 # 4. Open Questions
 
 - **Shell timeouts of Codex, Cursor and Copilot.** Not confirmed from this repository;
@@ -437,8 +496,9 @@ does not create an artifact.
 
 # 6. Implementation Consequences
 
-- `integrations/nanoclaw/argus-task.mjs` and `argus-task.test.mjs` (run by the root
-  `pnpm test`). It ships through the tools layer (`Dockerfile.tools-layer`, staged by
+- `integrations/nanoclaw/argus-task.mjs`, `argus-task.test.mjs` and `argus-task-merge.test.mjs` (run by the root
+  `pnpm test`); `github-api.mjs` flags contradictory check runs and `gitea-api.mjs` exports the
+  merge-authorization check for `merge` (3.11). It ships through the tools layer (`Dockerfile.tools-layer`, staged by
   `install-gitea-api.sh stage-tools-ctx`), which provisioning applies to every agent
   image, and the Radar project layer; the CI tools-layer smoke checks the binary.
 - `ProgressKind.WAITING` and its validation in `argus_core.tasks`; the OpenAPI client is
@@ -453,13 +513,13 @@ does not create an artifact.
 - The repository section of the task prompt (3.9).
 - **Merged code is not a live rollout.** Running containers keep their image, and the
   host channel changes with the next `install.sh`. Rollout is an image rebuild and a
-  channel install, a canary on one worker (`argus-task --help`, `pr-ready` and
+  channel install, a canary on one worker (`argus-task --help` lists `merge`, `pr-ready` and
   `ci-digest` against an open PR, a `wait ci` that a steer interrupts, the `waiting`
   milestone on the task card), then recreating the remaining workers. Roll back by
   redeploying the previous image.
 
 ## Verification boundary
 
-- Commands: `make test` (runs `integrations/nanoclaw/argus-task.test.mjs`, `argus-task-attach.test.mjs` and `argus-task-signals.test.ts`); `uv run pytest -q -p no:cacheprovider integrations/nanoclaw/tests/test_attach_packaging.py`.
+- Commands: `make test` (runs `integrations/nanoclaw/argus-task.test.mjs`, `argus-task-merge.test.mjs`, `argus-task-attach.test.mjs` and `argus-task-signals.test.ts`); `uv run pytest -q -p no:cacheprovider integrations/nanoclaw/tests/test_attach_packaging.py`.
 - Verified: unit and fixture level with a fake forge, an injected clock and a fake store; the attach CLI runs against the real bridge with a fake store.
 - Not verified: a real forge or CI provider, the helpers inside a deployed worker image, real harness CLIs, and production.

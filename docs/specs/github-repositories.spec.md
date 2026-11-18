@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 # GitHub repositories
@@ -117,7 +117,7 @@ Where GitHub differs, the helper adapts and the difference is visible in `--help
 | --- | --- |
 | Base | `https://api.github.com/repos/{owner}/{repo}`, header `X-GitHub-Api-Version: 2022-11-28`. |
 | Lists | `per_page` instead of `limit` (still 1..50). |
-| CI | `status` and `statuses` add the head SHA's **check runs** (GitHub Actions report there, not as statuses) and a `combined_state` over both. Each entry is normalized first: a status is `failure` (`failure`, `error`, `cancelled`, `timed_out`), `pending`, `success`, `neutral`, `skipped` or `unknown`; a check run is `failure` (conclusion `failure`, `timed_out`, `cancelled`, `action_required` or `startup_failure`), `pending` (status `pending`, `queued`, `in_progress`, `waiting` or `requested`), `success`, `neutral`, `skipped`, or `unknown` (a completed run with a missing or unrecognized conclusion such as `stale`, or a missing or unrecognized status). `combined_state` is `failure` if any entry fails; else `pending` if any is pending; else `unknown` if any is unknown; else `success` if any is `success` or `neutral`; else `skipped` when all are skipped; `null` with no entries. Unrecognized evidence is never a pass. `ciStatuses` (used by `argus-task`) returns the same per-entry states. |
+| CI | `status` and `statuses` add the head SHA's **check runs** (GitHub Actions report there, not as statuses) and a `combined_state` over both. Each entry is normalized first: a status is `failure` (`failure`, `error`, `cancelled`, `timed_out`), `pending`, `success`, `neutral`, `skipped` or `unknown`; a check run is `failure` (conclusion `failure`, `timed_out`, `cancelled`, `action_required` or `startup_failure`), `pending` (status `pending`, `queued`, `in_progress`, `waiting` or `requested`), `success`, `neutral`, `skipped`, or `unknown` (a completed run with a missing or unrecognized conclusion such as `stale`, or a missing or unrecognized status). `combined_state` is `failure` if any entry fails; else `pending` if any is pending; else `unknown` if any is unknown; else `success` if any is `success` or `neutral`; else `skipped` when all are skipped; `null` with no entries. Unrecognized evidence is never a pass. A check run that reports `in_progress` (or any non-completed status) while carrying a `conclusion` or `completed_at` is contradictory (PR 428): it stays `pending`, and `ciStatuses` marks it `contradictory` with the `run_id` of its workflow run, so `argus-task merge` can accept it only when that run is `completed`/`success` for the same head (task helpers 3.11). `ciStatuses` (used by `argus-task`) returns the same per-entry states. |
 | Issues | `issue-list --type` filters client-side on `pull_request` (pages can come back short). `--q` and `--before` are refused (`usage`): the search API is outside the repository path the proxy authorizes. |
 | Comments | `comment-list --before` is refused (`usage`). |
 | Statuses | `statuses --state/--sort` are refused (`usage`). |
