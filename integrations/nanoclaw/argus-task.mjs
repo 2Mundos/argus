@@ -772,6 +772,28 @@ const PRE_PUSH_CHECKS = [
 ];
 const PRE_PUSH_TIMEOUT_MS = 40 * 60_000;
 const PRE_PUSH_OUTPUT_BYTES = 2048;
+// A fresh task checkout has no installed dependencies, so a check fails on a missing module or tool.
+// The first matching signature names the sync to run; nothing runs it, and the online install is
+// the fix (never --offline).
+const UV_SYNC = "uv sync --frozen --all-packages --group dev";
+const PNPM_INSTALL = "pnpm install --frozen-lockfile";
+const SYNC_SIGNATURES = [
+  { pattern: /No module named 'prometheus_client'/, commands: [UV_SYNC] },
+  { pattern: /ModuleNotFoundError: No module named 'argus_\w+'/, commands: [UV_SYNC] },
+  { pattern: /\bbiome: not found/, commands: [PNPM_INSTALL] },
+  { pattern: /\btsc: not found/, commands: [PNPM_INSTALL] },
+  { pattern: /\bopenapi-typescript: not found/, commands: [PNPM_INSTALL] },
+  { pattern: /ERR_PNPM_NO_OFFLINE_TARBALL/, commands: [PNPM_INSTALL] },
+  { pattern: /Network connectivity is disabled/, commands: [UV_SYNC, PNPM_INSTALL] },
+];
+
+/** The action that names the sync for a failed check's output, or undefined when no signature matches. */
+function syncAction(output) {
+  const signature = SYNC_SIGNATURES.find((s) => s.pattern.test(output));
+  if (!signature) return undefined;
+  const commands = signature.commands.map((c) => `\`${c}\``).join(" and ");
+  return `run ${commands} from the workspace root, then run \`argus-task deliver\` again; do not use --offline and do not skip the gate`;
+}
 
 /** Run one check in the worktree. A missing program is `missing`; a timeout or signal is a failure. */
 function defaultRunCheck(argv, cwd, env) {
@@ -832,7 +854,8 @@ function prePushChecks(git, cwd, ctx) {
       const violations = check.violations ? parseViolations(r.output) : null;
       if (violations?.length)
         return { ...failed, violations, action: violations.map((v) => v.action).join("; ") };
-      return failed;
+      const sync = syncAction(r.output);
+      return sync ? { ...failed, action: sync } : failed;
     }
   }
   if (gitStep(git, ["rev-parse", "HEAD"], cwd) !== head || !clean())

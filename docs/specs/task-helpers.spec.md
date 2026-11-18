@@ -248,7 +248,13 @@ runs for a developer push, on the exact commit it pushes: `make check-changed`, 
 `core.hooksPath` is the Argus commit-attribution hook), so the gate is in `deliver`. It needs
 a clean worktree with no untracked files at HEAD, and it fails closed: a failing check exits
 12 with `reasons: ["pre_push_failed"]`, the check name, its exit status and the last bytes of
-its output, and nothing is pushed; a missing `make` or `gitleaks` exits 1
+its output, and nothing is pushed. When the failed check's output matches a missing-dependency
+signature, the failure's `action` names the sync to run from the workspace root, then `deliver`
+again: `uv sync --frozen --all-packages --group dev` for `No module named 'prometheus_client'` or
+`ModuleNotFoundError: No module named 'argus_…'`; `pnpm install --frozen-lockfile` for `biome:`,
+`tsc:` or `openapi-typescript: not found` and `ERR_PNPM_NO_OFFLINE_TARBALL`; both for `Network
+connectivity is disabled`. The first signature in that order wins. `deliver` never runs the sync
+and never uses `--offline`; other failures keep the generic action. A missing `make` or `gitleaks` exits 1
 (`pre_push_unavailable`); HEAD or the worktree changing during the checks is refused
 (`dirty_worktree`). Unlike the hook it never skips the secret scan. The checks run with
 `GIT_*` variables removed, and `make hooks` and `--no-verify` are not used.
