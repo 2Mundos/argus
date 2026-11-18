@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Set as AbstractSet
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,7 @@ from argus_core.tasks import (
 from argus_api import model_policy
 from argus_api.db import Database, Tx, ts
 from argus_api.decisions import store as decisions
-from argus_api.errors import ValidationFailedError
+from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.events import record
 from argus_api.tasks import continuation as cont
 from argus_api.tasks import deliverable, delivery
@@ -56,7 +56,12 @@ from argus_api.tasks import execution_routes as routes
 NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
 NO_REVIEW_HEAD = "no_review_head"
 REVIEW_FAILED = "review_failed"
-_GATE_BLOCKS = (NO_INDEPENDENT_REVIEWER, NO_REVIEW_HEAD, REVIEW_FAILED)
+# An approved parent that settles on its own once the forge shows the deliverable met.
+AWAITING_FORGE = "awaiting_forge"
+_GATE_BLOCKS = (NO_INDEPENDENT_REVIEWER, NO_REVIEW_HEAD, REVIEW_FAILED, AWAITING_FORGE)
+FORGE_FRESH_S = 120  # how old the forge read may be when the write uses it
+PASSED_EVENT = "review.independent_passed"
+WAITING_EVENT = "review.independent_awaiting_forge"
 _GATE_WHY = {
     NO_REVIEWER_GATE: "no independent reviewer could be selected",
     REVIEWER_FAILED_GATE: "the reviewer failed to deliver a verdict",
@@ -218,6 +223,143 @@ async def has_code_delivery(
     return pr, sha
 
 
+async def settles_alone(conn: aiosqlite.Connection, parent: aiosqlite.Row) -> bool:
+    """True when an approved independent review is all the review this parent needs:
+    `review=none`, acceptance off, and a deliverable (`pr_green`, `pr_merged`) that the
+    forge, not the reviewer, must confirm (settings spec 3.5, deliverable spec 3.5)."""
+    from argus_api.settings import service as settings_svc
+
+    return (
+        parent["state"] == TaskState.IN_REVIEW
+        and Review(parent["review"]) is Review.NONE
+        and Deliverable(parent["deliverable"]) in FORGE_DELIVERABLES
+        and not await settings_svc.acceptance_enabled(conn, parent["project"])
+    )
+
+
+async def awaits_settlement(conn: aiosqlite.Connection, parent: aiosqlite.Row) -> bool:
+    """`settles_alone` and nothing else holds the parent: no open review decision (an
+    explicit request) and no active reviewer."""
+    return (
+        await settles_alone(conn, parent)
+        and not await decisions.open_ids(
+            conn, "task", parent["id"], (DecisionKind.REVIEW,)
+        )
+        and not await has_active_reviewer(conn, parent["id"])
+    )
+
+
+def forge_verdict(
+    parent: aiosqlite.Row,
+    forge: deliverable.ForgeRead | None,
+    reviewed_head: str | None,
+    now: datetime,
+) -> tuple[str, str] | None:
+    """None when the forge, read for this settlement, shows the deliverable met on
+    the head the reviewer approved; else (code, why). The code is `head_moved` for a
+    head that changed after the review, `forge_not_ready` otherwise. Never reads the
+    reviewer's word as proof of forge state."""
+    try:
+        deliverable.check_accept(parent, forge)
+    except ConflictError as exc:
+        return "forge_not_ready", exc.details[0] if exc.details else exc.message
+    seen = forge.delivery if forge is not None else None
+    if seen is None or seen.head is None or not seen.head.sha:
+        return "forge_not_ready", "the forge reported no head for the pull request"
+    if now - seen.checked_at > timedelta(seconds=FORGE_FRESH_S):
+        return "forge_not_ready", "the forge read is stale"
+    if seen.stale:
+        return "forge_not_ready", "the checks do not belong to the pull request head"
+    if not reviewed_head:
+        return "forge_not_ready", "the reviewed head is unknown"
+    forge_head, reviewed = seen.head.sha.lower(), reviewed_head.lower()
+    if not (forge_head.startswith(reviewed) or reviewed.startswith(forge_head)):
+        return "head_moved", f"the pull request head moved to {forge_head[:12]}"
+    return None
+
+
+async def reviewed_head_of(conn: aiosqlite.Connection, parent_id: str) -> str | None:
+    """The head of the newest approved independent review of the parent."""
+    async with conn.execute(
+        "SELECT data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = ? ORDER BY id DESC LIMIT 1",
+        (parent_id, PASSED_EVENT),
+    ) as cur:
+        row = await cur.fetchone()
+    data = json.loads(row[0]) if row and row[0] else {}
+    head = data.get("head_sha") if isinstance(data, dict) else None
+    return head if isinstance(head, str) and head else None
+
+
+async def settle_or_wait(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    forge: deliverable.ForgeRead | None,
+    reviewed_head: str | None,
+    actor: str,
+) -> bool:
+    """Accept an approved parent the forge shows delivered, else leave it `in_review`
+    with the visible `awaiting_forge` block (re-checked by `review_settle`). A moved
+    head is reviewed again. True when the parent succeeded."""
+    from argus_api.tasks import service as tasks_svc
+
+    verdict = forge_verdict(parent, forge, reviewed_head, tx.now)
+    if verdict is None:
+        await tx.conn.execute(
+            "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent["id"],)
+        )
+        await tasks_svc._apply(
+            tx, parent, Action.ACCEPT, actor, data={"notes": "independent review"}
+        )
+        return True
+    code, why = verdict
+    if code == "head_moved":
+        seen = forge.delivery if forge is not None else None
+        setting, policy = await _load_settings(tx.conn, parent["project"])
+        await record(
+            tx,
+            actor,
+            "task",
+            parent["id"],
+            "review.independent_void",
+            {"reason": code, "reviewed": reviewed_head, "current": why},
+        )
+        await tx.conn.execute(
+            "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent["id"],)
+        )
+        await spawn_reviewer(
+            tx,
+            await tasks_svc._row(tx.conn, parent["id"]),
+            pr=seen.pr if seen else None,
+            head_sha=seen.head.sha if seen and seen.head else None,
+            setting=setting,
+            policy=policy,
+            actor=actor,
+        )
+        return False
+    async with tx.conn.execute(
+        "SELECT data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = ? ORDER BY id DESC LIMIT 1",
+        (parent["id"], WAITING_EVENT),
+    ) as cur:
+        last = await cur.fetchone()
+    seen_before = json.loads(last[0]) if last and last[0] else {}
+    if parent["block_reason"] != AWAITING_FORGE or seen_before.get("why") != why:
+        await tx.conn.execute(
+            "UPDATE tasks SET block_reason = ?, updated_at = ? WHERE id = ?",
+            (AWAITING_FORGE, ts(tx.now), parent["id"]),
+        )
+        await record(
+            tx,
+            actor,
+            "task",
+            parent["id"],
+            WAITING_EVENT,
+            {"why": why, "head_sha": reviewed_head},
+        )
+    return False
+
+
 async def completion_forge_read(
     db: Database,
     checker: delivery.PrChecker,
@@ -228,7 +370,9 @@ async def completion_forge_read(
 ) -> deliverable.ForgeRead | None:
     """The forge's word on the PR a completion names, read before and outside the
     write (like find_pr). Only for a task whose parent gate may apply and whose head
-    no report or bound PR already gives. None otherwise."""
+    no report or bound PR already gives. For an approving `code_review` child, the
+    parent's PR when the parent settles on that approval alone (`settles_alone`), so
+    the approval is checked against the forge, not taken as its proof. None otherwise."""
     from argus_api.settings import service as settings_svc
     from argus_api.tasks import service as tasks_svc
 
@@ -237,7 +381,15 @@ async def completion_forge_read(
     async with db.read() as conn:
         row = await tasks_svc.task_row(conn, task_id)
         if row["kind"] == CODE_REVIEW_KIND:
-            return None
+            if not row["parent_id"] or (result.data or {}).get("verdict") != "approve":
+                return None
+            parent = await tasks_svc.task_row(conn, row["parent_id"])
+            if not await settles_alone(conn, parent):
+                return None
+            task = await tasks_svc.get_task(conn, parent["id"])
+            return deliverable.ForgeRead(
+                await delivery.delivery_of(conn, checker, task)
+            )
         if _delivery_refs(row, result)[1] is not None:
             return None
         setting = await settings_svc.get_review(
@@ -616,7 +768,7 @@ async def open_manual_review(
 async def clear_gate_block(tx: Tx, task_id: str) -> None:
     """Drop a gate block_reason once the operator's review decision settled the task."""
     await tx.conn.execute(
-        "UPDATE tasks SET block_reason = NULL WHERE id = ? AND block_reason IN (?, ?, ?)",
+        "UPDATE tasks SET block_reason = NULL WHERE id = ? AND block_reason IN (?, ?, ?, ?)",
         (task_id, *_GATE_BLOCKS),
     )
 
@@ -851,8 +1003,10 @@ async def on_review_child_complete(
     setting: IndependentReviewSetting,
     policy: model_policy.Policy,
     actor: str,
+    forge: deliverable.ForgeRead | None = None,
 ) -> None:
-    """Apply the child's verdict to the parent (proof-checked)."""
+    """Apply the child's verdict to the parent (proof-checked). `forge` is the read of
+    the parent's PR made before the write (`completion_forge_read`)."""
     from argus_api.tasks import service as tasks_svc
 
     parent_id = child["parent_id"]
@@ -938,6 +1092,7 @@ async def on_review_child_complete(
                 "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent_id,)
             )
         review = Review(parent["review"])
+        reviewed = head_sha or json.loads(child["input"] or "{}").get("head_sha")
         have = cont.load(parent)
         open_items = (
             [i.id for i in have.checklist if i.status.value != "done"]
@@ -950,12 +1105,17 @@ async def on_review_child_complete(
             "task",
             parent_id,
             "review.independent_passed",
-            {"child_id": child["id"], "verdict": "approve"},
+            {"child_id": child["id"], "verdict": "approve", "head_sha": reviewed},
         )
-        # A PR that must still turn green or merge is closed by a decision, which
-        # reads the forge (task deliverable spec 3.5), never by this approval.
+        # A PR that must still turn green or merge is closed by the forge's word
+        # (task deliverable spec 3.5), never by this approval: without a manual review
+        # to ask for, the parent settles once the forge read confirms it.
         forge_gated = Deliverable(parent["deliverable"]) in FORGE_DELIVERABLES
-        if review is not Review.NONE or open_items or forge_gated:
+        if await settles_alone(tx.conn, parent) and not await decisions.open_ids(
+            tx.conn, "task", parent_id, (DecisionKind.REVIEW,)
+        ):
+            await settle_or_wait(tx, parent, forge, reviewed, actor)
+        elif review is not Review.NONE or open_items or forge_gated:
             await decisions.open_decision(
                 tx,
                 subject_type="task",
@@ -1355,7 +1515,9 @@ async def backfill_manual_reviews(tx: Tx) -> list[str]:
     from argus_api.tasks import service as tasks_svc
 
     async with tx.conn.execute(
-        "SELECT id FROM tasks WHERE state = ? ORDER BY rowid", (TaskState.IN_REVIEW,)
+        "SELECT id FROM tasks WHERE state = ? AND coalesce(block_reason, '') != ?"
+        " ORDER BY rowid",
+        (TaskState.IN_REVIEW, AWAITING_FORGE),
     ) as cur:
         ids = [r["id"] for r in await cur.fetchall()]
     repaired: list[str] = []

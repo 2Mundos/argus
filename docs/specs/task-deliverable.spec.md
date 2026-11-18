@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-16
+updated: 2026-11-18
 ---
 
 # Task deliverable
@@ -204,9 +204,12 @@ projection), and passes the result in:
   read is refused as `deliverable_unverified` (fail closed).
 
 The gate applies to every route that answers a decision (single and batch;
-the MCP and inbox actions use them). **Independent review** no longer accepts
-such a task on its own: on approval it opens the review decision instead, which
-then passes the gate above.
+the MCP and inbox actions use them). **Independent review** never accepts such a
+task on the reviewer's word: on approval it opens the review decision, which then
+passes the gate above. The one exception is a task with `review=none` and acceptance
+off, which has no manual review to ask for: the approval accepts it only after the
+same gate passes on a forge read made before the write, on the reviewed head;
+otherwise it waits `awaiting_forge` and is rechecked (settings spec 3.5).
 
 ### Issue linkage
 
@@ -442,7 +445,9 @@ succeeded task is terminal.
 - `apps/api/src/argus_api/tasks/deliverable.py`: creation rules, completion
   evidence, accept check. `service.create_task`, `check_create`, `complete`,
   `review`, `edit_task` and the attempt snapshot call it;
-  `independent_review` opens a decision for forge-gated deliverables.
+  `independent_review` opens a decision for forge-gated deliverables, except for a
+  `review=none`, acceptance-off parent, which it settles from a forge read
+  (settings spec 3.5; `review_settle` rechecks while it waits).
 - `decisions`: the single and batch answer routes read the forge first and
   pass the result to `answer`.
 - 3.10: `0078_task_review_disposition.sql` (one nullable JSON column),

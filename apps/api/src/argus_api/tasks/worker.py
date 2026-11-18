@@ -147,6 +147,7 @@ async def complete(
             setting=review_setting,
             policy=policy,
             actor=actor,
+            forge=forge,
         )
         return await get_task(tx.conn, task_id)
 

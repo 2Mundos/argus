@@ -181,6 +181,27 @@ different model**, with `different_provider` shown as "…from a different provi
   again, before its write. No child is created while the head is unknown. The block
   is reached only when neither the record, the forge nor the milestone history names
   a head.
+- **Approval of a forge-gated parent.** An `approve` verdict on the exact head
+  (`review.independent_passed {child_id, verdict, head_sha}`) is not proof of forge
+  state. For a `pr_green` or `pr_merged` parent with `review=none` and acceptance
+  off, with no open `review` decision, the approval alone is the review it needs:
+  the completion route reads the parent's PR from the forge before the write
+  (`completion_forge_read`), and the write accepts the parent (`succeeded`, no
+  `review` decision) only when `check_accept` holds for that read (merged, or open
+  with green checks for `pr_green`), the read is at most 120 s old, its checks
+  belong to its head, and the head equals the reviewed head. Otherwise the parent
+  stays `in_review` with `block_reason: awaiting_forge` and one
+  `review.independent_awaiting_forge {why, head_sha}` event per distinct reason, and
+  no decision. A head that moved after the review voids the approval
+  (`review.independent_void {reason: head_moved}`) and spawns a reviewer for the new
+  head. A loop (`review_settle`, every `merge_supersede_interval_s`, backing off per
+  task) reads the forge outside any write for each `awaiting_forge` parent and the
+  write re-checks it before accepting; if manual review or acceptance was switched on
+  meanwhile it opens the regular `review` decision instead. With `review` other than
+  `none`, acceptance on, or open acceptance evidence, the approval opens the `review`
+  decision as before. `request_changes`, reviewer failure and the callbacks are
+  unchanged and idempotent (a parent no longer `in_review` ignores the callback).
+  Startup repair skips `awaiting_forge` parents.
 - **Reviewer failure.** A `code_review` child that ends `failed` or `cancelled`
   without a verdict does not strand the parent. Argus records
   `review.independent_child_failed {child_id, state, error_class, account, model,
