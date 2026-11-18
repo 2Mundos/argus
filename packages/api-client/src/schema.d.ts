@@ -430,6 +430,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/mark-available": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Available
+         * @description Clear a login block (an expired provider login) by hand, make an exhausted
+         *     account available and close its notice. A disabled account stays disabled.
+         */
+        post: operations["mark_available_api_accounts__account_id__mark_available_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/models/{author}/{slug}/endpoints": {
         parameters: {
             query?: never;
@@ -14383,6 +14404,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LocalTestResult"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_available_api_accounts__account_id__mark_available_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

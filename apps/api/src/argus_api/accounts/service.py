@@ -45,7 +45,13 @@ from argus_core.custom_accounts import (
     lease_settings,
     serves_role,
 )
-from argus_core.quota import QuotaHit, classify_quota, sanitize_notice
+from argus_core.decisions import Audience, DecisionKind
+from argus_core.quota import (
+    QuotaHit,
+    auth_expired_output,
+    classify_quota,
+    sanitize_notice,
+)
 from argus_core.tasks import HarnessModel, ModelId, Task
 from pydantic import TypeAdapter
 
@@ -53,6 +59,7 @@ from argus_api.accounts import usage
 from argus_api.accounts.eligibility import LEASE_BLOCK_SQL, engine_pool
 from argus_api.accounts.local_health import HEALTH_REASONS
 from argus_api.db import Tx, ts
+from argus_api.decisions import store as decision_store
 from argus_api.disk_guard import DiskGuard
 from argus_api.engine_choice import EngineChoice
 from argus_api.errors import (
@@ -754,17 +761,14 @@ async def exhausted(
         tx, agent_id, account_id, report.until, reason, cooldown, detail
     )
     if report.reason_code == "auth_expired":
-        await _record_auth_rejected(
+        await _login_required(
             tx,
             agent_id,
             account_id,
             task_id,
             attempt,
-            role,
-            report.source,
-            _AUTH_REJECTED_REASONS.get(
-                account_row["provider"], "authentication expired"
-            ),
+            report.source or "structured",
+            role=role,
         )
     await release(tx, agent_id, "exhausted", role)
     if task_id is None:
@@ -918,7 +922,7 @@ async def fail_task(
             code="execution_report_required",
         )
     held = None
-    if reason == "provider_failure":
+    if reason in {"provider_failure", "session_lost"}:
         async with tx.conn.execute(
             "SELECT l.providers, a.id, a.name, a.provider FROM account_leases l"
             " JOIN accounts a ON a.id = l.account_id WHERE l.agent_id = ?"
@@ -926,7 +930,19 @@ async def fail_task(
             (agent_id,),
         ) as cur:
             held = await cur.fetchone()
-    hit = classify_quota(error, held["provider"], tx.now) if held else None
+    if held is not None and (pattern := auth_expired_output(error)):
+        await _login_required(
+            tx, agent_id, held["id"], task_id, attempt, "stderr", pattern
+        )
+        if await current(tx.conn, task_id, attempt) is None:
+            return await _auth_expired_failover(
+                tx, agent_id, task_id, attempt, held, native_session
+            )
+    hit = (
+        classify_quota(error, held["provider"], tx.now)
+        if held and reason == "provider_failure"
+        else None
+    )
     if held is None or hit is None:
         task = await tasks.fail(
             tx, agent_id, task_id, attempt, error, reason, oom_kill=oom_kill
@@ -980,6 +996,128 @@ async def fail_task(
         detail | {"reset_at": reset_at},
     )
     return await tasks.get_task(tx.conn, task.id)
+
+
+async def _login_required(
+    tx: Tx,
+    agent_id: str,
+    account_id: str,
+    task_id: str | None,
+    attempt: int | None,
+    source: str,
+    pattern: str | None = None,
+    role: LeaseRole = "engine",
+) -> None:
+    """The account's provider login expired (failure classes 3.6): the durable
+    exclusion is `account.auth_rejected` (the derived `auth_rejected` lease block),
+    `account.auth_expired` is the audit event, and one open notice per account asks
+    a human to renew the login. Names and the matched pattern only; no token."""
+    row = await _row(tx.conn, account_id)
+    await _record_auth_rejected(
+        tx,
+        agent_id,
+        account_id,
+        task_id,
+        attempt,
+        role,
+        source,
+        _AUTH_REJECTED_REASONS.get(row["provider"], "authentication expired"),
+    )
+    await record(
+        tx,
+        f"agent:{agent_id}",
+        "account",
+        account_id,
+        "account.auth_expired",
+        {"task_id": task_id, "attempt": attempt, "pattern": pattern},
+    )
+    if await decision_store.open_ids(tx.conn, "account", account_id):
+        return
+    await decision_store.open_decision(
+        tx,
+        subject_type="account",
+        subject_id=account_id,
+        kind=DecisionKind.POLICY,
+        question=(
+            f"The login of account {row['name']} has expired. Renew it, or replace"
+            " its credential, then mark the account available."
+        ),
+        options=["approve", "reject"],
+        audience=Audience.HUMAN,
+        requested_by="system",
+        payload={"reason": "auth_expired"},
+    )
+
+
+async def _auth_expired_failover(
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    held: aiosqlite.Row,
+    native_session: NativeSessionReport | None,
+) -> Task:
+    """An expired login ended the attempt, which is not the task's fault: release the
+    lease, send the task back to `ready` (or `awaiting_quota` when no other account
+    can serve it) with `failures` unchanged. The blocked account is no candidate for
+    the next claim."""
+    await tasks.check_lease(tx, task_id, attempt, agent_id, allow_expired=True)
+    await release(tx, agent_id, "auth_expired", "engine")
+    scope = await _scope(
+        tx, task_id, "engine", json.loads(held["providers"]) or None, agent_id
+    )
+    next_candidate = _only(
+        await _ranked(
+            tx,
+            agent_id,
+            "engine",
+            scope.providers,
+            prefer_local=await _prefer_local(tx, task_id, "engine"),
+        ),
+        scope.account,
+    )
+    note = f"login of account {held['name']} expired"
+    task = await tasks.pause_for_quota(
+        tx,
+        agent_id,
+        task_id,
+        attempt,
+        note,
+        wait=not next_candidate,
+        reason="auth_expired",
+    )
+    if native_session is not None:
+        await quota_resume.record_session(
+            tx, agent_id, task_id, attempt, native_session, "quota"
+        )
+    await _failover(
+        tx,
+        agent_id,
+        task_id,
+        attempt,
+        held["name"],
+        next_candidate[0]["name"] if next_candidate else None,
+        note,
+        held["id"],
+        next_candidate[0]["id"] if next_candidate else None,
+        {"reason_code": "auth_expired", "source": "log"},
+    )
+    return await tasks.get_task(tx.conn, task.id)
+
+
+async def mark_available(tx: Tx, account_id: str, actor: str) -> None:
+    """Clear a login block by hand (`account.auth_cleared`), make an exhausted
+    account available again, close the account's open notice and wake the tasks
+    that waited for an account. A disabled account stays disabled."""
+    await _row(tx.conn, account_id)  # NotFoundError for an unknown id
+    await tx.conn.execute(
+        "UPDATE accounts SET state = 'available', exhausted_until = NULL,"
+        " updated_at = ? WHERE id = ? AND state = 'exhausted'",
+        (ts(tx.now), account_id),
+    )
+    await record(tx, actor, "account", account_id, "account.auth_cleared", {})
+    await decision_store.cancel_open(tx, "account", account_id)
+    await release_waiting_tasks(tx)
 
 
 async def _switch_failed(
@@ -1220,7 +1358,17 @@ async def recover(tx: Tx) -> list[str]:
             (ts(tx.now), account_id),
         )
         await record(tx, "system", "account", account_id, "account.available")
-    if ids:
+    # A passed check or an accepted run lifts the login block by itself; its notice
+    # is moot then.
+    async with tx.conn.execute(
+        "SELECT DISTINCT d.subject_id FROM decisions d JOIN accounts a"  # noqa: S608
+        " ON a.id = d.subject_id WHERE d.state = 'open' AND d.subject_type = 'account'"
+        f" AND ({LEASE_BLOCK_SQL}) IS NULL"
+    ) as cur:
+        moot = [r["subject_id"] for r in await cur.fetchall()]
+    for account_id in moot:
+        await decision_store.cancel_open(tx, "account", account_id)
+    if ids or moot:
         await release_waiting_tasks(tx)
     return ids
 
@@ -1360,6 +1508,9 @@ async def credential_renewed(
         "account.credential_renewed",
         {"mode": mode, "kind_changed": row["kind"] != kind},
     )
+    # A new credential ends a login block (the event is what clears it).
+    await decision_store.cancel_open(tx, "account", account_id)
+    await release_waiting_tasks(tx)
 
 
 async def disable_for_write_failure(tx: Tx, account_id: str, error: str) -> None:

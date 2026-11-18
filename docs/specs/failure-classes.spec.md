@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 # Failure classes
@@ -86,6 +86,25 @@ reasons and adds `failure_class` to each failure row and a count per class.
   a loop. The same words under `worker_fail` or `channel_error` stay
   `implementation`: the work's own text is not evidence (3.5). Genuine
   implementation failures count exactly as before.
+- **An expired login is the account's failure, not the task's.** Engine output
+  (the `provider_failure` error, or the stderr tail of a `session_lost`) that
+  matches one row of the `AUTH_EXPIRED_OUTPUT` table in `quota.py` (HTTP 401 with
+  `token_expired`, "Provided authentication token is expired", "Please try signing
+  in again", "OAuth token has expired", `authentication_error`) while the agent
+  holds an engine lease is class `auth_expired`. This is the one place that
+  searches the output instead of its first words (3.5): the patterns are specific
+  to a provider's own wording. `POST /tasks/{id}/fail` then records
+  `account.auth_rejected` (the durable exclusion: the derived `lease_block`
+  `auth_rejected`, see [account usage](account-usage.spec.md)) and
+  `account.auth_expired` (account id, task id, attempt, matched pattern; never a
+  token), opens one notice per account ([account
+  selection](account-selection.spec.md) 3.14), releases the lease and requeues the task
+  (`awaiting_quota` when no other account of its providers is left) with `failures`
+  and `attempt` unchanged. The blocked account is no candidate at the next claim,
+  so another account of the same provider, or the next chain alternative, serves
+  it. Not covered: a task on an explicit execution route records the block and the
+  notice, then fails as any `provider_failure` does, until the route advance
+  carries the class.
 - **Backoff.** A `transient` fail that requeues sets `tasks.retry_at` to
   `tx.now + min(60 · 2^(failures − 1), 900)` s, `failures` counted after this
   fail (60 s, 120 s, 240 s, …, at most 15 min). `claim()` skips a ready task
@@ -582,6 +601,7 @@ and whether the model's or the work's own output can forge it.
 | --- | --- | --- | --- | --- |
 | `quota.py classify_quota()` — quota / auth | Provider-level error text; structured JSON `codexErrorInfo`/`code`/`type`; `auth_expired` notices | `_PREFIX` stripped then patterns anchored at `^` via `_fold` → `_PREFIX.sub` + `body` start | No | No — anchored at start after runner prefix |
 | `quota.py failure_class()` — provider credential (`provider_auth`) | Runner's error head after the same prefixes: HTTP 401/403, `token_expired`, `credential_rejected`, `auth_rejected`, `auth_missing`, `invalid_api_key`, "not logged in"; acted on only for reason `provider_failure` | `PROVIDER_AUTH_NOTICES.match(head)` — `^` anchored | No | No — only the runner's first line, and never under `worker_fail` |
+| `quota.py auth_expired_output()` — expired login | Engine error or stderr tail of a `provider_failure` / `session_lost` while the agent holds an engine lease; the `AUTH_EXPIRED_OUTPUT` table | Search, not anchored; every row names a provider's own expiry wording | No | Partly: a model can print the words, but the effect is an account block with a notice, never a task failure, and a passed check or accepted run lifts it |
 | `quota.py failure_class()` — network | Runner's own error head after `_PREFIX`, `_CHANNEL_STEP`, `_JS_ERROR` stripped | `NETWORK_NOTICES.match(head)` — `^` anchored | No | No — only the runner's first line classifies |
 | `overlays/claude-rate-limit.ts classifyRateLimit()` | SDK `RateLimitError` mark or one exact whole-line notice | Pattern anchored at `^` after prefix strip | No | No — SDK mark or exact runner line |
 | `overlays/codex-usage-limit.ts codexUsageLimitFailure()` | Structured `codexErrorInfo`/`code`/`type` field, or runner-prefixed text | `LIMIT_TEXT` anchored at `^` after `NOTICE_PREFIX` strip; structured path bypasses text match | No | No — anchored after prefix strip |

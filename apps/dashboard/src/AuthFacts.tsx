@@ -6,23 +6,32 @@ import { LEASE_BLOCK_LABELS } from "./usage";
 /** Credential state, last accepted and last rejected as three separate facts. */
 export function AuthFacts({ account: a }: { account: Account }) {
   const credential = credentialLabel(a.credential);
-  if (credential === null) return null;
+  if (credential === null && !a.lease_block) return null;
   return (
     <ul className="auth-facts small">
-      <li>
-        Credential: <span className={`badge credential-${a.credential?.state}`}>{credential}</span>
-        {a.credential?.expires_at && (
-          <span className="muted">
-            {" "}
-            · expires <DateChip at={a.credential.expires_at} />
-          </span>
-        )}
-      </li>
+      {credential !== null && (
+        <li>
+          Credential:{" "}
+          <span className={`badge credential-${a.credential?.state}`}>{credential}</span>
+          {a.credential?.expires_at && (
+            <span className="muted">
+              {" "}
+              · expires <DateChip at={a.credential.expires_at} />
+            </span>
+          )}
+        </li>
+      )}
       {a.lease_block && (
         <li>
           <span className="badge account-exhausted">
             {LEASE_BLOCK_LABELS[a.lease_block] ?? a.lease_block}
           </span>
+          {a.lease_block === "auth_rejected" && a.last_rejected_at && (
+            <span className="muted">
+              {" "}
+              since <DateChip at={a.last_rejected_at} />
+            </span>
+          )}
         </li>
       )}
       <li>

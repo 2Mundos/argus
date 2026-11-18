@@ -30150,6 +30150,47 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/mark-available": {
+      "post": {
+        "description": "Clear a login block (an expired provider login) by hand, make an exhausted\naccount available and close its notice. A disabled account stays disabled.",
+        "operationId": "mark_available_api_accounts__account_id__mark_available_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark Available",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/models/{author}/{slug}/endpoints": {
       "get": {
         "description": "The hosts serving an OpenRouter model, with quantization, context and price,\nfor the routing pickers (custom accounts spec 3). Proxied; `author` and `slug`\nare validated as one path segment each.",

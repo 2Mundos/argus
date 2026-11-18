@@ -424,6 +424,12 @@ def _effects(decision: Decision) -> list[Effect] | Literal["unknown"]:
         return [Effect(choice=o, effect=effects[o]) for o in REVIEW_OPTIONS]
     if kind is DecisionKind.POLICY and subject == "pool":
         return each("approve", "applies the requested scale", "keeps the current scale")
+    if kind is DecisionKind.POLICY and subject == "account":
+        return each(
+            "approve",
+            "marks the account available again",
+            "dismisses the notice; the account stays blocked until a check passes",
+        )
     if kind is DecisionKind.POLICY and subject == "routine":
         return each("approve", "re-enables the routine", "the routine stays disabled")
     if kind in (DecisionKind.APPROVAL, DecisionKind.POLICY) and subject == "task":

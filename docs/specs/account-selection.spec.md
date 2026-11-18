@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 # Global account selection
@@ -353,6 +353,25 @@ isolation or sandbox/TLS restrictions.
   credential gateway or has the executable for it. The route diagnostic
   ([task models](task-models.spec.md) 3.5) reports both as `unknown` unless an
   attempt reported the failure.
+- **Expired login (3.14).** A provider login that expired ([failure
+  classes](failure-classes.spec.md) 3.2, `auth_expired`) blocks its account, not
+  the task:
+  - **Exclusion.** `account.auth_rejected` and `account.auth_expired` are recorded;
+    the derived `lease_block` `auth_rejected` keeps the account out of `_ranked`,
+    the engine pool, task engine choice and execution routes until it clears. The
+    account state does not change (no new state, no migration). Another account of
+    the same provider, or the next chain alternative, serves the requeued task.
+  - **Notice.** One open `policy` decision per account (subject type `account`,
+    audience `human`, options `approve` = mark available, `reject` = dismiss)
+    names the account and says its login must be renewed. Repeated failures add
+    events, never a second notice. No token or credential text is stored.
+  - **Way back.** Any of these clears the block: `POST
+    /api/accounts/{id}/mark-available` (admin; dashboard "Mark available"; MCP tool
+    `mark_account_available`, admin only; answering the notice `approve`), a
+    replaced credential, a successful quota probe, or an accepted run. Each also
+    cancels the notice (the recovery loop cancels it for the automatic clears) and
+    wakes `awaiting_quota` tasks. "Mark available" also resets an `exhausted`
+    account to `available`; a `disabled` one stays disabled.
 
 # 4. Open Questions
 

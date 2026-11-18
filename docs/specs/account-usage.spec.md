@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-16
+updated: 2026-11-18
 ---
 
 # Account usage
@@ -217,11 +217,14 @@ account lease and must preserve the document structure and JSON value types.
 - **Lease block.** A dead credential is not a spent quota. An available account
   is not leased while its last probe is `credential_rejected`, or a lease run
   reported `account.auth_rejected` after the last accepted run, credential
-  renewal and successful probe. The account read model carries it as
+  renewal, operator "Mark available" (`account.auth_cleared`) and successful
+  probe. The dashboard shows `auth_rejected` as "Login required" with
+  `last_rejected_at`. The account read model carries it as
   `lease_block` (`credential_rejected | auth_rejected | null`; the probe code is
   in `quota_status.last_probe`). A successful probe lifts it, and so does
-  renewing the credential (which also forgets the old probe); the account is
-  never disabled. A sweep re-probes a `credential_rejected` account at most
+  renewing the credential (which also forgets the old probe), as does "Mark
+  available" (3.14 of [account selection](account-selection.spec.md)); the
+  account is never disabled. A sweep re-probes a `credential_rejected` account at most
   every 6 hours; "Refresh quota" always probes. `oauth_scope_missing` never
   blocks. `engine_pool` counts a blocked account as neither usable nor exhausted.
 - **Codex.** The probe runs `ARGUS_CODEX_BIN app-server` (or the client a Codex

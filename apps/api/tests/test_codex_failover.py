@@ -7,11 +7,16 @@ import pytest
 from api_support import FakeClock, insert_agent
 from argus_api.accounts import service as accounts
 from argus_api.accounts.eligibility import engine_pool
+from argus_api.auth import Identity
 from argus_api.db import Database
+from argus_api.decisions import service as decisions
+from argus_api.decisions import store as decision_store
 from argus_api.errors import ConflictError
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import service as tasks
 from argus_core.accounts import AccountCreate, ExhaustedReport
+from argus_core.auth import Scope
+from argus_core.decisions import DecisionAnswer
 from argus_core.quota import sanitize_notice
 from argus_core.tasks import TaskCreate
 from argus_core.tasks import TaskState as S
@@ -300,3 +305,108 @@ def test_exhausted_report_reset_status_must_match_until() -> None:
     ):
         with pytest.raises(ValueError):
             ExhaustedReport(**base, **bad)  # type: ignore[arg-type] — deliberately invalid kwargs
+
+
+TAIL = (
+    "last output: ERROR codex_models_manager: 401 Unauthorized, auth error code:"
+    " token_expired; Bearer sk-secret-token-value"
+)
+
+
+async def block_of(db: Database, clock: FakeClock, account_id: str) -> str | None:
+    async with db.read() as conn:
+        return (await accounts.get_account(conn, account_id, clock.now)).lease_block
+
+
+async def notices(db: Database, account_id: str) -> list[str]:
+    async with db.read() as conn:
+        return await decision_store.open_ids(conn, "account", account_id)
+
+
+@pytest.mark.parametrize("reason", ["provider_failure", "session_lost"])
+async def test_expired_login_blocks_the_account_and_the_next_claim_uses_another(
+    db: Database, store: MemorySecretStore, clock: FakeClock, reason: str
+) -> None:
+    a = await add(db, store, "codex-a", priority=100)
+    await add(db, store, "codex-b", priority=90)
+    task = await started(db, store)
+    after = await fail(db, store, task, TAIL, reason)
+    # Not the task's fault: requeued, nothing counted.
+    assert (after.state, after.attempt, after.failures) == (S.READY, 1, 0)
+    assert after.failover is not None
+    assert after.failover.reason_code == "auth_expired"
+    assert await block_of(db, clock, a) == "auth_rejected"
+    [event] = await events(db, "account.auth_expired")
+    assert (event["task_id"], event["attempt"]) == (task.id, 1)
+    assert "sk-secret" not in json.dumps(await events(db, "account.auth_rejected"))
+    assert "sk-secret" not in json.dumps(event)
+    nxt = await claim(db)
+    assert (nxt.attempt, nxt.failures) == (2, 0)
+    assert (await lease(db, store, nxt)).name == "codex-b"
+
+
+async def test_expired_login_on_the_only_account_waits_instead_of_failing(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    a = await add(db, store, "codex-a")
+    task = await started(db, store)
+    after = await fail(db, store, task, TAIL)
+    assert (after.state, after.block_reason) == (S.BLOCKED, "awaiting_quota")
+    assert after.failures == 0
+    async with db.write() as tx:
+        await accounts.mark_available(tx, a, "admin:test")
+    async with db.read() as conn:
+        assert (await tasks.get_task(conn, task.id)).state is S.READY
+
+
+async def test_one_notice_per_account_however_often_the_login_fails(
+    db: Database, store: MemorySecretStore
+) -> None:
+    a = await add(db, store, "codex-a")
+    task = await started(db, store)
+    async with db.write() as tx:
+        for _ in range(3):
+            await accounts._login_required(tx, A, a, task.id, 1, "stderr")
+    [notice] = await notices(db, a)
+    async with db.read() as conn:
+        decision = await decision_store.get(conn, notice)
+    assert "codex-a" in decision.question
+    assert len(await events(db, "account.auth_expired")) == 3
+
+
+async def test_mark_available_and_a_new_credential_clear_the_block(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    a = await add(db, store, "codex-a")
+    b = await add(db, store, "codex-b")
+    for account in (a, b):
+        async with db.write() as tx:
+            await accounts._login_required(tx, A, account, None, None, "stderr")
+        assert await block_of(db, clock, account) == "auth_rejected"
+        assert len(await notices(db, account)) == 1
+    clock.advance(1)
+    async with db.write() as tx:
+        await accounts.mark_available(tx, a, "admin:test")
+        await accounts.credential_renewed(
+            tx, b, "subscription", "replace", "admin:test"
+        )
+    for account in (a, b):
+        assert await block_of(db, clock, account) is None
+        assert await notices(db, account) == []
+
+
+async def test_approving_the_notice_marks_the_account_available(
+    db: Database, store: MemorySecretStore, clock: FakeClock
+) -> None:
+    a = await add(db, store, "codex-a")
+    async with db.write() as tx:
+        await accounts._login_required(tx, A, a, None, None, "stderr")
+    [notice] = await notices(db, a)
+    async with db.write() as tx:
+        await decisions.answer(
+            tx,
+            notice,
+            DecisionAnswer(choice="approve"),
+            Identity("t-admin", Scope.ADMIN, None, "test"),
+        )
+    assert await block_of(db, clock, a) is None

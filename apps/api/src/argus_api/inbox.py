@@ -54,7 +54,7 @@ class Stuck(BaseModel):
 
 
 class InboxItem(BaseModel):
-    subject_type: str  # task, pool, knowledge_proposal, routine
+    subject_type: str  # task, pool, knowledge_proposal, routine, account
     subject_id: str
     title: str | None
     project: str | None  # None for pools
@@ -126,11 +126,12 @@ _ROWS = (
     " WHERE t.state = 'claimed' AND t.quiet_at IS NOT NULL"
     " UNION ALL"
     " SELECT d.subject_type, d.subject_id,"
-    " coalesce(kp.title, ro.title, d.subject_id), coalesce(kp.project, ro.project),"
+    " coalesce(kp.title, ro.title, ac.name, d.subject_id), coalesce(kp.project, ro.project),"
     " NULL, NULL, NULL, NULL, d.id, d.kind, d.audience, d.created_at, d.id, NULL"
     " FROM decisions d LEFT JOIN knowledge_proposals kp"
     "  ON d.subject_type = 'knowledge_proposal' AND kp.id = d.subject_id"
     " LEFT JOIN routines ro ON d.subject_type = 'routine' AND ro.id = d.subject_id"
+    " LEFT JOIN accounts ac ON d.subject_type = 'account' AND ac.id = d.subject_id"
     " WHERE d.state = 'open' AND d.subject_type != 'task'"
 )
 

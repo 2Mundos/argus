@@ -1259,6 +1259,13 @@ async def refresh_account_quota(ctx: Context, account_id: str) -> dict:
     return await _call(ctx, "POST", f"/accounts/{account_id}/quota/refresh")
 
 
+@tool(ADMINS)
+async def mark_account_available(ctx: Context, account_id: str) -> dict:
+    """Clear an account's login block (expired provider login) once it is renewed."""
+    await _call(ctx, "POST", f"/accounts/{account_id}/mark-available")
+    return {"ok": True}
+
+
 LocalField = Literal["api_base_url", "model", "context_tokens"]
 
 

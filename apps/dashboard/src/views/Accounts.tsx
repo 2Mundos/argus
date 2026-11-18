@@ -143,6 +143,22 @@ export function Accounts() {
     }, `toggle:${account.id}`);
   }
 
+  async function markAvailable(account: Account) {
+    setError(undefined);
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/accounts/{account_id}/mark-available", {
+            params: { path: { account_id: account.id } },
+          }),
+        );
+        reloadList();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, `mark-available:${account.id}`);
+  }
+
   async function reload() {
     setError(undefined);
     await action.run(async () => {
@@ -225,6 +241,16 @@ export function Accounts() {
                 </td>
                 <td data-label="Auth">
                   <AuthFacts account={a} />
+                  {a.lease_block && (
+                    <ActionButton
+                      type="button"
+                      pending={action.is(`mark-available:${a.id}`)}
+                      pendingLabel="Marking…"
+                      action={() => void markAvailable(a)}
+                    >
+                      Mark available
+                    </ActionButton>
+                  )}
                 </td>
                 <td data-label="Quota left">
                   {!model ? (

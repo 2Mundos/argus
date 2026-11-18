@@ -4,7 +4,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from argus_core.quota import _reset, classify_quota, failure_class, sanitize_notice
+from argus_core.quota import (
+    AUTH_EXPIRED_OUTPUT,
+    _reset,
+    auth_expired_output,
+    classify_quota,
+    failure_class,
+    sanitize_notice,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "quota-notices.json"
 CASES = json.loads(FIXTURE.read_text())
@@ -153,3 +160,57 @@ def test_unclosed_resets_markers_do_not_backtrack() -> None:
     assert time.perf_counter() - started < 0.5
     stamped = "(resets " * 100 + "(resets 2026-10-20T23:50:00Z)"
     assert _reset(stamped, now) == datetime(2026, 10, 20, 23, 50, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("output", "pattern"),
+    [
+        (
+            "ERROR codex_models_manager: 401 Unauthorized, auth error code: token_expired",
+            "codex_401_token_expired",
+        ),
+        ("auth error code: token_expired (HTTP 401)", "codex_token_expired_401"),
+        (
+            "Your access token could not be refreshed: Provided authentication token"
+            " is expired.",
+            "codex_token_is_expired",
+        ),
+        ("Please try signing in again.", "sign_in_again"),
+        ("API Error: OAuth token has expired", "claude_oauth_expired"),
+        (
+            '{"type":"authentication_error","message":"x"}',
+            "claude_authentication_error",
+        ),
+    ],
+)
+def test_auth_expired_output_names_its_pattern(output: str, pattern: str) -> None:
+    assert auth_expired_output(output) == pattern
+
+
+def test_every_auth_expired_pattern_has_a_case() -> None:
+    cases = {
+        "codex_401_token_expired",
+        "codex_token_expired_401",
+        "codex_token_is_expired",
+        "sign_in_again",
+        "claude_oauth_expired",
+        "claude_authentication_error",
+    }
+    assert {name for name, _ in AUTH_EXPIRED_OUTPUT} == cases
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "HTTP 401 Unauthorized",
+        "token_expired",
+        "the token is valid until tomorrow",
+        "please try again",
+        "authentication failed: bad password",
+        "403 Forbidden",
+        "tests failed: assert 400 == 401",
+        "",
+    ],
+)
+def test_auth_expired_output_ignores_near_misses(output: str) -> None:
+    assert auth_expired_output(output) is None

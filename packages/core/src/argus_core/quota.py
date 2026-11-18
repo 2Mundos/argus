@@ -59,6 +59,24 @@ AUTH_EXPIRED_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("custom", _AUTH_EXPIRED),
 )
 
+# An expired login named anywhere in the engine's own output (the stderr tail a
+# lost session leaves, a runner's failure text), not only at the start of a notice:
+# `AUTH_EXPIRED_NOTICES` above needs the anchor, this table does not. One row per
+# signature the engines print; the first column names it in tests and events.
+AUTH_EXPIRED_OUTPUT: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # Codex: "... 401 Unauthorized ... auth error code: token_expired".
+    ("codex_401_token_expired", re.compile(r"\b401\b.{0,300}?\btoken_expired\b", re.I)),
+    ("codex_token_expired_401", re.compile(r"\btoken_expired\b.{0,300}?\b401\b", re.I)),
+    (
+        "codex_token_is_expired",
+        re.compile(r"provided authentication token is expired", re.I),
+    ),
+    ("sign_in_again", re.compile(r"please try signing in again", re.I)),
+    # Claude Code.
+    ("claude_oauth_expired", re.compile(r"oauth token has expired", re.I)),
+    ("claude_authentication_error", re.compile(r"\bauthentication_error\b", re.I)),
+)
+
 # A credential the provider or the executor refused, whatever the account: HTTP 401
 # or 403 from an engine, the provider's own codes, or a missing login. Environmental
 # (failure classes 3.2): re-running the same attempt cannot fix it. Anchored like the
@@ -219,6 +237,14 @@ def classify_quota(
             until, status, words = reset_of(body, now)
             return QuotaHit(text, until, "quota_exhausted", status, words)
     return None
+
+
+def auth_expired_output(output: str) -> str | None:
+    """The name of the `AUTH_EXPIRED_OUTPUT` row that matches engine output, or None.
+    Only for text the engine or its container wrote (a lost session's stderr tail),
+    never the model's own words."""
+    text = _fold(output)
+    return next((name for name, p in AUTH_EXPIRED_OUTPUT if p.search(text)), None)
 
 
 def failure_class(

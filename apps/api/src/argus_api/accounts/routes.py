@@ -643,6 +643,14 @@ async def awaiting_quota(
         )
 
 
+@router.post("/{account_id}/mark-available", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_available(account_id: str, db: DbDep, caller: AdminDep) -> None:
+    """Clear a login block (an expired provider login) by hand, make an exhausted
+    account available and close its notice. A disabled account stays disabled."""
+    async with db.write() as tx:
+        await service.mark_available(tx, account_id, caller.actor)
+
+
 @router.post("/{account_id}/exhausted")
 async def report_exhausted(
     account_id: str,

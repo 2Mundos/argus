@@ -450,6 +450,13 @@ def _other_effects(decision: Decision, effect: Effect, add) -> None:
             add("routine_reenabled", f"routine {decision.subject_id} is re-enabled")
         case Effect.ROUTINE_STAY_OFF:
             add("routine_unchanged", f"routine {decision.subject_id} stays disabled")
+        case Effect.ACCOUNT_MARK_AVAILABLE:
+            add(
+                "account_available",
+                f"account {decision.subject_id} is marked available",
+            )
+        case Effect.ACCOUNT_DISMISS:
+            add("account_unchanged", f"account {decision.subject_id} stays blocked")
 
 
 # A PR URL, an owner/repo#N reference, or a bare PR N / #N mention.
