@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-17
-updated: 2026-10-28
+updated: 2026-11-18
 ---
 
 # Preferred models
@@ -105,6 +105,7 @@ project overrides.
 
 Policy updates apply on new instances (pool env follows existing lifecycle).
 In-flight attempts retain their snapshot. No real credentials in the policy.
+Tests of `argus-delegate` must set `ARGUS_MODEL_POLICY_FILE` to a file in their temp dir: under the Node test runner (or `ARGUS_DELEGATE_TEST=1`) the delegate refuses the default `/workspace/agent/argus-model-policy.json`, which is a live task's snapshot.
 Fallback runs may see partial workspace edits, so callers must review the diff.
 
 # 6. Implementation Consequences

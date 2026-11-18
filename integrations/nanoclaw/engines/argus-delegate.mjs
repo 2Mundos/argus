@@ -875,15 +875,29 @@ function finish(code, report, resultFile) {
   process.exit(code);
 }
 
+const DEFAULT_MODEL_POLICY_FILE = "/workspace/agent/argus-model-policy.json";
+
+/**
+ * The model policy snapshot the delegate reads; its directory also holds the relay files.
+ * In a task session that default holds the live task context, so a test run (the Node test
+ * runner, or ARGUS_DELEGATE_TEST=1 from the tests) must name its own file and is refused otherwise.
+ */
+function modelPolicyFile(e) {
+  if (e.ARGUS_MODEL_POLICY_FILE) return e.ARGUS_MODEL_POLICY_FILE;
+  if (e.NODE_TEST_CONTEXT || e.ARGUS_DELEGATE_TEST === "1") {
+    process.stderr.write(
+      `refused: ARGUS_MODEL_POLICY_FILE is not set; a test run must not use ${DEFAULT_MODEL_POLICY_FILE}\n`,
+    );
+    process.exit(2);
+  }
+  return DEFAULT_MODEL_POLICY_FILE;
+}
+
 /** Append a model-observability record to the live-log relay (spec 3.6). Never throws. */
 function appendModelRelay(e, { taskId, attempt, executions, selections = [], usage = null }) {
   if (!taskId || !Number.isSafeInteger(attempt) || attempt < 1) return;
   const relayFile =
-    e.ARGUS_TASK_LOG_FILE ||
-    path.join(
-      path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-      RELAY_FILE,
-    );
+    e.ARGUS_TASK_LOG_FILE || path.join(path.dirname(modelPolicyFile(e)), RELAY_FILE);
   try {
     fs.appendFileSync(
       relayFile,
@@ -1312,10 +1326,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   let selection;
   let settings = null;
   try {
-    snapshot = loadPolicy(
-      e,
-      e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json",
-    );
+    snapshot = loadPolicy(e, modelPolicyFile(e));
     // The pinned task context names the engine/account the channel leased; it
     // fills the identity when the process environment does not.
     if (!e.ARGUS_ENGINE && snapshot.context?.engine)
@@ -1690,10 +1701,7 @@ async function runAttempt(
   // file; it needs the run's identity and the file. No token, no network.
   const milestoneRelayFile =
     e.ARGUS_MILESTONE_RELAY_FILE ||
-    path.join(
-      path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-      MILESTONE_RELAY_FILE,
-    );
+    path.join(path.dirname(modelPolicyFile(e)), MILESTONE_RELAY_FILE);
   const childEnv =
     executor === "claude" && taskIdEarly && Number.isSafeInteger(attemptEarly) && attemptEarly >= 1
       ? {
@@ -1722,11 +1730,7 @@ async function runAttempt(
     const attempt = Number(snapshot.context?.attempt);
     if (taskId && Number.isSafeInteger(attempt) && attempt >= 1) {
       const relayFile =
-        e.ARGUS_TASK_LOG_FILE ||
-        path.join(
-          path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-          RELAY_FILE,
-        );
+        e.ARGUS_TASK_LOG_FILE || path.join(path.dirname(modelPolicyFile(e)), RELAY_FILE);
       const seconds = (v) => (Number(v) > 0 ? Number(v) * 1000 : undefined);
       live = startLiveLog({
         stdoutFile,
@@ -1750,11 +1754,7 @@ async function runAttempt(
     const attempt = Number(snapshot.context?.attempt);
     if (taskId && Number.isSafeInteger(attempt) && attempt >= 1) {
       const file =
-        e.ARGUS_TASK_CHANGES_FILE ||
-        path.join(
-          path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-          CHANGES_FILE,
-        );
+        e.ARGUS_TASK_CHANGES_FILE || path.join(path.dirname(modelPolicyFile(e)), CHANGES_FILE);
       const ms =
         Number(e.ARGUS_CHANGES_TICK_S) > 0 ? Number(e.ARGUS_CHANGES_TICK_S) * 1000 : undefined;
       changes = startChanges({
@@ -1799,10 +1799,7 @@ async function runAttempt(
       ? startProvisionalUsage({
           file:
             e.ARGUS_USAGE_PROVISIONAL_RELAY_FILE ||
-            path.join(
-              path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-              PROVISIONAL_RELAY_FILE,
-            ),
+            path.join(path.dirname(modelPolicyFile(e)), PROVISIONAL_RELAY_FILE),
           stdoutFile,
           identity: {
             task_id: taskIdEarly,
@@ -1920,11 +1917,7 @@ async function runAttempt(
   // host reads this file and posts with its own, after checking the task, attempt and account.
   if (accountId && taskId && usageReport.status !== "sent") {
     const usageRelayFile =
-      e.ARGUS_USAGE_RELAY_FILE ||
-      path.join(
-        path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-        USAGE_RELAY_FILE,
-      );
+      e.ARGUS_USAGE_RELAY_FILE || path.join(path.dirname(modelPolicyFile(e)), USAGE_RELAY_FILE);
     const queued = appendUsageRecord(usageRelayFile, {
       source: "delegate",
       role: "executor",
@@ -1938,11 +1931,7 @@ async function runAttempt(
   // The host exhausts the executor account with a fixed reason (copilot accounts spec 3).
   if (jsonFail?.kind === "auth_rejected" && accountId && taskId) {
     appendAuthRejectedRecord(
-      e.ARGUS_USAGE_RELAY_FILE ||
-        path.join(
-          path.dirname(e.ARGUS_MODEL_POLICY_FILE || "/workspace/agent/argus-model-policy.json"),
-          USAGE_RELAY_FILE,
-        ),
+      e.ARGUS_USAGE_RELAY_FILE || path.join(path.dirname(modelPolicyFile(e)), USAGE_RELAY_FILE),
       { task_id: taskId, attempt: snapshot.context?.attempt ?? null, account_id: accountId },
     );
   }
