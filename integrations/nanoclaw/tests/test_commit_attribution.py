@@ -737,3 +737,76 @@ def test_wrapper_fails_closed_without_configured_identity(tmp_path: Path) -> Non
     alias = _run_git(repo, env, "ci", "-m", "msg")
     assert alias.returncode == 1
     assert "no git author identity is configured" in alias.stderr
+
+
+def _git_ok(cwd: Path, *args: str) -> str:
+    done = subprocess.run(
+        [REAL, *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return done.stdout.strip()
+
+
+def _behind_remote(tmp_path: Path) -> tuple[Path, str]:
+    """A worker clone on `feature` whose remote main moved to a commit it never fetched."""
+    bare = tmp_path / "remote.git"
+    subprocess.run(
+        [REAL, "init", "--bare", "-b", "main", str(bare)],
+        check=True,
+        capture_output=True,
+    )
+    other = tmp_path / "other"
+    subprocess.run([REAL, "clone", str(bare), str(other)], check=True, capture_output=True)
+    _git_ok(other, "config", "user.email", "a@e.com")
+    _git_ok(other, "config", "user.name", "A")
+    _git_ok(other, "checkout", "-b", "main")
+    (other / "f").write_text("1\n")
+    _git_ok(other, "add", "f")
+    _git_ok(other, "commit", "-m", "base")
+    _git_ok(other, "push", "origin", "main")
+    worker = tmp_path / "worker"
+    subprocess.run([REAL, "clone", str(bare), str(worker)], check=True, capture_output=True)
+    _git_ok(worker, "config", "user.email", "w@e.com")
+    _git_ok(worker, "config", "user.name", "W")
+    _git_ok(worker, "checkout", "-b", "feature")
+    (worker / "g").write_text("g\n")
+    _git_ok(worker, "add", "g")
+    _git_ok(worker, "commit", "-m", "work")
+    (other / "f").write_text("2\n")
+    _git_ok(other, "commit", "-am", "moved")
+    _git_ok(other, "push", "origin", "main")
+    tip = _git_ok(other, "rev-parse", "HEAD")
+    missing = subprocess.run(
+        [REAL, "cat-file", "-e", f"{tip}^{{commit}}"], cwd=worker, check=False
+    )
+    assert missing.returncode != 0
+    return worker, tip
+
+
+def test_push_fetches_a_remote_default_tip_missing_locally(tmp_path: Path) -> None:
+    if not REAL:
+        pytest.skip("git not installed")
+    worker, tip = _behind_remote(tmp_path)
+    err = attribution.check_push(str(worker), ["git", "push", "origin", "feature"])
+    assert err is None
+    assert _git_ok(worker, "cat-file", "-t", tip) == "commit"
+
+
+def test_push_refuses_an_unfetchable_remote_tip_naming_sha_and_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not REAL:
+        pytest.skip("git not installed")
+    worker, _ = _behind_remote(tmp_path)
+    ghost = "f" * 40
+    monkeypatch.setattr(
+        attribution, "_remote_default_tip", lambda *a, **k: (ghost, None)
+    )
+    err = attribution.check_push(str(worker), ["git", "push", "origin", "feature"])
+    assert err and err.startswith("Argus")
+    assert ghost in err
+    assert "git fetch origin" in err
+    assert "fatal:" not in err

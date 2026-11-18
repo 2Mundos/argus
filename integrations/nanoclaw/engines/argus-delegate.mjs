@@ -474,7 +474,7 @@ export function dshOutcome(stdoutText, stderrText = "") {
 /**
  * The argus-task wait cap the executor's shell can hold (task-helpers spec 3.8). Claude's
  * comes from its managed settings (480 s); every other executor gets the helper's default
- * (110 s), not the harness's value it would otherwise inherit.
+ * (90 s), not the harness's value it would otherwise inherit.
  */
 export function waitCapEnv(executor, e) {
   if (executor === "claude") return e;

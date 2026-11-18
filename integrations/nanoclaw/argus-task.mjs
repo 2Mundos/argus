@@ -48,7 +48,8 @@ const MIN_INTERVAL_S = 10;
 // re-checks run at 3, 6, 12, 24 s and then settle on the interval, which stays the ceiling.
 const FAST_POLL_MS = 3000;
 const MAX_DOUBLINGS = 4; // 3, 6, 12, 24, then the interval
-const DEFAULT_MAX_S = 110; // under the shortest engine shell timeout we know of (spec 3.8)
+const DEFAULT_MAX_S = 90; // well under the shortest engine shell timeout we know of, 120 s (spec 3.8)
+const PR_READY_MAX_S = 60; // pr-ready is one read pass; a slow forge ends it here, not at the tool timeout
 const CEILING_MAX_S = 540;
 const MARKER_TICK_MS = 1000;
 const PROBE_REQUEST_MS = 10_000; // per forge request inside a wait
@@ -418,7 +419,14 @@ async function wait(api, o, ctx) {
     const { done: _, ...rest } = check;
     return {
       code: EXIT.pending,
-      result: { on, ref, waited_s: (ctx.now() - start) / 1000, cursor, ...rest },
+      result: {
+        on,
+        ref,
+        waited_s: (ctx.now() - start) / 1000,
+        cursor,
+        ...rest,
+        next: `still pending, nothing is lost: run the same command again (argus-task wait ${on} --pr ${o.number})`,
+      },
     };
   };
   try {
@@ -488,6 +496,29 @@ async function prReady(api, o, ctx) {
   // Missing review is a reason only when policy requires one; an existing review is always read.
   const needsReview = policy === "required" || (policy === "unset" && !o["skip-review"]);
   const readsReview = policy !== "unset" || !o["skip-review"];
+  // One bounded pass: a slow forge ends the call as pending instead of hitting the tool timeout.
+  const start = ctx.now();
+  api.timeoutMs = PROBE_REQUEST_MS;
+  api.deadline = { at: start + PR_READY_MAX_S * 1000, now: ctx.now };
+  try {
+    return await prReadyPass(api, o, ctx, { policy, needsReview, readsReview });
+  } catch (error) {
+    if (error instanceof GiteaError && error.code === "deadline_exceeded")
+      return {
+        code: EXIT.pending,
+        result: {
+          number: o.number,
+          ready: null,
+          next: `the forge did not answer within ${PR_READY_MAX_S} s; run the same command again (argus-task pr-ready --pr ${o.number})`,
+        },
+      };
+    throw error;
+  } finally {
+    api.deadline = null;
+  }
+}
+
+async function prReadyPass(api, o, ctx, { policy, needsReview, readsReview }) {
   const pr = await api.getPullRequest(o.number);
   const head = pr?.head?.sha;
   if (typeof head !== "string") throw new GiteaError("bad_response", "PR response has no head SHA");
@@ -643,6 +674,44 @@ const GIT_OPERATIONS = [
   ["REVERT_HEAD", "revert"],
 ];
 
+/** A GiteaError that carries the one command to run next, emitted as `action`. */
+function failure(code, message, action) {
+  const error = new GiteaError(code, message);
+  error.action = action;
+  return error;
+}
+
+const OPERATION_ABORT = {
+  rebase: "git rebase --abort",
+  merge: "git merge --abort",
+  "cherry-pick": "git cherry-pick --abort",
+  revert: "git revert --abort",
+};
+const COMMIT_ACTION =
+  'run `git add -A && git commit -m "<message>"`, then run `argus-task deliver` again';
+
+/** The next step for an error with no specific one, by code; emitted as `action`. */
+function defaultAction(error) {
+  if (typeof error?.action === "string") return error.action;
+  switch (error?.code) {
+    case "usage":
+      return "fix the arguments (see `argus-task --help`) and run the command again";
+    case "policy_denied":
+      return "pass --repository URL for the task's repository, or set ARGUS_REPOSITORY_URL, then run the command again";
+    case "git_failed":
+      return "run `git status` and `git fetch origin`, fix what they report, then run `argus-task deliver` again";
+    case "dirty_worktree":
+      return COMMIT_ACTION;
+    case "network_error":
+    case "server_error":
+    case "rate_limited":
+    case "ambiguous":
+      return "run the same command again in a few seconds";
+    default:
+      return "run the same command again; if it fails again, report the error message in your reply";
+  }
+}
+
 /** A git failure as a thrown error: stable code, subcommand, exit status, bounded stderr. */
 function gitError(args, error) {
   const status = typeof error?.status === "number" ? error.status : null;
@@ -713,16 +782,18 @@ function prePushChecks(git, cwd, ctx) {
   const clean = () => gitStep(git, ["status", "--porcelain"], cwd) === "";
   const head = gitStep(git, ["rev-parse", "HEAD"], cwd);
   if (!clean())
-    throw new GiteaError(
+    throw failure(
       "dirty_worktree",
-      "the worktree has changes or untracked files; the pre-push checks need the exact commit: commit or remove them, then run deliver again",
+      `the worktree has changes or untracked files; the pre-push checks need the exact commit; ${COMMIT_ACTION}`,
+      COMMIT_ACTION,
     );
   for (const check of PRE_PUSH_CHECKS) {
     const r = ctx.runCheck(check.argv, cwd, ctx.env);
     if (r.missing)
-      throw new GiteaError(
+      throw failure(
         "pre_push_unavailable",
         `${check.argv[0]} is not installed, so ${check.name} cannot run; nothing was pushed`,
+        `${check.argv[0]} is missing from this image: do not push by other means; report it in your reply as a blocker`,
       );
     if (check.probe) continue;
     if (r.status !== 0)
@@ -733,9 +804,10 @@ function prePushChecks(git, cwd, ctx) {
       };
   }
   if (gitStep(git, ["rev-parse", "HEAD"], cwd) !== head || !clean())
-    throw new GiteaError(
+    throw failure(
       "dirty_worktree",
-      "HEAD or the worktree changed during the pre-push checks; nothing was pushed, run deliver again",
+      "HEAD or the worktree changed during the pre-push checks; nothing was pushed, run `argus-task deliver` again",
+      "run `argus-task deliver` again without editing files while it runs",
     );
   return null;
 }
@@ -745,12 +817,41 @@ async function deliver(api, o, ctx) {
   // Before the branch check: a rebase in progress detaches HEAD, and we must not touch it.
   const pending = operationInProgress(git, cwd);
   if (pending)
-    throw new GiteaError(
+    throw failure(
       "git_operation_in_progress",
-      `a ${pending} is already in progress in this worktree; finish or abort it, then run deliver again`,
+      `a ${pending} is already in progress in this worktree; run \`${OPERATION_ABORT[pending]}\`, then run \`argus-task deliver\` again`,
+      `run \`${OPERATION_ABORT[pending]}\`, then run \`argus-task deliver\` again`,
     );
-  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
-  if (!branch || branch === "HEAD") throw usage("deliver needs a checked-out branch");
+  let branch = "";
+  try {
+    branch = git(["symbolic-ref", "-q", "--short", "HEAD"], cwd);
+  } catch {
+    // detached HEAD: symbolic-ref exits 1
+  }
+  if (!branch) {
+    const action =
+      "run `git switch -c <branch-name>` to keep the current commit on a branch, then run `argus-task deliver` again";
+    throw failure(
+      "detached_head",
+      `deliver needs a checked-out branch but HEAD is detached; ${action}`,
+      action,
+    );
+  }
+  try {
+    git(["rev-parse", "--verify", "-q", "HEAD"], cwd);
+  } catch {
+    throw failure(
+      "unborn_branch",
+      `branch ${branch} has no commits yet; ${COMMIT_ACTION}`,
+      COMMIT_ACTION,
+    );
+  }
+  if (gitStep(git, ["status", "--porcelain", "--untracked-files=no"], cwd) !== "")
+    throw failure(
+      "dirty_worktree",
+      `the worktree has uncommitted or untracked changes; ${COMMIT_ACTION}`,
+      COMMIT_ACTION,
+    );
   const base =
     o.base === undefined
       ? (await api.getRepository()).default_branch
@@ -773,9 +874,10 @@ async function deliver(api, o, ctx) {
       .filter(Boolean)
       .map((line) => line.slice(3));
     if (changed.length)
-      throw new GiteaError(
+      throw failure(
         "dirty_worktree",
-        `${changed.length} changed path(s) block the rebase; commit or stash them: ${changed.slice(0, 5).join(", ")}`,
+        `${changed.length} changed path(s) block the rebase: ${changed.slice(0, 5).join(", ")}; ${COMMIT_ACTION}`,
+        COMMIT_ACTION,
       );
     try {
       git(["rebase", "--quiet", "FETCH_HEAD"], cwd);
@@ -800,7 +902,13 @@ async function deliver(api, o, ctx) {
       if (!conflicts.length) throw gitError(["rebase"], error);
       return {
         code: EXIT.not_ready,
-        result: { branch, base, reasons: ["rebase_conflict"], conflicts },
+        result: {
+          branch,
+          base,
+          reasons: ["rebase_conflict"],
+          conflicts,
+          action: `run \`git fetch origin && git rebase origin/${base}\`, resolve the conflicts in the listed files, \`git add\` them, run \`git rebase --continue\`, then run \`argus-task deliver\` again`,
+        },
       };
     }
     rebased = true;
@@ -847,6 +955,9 @@ async function deliver(api, o, ctx) {
       base,
       created: !existing,
       rebased,
+      sync: rebased
+        ? `rebased the branch onto origin/${base}`
+        : `branch already contains origin/${base}; no rebase needed`,
     },
   };
 }
@@ -1283,7 +1394,7 @@ const COMMANDS = {
   },
   "pr-ready": {
     summary:
-      "--pr N: ready (0) or not (12) with reasons; never merges. Review per ARGUS_FORGE_REVIEW (required|off, from the Argus claim); --skip-review only when it is unset",
+      "--pr N: ready (0) or not (12) with reasons; never merges; returns within 60 s (10 = run it again). Review per ARGUS_FORGE_REVIEW (required|off, from the Argus claim); --skip-review only when it is unset",
     options: { "skip-review": "bool" },
     run: prReady,
   },
@@ -1296,7 +1407,7 @@ const COMMANDS = {
   },
   deliver: {
     summary:
-      "push the branch (clean rebase onto the base first), create or update its PR; exits 12 on a rebase conflict",
+      "the one delivery step after you commit: fetch the base, rebase onto it when behind, run the pre-push checks, push, create or update the PR; exits 12 on a rebase conflict or failed check. Every error carries an `action`",
     options: { title: "string", "body-file": "string", base: "string" },
     noPr: true,
     run: deliver,
@@ -1309,7 +1420,9 @@ function usageText() {
 
 ${lines.join("\n")}
 
-Global options: --repository URL (default ARGUS_REPOSITORY_URL).
+Global options: --repository URL (default ARGUS_REPOSITORY_URL, else the task's only allowed repository).
+Delivery path, no raw git push: commit, then \`argus-task deliver\`, then \`argus-task wait merge --pr N\`.
+\`wait\` returns after at most the cap with exit 10: that is not a failure, run the same command again.
 There is no completion subcommand: finish by sending COMPLETE: with the send_message tool to
 the argus destination (plain text, then the JSON object). On a task run the runner delivers only
 explicit tool sends, so a COMPLETE written as reply text stays in the run log. Do not run
@@ -1369,12 +1482,18 @@ export async function main(argv, env = process.env, io = {}) {
     // A local command talks to the Argus channel's files, not to the forge.
     let api = null;
     if (!definition.local) {
-      const repository = options.repository ?? env.ARGUS_REPOSITORY_URL;
+      // The task's own repository: the flag, ARGUS_REPOSITORY_URL, else the only one the task
+      // allowlist names. Never a guess from a git remote.
+      const allowed = allowlistFrom(env);
+      const repository =
+        options.repository ??
+        (env.ARGUS_REPOSITORY_URL || undefined) ??
+        (allowed.length === 1 ? allowed[0] : undefined);
       if (!repository)
         throw policy("no repository: pass --repository URL or set ARGUS_REPOSITORY_URL");
       const fetchImpl =
         io.fetch ?? createGatewayFetch({ proxy: env.HTTPS_PROXY ?? env.https_proxy ?? "" });
-      api = repositoryClient(repository, allowlistFrom(env), fetchImpl, {
+      api = repositoryClient(repository, allowed, fetchImpl, {
         sleep: io.retrySleep,
       });
     }
@@ -1399,7 +1518,9 @@ export async function main(argv, env = process.env, io = {}) {
       );
       return ATTACH_REFUSED.has(error.code) ? EXIT.not_ready : EXIT.error;
     }
-    stderr.write(`${JSON.stringify({ error: errorPayload(error) })}\n`);
+    stderr.write(
+      `${JSON.stringify({ error: { ...errorPayload(error), action: defaultAction(error) } })}\n`,
+    );
     return error instanceof GiteaError && error.code === "usage" ? EXIT.usage : EXIT.error;
   }
 }

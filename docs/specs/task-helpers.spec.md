@@ -124,7 +124,7 @@ argus-task wait merge --pr N
   30, minimum 10), which is the ceiling, not a floor. A merge or a finished CI is noticed in
   seconds; a long wait still costs the interval rate. It returns after `--max` seconds at
   most. `--max` defaults to `ARGUS_TASK_WAIT_MAX_S`
-  (110 when unset, never above 540) and is clamped to it (3.8). Exit 10 carries a
+  (90 when unset, never above 540) and is clamped to it (3.8). Exit 10 carries a
   one-line status (`"3 of 5 checks running"`) so a re-call costs one short turn.
 - Between forge checks it reads the interrupt marker (3.4) once a second, a local file
   read, so a steer ends the wait within a second.
@@ -286,8 +286,8 @@ engine-specific code in the helper:
 | Engine | Decision |
 | --- | --- |
 | Claude | Supported. The image's Claude managed settings set `ARGUS_TASK_WAIT_MAX_S=480`. Claude Code's Bash tool defaults to a 120 s timeout (600 s at most), so the prompt tells the agent to pass a longer timeout; a call cut short loses nothing (3.1). |
-| Codex, Cursor, Copilot, OpenCode (custom, local) as executors | Supported at the helper's default of 110 s: `argus-delegate` removes the harness's `ARGUS_TASK_WAIT_MAX_S` for every executor but Claude, until each engine's shell timeout is confirmed (4). |
-| Codex or local as harness | Supported at 110 s: managed settings are Claude's only. |
+| Codex, Cursor, Copilot, OpenCode (custom, local) as executors | Supported at the helper's default of 90 s: `argus-delegate` removes the harness's `ARGUS_TASK_WAIT_MAX_S` for every executor but Claude, until each engine's shell timeout is confirmed (4). |
+| Codex or local as harness | Supported at 90 s: managed settings are Claude's only. |
 
 A shorter cap only means more re-calls, each one short turn.
 
@@ -388,7 +388,7 @@ does not create an artifact.
 # 4. Open Questions
 
 - **Shell timeouts of Codex, Cursor and Copilot.** Not confirmed from this repository;
-  each needs a check against its CLI before its default moves above 110 s.
+  each needs a check against its CLI before its default moves above 90 s.
 - **Park-and-wake.** A `WAIT:` outcome that frees the worker slot and wakes a new turn on
   the event. It needs lease, scheduling and resume rules; same-session resume exists only
   for Claude ([quota resume](quota-resume.spec.md)).
