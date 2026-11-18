@@ -111,6 +111,8 @@ selectors, including a single-layer first choice and mixed fallback modes.
   `mode: paired` requires both selectors. Unknown fields, duplicate IDs within a
   difficulty, unknown difficulty/version, invalid provider/adapter and unsupported
   model source are `422 validation_failed` with a field path and stable reason.
+- A selector may set `effort`, the reasoning effort for that role only (3.8).
+  Omitted means the runtime's own default, exactly as before this field existed.
 - Each named difficulty has 1–16 alternatives; IDs use the existing bounded
   identifier convention (1–64 ASCII letters, digits, `_` or `-`). Empty list is
   invalid, not an ambiguous spelling of single-layer or inherit.
@@ -333,8 +335,10 @@ unknown observation is unknown, not proof that the configured model ran.
 `#setup` currently defaults to Settings (`#setup/settings`); both must expose
 **Execution chains**, with a global/project picker and all four difficulties.
 Each difficulty has ordered cards: Single layer / Harness + executor, supported
-runtime, adapter, provider, account (default "Any available account", optional pin)
-and allowed model-source selectors.
+runtime, adapter, provider, account (default "Any available account", optional pin),
+allowed model-source selectors and, per role, an effort select offering "Runtime
+default" plus the catalogue levels the chosen model takes (3.8). An unsupported
+adapter disables it with its reason; an inherited list shows each role's effort.
 Add/remove/reorder changes the **whole alternative**. Show source, effective
 inherited list, editable scoped list, save validation and per-level inherit/reset.
 Save validation lists every problem above the Save button, one line each, naming
@@ -372,6 +376,71 @@ new child with the void model's accounts treated as authors. A child that ends
 alternative and any alternative pinned to its account, which are skipped as
 `failed` ([settings](settings.spec.md) 3.5, bounded by `max_reviewer_failures`);
 when none remains the parent blocks as `review_failed` and a human decides.
+
+## 3.8 Reasoning effort per role
+
+`effort` is an optional selector field, set independently on the harness and, in
+a paired alternative, on the executor. It is a lowercase level name; there is no
+universal vocabulary, so each adapter/provider has its own verified set and
+interface. The capability catalogue carries the set (`efforts`), the interface
+(`effort_interface`), per-model rules (`effort_model_rules`) and how unlisted
+models are treated (`effort_unlisted_models`). Settings writes validate against
+it; Setup renders from it.
+
+| Role | Adapter / provider | Levels | Runtime interface | Model rules |
+| --- | --- | --- | --- | --- |
+| harness | `claude` / `anthropic` | low, medium, high, xhigh, max | NanoClaw container config `effort` → Agent SDK `query({effort})` | Claude CLI rules; unlisted models supported |
+| harness | `codex` / `openai` | low, medium, high, xhigh | NanoClaw container config `effort` → Codex app-server `model_reasoning_effort` | Codex catalogue; unlisted models unverified |
+| harness | `claude` / `local`, `claude` / `custom` | unsupported | the redirect and bridge do not translate effort | — |
+| executor | `claude` / `anthropic` | low, medium, high, xhigh, max | `claude --effort <level>` | Claude CLI rules; unlisted models supported |
+| executor | `codex` / `openai` | low, medium, high, xhigh, max, ultra | `codex exec -c model_reasoning_effort="<level>"` | Codex catalogue; unlisted models unverified |
+| executor | `copilot` / `copilot` | none, minimal, low, medium, high, xhigh, max | `copilot --reasoning-effort <level>` | none known; all models unverified |
+| executor | `agent` / `cursor` | unsupported | only bracketed model parameters, which model IDs forbid | — |
+| executor | `opencode` / `local`, `opencode` / `custom` | unsupported | `--variant` needs provider variants Argus does not define | — |
+
+Sources: claude-code 2.1.296 (`--effort`, per-model support functions), Claude
+Agent SDK 0.3.296 (`EffortLevel`), codex-cli 0.162.1 (bundled model catalogue
+`supported_reasoning_levels`), the NanoClaw agent-runner's `normalizeCodexEffort`
+(none, minimal, low, medium, high, xhigh), copilot 1.0.105 (`--reasoning-effort`),
+cursor-agent 2026.10.16 and the pinned NanoClaw host, whose `container_configs`
+row has an `effort` column written to `container.json`. All from help text,
+type definitions and static inspection; no inference was run.
+
+Model rules match the canonical model ID (lowercase, trailing `-YYYYMMDD`
+removed). Claude: `claude-3-*`, `claude-opus-4`, `claude-opus-4-0`,
+`claude-opus-4-1`, `claude-sonnet-4`, `claude-sonnet-4-0`, `claude-sonnet-4-5`
+and `claude-haiku-4-5` take no effort; `claude-opus-4-5` takes low–high;
+`claude-opus-4-6` and `claude-sonnet-4-6` take low–high and max. Codex:
+`gpt-5.5` takes low–xhigh; `gpt-6-luna`, `gpt-5.6-luna` and `codex-auto-review`
+add max; `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`,
+`gpt-5.6-terra`, `gpt-daybreak-blue-latest` and `gpt-daybreak-red-latest` add
+max and ultra; a harness level is always also within the harness set.
+
+- An effort on an unsupported adapter/provider is `422` with
+  `<role>_effort_unsupported`; a level outside the set is `<role>_effort_invalid`;
+  a level a listed model does not take is `<role>_effort_unsupported_by_model`.
+  Every supported row uses an explicit model, so its rules are known on save.
+  Nothing is silently
+  dropped or clamped; the Claude CLI and SDK would downgrade silently, so Argus
+  refuses those combinations before saving.
+- An unlisted model on an "unverified" adapter is accepted and Setup labels the
+  level "unverified for this model"; the CLI decides at run time.
+- The field is excluded when omitted, so existing settings, revisions, snapshots
+  and fingerprints are byte-for-byte unchanged. Setting, changing or clearing it
+  changes only that difficulty's revision, which starts a new traversal there on
+  the next claim (3.5); other difficulties and generation fencing are untouched.
+  It travels in the alternative: claim snapshot, candidates, `review` routes,
+  `task.execution_route_selected` and every fallback alternative keep the level
+  configured for that alternative, never the previous one's.
+- NanoClaw applies the harness level to the group container config with the
+  model, restarting the session when either changes, and restores the operator's
+  previous value when a later route omits effort. `argus-delegate` adds the
+  executor flag above and refuses an effort for an adapter without an interface.
+  Both re-check the set and refuse an unknown level rather than ignoring it.
+- This is the configured level. No adapter reports the level it applied, so
+  observed effort is recorded as unknown (`null`), never as the configured value.
+- Author exclusion in independent review compares provider, model and account
+  pins, not effort: the same model at another effort is still the author.
 
 # 4. Open Questions
 
@@ -494,6 +563,9 @@ Publication and live activation are separate from their local verification.
   orders across database reopen, exact tuple rollback/reuse/capacity, generation
   fencing, reset, model freezing, pins/locks and no-executor calls. Repository,
   provisioned NanoClaw and delegate suites must be green for publication.
+- Effort (3.8): core, settings, snapshot and fallback tests, delegate argv tests
+  and NanoClaw container-config tests check the configured level and the exact
+  constructed invocation. Whether a provider honours a level is not verified.
 - Real-provider inference, installed production CLI readiness, gateway grants,
   deployment and live activation remain separately authorized operator work.
   No local test proves endpoint reachability or model tool-use quality. No live

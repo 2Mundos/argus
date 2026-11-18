@@ -6,6 +6,7 @@ account roles, capacity, credentials and the worker's declared adapter capabilit
 
 import hashlib
 import json
+import re
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -15,6 +16,8 @@ from argus_core.difficulty import Difficulty
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
 # Same opaque model-ID contract as task pins and custom accounts.
 ModelIdentifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")]
+# A level name; which names an adapter takes is in `_EFFORT`, not in this pattern.
+EffortLevel = Annotated[str, Field(pattern=r"^[a-z]{1,16}$")]
 
 
 class ClosedModel(BaseModel):
@@ -39,6 +42,9 @@ class Selector(ClosedModel):
         default=None, exclude_if=lambda v: v is None
     )
     model: Annotated[AccountModel | ExplicitModel, Field(discriminator="source")]
+    # Reasoning effort for this role only. None = the runtime's own default; it is
+    # left out of dumps so existing policies keep their revisions.
+    effort: EffortLevel | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 # Closed static target matrix, NOT an advertised list of validated worker features.
@@ -60,12 +66,137 @@ _SELECTOR_SOURCES = {
 }
 
 
+class EffortModelRule(ClosedModel):
+    """Levels a canonical model ID takes, overriding the adapter set."""
+
+    models: list[str] = Field(default_factory=list)
+    prefixes: list[str] = Field(default_factory=list)
+    efforts: list[str]
+
+
+class EffortSupport(ClosedModel):
+    interface: str
+    efforts: list[str]
+    model_rules: list[EffortModelRule] = Field(default_factory=list)
+    # "supported": the CLI applies any level to a model no rule lists.
+    # "unverified": accepted, but whether that model takes the level is unknown.
+    unlisted_models: Literal["supported", "unverified"]
+
+
+# Verified per installed CLI/runtime (docs/specs/execution-chains.spec.md 3.8);
+# a selector absent here takes no effort.
+_CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+_CLAUDE_RULES = [
+    EffortModelRule(
+        models=[
+            "claude-opus-4",
+            "claude-opus-4-0",
+            "claude-opus-4-1",
+            "claude-sonnet-4",
+            "claude-sonnet-4-0",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+        ],
+        prefixes=["claude-3-"],
+        efforts=[],
+    ),
+    EffortModelRule(models=["claude-opus-4-5"], efforts=["low", "medium", "high"]),
+    EffortModelRule(
+        models=["claude-opus-4-6", "claude-sonnet-4-6"],
+        efforts=["low", "medium", "high", "max"],
+    ),
+]
+_CODEX_RULES = [
+    EffortModelRule(models=["gpt-5.5"], efforts=["low", "medium", "high", "xhigh"]),
+    EffortModelRule(
+        models=["gpt-6-luna", "gpt-5.6-luna", "codex-auto-review"],
+        efforts=["low", "medium", "high", "xhigh", "max"],
+    ),
+    EffortModelRule(
+        models=[
+            "gpt-6-astra",
+            "gpt-6.1-sol",
+            "gpt-6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-daybreak-blue-latest",
+            "gpt-daybreak-red-latest",
+        ],
+        efforts=["low", "medium", "high", "xhigh", "max", "ultra"],
+    ),
+]
+_EFFORT = {
+    ("harness", "claude", "anthropic"): EffortSupport(
+        interface="NanoClaw container config effort -> Agent SDK query({effort})",
+        efforts=_CLAUDE_LEVELS,
+        model_rules=_CLAUDE_RULES,
+        unlisted_models="supported",
+    ),
+    # The agent-runner accepts none..xhigh; no catalogued model takes none/minimal.
+    ("harness", "codex", "openai"): EffortSupport(
+        interface="NanoClaw container config effort -> Codex model_reasoning_effort",
+        efforts=["low", "medium", "high", "xhigh"],
+        model_rules=_CODEX_RULES,
+        unlisted_models="unverified",
+    ),
+    ("executor", "claude", "anthropic"): EffortSupport(
+        interface="claude --effort <level>",
+        efforts=_CLAUDE_LEVELS,
+        model_rules=_CLAUDE_RULES,
+        unlisted_models="supported",
+    ),
+    ("executor", "codex", "openai"): EffortSupport(
+        interface='codex exec -c model_reasoning_effort="<level>"',
+        efforts=["low", "medium", "high", "xhigh", "max", "ultra"],
+        model_rules=_CODEX_RULES,
+        unlisted_models="unverified",
+    ),
+    ("executor", "copilot", "copilot"): EffortSupport(
+        interface="copilot --reasoning-effort <level>",
+        efforts=["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        unlisted_models="unverified",
+    ),
+}
+
+
+def allowed_efforts(
+    selector: Selector, role: Literal["harness", "executor"]
+) -> list[str]:
+    """Levels this selector's adapter and (explicit) model take; [] = none."""
+    support = _EFFORT.get((role, selector.adapter, selector.provider))
+    if support is None:
+        return []
+    if selector.model.source != "explicit":
+        return support.efforts
+    model = re.sub(r"-\d{8}$", "", selector.model.id.lower())
+    for rule in support.model_rules:
+        if model in rule.models or model.startswith(tuple(rule.prefixes)):
+            return [e for e in support.efforts if e in rule.efforts]
+    return support.efforts
+
+
 def _validate_selector(
     selector: Selector, role: Literal["harness", "executor"]
 ) -> None:
     allowed = _SELECTOR_SOURCES.get((role, selector.adapter, selector.provider), set())
     if selector.model.source not in allowed:
         raise ValueError(f"unsupported_{role}_selector: adapter/provider/model source")
+    if selector.effort is None:
+        return
+    support = _EFFORT.get((role, selector.adapter, selector.provider))
+    if support is None:
+        raise ValueError(
+            f"{role}_effort_unsupported: {selector.adapter}/{selector.provider}"
+        )
+    if selector.effort not in support.efforts:
+        raise ValueError(
+            f"{role}_effort_invalid: {selector.effort} not in {support.efforts}"
+        )
+    if selector.effort not in allowed_efforts(selector, role):
+        raise ValueError(
+            f"{role}_effort_unsupported_by_model: {selector.effort} on "
+            f"{getattr(selector.model, 'id', 'account model')}"
+        )
 
 
 class SingleAlternative(ClosedModel):
@@ -238,6 +369,11 @@ class ExecutionCapability(ClosedModel):
     modes: list[Literal["single", "paired"]]
     excluded_harness_providers: list[str] = Field(default_factory=list)
     same_provider_same_account: bool = False
+    # Empty = this role/adapter takes no effort; a set value is rejected.
+    efforts: list[str] = Field(default_factory=list)
+    effort_interface: str | None = None
+    effort_model_rules: list[EffortModelRule] = Field(default_factory=list)
+    effort_unlisted_models: Literal["supported", "unverified"] | None = None
 
 
 EXECUTION_CAPABILITIES = [
@@ -253,6 +389,16 @@ EXECUTION_CAPABILITIES = [
             if role == "executor" and adapter not in {"agent", "opencode"}
             else [],
             "same_provider_same_account": role == "executor" and provider != "custom",
+            **(
+                {
+                    "efforts": effort.efforts,
+                    "effort_interface": effort.interface,
+                    "effort_model_rules": effort.model_rules,
+                    "effort_unlisted_models": effort.unlisted_models,
+                }
+                if (effort := _EFFORT.get((role, adapter, provider)))
+                else {}
+            ),
         }
     )
     for (role, adapter, provider), sources in _SELECTOR_SOURCES.items()

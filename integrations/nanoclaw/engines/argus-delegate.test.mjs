@@ -617,6 +617,75 @@ test("commands are non-interactive, scoped to the cwd, and read-only on request"
   }
 });
 
+test("configured executor effort is the exact flag each CLI documents, or a refusal", () => {
+  const argv = (executor, effort) =>
+    buildCommand(executor, { cwd: "/w", model: "m", lastMessageFile: "/o", effort }).args;
+  const claude = argv("claude", "xhigh");
+  assert.deepEqual(claude.slice(claude.indexOf("--effort"), claude.indexOf("--effort") + 2), [
+    "--effort",
+    "xhigh",
+  ]);
+  const codex = argv("codex", "ultra");
+  assert.deepEqual(codex.slice(-3), ["-c", 'model_reasoning_effort="ultra"', "-"]);
+  const copilot = argv("copilot", "none");
+  assert.deepEqual(copilot.slice(-3), ["--reasoning-effort", "none", "-p"]);
+  // Omitted effort leaves every argv as it was.
+  for (const e of ["claude", "codex", "copilot", "opencode", "agent"])
+    assert.deepEqual(
+      argv(e, null),
+      buildCommand(e, { cwd: "/w", model: "m", lastMessageFile: "/o" }).args,
+    );
+  for (const e of ["opencode", "agent", "dsh"])
+    assert.throws(() => argv(e, "high"), /no reasoning effort interface/);
+});
+
+test("execution route effort reaches the claude argv and the evidence as configured, not observed", async (t) => {
+  const s = sandbox(t);
+  const rec = path.join(s.dir, "claude.argv");
+  s.fake(
+    "claude",
+    `if [ "$1" = "--version" ]; then echo v; exit 0; fi\nprintf '%s\\n' "$@" > ${rec}\ncat >/dev/null; echo '{"result":"ok"}'`,
+  );
+  const policy = { harness: { codex: ["luna"] }, implementation: { claude: ["sonnet"] } };
+  const file = path.join(s.dir, "effort-policy.json");
+  for (const [effort, expected] of [
+    ["max", 0],
+    ["ultra", 64],
+  ]) {
+    fs.rmSync(rec, { force: true });
+    const execution = {
+      version: 1,
+      generation: 1,
+      alternative: { mode: "paired" },
+      executor: {
+        model: "claude-opus-5-5",
+        selector: { adapter: "claude", provider: "anthropic", effort },
+      },
+    };
+    fs.writeFileSync(file, JSON.stringify(policySnapshot(policy, { task_id: "t1", execution })));
+    const { code, report } = await run(["claude", "--cwd", s.work], {
+      env: { ...s.env, ANTHROPIC_API_KEY: "x", ARGUS_MODEL_POLICY_FILE: file },
+    });
+    assert.equal(code, expected, JSON.stringify(report));
+    if (expected === 64) {
+      assert.equal(report.error, "model_policy_invalid");
+      assert.match(report.detail, /executor effort ultra is not supported/);
+      assert.equal(fs.existsSync(rec), false);
+      continue;
+    }
+    const args = fs.readFileSync(rec, "utf8").trim().split("\n");
+    assert.deepEqual(args.slice(args.indexOf("--model"), args.indexOf("--model") + 4), [
+      "--model",
+      "claude-opus-5-5",
+      "--effort",
+      "max",
+    ]);
+    assert.equal(report.configured_effort, "max");
+    assert.equal(report.observed_effort, null);
+    assert.equal(report.attempts[0].configured_effort, "max");
+  }
+});
+
 test("claude exit 0 with is_error is a delegate failure", async (t) => {
   const s = sandbox(t);
   s.fake(

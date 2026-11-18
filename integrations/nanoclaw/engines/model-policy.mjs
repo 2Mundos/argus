@@ -92,6 +92,29 @@ export function selectModel(snapshot, scope, engine, attempt = 1, reason = null,
   };
 }
 
+// Reasoning effort levels each role/adapter/provider has an interface for
+// (execution-chains spec 3.8). The API also checks per-model rules on save; this
+// re-check refuses a level the runtime could not apply instead of dropping it.
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+export const EFFORTS = {
+  "harness:claude:anthropic": CLAUDE_EFFORTS,
+  "harness:codex:openai": ["low", "medium", "high", "xhigh"],
+  "executor:claude:anthropic": CLAUDE_EFFORTS,
+  "executor:codex:openai": ["low", "medium", "high", "xhigh", "max", "ultra"],
+  "executor:copilot:copilot": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+};
+
+/** The configured effort of one role of an execution route; null when omitted. */
+export function executionEffort(execution, role) {
+  const selector = execution?.[role]?.selector;
+  const effort = selector?.effort ?? null;
+  if (effort === null) return null;
+  const key = `${role}:${selector.adapter}:${selector.provider}`;
+  if (!EFFORTS[key]?.includes(effort))
+    throw new Error(`${role} effort ${effort} is not supported for ${key}`);
+  return effort;
+}
+
 const PIN_PROVIDERS = { claude: "anthropic", codex: "openai" };
 
 /**

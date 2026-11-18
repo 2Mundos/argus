@@ -39,6 +39,36 @@ function unavailableReason(
   return undefined;
 }
 
+/**
+ * Reasoning effort levels this selector takes (execution-chains spec 3.8): the
+ * capability's levels, narrowed by the first model rule an explicit model matches.
+ * `verified` is false when the model is listed by no rule and the CLI's model check
+ * was not verified.
+ */
+function effortChoices(c: Capability | undefined, selector: Selector) {
+  const levels = c?.efforts ?? [];
+  if (selector.model.source !== "explicit") return { levels, verified: true };
+  const model = selector.model.id.toLowerCase().replace(/-\d{8}$/, "");
+  const rule = c?.effort_model_rules?.find(
+    (r) => r.models?.includes(model) || r.prefixes?.some((p) => model.startsWith(p)),
+  );
+  if (rule) return { levels: levels.filter((l) => rule.efforts.includes(l)), verified: true };
+  return { levels, verified: c?.effort_unlisted_models !== "unverified" };
+}
+
+/** Why the selector's effort cannot be saved; undefined when it can (or is omitted). */
+function effortProblem(caps: Capability[], selector: Selector, role: "harness" | "executor") {
+  if (!selector.effort) return undefined;
+  const c = caps.find(
+    (x) => x.role === role && x.adapter === selector.adapter && x.provider === selector.provider,
+  );
+  if (!c?.efforts?.length)
+    return `${role} effort: ${selector.adapter} / ${selector.provider} has no reasoning effort setting`;
+  if (!effortChoices(c, selector).levels.includes(selector.effort))
+    return `${role} effort: ${selector.effort} is not supported by this ${selector.adapter} model`;
+  return undefined;
+}
+
 /** One line per adapter / provider: which roles it can fill and which modes follow. */
 function describeCapabilities(caps: Capability[]) {
   const roles = new Map<string, Set<string>>();
@@ -53,7 +83,7 @@ function describeCapabilities(caps: Capability[]) {
 }
 
 /** Every reason the draft cannot be saved, one line each; empty when it is valid. */
-function draftProblems(draft: Policy): string[] {
+function draftProblems(draft: Policy, caps: Capability[]): string[] {
   const problems: string[] = [];
   for (const level of DIFFICULTY_LEVELS) {
     const list = draft.difficulties[level];
@@ -67,6 +97,11 @@ function draftProblems(draft: Policy): string[] {
         problems.push(`${where}: harness model ID is empty`);
       if (a.mode === "paired" && a.executor.model.source === "explicit" && !a.executor.model.id)
         problems.push(`${where}: executor model ID is empty`);
+      for (const problem of [
+        effortProblem(caps, a.harness, "harness"),
+        a.mode === "paired" ? effortProblem(caps, a.executor, "executor") : undefined,
+      ])
+        if (problem) problems.push(`${where}: ${problem}`);
     });
   }
   return problems;
@@ -103,6 +138,7 @@ function SelectorEditor({
   // A native provider has one gateway identity per session: once the other side
   // is pinned, this side can only use that same account.
   const sharedNative = !!harness && !!capability?.same_provider_same_account;
+  const effort = effortChoices(capability, value);
   return (
     <fieldset>
       <legend>{role === "harness" ? "Harness" : "Executor"}</legend>
@@ -206,6 +242,39 @@ function SelectorEditor({
           />
         </label>
       )}
+      <label>
+        Reasoning effort{" "}
+        <select
+          aria-label={`${role} reasoning effort`}
+          value={value.effort ?? ""}
+          disabled={!capability?.efforts?.length && !value.effort}
+          onChange={(e) => {
+            const { effort: _omitted, ...rest } = value;
+            onChange(e.target.value ? { ...rest, effort: e.target.value } : rest);
+          }}
+        >
+          <option value="">Runtime default</option>
+          {effort.levels.map((level) => (
+            <option key={level} value={level}>
+              {level}
+            </option>
+          ))}
+          {value.effort && !effort.levels.includes(value.effort) && (
+            <option value={value.effort} disabled>
+              {value.effort} (not supported here)
+            </option>
+          )}
+        </select>
+      </label>
+      <p className="small">
+        {capability?.efforts?.length
+          ? `Applied with ${capability.effort_interface}. ${
+              effort.verified
+                ? "Runtime default leaves the CLI's own level."
+                : "This model is not in the verified list: the CLI may reject a level."
+            }`
+          : `${value.adapter} / ${value.provider} has no reasoning effort setting for the ${role}; the runtime default applies.`}
+      </p>
       <p className="small">
         Configured account model: {accountModel(account, role)}.{" "}
         {value.provider !== "local" && (
@@ -275,7 +344,7 @@ export function ExecutionChains({
   const effective = (setting?.value as Policy | undefined) ?? empty();
   const caps = catalog?.execution_capabilities ?? [];
   const notesId = useId();
-  const problems = draftProblems(draft);
+  const problems = draftProblems(draft, caps);
   const notes = [
     ...problems,
     ...(caps.length ? [] : ["No execution capabilities loaded from /api/engines"]),
@@ -377,9 +446,10 @@ export function ExecutionChains({
                 {!own ? (
                   <p>
                     {alternative.harness.provider} /{" "}
-                    {alternative.harness.account_id ?? "any account"}
+                    {alternative.harness.account_id ?? "any account"} · effort{" "}
+                    {alternative.harness.effort ?? "runtime default"}
                     {alternative.mode === "paired"
-                      ? ` → ${alternative.executor.provider} / ${alternative.executor.account_id ?? "any account"}`
+                      ? ` → ${alternative.executor.provider} / ${alternative.executor.account_id ?? "any account"} · effort ${alternative.executor.effort ?? "runtime default"}`
                       : ""}
                   </p>
                 ) : (

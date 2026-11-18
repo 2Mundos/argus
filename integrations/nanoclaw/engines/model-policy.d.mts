@@ -13,13 +13,13 @@ export interface ExecutionSelection {
     account_id: string;
     model: string;
     lease_id: string;
-    selector: { adapter: string; provider: string };
+    selector: { adapter: string; provider: string; effort?: string };
   };
   executor?: {
     account_id: string;
     model: string;
     lease_id: string;
-    selector: { adapter: string; provider: string };
+    selector: { adapter: string; provider: string; effort?: string };
   } | null;
 }
 export interface PolicySnapshot {
@@ -64,6 +64,11 @@ export interface ModelSelection {
   fallback_reason: string | null;
   has_next: boolean;
 }
+export const EFFORTS: Record<string, string[]>;
+export function executionEffort(
+  execution: ExecutionSelection | null | undefined,
+  role: "harness" | "executor",
+): string | null;
 export function validatePolicy(raw: unknown): ModelPolicy;
 export function policySnapshot(raw: unknown, context?: PolicySnapshot["context"]): PolicySnapshot;
 export function loadPolicy(e?: NodeJS.ProcessEnv, snapshotFile?: string): PolicySnapshot;

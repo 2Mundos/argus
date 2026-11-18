@@ -3,7 +3,11 @@
 from copy import deepcopy
 
 import pytest
-from argus_core.execution_chains import ExecutionChains, resolve_chains
+from argus_core.execution_chains import (
+    EXECUTION_CAPABILITIES,
+    ExecutionChains,
+    resolve_chains,
+)
 from pydantic import ValidationError
 
 LEVELS = ("trivial", "simple", "standard", "hard")
@@ -293,3 +297,143 @@ def test_revision_is_deterministic_per_difficulty_and_tracks_order_and_source():
     reordered = policy("hard", [single(), paired()])
     assert resolve_chains(reordered)["hard"].revision != route.revision
     assert resolve_chains(base, base)["hard"].revision != route.revision
+
+
+def native_pair(harness_effort=None, executor_effort=None, executor="codex"):
+    provider = {"codex": "openai", "claude": "anthropic", "copilot": "copilot"}
+    route = {
+        "id": "native",
+        "mode": "paired",
+        "runtime": "nanoclaw",
+        "harness": {
+            "adapter": "claude",
+            "provider": "anthropic",
+            "model": {"source": "explicit", "id": "claude-opus-4-7"},
+        },
+        "executor": {
+            "adapter": executor,
+            "provider": provider[executor],
+            "model": {"source": "explicit", "id": "gpt-5.5"},
+        },
+    }
+    if harness_effort:
+        route["harness"]["effort"] = harness_effort
+    if executor_effort:
+        route["executor"]["effort"] = executor_effort
+    return route
+
+
+@pytest.mark.parametrize("difficulty", LEVELS)
+def test_effort_is_per_role_roundtrips_and_omission_keeps_revision(difficulty):
+    plain = policy(difficulty, [native_pair()])
+    assert "effort" not in plain.model_dump_json()
+    value = {
+        "version": 1,
+        "difficulties": {difficulty: [native_pair("max", "low"), single()]},
+    }
+    parsed = ExecutionChains.model_validate(value)
+    assert parsed.model_dump(mode="json") == value
+    pair = parsed.difficulties[difficulty][0]
+    assert (pair.harness.effort, pair.executor.effort) == ("max", "low")
+    # Setting, changing or clearing one role's effort changes only that level.
+    revisions = {
+        resolve_chains(policy(difficulty, [native_pair(*efforts)]))[difficulty].revision
+        for efforts in [(None, None), ("max", None), ("high", None), (None, "low")]
+    }
+    assert len(revisions) == 4
+    assert (
+        resolve_chains(policy(difficulty, [native_pair()]))[difficulty]
+        == resolve_chains(plain)[difficulty]
+    )
+    # A project without the level inherits the global effort; one with it replaces.
+    inherited = resolve_chains(parsed, ExecutionChains())[difficulty]
+    assert inherited.source == "global"
+    assert inherited.alternatives[0].executor.effort == "low"
+    own = resolve_chains(parsed, policy(difficulty, [native_pair(None, "high")]))
+    assert own[difficulty].alternatives[0].executor.effort == "high"
+    assert own[difficulty].alternatives[0].harness.effort is None
+
+
+@pytest.mark.parametrize(
+    "role,effort,model,reason",
+    [
+        ("harness", "ultra", None, "harness_effort_invalid"),
+        ("harness", "High", None, "should match pattern"),
+        ("executor", "max", None, "executor_effort_unsupported_by_model"),
+        ("executor", "minimal", None, "executor_effort_invalid"),
+        ("harness", "low", "claude-sonnet-4-5-20250929", "unsupported_by_model"),
+        ("harness", "xhigh", "claude-opus-4-6", "unsupported_by_model"),
+        ("harness", "high", "claude-3-7-sonnet-latest", "unsupported_by_model"),
+    ],
+)
+def test_effort_rejects_invalid_levels_and_model_restrictions(
+    role, effort, model, reason
+):
+    route = native_pair()
+    route[role]["effort"] = effort
+    if model:
+        route[role]["model"]["id"] = model
+    with pytest.raises(ValidationError, match=reason):
+        policy("hard", [route])
+
+
+@pytest.mark.parametrize(
+    "role,adapter,provider",
+    [
+        ("harness", "claude", "local"),
+        ("harness", "claude", "custom"),
+        ("executor", "opencode", "custom"),
+        ("executor", "agent", "cursor"),
+    ],
+)
+def test_effort_on_adapter_without_interface_is_rejected_not_ignored(
+    role, adapter, provider
+):
+    route = paired()
+    route["harness"]["provider"] = "custom"
+    route[role].update(adapter=adapter, provider=provider, effort="high")
+    if adapter == "agent":
+        route[role]["model"] = {"source": "explicit", "id": "vendor/code"}
+    with pytest.raises(ValidationError, match=f"{role}_effort_unsupported:"):
+        policy("hard", [route])
+    del route[role]["effort"]
+    assert policy("hard", [route])
+
+
+def test_model_rules_allow_supported_levels_and_unlisted_models():
+    route = native_pair("high", "none", executor="copilot")
+    assert policy("hard", [route]).difficulties["hard"][0].executor.effort == "none"
+    for role, effort, model in [
+        ("harness", "max", "claude-opus-4-6"),
+        ("harness", "high", "claude-opus-4-5-20251101"),
+        ("harness", "max", "claude-future-model"),
+        ("executor", "ultra", "gpt-6-sol"),
+        ("executor", "ultra", "vendor-unlisted"),
+    ]:
+        route = native_pair()
+        route[role].update(effort=effort, model={"source": "explicit", "id": model})
+        assert getattr(policy("hard", [route]).difficulties["hard"][0], role).effort
+
+
+def test_capabilities_publish_effort_support_per_role():
+    caps = {c.id: c for c in EXECUTION_CAPABILITIES}
+    assert caps["nanoclaw:harness:claude:anthropic"].efforts[-1] == "max"
+    assert caps["nanoclaw:harness:codex:openai"].efforts == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ]
+    assert caps["nanoclaw:executor:codex:openai"].effort_unlisted_models == "unverified"
+    assert (
+        "--reasoning-effort"
+        in caps["nanoclaw:executor:copilot:copilot"].effort_interface
+    )
+    for id in [
+        "nanoclaw:harness:claude:local",
+        "nanoclaw:harness:claude:custom",
+        "nanoclaw:executor:agent:cursor",
+        "nanoclaw:executor:opencode:local",
+        "nanoclaw:executor:opencode:custom",
+    ]:
+        assert caps[id].efforts == [] and caps[id].effort_interface is None
