@@ -760,6 +760,12 @@ function operationInProgress(git, cwd, only) {
 // the gate lives here. Unlike the hook it never skips the scan: a scanner that is not installed
 // means a required check cannot run, and deliver fails closed.
 const PRE_PUSH_CHECKS = [
+  // First and cheap: a stray or misplaced file is named with its fix, not buried in check-changed output.
+  {
+    name: "path check",
+    argv: ["python3", "scripts/check_paths.py", "--json"],
+    violations: true,
+  },
   { name: "make check-changed", argv: ["make", "check-changed"] },
   { name: "gitleaks", argv: ["gitleaks", "version"], probe: true },
   { name: "make secret-scan", argv: ["make", "secret-scan"] },
@@ -782,6 +788,16 @@ function defaultRunCheck(argv, cwd, env) {
   });
   if (r.error?.code === "ENOENT") return { missing: true, status: null, output: "" };
   return { missing: false, status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+/** The `[{path, rule, action}]` list `check_paths.py --json` prints, or null when the output is not that. */
+function parseViolations(output) {
+  try {
+    const list = JSON.parse(output.slice(output.indexOf("[")));
+    return Array.isArray(list) ? list : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -807,12 +823,17 @@ function prePushChecks(git, cwd, ctx) {
         `${check.argv[0]} is missing from this image: do not push by other means; report it in your reply as a blocker`,
       );
     if (check.probe) continue;
-    if (r.status !== 0)
-      return {
+    if (r.status !== 0) {
+      const failed = {
         check: check.name,
         exit: r.status,
         output_tail: r.output.slice(-PRE_PUSH_OUTPUT_BYTES),
       };
+      const violations = check.violations ? parseViolations(r.output) : null;
+      if (violations?.length)
+        return { ...failed, violations, action: violations.map((v) => v.action).join("; ") };
+      return failed;
+    }
   }
   if (gitStep(git, ["rev-parse", "HEAD"], cwd) !== head || !clean())
     throw failure(
@@ -933,8 +954,8 @@ async function deliver(api, o, ctx) {
         branch,
         base,
         reasons: ["pre_push_failed"],
-        ...failed,
         action: "fix the failing check, commit the fix, then run deliver again",
+        ...failed,
       },
     };
   const refspec = `HEAD:refs/heads/${branch}`;

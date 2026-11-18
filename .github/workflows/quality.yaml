@@ -41,6 +41,10 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run python scripts/check_tests.py --strict
       - run: uv run ty check
+      - name: Git identity for the temp repos the path-gate tests commit in
+        run: |
+          git config --global user.name "Argus CI"
+          git config --global user.email "ci@example.invalid"
       - run: uv run pytest -n auto
       - name: OpenAPI contract drift
         run: uv run python scripts/export_openapi.py --check
@@ -333,6 +337,25 @@ jobs:
       - uses: actions/checkout@v7
       - run: python3 scripts/validate_docs.py
       - run: python3 scripts/check_specs.py
+
+  # Path/type gate: files a change adds must make sense for their type and
+  # location (scripts/path_policy.json). Server-side twin of the pre-push and
+  # deliver checks, so a bypassed hook is still caught. Not path-gated: a stray
+  # file can land anywhere. A PR is judged against its base; the whole tree is
+  # checked on push to main and manual runs as the baseline proof.
+  path-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: New files in the PR
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/check_paths.py --base "$BASE"
+      - name: Baseline, every tracked file
+        run: python3 scripts/check_paths.py --all
 
   # English-only prose gate: docs, code comments and commit messages added by
   # the PR must be English. Cheap (diff-scoped, stdlib-only), so it is not

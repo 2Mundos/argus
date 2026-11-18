@@ -1174,6 +1174,14 @@ describe("deliver", () => {
         `echo "head $("$ARGUS_TEST_GIT" rev-parse HEAD)" >> "$ARGUS_TEST_LOG"\n` +
         `if [ "$*" = "$ARGUS_TEST_FAIL" ]; then echo "$* finding" >&2; exit 2; fi\nexit 0\n`,
     );
+    // The path check prints its JSON list on stdout, as scripts/check_paths.py --json does.
+    script(
+      "python3",
+      `echo "python3 $*" >> "$ARGUS_TEST_LOG"\n` +
+        `if [ "$ARGUS_TEST_FAIL" = "check-paths" ]; then\n` +
+        `echo '[{"path":"pr-body.txt","rule":"root-file","action":"pr-body.txt is a stray file: keep it under /tmp"}]'\n` +
+        `exit 1\nfi\nexit 0\n`,
+    );
     if (scanner) script("gitleaks", `echo "gitleaks $*" >> "$ARGUS_TEST_LOG"\nexit 0\n`);
     const options = {
       env: {
@@ -1426,6 +1434,7 @@ describe("deliver", () => {
     const head = git(["rev-parse", "HEAD"], work);
     assert.equal(r.out.head_sha, head);
     assert.deepEqual(g.lines(), [
+      "python3 scripts/check_paths.py --json",
       "make check-changed",
       `head ${head}`,
       "gitleaks version",
@@ -1443,7 +1452,7 @@ describe("deliver", () => {
     assert.equal(r.code, EXIT.ok, r.err);
     assert.equal(r.out.rebased, true);
     const lines = g.lines();
-    assert.equal(lines[1], `head ${r.out.head_sha}`);
+    assert.equal(lines[2], `head ${r.out.head_sha}`);
     assert.equal(lines.at(-1), "push --quiet --force-with-lease origin HEAD:refs/heads/feature");
     assert.equal(git(["rev-parse", "refs/heads/feature"], s.origin), r.out.head_sha);
   });
@@ -1468,6 +1477,30 @@ describe("deliver", () => {
         .filter((l) => l.startsWith("make") || l.startsWith("gitleaks") || l.startsWith("push")),
       ["make check-changed"],
     );
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+    assert.deepEqual(created, []);
+  });
+
+  it("a path violation prevents every push and passes its action through", async () => {
+    const { origin, work } = setup();
+    writeFileSync(join(work, "pr-body.txt"), "body\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add pr-body"], work);
+    const g = gateFixture({ fail: "check-paths" });
+    const created = [];
+    const r = await run(["deliver"], { routes: forgeRoutes(created), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.not_ready);
+    assert.deepEqual(r.out.reasons, ["pre_push_failed"]);
+    assert.equal(r.out.check, "path check");
+    assert.deepEqual(r.out.violations, [
+      {
+        path: "pr-body.txt",
+        rule: "root-file",
+        action: "pr-body.txt is a stray file: keep it under /tmp",
+      },
+    ]);
+    assert.equal(r.out.action, "pr-body.txt is a stray file: keep it under /tmp");
+    assert.deepEqual(g.lines(), ["python3 scripts/check_paths.py --json"]);
     assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
     assert.deepEqual(created, []);
   });

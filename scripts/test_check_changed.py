@@ -34,6 +34,13 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def quiet_path_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real path check needs a real merge base; tests of the runner stub it."""
+    monkeypatch.setattr(cc, "PATH_CHECK", cc.Step("path check", ("true",), 5))
+    monkeypatch.setattr(cc, "PATH_CHECK_ALL", cc.Step("path check", ("true",), 5))
+
+
 def steps_for(changed: list[str], cpus: int = 8) -> list[str]:
     return [s.name for s in cc.plan(changed, sorted(FILES), cc.Graph(FILES), cpus)]
 
@@ -198,6 +205,36 @@ def test_rerun_on_same_files_after_pass_skips_steps(
     assert "already passed: validate docs" in capsys.readouterr().out
     monkeypatch.setattr(cc, "fingerprint", lambda base, changed: "k2")
     assert cc.main([]) == 0 and len(ran) == 2
+
+
+def test_path_check_runs_even_when_the_pass_record_matches(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    step = cc.Step("s", ("true",), 5)
+    monkeypatch.setattr(cc, "merge_base", lambda ref="origin/main": "b" * 40)
+    monkeypatch.setattr(cc, "changed_files", lambda base: ["docs/README.md"])
+    monkeypatch.setattr(cc, "fingerprint", lambda base, changed: "k1")
+    monkeypatch.setattr(cc, "read_graph_files", dict)
+    monkeypatch.setattr(cc, "plan", lambda *a: [step])
+    monkeypatch.setattr(cc, "passed_file", lambda: tmp_path / "passed")
+    assert cc.main([]) == 0  # records the pass
+    monkeypatch.setattr(
+        cc,
+        "PATH_CHECK",
+        cc.Step(
+            "path check",
+            (
+                sys.executable,
+                "-c",
+                "print('pr-body.txt: root-file: x'); raise SystemExit(1)",
+            ),
+            5,
+        ),
+    )
+    assert cc.main([]) == 1
+    assert "pr-body.txt: root-file" in capsys.readouterr().out
+    assert cc.main(["--plan"]) == 0
+    assert "path check:" in capsys.readouterr().out
 
 
 def test_failed_run_is_not_recorded(monkeypatch, tmp_path) -> None:

@@ -275,6 +275,9 @@ why you are here.
   model detection
 - [Changed-only checks](specs/changed-only-checks.spec.md) — the pre-push hook runs
   only the checks the changed files can affect
+- [Path and type gate](specs/path-gate.spec.md) — rejects stray or misplaced new files
+  (root allowlist, deny patterns, type by directory, doc names, size) in pre-push,
+  `argus-task deliver` and CI
 - [Language validation](specs/language-validation.spec.md) — English-only gate for
   new docs, code comments and commit messages (CI job, git hooks and `make language-lint`)
 - [Test hygiene checks](specs/test-hygiene.spec.md) — `check_tests.py --strict`

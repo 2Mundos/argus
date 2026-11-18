@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-05
-updated: 2026-11-05
+updated: 2026-11-18
 ---
 
 # Changed-only checks
@@ -41,6 +41,7 @@ cannot be found, the full `make check` and `make build` run.
 | an API router or model, or the OpenAPI files | `make openapi-check` |
 | Biome-covered files (`.ts`, `.tsx`, `.js`, `.json`, `.css`, …) | Biome on the changed files |
 | `apps/dashboard/**`, `packages/api-client/**` | tsc, Vitest on related tests, the dashboard build |
+| any change | the path gate (`check_paths.py`, [path-gate spec](path-gate.spec.md)), always, before the pass record is consulted |
 | `docs/**` | `validate_docs.py`; `check_specs.py` too for `docs/specs/`, `docs/drafts/` or the script |
 
 ## 3.3 How it runs
