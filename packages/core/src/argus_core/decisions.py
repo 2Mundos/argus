@@ -38,6 +38,13 @@ RETRY_REVIEWER = "retry_reviewer"
 APPROVE_WITHOUT_REVIEW = "approve_without_review"
 REVIEW_FAILED_OPTIONS = (RETRY_REVIEWER, APPROVE_WITHOUT_REVIEW, "cancel")
 
+# A task in `in_review` always has an active reviewer or an open review decision.
+# When the independent review cannot deliver, the regular review decision (REVIEW_OPTIONS)
+# opens with one of these `gate` values in its payload (settings spec 3.5).
+NO_REVIEWER_GATE = "no_reviewer"
+REVIEWER_FAILED_GATE = "reviewer_failed"
+GATE_DISABLED_GATE = "gate_disabled"
+
 
 class DecisionState(StrEnum):
     OPEN = "open"

@@ -429,6 +429,10 @@ async def put_setting(
         "settings.changed",
         {"scope": scope, "key": key, "from": previous_value, "to": normalised},
     )
+    if key == REVIEW_KEY:
+        from argus_api.tasks import independent_review
+
+        await independent_review.on_gate_changed(tx, actor)
     return await _setting(tx.conn, path, scope, key)
 
 
@@ -473,6 +477,10 @@ async def reset_setting(
         "settings.changed",
         {"scope": scope, "key": key, "from": previous, "to": after.value},
     )
+    if key == REVIEW_KEY:
+        from argus_api.tasks import independent_review
+
+        await independent_review.on_gate_changed(tx, actor)
     return after
 
 

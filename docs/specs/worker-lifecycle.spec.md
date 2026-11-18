@@ -154,7 +154,9 @@ Large outputs are never stored in `result`; it holds artifact references (3.12).
   with findings under **Review findings**, without counting a failure. After
   `max_rounds` of `request_changes`, a human `review` decision is opened. A
   missing eligible reviewer leaves the task `in_review` with
-  `block_reason: no_independent_reviewer` (visible in the inbox). A reviewer child
+  `block_reason: no_independent_reviewer` (visible in the inbox) and an open
+  `review` decision for a human; an `in_review` task always has that decision or an
+  active reviewer child (settings 3.5). A reviewer child
   that ends `failed` or `cancelled` without a verdict is replaced by a new child on
   the next alternative, up to `max_reviewer_failures`; past that, or with no
   alternative left, the task stays `in_review` with `block_reason: review_failed`

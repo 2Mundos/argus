@@ -187,9 +187,25 @@ different model**, with `different_provider` shown as "…from a different provi
   gate or `succeeded`) and `cancel`. An author model is never selected as a
   fallback. The callback is idempotent per child. The delivery summary
   (`independent.failed_reviewers`) lists each failed attempt with its child link.
+- **Manual review when the gate cannot deliver.** A task in `in_review` always has
+  an active `code_review` child or an open `review` decision, never neither. When
+  the last reviewer is gone without a verdict and the retry decision above does not
+  apply, Argus opens the regular `review` decision (`accept`, `accept_with_deviation`,
+  `reject`; the same acceptance rules) for a human, with `gate` in its payload and
+  the reason in its question: `no_reviewer` (no eligible reviewer; no head is
+  covered by the `no_review_head` decision above), `reviewer_failed` (a reviewer finished
+  without an `approve` or `request_changes` verdict) or `gate_disabled` (see
+  Timing). `failed` lists the failed children. One open decision at most, and a
+  repeated callback adds none. Answering it clears the gate `block_reason`.
 - **Timing.** The mode is read when the task completes. Turning it on does not
-  reopen succeeded tasks; turning it off lets a waiting gate pass on the next
-  completion or a manager's `accept`.
+  reopen succeeded tasks. Changing `review.independent` (set or reset, any scope)
+  cancels the running reviewer of every `in_review` parent in a project where it is
+  now `off`; that parent gets the `gate_disabled` decision.
+- **Startup repair.** On start, every `in_review` task with neither an open
+  `review` decision nor an active reviewer child gets one (`reviewer_failed` when
+  a reviewer child ever existed, else `no_reviewer`) and a
+  `review.decision_backfilled {decision_id, gate}` event. State is unchanged and a
+  second run finds nothing.
 - **Not the forge's review.** This gate is Argus's own `code_review` child. It
   never asks for, waits on, or counts a comment on the pull request. Whether a
   worker needs the forge's agentic review is a separate key (3.12).

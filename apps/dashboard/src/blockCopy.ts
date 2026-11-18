@@ -37,6 +37,10 @@ export const BLOCK_COPY: Record<string, string> = {
   worker_gave_up: "the worker gave up; retry or cancel it",
   review_failed:
     "no independent reviewer delivered a verdict; retry the reviewer, approve without review, or cancel",
+  no_independent_reviewer:
+    "no independent reviewer is eligible; review it manually from the open review decision",
+  no_review_head:
+    "the delivery names no commit to review; review it manually from the open review decision",
   budget_exhausted: "its budget is spent; raise the budget or cancel it",
 };
 

@@ -132,6 +132,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             raise
         async with db.write() as tx:
             await accounts.reconcile_secrets(tx, secrets)
+        async with db.write() as tx:
+            await independent_review.backfill_manual_reviews(tx)
         if generated:
             log.warning(
                 "Created the initial admin token; read it from %s",
