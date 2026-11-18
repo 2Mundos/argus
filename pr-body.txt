@@ -1,0 +1,33 @@
+Docs-only runbook for tasks stuck `ready` after execution chains are configured.
+
+Incident: after the operator saved execution chains in Setup for difficulties
+of the configured difficulties, new tasks of those difficulties stayed `ready`
+forever and `POST /api/tasks/claim` kept returning 204, with nothing explaining
+why in the task view.
+
+Cause: once any difficulty has a saved chain, a worker is admitted for that
+route only if its pool capabilities — rendered into `ARGUS_CAPABILITIES` —
+contain `execution-chains-v1` plus the `nanoclaw:harness:<adapter>:<provider>`
+and `nanoclaw:executor:<adapter>:<provider>` capability IDs of the route.
+A worker that declares none keeps legacy routing and cannot claim
+chain-routed tasks.
+
+Fix: PATCH the pool `capabilities` with `execution-chains-v1` and the exact
+adapter capability IDs for the adapters the agent image really contains (probe
+the CLIs in the image first), then recycle idle instances one at a time; new
+instances inherit the corrected declaration at start, and never recycle an
+instance that holds a claimed task.
+
+Also documents: the separate provider-side symptom (`engine_account_unavailable`
+/ `awaiting_execution_route`, `max_leases` vs `active_leases` for the shared
+`local` account — report to the owner rather than raising leases blindly), and
+the last line that after a host restart a task attempt's lease expires and the
+task is requeued (steers to the dead attempt are lost).
+
+Files added/changed: `docs/runbooks/2026-11-18.execution-chains-no-worker.ref.md`
+(docs only, no code, under ~70 lines, no secrets or IP addresses) and one link
+line added to `docs/README.md` under the Runbooks entries, next to the
+public-proxy-tunnel runbook. Both files changed as described.
+
+Verification: repo docs validation passes (`python3 scripts/validate_docs.py`
+exit 0; `python3 scripts/validate_language.py` passes English-only).
