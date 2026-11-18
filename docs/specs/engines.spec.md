@@ -300,7 +300,9 @@ In scope:
 - `integrations/nanoclaw/engines/`: installer for the Codex payload and the
   CLI manifest, the image steps for opencode and the Cursor agent (checksum
   pinned), `install-dsh.sh` (and its test), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
-  (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client, rsync and
+  (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client, rsync, ripgrep (`rg`), jq, wget, patch (Debian packages via apt, so
+  every variant built through `apply-tools-layer.sh` and every project image derived from it has them;
+  probed offline as uid 1000 by `engines/probe-worker-tools.sh IMAGE`) and
   `kubectl` (`install-kubectl.sh`: pinned version, SHA-256 checked, probed by
   `image_tools`) on top of NanoClaw's image, applied by `provision.sh`; its build context is a
   staged copy of `engines/` plus `../gitea-api.mjs`, and CI's `tools-layer` job
