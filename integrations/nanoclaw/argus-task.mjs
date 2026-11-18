@@ -228,7 +228,8 @@ const short = (sha) => sha.slice(0, 7);
  * One CI observation of the watched commit. `watch` pins the commit for the whole call: an
  * explicit --sha as given, else the stored one while the PR head still is it, else the PR head
  * at the first observation. The PR head is read afresh on every check; the wait is done only
- * when the checks on the watched commit have finished and the PR head still is that commit.
+ * when the checks on the watched commit have finished, or one has failed unless `--all`, and the
+ * PR head still is that commit.
  */
 async function checkCi(api, o, watch) {
   const pr = await api.getPullRequest(o.number);
@@ -279,7 +280,17 @@ async function checkCi(api, o, watch) {
       status: `PR head ${short(head)} is not the watched ${short(sha)}`,
       ...evidence,
     };
-  // Done only when every check has finished, even after one has failed (spec 3.3).
+  // Fail fast: the first failed check ends the wait unless --all asks for the whole run (spec 3.3).
+  if (ci.failed.length && !o.all)
+    return {
+      done: true,
+      ...evidence,
+      action: `read the failing job log with argus-github-api job-logs, fix, push, then run wait ci again${
+        ci.running
+          ? `; ${ci.running} checks are still running on this commit and will be superseded by the new push`
+          : ""
+      }`,
+    };
   if (ci.state !== "missing" && ci.running === 0) return { done: true, ...evidence };
   const failedSoFar = ci.failed.length ? `, ${ci.failed.length} failed` : "";
   const status =
@@ -1387,8 +1398,8 @@ const COMMANDS = {
   },
   wait: {
     summary:
-      "wait ci|review|merge --pr N: block until CI on the head SHA finishes, a new review/comment lands, or the PR is merged or closed; exits 10 at the cap, 11 on a steer. First checks are 3 s apart, settling on --interval (default 30 s)",
-    options: { sha: "string", since: "string", interval: "int", max: "int" },
+      "wait ci|review|merge --pr N: block until CI on the head SHA finishes or its first check fails (--all: wait for every check), a new review/comment lands, or the PR is merged or closed; exits 10 at the cap, 11 on a steer. First checks are 3 s apart, settling on --interval (default 30 s)",
+    options: { sha: "string", since: "string", interval: "int", max: "int", all: "bool" },
     positional: "on",
     run: wait,
   },

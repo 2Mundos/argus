@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-02
-updated: 2026-11-12
+updated: 2026-11-18
 ---
 
 # Task helpers (`argus-task`)
@@ -80,7 +80,7 @@ No credential appears in stdout, stderr or any file the helper writes.
 ## 3.3 `wait`
 
 ```
-argus-task wait ci --pr N [--sha SHA]
+argus-task wait ci --pr N [--sha SHA] [--all]
 argus-task wait review --pr N [--since CURSOR]
 argus-task wait merge --pr N
     [--interval SECONDS] [--max SECONDS]
@@ -92,14 +92,18 @@ argus-task wait merge --pr N
   it still is the PR head (a finished wait's record is never reused); if the head moved on, the new first observation is bound and the result
   says `rebound_from: <old sha>`. Every check reads the PR head afresh and returns
   `watched_sha`, `pr_head_sha` and `head_matches` (the head equals the watched sha; an
-  abbreviated `--sha` matches by prefix). It returns when no check on the watched commit is
-  pending, including after one has already failed, so one result covers the whole run,
-  and only while `head_matches` is true. If the head is another commit the wait keeps
+  abbreviated `--sha` matches by prefix). It fails fast: it returns as soon as one check on
+  the watched commit has failed, with `state` `failure`, the checks failed so far, the number
+  still `running` and an `action` (read the failing job log, fix, push, wait again; it
+  names the checks still running, which the new push supersedes), so the worker does not
+  idle while slow jobs finish a run that is already red. `--all` restores the whole-run
+  wait: it returns only when no check is pending. Success always needs every check
+  finished and none failed. Either way it returns only while `head_matches` is true. If the head is another commit the wait keeps
   going, bounded like any wait, with the status "PR head abc1234 is not the watched
   def5678"; it is never done on a commit the PR no longer points at, so a failure on an
   old head is never reported as an outcome. The JSON carries the
   overall `state` and the names of the failed checks of the watched commit only (not other
-  commits' contexts); a pending result says how many failed so far. When the wait is done
+  commits' contexts); a pending result (`--all`) says how many failed so far. When the wait is done
   it also leaves the outcome (`state`, failed contexts) in the terminal record (3.4). Each check's state is normalized and anything unrecognized, missing or malformed
   (a Gitea `warning`, a status without a state) is `unknown`, never success. The overall
   `state` is the first that applies: `failure` (failure, error, cancelled, timed_out),
@@ -264,10 +268,15 @@ aborted; if the abort fails, that is the error.
 | Record | `kind` | `data` | Message |
 | --- | --- | --- | --- |
 | pending | `waiting` | `on`, `ref`, `since` | "Waiting on CI for #412 at abc1234" (a review wait has no commit) |
-| `failure` | `ci_failed` | `sha` | "CI failed at abc1234: python, secret-scan" |
+| `failure` | `ci_failed` | `sha` | "CI failed at abc1234: python, secret-scan" (the failures seen so far; see below) |
 | `success` | `ci_passed` | `sha` | "CI passed at abc1234" |
 | `skipped` | `ci_passed` | `sha` | "CI skipped at abc1234" (skipped is not a blocker, as in `pr-ready`) |
 | `unknown` | `ci_failed` | `sha` | "CI inconclusive at abc1234: unknown" (not a pass) |
+
+A fail-fast wait posts `ci_failed` at the first failure with the failures seen so far. A
+later wait on the same commit that sees more failed contexts updates it once; a failed set
+that does not grow posts nothing. `pr-ready` (3.6) does not depend on this: a PR with a
+failed check is not ready whatever is still running.
 
 The API refuses data keys outside the closed set, so the pending post carries no `sha` (the
 message names it) and the failed contexts travel only in the message of `ci_failed`. The
