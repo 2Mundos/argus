@@ -156,8 +156,8 @@ def _git(cwd: Path, *args: str) -> str:
 
 def _init_repo(path: Path) -> None:
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
-    _git(path, "config", "user.name", "Test")
-    _git(path, "config", "user.email", "test@example.com")
+    with (path / ".git" / "config").open("a") as config:
+        config.write("[user]\n\tname = Test\n\temail = test@example.com\n")
 
 
 def test_range_mode_checks_commit_messages_and_added_lines(
