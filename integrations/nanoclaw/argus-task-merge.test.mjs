@@ -19,7 +19,9 @@ const grant = (task = "t1", attempt = "1") => ({
   ARGUS_MERGE_AUTH_KEY: KEY,
   ARGUS_MERGE_AUTH_TASK: task,
   ARGUS_MERGE_AUTH_ATTEMPT: attempt,
-  ARGUS_MERGE_AUTHORIZED: createHmac("sha256", KEY).update(`merge:${task}:${attempt}`).digest("hex"),
+  ARGUS_MERGE_AUTHORIZED: createHmac("sha256", KEY)
+    .update(`merge:${task}:${attempt}`)
+    .digest("hex"),
 });
 const ENV = {
   ARGUS_REPOSITORY_URL: REPO,
@@ -49,7 +51,14 @@ const checkRun = (over = {}) => ({
 /** The forge: mutable `s`, every non-GET recorded in `writes`. */
 function forge(over = {}) {
   const s = {
-    pr: { number: 7, state: "open", merged: false, mergeable: true, mergeable_state: "clean", head: { sha: HEAD } },
+    pr: {
+      number: 7,
+      state: "open",
+      merged: false,
+      mergeable: true,
+      mergeable_state: "clean",
+      head: { sha: HEAD },
+    },
     runs: [checkRun()],
     statuses: [],
     comments: [],
@@ -69,8 +78,15 @@ function forge(over = {}) {
     if (method !== "GET") {
       writes.push(`${method} ${path}`);
       if (method === "PUT" && path === "/pulls/7/merge") {
-        if (s.putStatus !== 200) return json({ message: "Pull Request is not mergeable" }, s.putStatus);
-        s.pr = { ...s.pr, state: "closed", merged: true, merge_commit_sha: MERGE_SHA, merged_at: "2026-11-18T17:30:00Z" };
+        if (s.putStatus !== 200)
+          return json({ message: "Pull Request is not mergeable" }, s.putStatus);
+        s.pr = {
+          ...s.pr,
+          state: "closed",
+          merged: true,
+          merge_commit_sha: MERGE_SHA,
+          merged_at: "2026-11-18T17:30:00Z",
+        };
         s.mergeBody = JSON.parse(init.body);
         return json({ merged: true, sha: MERGE_SHA });
       }
@@ -78,7 +94,10 @@ function forge(over = {}) {
     }
     const route = {
       "/pulls/7": () => (typeof s.pr === "function" ? s.pr() : s.pr),
-      [`/commits/${s.pr.head?.sha}/check-runs`]: () => ({ total_count: s.runs.length, check_runs: s.runs }),
+      [`/commits/${s.pr.head?.sha}/check-runs`]: () => ({
+        total_count: s.runs.length,
+        check_runs: s.runs,
+      }),
       [`/commits/${HEAD}/check-runs`]: () => ({ total_count: s.runs.length, check_runs: s.runs }),
       [`/commits/${MOVED}/check-runs`]: () => ({ total_count: 0, check_runs: [] }),
       [`/commits/${HEAD}/status`]: () => ({ statuses: s.statuses }),
@@ -118,7 +137,11 @@ async function merge(f, argv = [], { env = {}, onSleep } = {}) {
 }
 
 const agentic = (n, sha = HEAD) => [
-  { id: 3, body: `Agentic review for head ${sha}: ${n} findings`, created_at: "2026-11-18T16:00:00Z" },
+  {
+    id: 3,
+    body: `Agentic review for head ${sha}: ${n} findings`,
+    created_at: "2026-11-18T16:00:00Z",
+  },
 ];
 
 describe("merge: happy path", () => {
@@ -208,23 +231,45 @@ describe("merge: fails closed", () => {
   };
 
   it("fails fast on a failed check with an actionable result", async () => {
-    const f = forge({ runs: [checkRun({ conclusion: "failure" }), checkRun({ id: 12, name: "lint", status: "in_progress", conclusion: null })] });
+    const f = forge({
+      runs: [
+        checkRun({ conclusion: "failure" }),
+        checkRun({ id: 12, name: "lint", status: "in_progress", conclusion: null }),
+      ],
+    });
     const r = await blocked(f, [], {}, "ci_failed");
     assert.match(r.out.action, /ci-digest/);
     assert.equal(r.out.waited_s, 0);
   });
 
   it("does not treat an all-skipped run as execution", async () => {
-    await blocked(forge({ runs: [checkRun({ conclusion: "skipped" })] }), [], {}, "ci_not_executed");
+    await blocked(
+      forge({ runs: [checkRun({ conclusion: "skipped" })] }),
+      [],
+      {},
+      "ci_not_executed",
+    );
   });
 
   it("a standing changes-requested review blocks", async () => {
-    const reviews = [{ id: 1, state: "CHANGES_REQUESTED", user: { login: "rev" }, submitted_at: "2026-11-18T16:00:00Z" }];
+    const reviews = [
+      {
+        id: 1,
+        state: "CHANGES_REQUESTED",
+        user: { login: "rev" },
+        submitted_at: "2026-11-18T16:00:00Z",
+      },
+    ];
     await blocked(forge({ reviews }), [], {}, "changes_requested");
   });
 
   it("agentic review findings block even when the review policy is off", async () => {
-    await blocked(forge({ comments: agentic(2) }), [], { ARGUS_FORGE_REVIEW: "off" }, "review_findings");
+    await blocked(
+      forge({ comments: agentic(2) }),
+      [],
+      { ARGUS_FORGE_REVIEW: "off" },
+      "review_findings",
+    );
   });
 
   for (const state of ["blocked", "behind", "dirty", "draft"]) {
@@ -304,7 +349,11 @@ describe("merge: required review policy (not conflated with off, acceptance or C
 
 describe("merge: PR 428 contradictory check shape", () => {
   const contradictory = () =>
-    checkRun({ status: "in_progress", conclusion: "success", completed_at: "2026-11-18T17:20:00Z" });
+    checkRun({
+      status: "in_progress",
+      conclusion: "success",
+      completed_at: "2026-11-18T17:20:00Z",
+    });
 
   it("merges when the workflow run is completed/success for this exact head", async () => {
     const f = forge({ runs: [contradictory()] });
@@ -315,9 +364,18 @@ describe("merge: PR 428 contradictory check shape", () => {
   });
 
   for (const [name, workflow] of [
-    ["the workflow run is still in progress", { id: 900, status: "in_progress", conclusion: null, head_sha: HEAD }],
-    ["the workflow run failed", { id: 900, status: "completed", conclusion: "failure", head_sha: HEAD }],
-    ["the workflow run is for another commit", { id: 900, status: "completed", conclusion: "success", head_sha: MOVED }],
+    [
+      "the workflow run is still in progress",
+      { id: 900, status: "in_progress", conclusion: null, head_sha: HEAD },
+    ],
+    [
+      "the workflow run failed",
+      { id: 900, status: "completed", conclusion: "failure", head_sha: HEAD },
+    ],
+    [
+      "the workflow run is for another commit",
+      { id: 900, status: "completed", conclusion: "success", head_sha: MOVED },
+    ],
   ]) {
     it(`never infers success when ${name}`, async () => {
       const f = forge({ runs: [contradictory()], workflow });

@@ -31,8 +31,16 @@ import {
 } from "./gitea-api.mjs";
 import { repositoryClient } from "./github-api.mjs";
 
-const { usage, policy, positiveNumber, plainText, timestamp, commitSha, token, requireMergeAuthorization } =
-  internals;
+const {
+  usage,
+  policy,
+  positiveNumber,
+  plainText,
+  timestamp,
+  commitSha,
+  token,
+  requireMergeAuthorization,
+} = internals;
 
 export const EXIT = Object.freeze({
   ok: 0,
@@ -512,7 +520,9 @@ async function changeRequesters(api, number) {
     const prev = latest.get(r.user.login);
     if (!prev || (reviewTime(r) ?? "") >= (reviewTime(prev) ?? "")) latest.set(r.user.login, r);
   }
-  return [...latest.values()].filter((r) => CHANGES_REQUESTED.has(r.state)).map((r) => r.user.login);
+  return [...latest.values()]
+    .filter((r) => CHANGES_REQUESTED.has(r.state))
+    .map((r) => r.user.login);
 }
 
 async function prReady(api, o, ctx) {
@@ -594,8 +604,10 @@ async function prReadyPass(api, o, ctx, { policy, needsReview, readsReview }) {
 const MERGEABLE_STATES = new Set(["clean", "has_hooks"]);
 // GitHub's mergeable_state values that no wait can fix: the author or a reviewer must act.
 const MERGE_BLOCKED = {
-  blocked: "branch protection or required reviews block the merge; satisfy them, then run merge again",
-  behind: "the branch is behind its base; run argus-task deliver to rebase and push, then merge again",
+  blocked:
+    "branch protection or required reviews block the merge; satisfy them, then run merge again",
+  behind:
+    "the branch is behind its base; run argus-task deliver to rebase and push, then merge again",
   dirty: "the branch conflicts with its base; run argus-task deliver to rebase, then merge again",
   draft: "the pull request is a draft; mark it ready, then run merge again",
 };
@@ -746,7 +758,10 @@ async function mergePr(api, o, ctx) {
     for (;;) {
       if (interruptAfter(ctx.dir, start)) {
         note(false);
-        return { code: EXIT.interrupted, result: { on: "merge", ref, merged: false, interrupted: "steer" } };
+        return {
+          code: EXIT.interrupted,
+          result: { on: "merge", ref, merged: false, interrupted: "steer" },
+        };
       }
       let observation = null;
       let gatedHead = null;
@@ -764,7 +779,8 @@ async function mergePr(api, o, ctx) {
           return stop(EXIT.not_ready, {
             blocked: ["pr_closed"],
             pr_head_sha: head,
-            action: "the PR was closed without a merge; do not recreate it, report it to the orchestrator",
+            action:
+              "the PR was closed without a merge; do not recreate it, report it to the orchestrator",
           });
         if (pinned && !head.startsWith(pinned))
           return stop(EXIT.not_ready, {
@@ -779,7 +795,8 @@ async function mergePr(api, o, ctx) {
             blocked: gates.blockers,
             pr_head_sha: head,
             ...gates.evidence,
-            action: BLOCKER_ACTION[gates.blockers[0]] ?? MERGE_BLOCKED[gates.evidence.mergeable_state],
+            action:
+              BLOCKER_ACTION[gates.blockers[0]] ?? MERGE_BLOCKED[gates.evidence.mergeable_state],
           });
         if (gates.waiting.length) {
           observation = { waiting: gates.waiting, pr_head_sha: head, ...gates.evidence };
@@ -793,8 +810,15 @@ async function mergePr(api, o, ctx) {
           } else {
             api.deadline = { at: ctx.now() + 30_000, now: ctx.now };
             merging = true;
-            const readback = await api.mergePullRequest(number, { sha: head, merge_method: method });
-            return done(readback, { merged_this_call: true, merge_method: method, ...gates.evidence });
+            const readback = await api.mergePullRequest(number, {
+              sha: head,
+              merge_method: method,
+            });
+            return done(readback, {
+              merged_this_call: true,
+              merge_method: method,
+              ...gates.evidence,
+            });
           }
         }
       } catch (error) {
@@ -819,12 +843,21 @@ async function mergePr(api, o, ctx) {
         } else throw error;
       }
       status = observation.waiting.join(", ");
-      if (ctx.now() >= deadline) return stop(EXIT.pending, { ...observation, status, next: `still pending, nothing is lost: run the same command again (argus-task merge --pr ${number})` });
+      if (ctx.now() >= deadline)
+        return stop(EXIT.pending, {
+          ...observation,
+          status,
+          next: `still pending, nothing is lost: run the same command again (argus-task merge --pr ${number})`,
+        });
       api.deadline = { at: deadline, now: ctx.now };
       const nextCheck = ctx.now() + pollDelay(attempt++, intervalMs);
       for (;;) {
         if (ctx.now() >= deadline)
-          return stop(EXIT.pending, { ...observation, status, next: `still pending, nothing is lost: run the same command again (argus-task merge --pr ${number})` });
+          return stop(EXIT.pending, {
+            ...observation,
+            status,
+            next: `still pending, nothing is lost: run the same command again (argus-task merge --pr ${number})`,
+          });
         if (ctx.now() >= nextCheck || interruptAfter(ctx.dir, start)) break;
         await ctx.sleep(MARKER_TICK_MS);
       }
