@@ -467,6 +467,11 @@ class TaskResult(BaseModel):
 
     summary: str = Field(min_length=1, max_length=10_000)
     data: dict[str, Any] | None = None
+    # Review keys a worker sent at the top level of its COMPLETE instead of under `data`;
+    # the API moves them into `data` for a code_review only (independent review 3.5).
+    envelope: dict[str, Any] | None = Field(
+        default=None, exclude=True
+    )  # wire input only
     artifacts: list[str] = []  # artifact ids uploaded for this task
     usage: Usage | None = None
     # The worker's claim per checklist item; an item without proof is not done.

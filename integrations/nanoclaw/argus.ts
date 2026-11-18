@@ -1002,9 +1002,13 @@ function checklistReports(value: unknown): ChecklistReport[] {
   return out;
 }
 
+/** Review keys a worker may leave at the top level of a COMPLETE (independent review 3.5). */
+const REVIEW_ENVELOPE_KEYS = ["verdict", "findings", "head_sha"] as const;
+
 function completionPayload(text: string): {
   summary: string;
   data?: Record<string, unknown>;
+  envelope?: Record<string, unknown>;
   checklist?: ChecklistReport[];
 } {
   try {
@@ -1013,11 +1017,17 @@ function completionPayload(text: string): {
       const record = value as Record<string, unknown>;
       if (typeof record.summary === "string") {
         const checklist = checklistReports(record.checklist);
+        // The API moves these into `data` for a code_review only; nothing is invented here.
+        const envelope = Object.fromEntries(
+          REVIEW_ENVELOPE_KEYS.filter((k) => k in record).map((k) => [k, record[k]]),
+        );
+        const hasEnvelope = Object.keys(envelope).length > 0;
         return {
           summary: record.summary,
           ...(record.data && typeof record.data === "object" && !Array.isArray(record.data)
             ? { data: record.data as Record<string, unknown> }
             : {}),
+          ...(!record.data && hasEnvelope ? { envelope } : {}),
           ...(checklist.length ? { checklist } : {}),
         };
       }
@@ -5184,6 +5194,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     text: string,
     data?: Record<string, unknown>,
     checklist?: ChecklistReport[],
+    envelope?: Record<string, unknown>,
   ): Promise<void> {
     await reportHarness(t, "succeeded");
     await storeCompletionTail(t);
@@ -5195,6 +5206,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         result: {
           summary: text + missing,
           ...(data ? { data } : {}),
+          ...(envelope ? { envelope } : {}),
           ...(checklist?.length ? { checklist } : {}),
           ...(extra.length ? { artifacts: extra } : {}),
         },
@@ -5215,6 +5227,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       result: {
         summary,
         ...(data ? { data } : {}),
+        ...(envelope ? { envelope } : {}),
         ...(checklist?.length ? { checklist } : {}),
         artifacts: [...new Set([artifactId, ...extra])],
       },
@@ -5663,6 +5676,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             result.summary || "(no summary)",
             result.data,
             result.checklist,
+            result.envelope,
           );
           finishTask();
         } else if (d.kind === "fail" && d.environment) {

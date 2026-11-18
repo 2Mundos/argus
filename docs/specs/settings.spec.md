@@ -127,6 +127,13 @@ different model**, with `different_provider` shown as "…from a different provi
   first model in the project's effective policy chains that is not an author (or,
   for `different_provider`, whose engine differs), among engines with a usable
   account.
+- **Result envelope.** The child's spec gives the exact COMPLETE shape: `data` with
+  exactly `verdict`, `findings` and `head_sha`, sent with the `send_message` tool to
+  `argus`. A `code_review` completion whose `data` is absent but that carries those
+  keys at the top level (the channel forwards them as `envelope`) has them moved into
+  `data` and records `review.result_normalised`; no other kind takes an envelope, and a
+  missing key is never invented. A `data` that fails the schema is a 422 whose details
+  name the offending or missing keys and the expected keys.
 - **Review models.** Key `review.chains`, scopes `global` and `project`, has the
   shape, validation, inheritance and legacy env lock of `execution.chains`
   ([execution chains](execution-chains.spec.md) 3.1, 3.3), keyed by the reviewed

@@ -651,6 +651,9 @@ def test_independent_review_spawns_child_on_delivery(client: TestClient) -> None
     assert kids[0]["kind"] == "code_review"
     detail = client.get(f"/api/tasks/{kids[0]['id']}", headers=ADMIN).json()
     assert detail["harness_model"]["model"] == "claude-opus-5-5"
+    # The reviewer gets the exact COMPLETE envelope, so its result validates (3.5).
+    assert '"data":{"verdict":"approve"' in detail["spec"]
+    assert 'to `to: "argus"`' in detail["spec"]
 
 
 def test_independent_review_skips_without_delivery(client: TestClient) -> None:

@@ -44,6 +44,7 @@ from argus_core.tasks import (
 from argus_api import model_policy
 from argus_api.db import Database, Tx, ts
 from argus_api.decisions import store as decisions
+from argus_api.errors import ValidationFailedError
 from argus_api.events import record
 from argus_api.tasks import continuation as cont
 from argus_api.tasks import deliverable, delivery
@@ -59,6 +60,34 @@ RETRY_EVENT = "review.independent_retry"
 # child's end can happen in a path that carries no settings (reaper, cancel).
 model_policy_path = Path("data/model-policy.json")
 CODE_REVIEW_KIND = "code_review"
+REVIEW_KEYS = ("verdict", "findings", "head_sha")
+
+
+def normalise_result(kind: str, result: TaskResult) -> tuple[TaskResult, bool]:
+    """Move a code_review's top-level verdict keys into `data` when `data` is absent.
+
+    Only the three review keys move, nothing is invented: a missing one is left for the
+    kind's schema to name. Other kinds drop the envelope untouched. Returns whether it
+    moved anything."""
+    if result.envelope is None:
+        return result, False
+    if kind != CODE_REVIEW_KIND or result.data is not None:
+        return result.model_copy(update={"envelope": None}), False
+    extra = sorted(set(result.envelope) - set(REVIEW_KEYS))
+    if extra:
+        raise ValidationFailedError(
+            "result does not match its kind's schema",
+            details=[
+                f"top level: unexpected key {k}; the review envelope takes only"
+                " verdict, findings and head_sha"
+                for k in extra
+            ],
+        )
+    return result.model_copy(
+        update={"data": dict(result.envelope), "envelope": None}
+    ), True
+
+
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
 # Engine name → account provider for harness / executor selection.
@@ -575,9 +604,13 @@ async def spawn_reviewer(
         spec=(
             f"Review the code delivered by task `{parent['id']}`"
             f" (head `{sha}`).\n\n"
-            "Return a structured result with `verdict` (`approve` or"
-            " `request_changes`), `findings`, and the `head_sha` you reviewed."
-            " Do not modify the repository."
+            "Finish with `COMPLETE:` and one JSON object, sent with the send_message"
+            ' tool to `to: "argus"`, in exactly this shape:\n'
+            '`COMPLETE: {"summary":"<one line>","data":{"verdict":"approve",'
+            '"findings":[<strings or objects>],"head_sha":"<the full sha you reviewed>"}}`\n'
+            "`verdict` is `approve` or `request_changes`. `data` takes exactly those"
+            " three keys and nothing else; do not put verdict, findings or head_sha at"
+            " the top level. Do not modify the repository."
         ),
         kind=CODE_REVIEW_KIND,
         project=parent["project"],

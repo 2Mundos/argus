@@ -102,7 +102,11 @@ async def test_result_data_is_validated_on_complete(db: Database) -> None:
             await tasks.complete(
                 tx, A, task.id, task.attempt, TaskResult(summary="s", data={})
             )
-    assert err.value.details == ["<root>: 'word_count' is a required property"]
+    assert err.value.details == [
+        "<root>: 'word_count' is a required property",
+        "expected result.data to be an object with required keys word_count;"
+        " allowed keys word_count",
+    ]
     async with db.write() as tx:
         done = await tasks.complete(
             tx,
@@ -113,6 +117,66 @@ async def test_result_data_is_validated_on_complete(db: Database) -> None:
         )
     assert done.result is not None
     assert done.result.data == {"word_count": 10}
+
+
+REVIEW_DATA = {"verdict": "approve", "findings": [], "head_sha": "abcdef1"}
+
+
+async def complete_review(db: Database, result: TaskResult):
+    await create(db, kind="code_review", input={"task_id": "t1", "head_sha": "abcdef1"})
+    task = await claim(db)
+    async with db.write() as tx:
+        return await tasks.complete(tx, A, task.id, task.attempt, result)
+
+
+async def test_code_review_top_level_envelope_is_moved_into_data(db: Database) -> None:
+    done = await complete_review(db, TaskResult(summary="ok", envelope=REVIEW_DATA))
+    assert done.result is not None
+    assert done.result.data == REVIEW_DATA
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT data FROM events WHERE kind = 'review.result_normalised'"
+        ) as cur,
+    ):
+        (data,) = await cur.fetchone()
+    assert json.loads(data) == {"keys": sorted(REVIEW_DATA), "from": "envelope"}
+
+
+async def test_code_review_envelope_names_missing_and_extra_keys(db: Database) -> None:
+    with pytest.raises(ValidationFailedError) as err:
+        await complete_review(
+            db,
+            TaskResult(summary="ok", envelope={"verdict": "approve", "findings": []}),
+        )
+    assert "<root>: 'head_sha' is a required property" in err.value.details
+    assert err.value.details[-1] == (
+        "expected result.data to be an object with required keys findings, head_sha,"
+        " verdict; allowed keys findings, head_sha, verdict and no other keys"
+    )
+    with pytest.raises(ValidationFailedError) as extra:
+        await complete_review(
+            db, TaskResult(summary="ok", envelope={**REVIEW_DATA, "notes": "x"})
+        )
+    assert extra.value.details == [
+        "top level: unexpected key notes; the review envelope takes only verdict,"
+        " findings and head_sha"
+    ]
+
+
+async def test_envelope_is_ignored_for_other_kinds(db: Database) -> None:
+    await create(db, kind="report", input={"topic": "x"})
+    task = await claim(db, ["writing"])
+    with pytest.raises(ValidationFailedError) as err:
+        async with db.write() as tx:
+            await tasks.complete(
+                tx,
+                A,
+                task.id,
+                task.attempt,
+                TaskResult(summary="s", envelope={"word_count": 10}),
+            )
+    assert err.value.details[0] == "<root>: None is not of type 'object'"
 
 
 async def test_unknown_artifact_in_result_is_rejected(db: Database) -> None:
