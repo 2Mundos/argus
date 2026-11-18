@@ -319,7 +319,7 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
   const streamMaxMs = opts.streamMaxMs ?? STREAM_MAX_MS;
   const probeTimeoutMs = opts.probeTimeoutMs ?? MCP_PROBE_TIMEOUT_MS;
   const publicHost = opts.publicHost;
-  const host = () =>
+  const advertisedHost = () =>
     typeof publicHost === "function" ? publicHost() : (publicHost ?? "host.docker.internal");
   const grants = new Map<string, Grant>();
   let server: http.Server | null = null;
@@ -925,7 +925,7 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
     };
     extend(grant);
     grants.set(grant.key, grant);
-    return { type: transport, url: `http://${host()}:${port}/mcp/${secret}` };
+    return { type: transport, url: `http://${advertisedHost()}:${port}/mcp/${secret}` };
   }
 
   return {
