@@ -471,7 +471,7 @@ function IndependentReviewSection(props: {
       setFailure(undefined);
       setDone(undefined);
       try {
-        await putSetting("review.independent", { mode, max_rounds: rounds }, project);
+        await putSetting("review.independent", { ...value, mode, max_rounds: rounds }, project);
         setDone("Saved.");
         onChanged();
       } catch (e) {

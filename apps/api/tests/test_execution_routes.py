@@ -886,3 +886,193 @@ async def test_void_review_reselects_without_the_void_model(db, fleet):
     _, second = await parent_events(db, parent.id, "review.independent_selected")
     assert second["selected"] == "sonnet"
     assert second["skipped"] == [{"id": "codex", "reason": "author"}]
+
+
+# A reviewer child that ends without a verdict (settings.spec.md 3.5).
+
+
+async def review_setting(db, **value):
+    async with db.write() as tx:
+        await settings.put_setting(
+            tx,
+            Path(),
+            "global",
+            "review.independent",
+            {"mode": "different_model", "max_rounds": 3, **value},
+            "admin:test",
+        )
+
+
+async def cancel_child(db, child_id):
+    async with db.write() as tx:
+        await tasks.cancel(tx, child_id, "admin:test")
+
+
+async def latest_child(db, parent_id):
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT id FROM tasks WHERE parent_id = ? ORDER BY rowid DESC",
+            (parent_id,),
+        ) as cur,
+    ):
+        return (await cur.fetchone())[0]
+
+
+async def open_decisions(db, parent_id):
+    from argus_api.decisions import store
+
+    async with db.read() as conn:
+        ids = await store.open_ids(conn, "task", parent_id)
+        return [await store.get(conn, i) for i in ids]
+
+
+async def answer(db, decision_id, choice, text=""):
+    from argus_api.auth import Identity
+    from argus_api.decisions import service as decisions
+    from argus_core.auth import Scope
+    from argus_core.decisions import DecisionAnswer
+
+    async with db.write() as tx:
+        return await decisions.answer(
+            tx,
+            decision_id,
+            DecisionAnswer(choice=choice, text=text),
+            Identity("t-admin", Scope.ADMIN, None, "test"),
+        )
+
+
+async def exhausted_parent(db, fleet):
+    """A parent whose only reviewer alternative failed with the bound at zero."""
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_setting(db, max_reviewer_failures=0)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    first = await spawn(db, parent.id)
+    await cancel_child(db, first)
+    return parent, first
+
+
+async def test_failed_reviewer_child_reselects_the_next_alternative(db, fleet):
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_setting(db)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    first = await spawn(db, parent.id)
+    await cancel_child(db, first)
+    [failed] = await parent_events(db, parent.id, "review.independent_child_failed")
+    assert failed["child_id"] == first and failed["state"] == "cancelled"
+    assert failed["alternative"] == "codex"
+    _, second = await parent_events(db, parent.id, "review.independent_selected")
+    assert second["selected"] == "sonnet"
+    assert second["skipped"] == [{"id": "codex", "reason": "failed"}]
+    row, _ = await state(db, parent.id)
+    assert row["block_reason"] is None
+    assert await latest_child(db, parent.id) != first
+    # A repeated callback for the same child changes nothing.
+    async with db.write() as tx:
+        from argus_api.tasks import independent_review as review
+        from argus_core.tasks import TaskState
+
+        await review.on_review_child_ended(
+            tx, await tasks.task_row(tx.conn, first), TaskState.CANCELLED, "system"
+        )
+    assert (
+        len(await parent_events(db, parent.id, "review.independent_child_failed")) == 1
+    )
+    assert len(await parent_events(db, parent.id, "review.independent_selected")) == 2
+
+
+async def test_failed_state_records_error_class_account_and_model(db, fleet):
+    from argus_api.tasks import independent_review as review
+    from argus_core.tasks import TaskState
+
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_setting(db)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    first = await spawn(db, parent.id)
+    async with db.write() as tx:
+        await record_execution(tx, first, 0, "gpt-5.5", "openai", "codex")
+        await tx.conn.execute(
+            "UPDATE tasks SET state = 'failed', error = ? WHERE id = ?",
+            ("401 Unauthorized: login expired", first),
+        )
+        await review.on_review_child_ended(
+            tx, await tasks.task_row(tx.conn, first), TaskState.FAILED, "system"
+        )
+    [failed] = await parent_events(db, parent.id, "review.independent_child_failed")
+    assert failed["account"] == "codex" and failed["model"] == "gpt-5.5"
+    assert failed["error_class"] and failed["state"] == "failed"
+    async with db.read() as conn:
+        [summary] = await review.failed_reviewer_summaries(conn, parent.id)
+    assert summary.child_task_id == first and summary.account == "codex"
+
+
+async def test_bound_reached_blocks_review_failed_with_one_decision(db, fleet):
+    parent, first = await exhausted_parent(db, fleet)
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "in_review" and row["block_reason"] == "review_failed"
+    [decision] = await open_decisions(db, parent.id)
+    assert decision.options == ["retry_reviewer", "approve_without_review", "cancel"]
+    assert decision.payload["failed"][0]["child_id"] == first
+    # No second child and no author model was ever selected.
+    assert await latest_child(db, parent.id) == first
+    assert len(await parent_events(db, parent.id, "review.independent_selected")) == 1
+
+
+async def test_no_alternative_left_blocks_review_failed(db, fleet):
+    await review_policy(db, [OPUS_ALT, CODEX_ALT])
+    await review_setting(db)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    first = await spawn(db, parent.id)
+    await cancel_child(db, first)
+    row, _ = await state(db, parent.id)
+    assert row["block_reason"] == "review_failed"
+    [blocked] = await parent_events(db, parent.id, "review.independent_blocked")
+    assert blocked["reason"] == "review_failed"
+    assert blocked["skipped"] == [
+        {"id": "opus", "reason": "author"},
+        {"id": "codex", "reason": "failed"},
+    ]
+    assert len(await open_decisions(db, parent.id)) == 1
+
+
+async def test_retry_reviewer_spawns_a_new_child(db, fleet):
+    parent, first = await exhausted_parent(db, fleet)
+    [decision] = await open_decisions(db, parent.id)
+    await answer(db, decision.id, "retry_reviewer")
+    second = await latest_child(db, parent.id)
+    assert second != first
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "in_review" and row["block_reason"] is None
+    assert not await open_decisions(db, parent.id)
+    # The failure window restarts: the retried reviewer gets the full chain again.
+    _, retried = await parent_events(db, parent.id, "review.independent_selected")
+    assert retried["selected"] == "codex"
+    # Its own failure counts against a fresh bound, so it escalates again.
+    await cancel_child(db, second)
+    assert len(await open_decisions(db, parent.id)) == 1
+
+
+async def test_approve_without_review_completes_the_parent_with_audit(db, fleet):
+    parent, _ = await exhausted_parent(db, fleet)
+    [decision] = await open_decisions(db, parent.id)
+    await answer(db, decision.id, "approve_without_review", "reviewer logins down")
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "succeeded" and row["block_reason"] is None
+    [waived] = await parent_events(db, parent.id, "review.independent_waived")
+    assert waived["decision_id"] == decision.id
+    assert waived["notes"] == "reviewer logins down" and len(waived["failed"]) == 1
+
+
+async def test_cancel_option_cancels_the_parent(db, fleet):
+    parent, _ = await exhausted_parent(db, fleet)
+    [decision] = await open_decisions(db, parent.id)
+    await answer(db, decision.id, "cancel")
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "cancelled"
+
+
+async def test_review_failed_decision_refuses_plain_review_choices(db, fleet):
+    parent, _ = await exhausted_parent(db, fleet)
+    [decision] = await open_decisions(db, parent.id)
+    with pytest.raises(ValidationFailedError):
+        await answer(db, decision.id, "accept")

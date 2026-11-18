@@ -17,6 +17,8 @@ class IndependentReviewSetting(BaseModel):
 
     mode: ReviewMode = "off"
     max_rounds: int = Field(default=3, ge=1, le=20)
+    # Reviewer children that may fail without a verdict before an operator decides.
+    max_reviewer_failures: int = Field(default=2, ge=0, le=20)
 
 
 class SettingDefinition(BaseModel):

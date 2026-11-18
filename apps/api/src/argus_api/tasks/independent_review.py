@@ -9,14 +9,24 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Set as AbstractSet
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
 from argus_core.accounts import LeaseRole
 from argus_core.continuation import ArtifactKind
-from argus_core.decisions import REVIEW_OPTIONS, Audience, DecisionKind
+from argus_core.decisions import (
+    REVIEW_FAILED_GATE,
+    REVIEW_FAILED_OPTIONS,
+    REVIEW_OPTIONS,
+    Audience,
+    DecisionKind,
+)
+from argus_core.delivery import FailedReviewer
 from argus_core.execution_chains import Alternative, Chain, PairedAlternative, Selector
+from argus_core.quota import failure_class, sanitize_notice
 from argus_core.settings import IndependentReviewSetting, ReviewMode
 from argus_core.tasks import (
     FORGE_DELIVERABLES,
@@ -41,6 +51,13 @@ from argus_api.tasks import execution_routes as routes
 
 NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
 NO_REVIEW_HEAD = "no_review_head"
+REVIEW_FAILED = "review_failed"
+_GATE_BLOCKS = (NO_INDEPENDENT_REVIEWER, NO_REVIEW_HEAD, REVIEW_FAILED)
+CHILD_FAILED_EVENT = "review.independent_child_failed"
+RETRY_EVENT = "review.independent_retry"
+# Where the global model policy lives; the app sets it at startup (main.py), as the
+# child's end can happen in a path that carries no settings (reaper, cancel).
+model_policy_path = Path("data/model-policy.json")
 CODE_REVIEW_KIND = "code_review"
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
@@ -212,12 +229,16 @@ async def review_route(
     models: set[str],
     providers: set[str],
     accounts: set[str],
+    exclude_alternatives: AbstractSet[str] = frozenset(),
+    exclude_accounts: AbstractSet[str] = frozenset(),
 ) -> tuple[list[Alternative], routes.ReviewRoute] | None:
     """The reviewer's route from `review.chains` for the parent's difficulty.
 
     None when that level is not configured (the policy-chain picker applies). Author
     alternatives are dropped; of the rest, those no active worker can admit now
     follow as fallbacks only when none can. An empty list means only authors remain.
+    `exclude_alternatives` and `exclude_accounts` drop routes whose reviewer already
+    ended without a verdict.
     """
     from pydantic import TypeAdapter
 
@@ -230,7 +251,15 @@ async def review_route(
     skipped: list[routes.SkippedAlternative] = []
     independent = []
     for alternative in chain:
-        if await _authored(
+        if alternative.id in exclude_alternatives or (
+            exclude_accounts & {p for p in routes.pins(alternative) if p}
+        ):
+            # A reviewer on this route (or pinned account) already ended without a
+            # verdict; the next alternative is tried instead.
+            skipped.append(
+                routes.SkippedAlternative(id=alternative.id, reason="failed")
+            )
+        elif await _authored(
             conn,
             alternative,
             mode=mode,
@@ -405,8 +434,11 @@ async def spawn_reviewer(
     actor: str,
     exclude_models: set[str] | None = None,
     exclude_accounts: set[str] | None = None,
+    exclude_alternatives: set[str] | None = None,
+    none_eligible: str = NO_INDEPENDENT_REVIEWER,
 ) -> str | None:
-    """Create a code_review child, or set block_reason when none is eligible.
+    """Create a code_review child, or set block_reason when none is eligible
+    (`none_eligible`: the reason when no alternative remains).
 
     Returns the child task id, or None when blocked for want of a reviewer.
     """
@@ -426,6 +458,8 @@ async def spawn_reviewer(
         models=author_models | (exclude_models or set()),
         providers=author_providers,
         accounts=await _accounts(tx.conn, parent["id"]) | (exclude_accounts or set()),
+        exclude_alternatives=exclude_alternatives or set(),
+        exclude_accounts=exclude_accounts or set(),
     )
     harness: HarnessModel | None = None
     executor: ExecutorModel | None = None
@@ -436,7 +470,7 @@ async def spawn_reviewer(
             await _block(
                 tx,
                 parent,
-                NO_INDEPENDENT_REVIEWER,
+                none_eligible,
                 actor,
                 skipped=[s.model_dump() for s in review.skipped],
             )
@@ -452,10 +486,10 @@ async def spawn_reviewer(
             exclude_models=exclude_models,
         )
         if harness is None and executor is None:
-            await _block(tx, parent, NO_INDEPENDENT_REVIEWER, actor)
+            await _block(tx, parent, none_eligible, actor)
             return None
     # Clear a prior gate block if we found a reviewer this time.
-    if parent["block_reason"] in (NO_INDEPENDENT_REVIEWER, NO_REVIEW_HEAD):
+    if parent["block_reason"] in _GATE_BLOCKS:
         await tx.conn.execute(
             "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent["id"],)
         )
@@ -681,7 +715,7 @@ async def on_review_child_complete(
                 actor=actor,
             )
             return
-        if parent["block_reason"] == NO_INDEPENDENT_REVIEWER:
+        if parent["block_reason"] in (NO_INDEPENDENT_REVIEWER, REVIEW_FAILED):
             await tx.conn.execute(
                 "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent_id,)
             )
@@ -773,3 +807,272 @@ async def on_review_child_complete(
             {"child_id": child["id"], "round": rounds},
         )
         return
+
+
+async def _gate_events(conn: aiosqlite.Connection, parent_id: str) -> list[Any]:
+    async with conn.execute(
+        "SELECT kind, data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind IN (?, ?) ORDER BY id",
+        (parent_id, CHILD_FAILED_EVENT, RETRY_EVENT),
+    ) as cur:
+        return list(await cur.fetchall())
+
+
+async def failed_reviewers(
+    conn: aiosqlite.Connection, parent_id: str
+) -> list[dict[str, Any]]:
+    """Data of the `review.independent_child_failed` events since the last operator
+    retry, oldest first. The retry starts a new window and its own bound."""
+    out: list[dict[str, Any]] = []
+    for row in await _gate_events(conn, parent_id):
+        if row["kind"] == RETRY_EVENT:
+            out = []
+        else:
+            out.append(json.loads(row["data"]))
+    return out
+
+
+async def failed_reviewer_summaries(
+    conn: aiosqlite.Connection, parent_id: str
+) -> list[FailedReviewer]:
+    return [
+        FailedReviewer(
+            child_task_id=d["child_id"],
+            state=d["state"],
+            error_class=d.get("error_class"),
+            account=d.get("account"),
+            model=d.get("model"),
+        )
+        for d in await failed_reviewers(conn, parent_id)
+    ]
+
+
+async def _child_facts(
+    conn: aiosqlite.Connection, child: aiosqlite.Row
+) -> dict[str, Any]:
+    """Alternative, account and model the child last ran on, when known."""
+    alternative = None
+    async with conn.execute(
+        "SELECT selection FROM task_execution_routes WHERE task_id = ?", (child["id"],)
+    ) as cur:
+        picked = await cur.fetchone()
+    if picked and picked["selection"]:
+        alternative = json.loads(picked["selection"])["alternative"]["id"]
+    elif child["execution_route"]:
+        alternative = (
+            json.loads(child["execution_route"]).get("review", {}).get("selected")
+        )
+    async with conn.execute(
+        "SELECT account_id, provider, observed_model, configured_model"
+        " FROM model_executions WHERE task_id = ? ORDER BY recorded_at DESC, id DESC"
+        " LIMIT 1",
+        (child["id"],),
+    ) as cur:
+        run = await cur.fetchone()
+    return {
+        "alternative": alternative or None,
+        "account": run["account_id"] if run else None,
+        "provider": run["provider"] if run else None,
+        "model": (run["observed_model"] or run["configured_model"]) if run else None,
+    }
+
+
+async def _load_settings(
+    conn: aiosqlite.Connection, project: str
+) -> tuple[IndependentReviewSetting, model_policy.Policy]:
+    from argus_api.settings import service as settings_svc
+
+    setting = await settings_svc.get_review(conn, model_policy_path, project)
+    policy, _ = await settings_svc.effective_model_policy(
+        conn, model_policy_path, project
+    )
+    return setting, policy
+
+
+async def _escalate(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    attempts: list[dict[str, Any]],
+    actor: str,
+    *,
+    blocked: bool,
+) -> None:
+    """Block the parent as `review_failed` and leave exactly one operator decision.
+    `blocked` is true when the selector already set the block."""
+    failed = [
+        {k: v for k, v in a.items() if k in ("child_id", "state", "error_class")}
+        | {"alternative": a.get("alternative")}
+        for a in attempts
+    ]
+    if not blocked:
+        await _block(tx, parent, REVIEW_FAILED, actor, failed=failed)
+    if await decisions.open_ids(tx.conn, "task", parent["id"], (DecisionKind.REVIEW,)):
+        return
+    await decisions.open_decision(
+        tx,
+        subject_type="task",
+        subject_id=parent["id"],
+        kind=DecisionKind.REVIEW,
+        question=(
+            f"No independent reviewer delivered a verdict for {parent['title']!r}"
+            f" ({len(attempts)} reviewer attempt(s) failed). Retry the reviewer,"
+            " approve without independent review, or cancel?"
+        ),
+        options=list(REVIEW_FAILED_OPTIONS),
+        audience=Audience.HUMAN,
+        requested_by=actor,
+        payload={"gate": REVIEW_FAILED_GATE, "failed": failed},
+    )
+
+
+async def on_review_child_ended(
+    tx: Tx, child: aiosqlite.Row, state: TaskState, actor: str
+) -> None:
+    """A `code_review` child reached `failed` or `cancelled` without a verdict.
+
+    Records `review.independent_child_failed` on the parent, then selects again with
+    the child's route and account excluded, until `max_reviewer_failures` is spent or
+    no alternative remains; then the parent is blocked `review_failed` and an operator
+    decides. Idempotent per child; a child that is not the parent's latest is ignored.
+    """
+    from argus_api.tasks import service as tasks_svc
+
+    parent_id = child["parent_id"]
+    if not parent_id or child["kind"] != CODE_REVIEW_KIND:
+        return
+    parent = await tasks_svc._row(tx.conn, parent_id)
+    if parent["state"] != TaskState.IN_REVIEW:
+        return
+    async with tx.conn.execute(
+        "SELECT id FROM tasks WHERE parent_id = ? AND kind = ?"
+        " ORDER BY rowid DESC LIMIT 1",
+        (parent_id, CODE_REVIEW_KIND),
+    ) as cur:
+        latest = await cur.fetchone()
+    if latest is None or latest["id"] != child["id"]:
+        return
+    if any(
+        json.loads(r["data"]).get("child_id") == child["id"]
+        for r in await _gate_events(tx.conn, parent_id)
+        if r["kind"] == CHILD_FAILED_EVENT
+    ):
+        return
+    error = sanitize_notice(child["error"]) if child["error"] else None
+    attempt = {
+        "child_id": child["id"],
+        "state": str(state),
+        "error_class": failure_class(child["error"], child["block_reason"] or "")
+        if child["error"]
+        else None,
+        "error": error,
+    } | await _child_facts(tx.conn, child)
+    await record(tx, actor, "task", parent_id, CHILD_FAILED_EVENT, attempt)
+    attempts = await failed_reviewers(tx.conn, parent_id)
+    setting, policy = await _load_settings(tx.conn, parent["project"])
+    if len(attempts) > setting.max_reviewer_failures:
+        await _escalate(tx, parent, attempts, actor, blocked=False)
+        return
+    child_input = json.loads(child["input"] or "{}")
+    spawned = await spawn_reviewer(
+        tx,
+        parent,
+        pr=child_input.get("pr"),
+        head_sha=child_input.get("head_sha"),
+        setting=setting,
+        policy=policy,
+        actor=actor,
+        exclude_models={a["model"] for a in attempts if a.get("model")},
+        exclude_accounts={a["account"] for a in attempts if a.get("account")},
+        exclude_alternatives={
+            a["alternative"] for a in attempts if a.get("alternative")
+        },
+        none_eligible=REVIEW_FAILED,
+    )
+    if spawned is None:
+        await _escalate(
+            tx,
+            await tasks_svc._row(tx.conn, parent_id),
+            attempts,
+            actor,
+            blocked=True,
+        )
+
+
+async def retry_reviewer(tx: Tx, parent_id: str, actor: str) -> str | None:
+    """The operator's `retry_reviewer`: select again with the failures forgotten
+    (authors stay excluded). Returns the new child id; None leaves the parent
+    `review_failed` with a fresh decision."""
+    from argus_api.tasks import service as tasks_svc
+
+    parent = await tasks_svc._row(tx.conn, parent_id)
+    if parent["state"] != TaskState.IN_REVIEW:
+        return None
+    async with tx.conn.execute(
+        "SELECT input FROM tasks WHERE parent_id = ? AND kind = ?"
+        " ORDER BY rowid DESC LIMIT 1",
+        (parent_id, CODE_REVIEW_KIND),
+    ) as cur:
+        last = await cur.fetchone()
+    child_input = json.loads(last["input"] or "{}") if last else {}
+    await record(tx, actor, "task", parent_id, RETRY_EVENT, {})
+    setting, policy = await _load_settings(tx.conn, parent["project"])
+    child_id = await spawn_reviewer(
+        tx,
+        parent,
+        pr=child_input.get("pr"),
+        head_sha=child_input.get("head_sha"),
+        setting=setting,
+        policy=policy,
+        actor=actor,
+        none_eligible=REVIEW_FAILED,
+    )
+    if child_id is None:
+        await _escalate(
+            tx,
+            await tasks_svc._row(tx.conn, parent_id),
+            await failed_reviewers(tx.conn, parent_id),
+            actor,
+            blocked=True,
+        )
+    return child_id
+
+
+async def approve_without_review(
+    tx: Tx,
+    parent_id: str,
+    actor: str,
+    reviewer: Any,
+    *,
+    decision_id: str,
+    notes: str,
+    forge: Any = None,
+) -> None:
+    """The operator's `approve_without_review`: the parent is accepted with no
+    independent verdict, recorded as `review.independent_waived`."""
+    from argus_api.tasks import service as tasks_svc
+
+    await record(
+        tx,
+        actor,
+        "task",
+        parent_id,
+        "review.independent_waived",
+        {
+            "decision_id": decision_id,
+            "notes": notes,
+            "failed": await failed_reviewers(tx.conn, parent_id),
+        },
+    )
+    await tasks_svc.review(
+        tx,
+        parent_id,
+        actor,
+        reviewer,
+        accept=True,
+        notes=notes or "approved without independent review",
+        forge=forge,
+    )
+    await tx.conn.execute(
+        "UPDATE tasks SET block_reason = NULL WHERE id = ? AND block_reason = ?",
+        (parent_id, REVIEW_FAILED),
+    )

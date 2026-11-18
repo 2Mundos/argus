@@ -7224,6 +7224,22 @@ export interface components {
             reason?: "worker_fail" | "channel_error" | "provider_failure" | "quota" | "account_unavailable" | "runtime_switch_failed" | "context_overflow" | "verification_failed" | "session_lost";
         };
         /**
+         * FailedReviewer
+         * @description A reviewer child that ended without a verdict (settings spec 3.5).
+         */
+        FailedReviewer: {
+            /** Account */
+            account?: string | null;
+            /** Child Task Id */
+            child_task_id: string;
+            /** Error Class */
+            error_class?: string | null;
+            /** Model */
+            model?: string | null;
+            /** State */
+            state: string;
+        };
+        /**
          * Failover
          * @description The last switch of the account serving a task (account selection 3.6).
          */
@@ -7610,6 +7626,11 @@ export interface components {
         IndependentReviewSummary: {
             /** Child Task Id */
             child_task_id?: string | null;
+            /**
+             * Failed Reviewers
+             * @default []
+             */
+            failed_reviewers?: components["schemas"]["FailedReviewer"][];
             /** Head Sha */
             head_sha?: string | null;
             /**
@@ -11284,7 +11305,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "author" | "unavailable";
+            reason: "author" | "unavailable" | "failed";
         };
         /**
          * Source

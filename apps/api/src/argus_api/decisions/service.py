@@ -6,6 +6,8 @@ from enum import StrEnum
 from argus_core.auth import Scope
 from argus_core.decisions import (
     ACCEPT_WITH_DEVIATION,
+    APPROVE_WITHOUT_REVIEW,
+    REVIEW_FAILED_GATE,
     REVIEW_OPTIONS,
     Ask,
     Audience,
@@ -30,7 +32,7 @@ from argus_api.events import record
 from argus_api.fleet import service as fleet
 from argus_api.knowledge import service as knowledge
 from argus_api.routines import service as routines
-from argus_api.tasks import deliverable, delivery
+from argus_api.tasks import deliverable, delivery, independent_review
 from argus_api.tasks import service as tasks
 
 
@@ -77,7 +79,7 @@ async def forge_evidence(
     shows, read here, before and outside the write transaction (task deliverable
     spec 3.5). None when no forge read is needed or the decision cannot be read; the
     answer reports the latter itself."""
-    if choice not in ("accept", ACCEPT_WITH_DEVIATION):
+    if choice not in ("accept", ACCEPT_WITH_DEVIATION, APPROVE_WITHOUT_REVIEW):
         return None
     async with db.read() as conn:
         try:
@@ -239,6 +241,16 @@ class Effect(StrEnum):
     REVIEW_ACCEPT = "review_accept"
     REVIEW_ACCEPT_DEVIATION = "review_accept_deviation"
     REVIEW_REJECT = "review_reject"
+    REVIEWER_RETRY = "reviewer_retry"
+    REVIEWER_WAIVE = "reviewer_waive"
+
+
+def review_failed_gate(decision: Decision) -> bool:
+    """The decision opened when no independent reviewer delivered a verdict."""
+    return (
+        decision.kind is DecisionKind.REVIEW
+        and (decision.payload or {}).get("gate") == REVIEW_FAILED_GATE
+    )
 
 
 def effect_of(decision: Decision, choice: str | None) -> Effect:
@@ -256,6 +268,14 @@ def effect_of(decision: Decision, choice: str | None) -> Effect:
             return Effect.ROUTINE_REENABLE if approve else Effect.ROUTINE_STAY_OFF
         case DecisionKind.APPROVAL | DecisionKind.POLICY:
             return Effect.TASK_APPROVE if choice == "approve" else Effect.TASK_CANCEL
+        case DecisionKind.REVIEW if review_failed_gate(decision):
+            match choice:
+                case "retry_reviewer":
+                    return Effect.REVIEWER_RETRY
+                case "approve_without_review":
+                    return Effect.REVIEWER_WAIVE
+                case _:
+                    return Effect.TASK_CANCEL
         case DecisionKind.REVIEW if choice == ACCEPT_WITH_DEVIATION:
             return Effect.REVIEW_ACCEPT_DEVIATION
         case DecisionKind.REVIEW:
@@ -321,6 +341,18 @@ async def _apply_answer(
             await tasks.approve(tx, task_id, caller.actor)
         case Effect.TASK_CANCEL:
             await tasks.cancel(tx, task_id, caller.actor)
+        case Effect.REVIEWER_RETRY:
+            await independent_review.retry_reviewer(tx, task_id, caller.actor)
+        case Effect.REVIEWER_WAIVE:
+            await independent_review.approve_without_review(
+                tx,
+                task_id,
+                caller.actor,
+                caller.scope,
+                decision_id=decision.id,
+                notes=body.text,
+                forge=forge,
+            )
         case (
             Effect.REVIEW_ACCEPT | Effect.REVIEW_ACCEPT_DEVIATION | Effect.REVIEW_REJECT
         ) as effect:
@@ -339,7 +371,11 @@ async def _apply_answer(
 def check_answer(decision: Decision, body: DecisionAnswer) -> None:
     """The choice and text rules of the answer path (raises 422)."""
     options = decision.options
-    if decision.kind is DecisionKind.REVIEW and options is not None:
+    if (
+        decision.kind is DecisionKind.REVIEW
+        and options is not None
+        and not review_failed_gate(decision)
+    ):
         # Review decisions opened before the choice existed take it too (3.10).
         options = [*options, *(o for o in REVIEW_OPTIONS if o not in options)]
     if options is not None and body.choice not in options:

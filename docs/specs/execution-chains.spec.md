@@ -365,7 +365,11 @@ in `tasks.execution_route` (migration `0086_task_execution_route.sql`) with sour
 explicit route replaces the generic chain for the child's own difficulty; admission,
 fallback, exhaustion, reset and diagnostics then work as above on that list. A new
 `review.chains` edit does not re-route an existing child. A void verdict creates a
-new child with the void model's accounts treated as authors.
+new child with the void model's accounts treated as authors. A child that ends
+`failed` or `cancelled` without a verdict does the same for the failed
+alternative and any alternative pinned to its account, which are skipped as
+`failed` ([settings](settings.spec.md) 3.5, bounded by `max_reviewer_failures`);
+when none remains the parent blocks as `review_failed` and a human decides.
 
 # 4. Open Questions
 

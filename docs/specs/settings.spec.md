@@ -104,10 +104,11 @@ and a one-line description shown in the dashboard. The registry is served by
 Key `review.independent`, scopes `global` and `project`, value:
 
 ```json
-{ "mode": "off" | "different_model" | "different_provider", "max_rounds": 3 }
+{ "mode": "off" | "different_model" | "different_provider", "max_rounds": 3,
+  "max_reviewer_failures": 2 }
 ```
 
-Default `{"mode": "off", "max_rounds": 3}`. Dashboard label: **Require review by a
+Default `{"mode": "off", "max_rounds": 3, "max_reviewer_failures": 2}`. Dashboard label: **Require review by a
 different model**, with `different_provider` shown as "…from a different provider".
 
 - **Applies to** tasks that deliver code: completion carries a PR or commit
@@ -159,6 +160,23 @@ different model**, with `different_provider` shown as "…from a different provi
   `block_reason: no_review_head` and `review.independent_blocked {reason:
   no_review_head}`, and no child is created. After `max_rounds` of `request_changes`, a `review` decision for a human
   is opened instead of another round.
+- **Reviewer failure.** A `code_review` child that ends `failed` or `cancelled`
+  without a verdict does not strand the parent. Argus records
+  `review.independent_child_failed {child_id, state, error_class, account, model,
+  alternative}` on the parent and selects again with that alternative (and any
+  alternative pinned to its account) skipped as `failed`, exactly like a void
+  verdict; the next alternative gets a new child. Auth errors are not special-cased.
+  `max_reviewer_failures` (0-20, default 2) bounds the failed children per
+  window, independent of `max_rounds`: up to that many failures reselect, the next
+  one escalates. When no alternative remains, or the bound is hit, the parent stays
+  `in_review` with `block_reason: review_failed` and one open `review` decision
+  (payload `{gate: review_failed, failed}`) for a human, with the choices
+  `retry_reviewer` (starts a new window and spawns a child, skipping nothing),
+  `approve_without_review` (explicit and audited: `review.independent_waived
+  {decision_id, notes, failed}`, then the parent goes through its own `review`
+  gate or `succeeded`) and `cancel`. An author model is never selected as a
+  fallback. The callback is idempotent per child. The delivery summary
+  (`independent.failed_reviewers`) lists each failed attempt with its child link.
 - **Timing.** The mode is read when the task completes. Turning it on does not
   reopen succeeded tasks; turning it off lets a waiting gate pass on the next
   completion or a manager's `accept`.
