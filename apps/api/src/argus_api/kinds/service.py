@@ -85,8 +85,16 @@ async def upsert_kind(tx: Tx, name: str, body: TaskKindUpsert, actor: str) -> Ta
     return await get_kind(tx.conn, name)
 
 
-def validate(schema: dict[str, Any] | None, value: Any, what: str) -> None:
-    """Raise ValidationFailedError listing every violation, if a schema is set."""
+def validate(
+    schema: dict[str, Any] | None,
+    value: Any,
+    what: str,
+    *,
+    shape_hint: bool = False,
+) -> None:
+    """Raise ValidationFailedError listing every violation, if a schema is set.
+
+    `shape_hint` adds the keys an object must carry (a worker's result envelope)."""
     if schema is None:
         return
     errors = sorted(
@@ -96,9 +104,32 @@ def validate(schema: dict[str, Any] | None, value: Any, what: str) -> None:
         raise ValidationFailedError(
             f"{what} does not match its kind's schema",
             details=[
-                f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message}" for e in errors
-            ],
+                f"{'/'.join(map(str, e.path)) or '<root>'}: {_bounded(e.message)}"
+                for e in errors
+            ]
+            + (_expected_shape(schema, what) if shape_hint else []),
         )
+
+
+_DETAIL_MAX = 300
+
+
+def _bounded(text: str) -> str:
+    """Keep a violation message short: it may echo a value the worker sent."""
+    return text if len(text) <= _DETAIL_MAX else text[: _DETAIL_MAX - 1] + "…"
+
+
+def _expected_shape(schema: dict[str, Any], what: str) -> list[str]:
+    """Name the keys an object result must carry, so the worker can fix its envelope."""
+    if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
+        return []
+    required = sorted(schema.get("required") or [])
+    allowed = sorted(schema["properties"])
+    tail = " and no other keys" if schema.get("additionalProperties") is False else ""
+    return [
+        f"expected {what} to be an object with required keys"
+        f" {', '.join(required) or '(none)'}; allowed keys {', '.join(allowed)}{tail}"
+    ]
 
 
 def _dump(value: Any) -> str | None:

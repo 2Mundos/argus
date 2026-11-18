@@ -12552,6 +12552,10 @@ export interface components {
             data?: {
                 [key: string]: unknown;
             } | null;
+            /** Envelope */
+            envelope?: {
+                [key: string]: unknown;
+            } | null;
             /** Summary */
             summary: string;
             usage?: components["schemas"]["Usage-Input"] | null;

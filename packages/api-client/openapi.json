@@ -25609,6 +25609,18 @@
             ],
             "title": "Data"
           },
+          "envelope": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Envelope"
+          },
           "summary": {
             "maxLength": 10000,
             "minLength": 1,

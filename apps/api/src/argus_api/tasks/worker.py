@@ -66,7 +66,17 @@ async def complete(
 
     row = await _owned(tx, task_id, attempt, agent_id)
     kind = await kinds.get_kind(tx.conn, row["kind"])
-    kinds.validate(kind.result_schema, result.data, "result.data")
+    result, normalised = indep.normalise_result(row["kind"], result)
+    kinds.validate(kind.result_schema, result.data, "result.data", shape_hint=True)
+    if normalised:
+        await record(
+            tx,
+            f"agent:{agent_id}",
+            "task",
+            task_id,
+            "review.result_normalised",
+            {"keys": sorted(result.data or {}), "from": "envelope"},
+        )
     await _oom_outcome(tx, agent_id, oom_kill=False)
     await _check_artifacts(tx.conn, task_id, result.artifacts)
     have = cont.load(row)
