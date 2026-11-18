@@ -34,6 +34,36 @@ def test_dockerfile_makes_argus_dirs_traversable() -> None:
     assert "/usr/local/lib/argus/git-hooks/commit-msg" in text
 
 
+WORKER_TOOLS = ("rg", "jq", "wget", "patch")
+PROBE = ENGINES / "probe-worker-tools.sh"
+
+
+def test_dockerfile_installs_worker_tools_from_distro_packages() -> None:
+    """Source-level: the layer apt-installs the four tools and fails the build without them."""
+    text = DOCKERFILE.read_text()
+    install = text.split("apt-get install", 1)[1].split("&& rm -rf", 1)[0]
+    for pkg in ("ripgrep", "jq", "wget", "patch", "openssh-client", "rsync", "curl"):
+        assert pkg in install.split(), pkg
+    check = next(ln for ln in text.splitlines() if "for b in ssh" in ln)
+    for b in WORKER_TOOLS:
+        assert f" {b}" in check
+    assert "pip install" not in text.replace("no pip", "")
+
+
+def test_probe_script_covers_each_tool_offline_as_uid_1000() -> None:
+    text = PROBE.read_text()
+    assert "--network none" in text and "--user 1000:1000" in text
+    for b in WORKER_TOOLS:
+        assert b in text
+    subprocess.run(["bash", "-n", str(PROBE)], check=True)
+
+
+def test_image_tools_probe_requires_worker_tools() -> None:
+    src = (ROOT / "apps/api/src/argus_api/engines/image_tools.py").read_text()
+    for b in WORKER_TOOLS:
+        assert f'"{b}"' in src
+
+
 @pytest.mark.skipif(not _docker_daemon(), reason="docker daemon not available")
 def test_built_layer_uid_1000_runs_guard_hook_and_reads_managed_settings() -> None:
     """Build an isolated tools-layer image; only remove the tags this test creates."""
@@ -89,6 +119,10 @@ def test_built_layer_uid_1000_runs_guard_hook_and_reads_managed_settings() -> No
             text=True,
         )
         assert probe.returncode == 0, probe.stderr or probe.stdout
+        tools = subprocess.run(
+            ["bash", str(PROBE), layer_tag], capture_output=True, text=True
+        )
+        assert tools.returncode == 0, tools.stderr or tools.stdout
     finally:
         for tag in tags:
             subprocess.run(["docker", "rmi", tag], capture_output=True)

@@ -4,7 +4,9 @@
 # a Python repo, which is what makes a worker able to prove its own work instead
 # of handing unverified code back). This layer adds both, carries the Argus bin
 # assets (argus-delegate and its model policy) so an image built from any BASE
-# gets the current ones, and fails the build if a required binary is missing.
+# gets the current ones, adds the everyday search/patch tools (ripgrep, jq, wget,
+# patch: Debian packages from the base image's own apt sources, no runtime installs
+# by workers), and fails the build if a required binary is missing.
 # Built by apply-tools-layer.sh.
 ARG BASE
 FROM ${BASE}
@@ -14,8 +16,9 @@ RUN mkdir -p /etc/claude-code /usr/local/lib/argus/bin /usr/local/lib/argus/git-
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       openssh-client rsync python3 python3-venv make ca-certificates curl \
+      ripgrep jq wget patch \
  && rm -rf /var/lib/apt/lists/* \
- && for b in ssh ssh-keygen ssh-keyscan rsync git python3 make; do command -v "$b" || exit 1; done
+ && for b in ssh ssh-keygen ssh-keyscan rsync git python3 make rg jq wget patch; do command -v "$b" || exit 1; done
 # kubectl, pinned and checksum verified (integrations spec 3.6): the client for a
 # task's opted-in Kubernetes integration. No kubeconfig ships in the image.
 COPY --chmod=0755 install-kubectl.sh /tmp/install-kubectl.sh
@@ -53,4 +56,4 @@ RUN echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
 COPY --chmod=0644 argus-oom-priority.sh argus-cpu-count.sh argus-cpu-count.cjs /usr/local/lib/argus/
 COPY --chmod=0644 argus-cpu-count-sitecustomize.py /usr/local/lib/argus/pycpu/sitecustomize.py
 USER node
-LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make kubectl argus-delegate model-policy command-guard argus-task"
+LABEL dev.argus.tools-layer="openssh-client rsync python3 uv make ripgrep jq wget patch kubectl argus-delegate model-policy command-guard argus-task"
