@@ -1160,7 +1160,7 @@ describe("deliver", () => {
    * Fake `make` and `gitleaks` on a PATH of their own. Each call and each push is appended to
    * one log in order; `make` logs the HEAD it ran on and fails for the target `fail` names.
    */
-  function gateFixture({ fail = "", scanner = true } = {}) {
+  function gateFixture({ fail = "", output = "", scanner = true } = {}) {
     const bin = join(scratch, `bin${repoCount++}`);
     const log = join(scratch, `gate${repoCount++}.log`);
     mkdirSync(bin);
@@ -1172,7 +1172,7 @@ describe("deliver", () => {
       "make",
       `echo "make $*" >> "$ARGUS_TEST_LOG"\n` +
         `echo "head $("$ARGUS_TEST_GIT" rev-parse HEAD)" >> "$ARGUS_TEST_LOG"\n` +
-        `if [ "$*" = "$ARGUS_TEST_FAIL" ]; then echo "$* finding" >&2; exit 2; fi\nexit 0\n`,
+        `if [ "$*" = "$ARGUS_TEST_FAIL" ]; then echo "$* finding" >&2; printf '%s\\n' "$ARGUS_TEST_FAIL_OUTPUT" >&2; exit 2; fi\nexit 0\n`,
     );
     // The path check prints its JSON list on stdout, as scripts/check_paths.py --json does.
     script(
@@ -1189,6 +1189,7 @@ describe("deliver", () => {
         ARGUS_TEST_LOG: log,
         ARGUS_TEST_GIT: gitBin,
         ARGUS_TEST_FAIL: fail,
+        ARGUS_TEST_FAIL_OUTPUT: output,
       },
       // A push is logged with its arguments, so ordering against the checks is visible.
       git: (args, cwd) => {
@@ -1479,6 +1480,57 @@ describe("deliver", () => {
     );
     assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
     assert.deepEqual(created, []);
+  });
+
+  const UV = "`uv sync --frozen --all-packages --group dev`";
+  const PNPM = "`pnpm install --frozen-lockfile`";
+  const OFFLINE =
+    /then run `argus-task deliver` again; do not use --offline and do not skip the gate/;
+  const SIGNATURE_ROWS = [
+    ["a missing prometheus_client", "ModuleNotFoundError: No module named 'prometheus_client'", UV],
+    ["a missing workspace package", "ModuleNotFoundError: No module named 'argus_core'", UV],
+    ["a missing biome", "sh: 1: biome: not found", PNPM],
+    ["a missing tsc", "sh: 1: tsc: not found", PNPM],
+    ["a missing openapi-typescript", "sh: 1: openapi-typescript: not found", PNPM],
+    ["a pnpm store miss", "ERR_PNPM_NO_OFFLINE_TARBALL No offline tarball", PNPM],
+    ["a network-disabled install", "Network connectivity is disabled", `${UV} and ${PNPM}`],
+    [
+      "two signatures (the table order decides)",
+      "sh: 1: tsc: not found\nNo module named 'prometheus_client'",
+      UV,
+    ],
+  ];
+  for (const [name, output, expected] of SIGNATURE_ROWS) {
+    it(`the failed check names the sync for ${name}`, async () => {
+      const { origin, work } = setup();
+      writeFileSync(join(work, "b.txt"), "new\n");
+      git(["add", "."], work);
+      git(["commit", "-qm", "Add b"], work);
+      const g = gateFixture({ fail: "check-changed", output });
+      const created = [];
+      const r = await run(["deliver"], { routes: forgeRoutes(created), cwd: work, ...g.options });
+      assert.equal(r.code, EXIT.not_ready);
+      assert.equal(r.out.check, "make check-changed");
+      assert.equal(r.out.action.split(" from the workspace root, ")[0], `run ${expected}`);
+      assert.match(r.out.action, OFFLINE);
+      assert.equal(
+        g.lines().some((l) => l.startsWith("push")),
+        false,
+      );
+      assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+      assert.deepEqual(created, []);
+    });
+  }
+
+  it("an unrelated check failure keeps the generic action", async () => {
+    const { work } = setup();
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture({ fail: "check-changed", output: "ruff: 3 errors in argus_api" });
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.not_ready);
+    assert.equal(r.out.action, "fix the failing check, commit the fix, then run deliver again");
   });
 
   it("a path violation prevents every push and passes its action through", async () => {
