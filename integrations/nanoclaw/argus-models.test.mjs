@@ -49,7 +49,7 @@ registerHooks({
       "../db/sessions.js":
         "export async function getSessionsByAgentGroup(){return [{id:'session1'}]}",
       "../container-runner.js":
-        "export function killContainer(id){globalThis.argusModelTest.killed.push(id)}",
+        "export function killContainer(id){globalThis.argusModelTest.killed.push(id)}; export function isContainerRunning(){return false}",
     };
     if (stubs[specifier])
       return {
@@ -59,7 +59,7 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { createArgusAdapter, modelsFromEnv } = await import("./argus.ts");
+const { createArgusAdapter, harnessEffort, modelsFromEnv } = await import("./argus.ts");
 
 async function smoke(t, selectModels) {
   const calls = [];
@@ -208,6 +208,56 @@ test("actual harness hook applies config, stops stale containers and pins policy
   await hook({ id: "task3", attempt: 1, failures: 1, spec: "", complexity: "trivial" }, held);
   const light = JSON.parse(readFileSync(file, "utf8")).context;
   assert.deepEqual([light.complexity, light.preferred_executor], ["trivial", "codex"]);
+});
+
+test("route harness effort is applied to the container config and restored after it", async (t) => {
+  const cwd = process.cwd();
+  const dir = mkdtempSync(path.join(os.tmpdir(), "argus-effort-"));
+  process.chdir(dir);
+  globalThis.argusModelTest = {
+    config: { provider: "codex", model: "gpt-6-luna", effort: "medium" },
+    killed: [],
+  };
+  t.after(() => {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+    delete globalThis.argusModelTest;
+  });
+  const hook = modelsFromEnv();
+  const held = { engine: { provider: "openai", account_id: "a-codex" }, executor: null };
+  const route = (effort) => ({
+    version: 1,
+    revision: "r".repeat(64),
+    alternative: { mode: "single" },
+    harness: {
+      model: "gpt-6-luna",
+      selector: { adapter: "codex", provider: "openai", ...(effort ? { effort } : {}) },
+    },
+    executor: null,
+  });
+  const task = (execution) => ({ id: "t", attempt: 1, spec: "", execution });
+  await hook(task(route("xhigh")), held);
+  assert.equal(globalThis.argusModelTest.config.effort, "xhigh");
+  assert.deepEqual(globalThis.argusModelTest.killed, ["session1"]);
+  const pinned = JSON.parse(readFileSync("groups/worker/argus-model-policy.json", "utf8"));
+  assert.equal(pinned.context.execution.harness.selector.effort, "xhigh");
+  // Same effort again: no restart. Omitted effort and a legacy task restore the operator's.
+  await hook(task(route("xhigh")), held);
+  assert.equal(globalThis.argusModelTest.killed.length, 1);
+  await hook(task(route(null)), held);
+  assert.equal(globalThis.argusModelTest.config.effort, "medium");
+  await hook(task(route("low")), held);
+  await hook({ id: "t", attempt: 1, spec: "" }, held);
+  assert.equal(globalThis.argusModelTest.config.effort, "medium");
+  // A level the runtime cannot apply fails the attempt; nothing is changed.
+  await assert.rejects(hook(task(route("ultra")), held), /harness effort ultra is not supported/);
+  assert.equal(globalThis.argusModelTest.config.effort, "medium");
+  // An operator edit made while a route effort is applied wins on restore.
+  const groupDir = path.join(dir, "groups/worker");
+  assert.equal(await harnessEffort(groupDir, "medium", route("high")), "high");
+  assert.equal(await harnessEffort(groupDir, "low", route(null)), "low");
+  assert.equal(await harnessEffort(groupDir, null, route("high")), "high");
+  assert.equal(await harnessEffort(groupDir, "high", task(null).execution), null);
 });
 
 test("channel installer is idempotent and includes source and built policy assets", (t) => {

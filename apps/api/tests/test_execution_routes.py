@@ -1,6 +1,7 @@
 """Execution alternatives use disposable accounts and SQLite; no inference."""
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -463,6 +464,106 @@ async def test_reset_generation_fencing_stop_and_exact_release(db, fleet):
     assert engine.lease_id != route.selection.harness.lease_id
 
 
+def native_effort(harness_effort, executor_effort=None):
+    route = direct(
+        "native",
+        selector(
+            "cloud", "anthropic", "claude", {"source": "explicit", "id": "fixture/h"}
+        )
+        | {"effort": harness_effort},
+    )
+    if executor_effort:
+        route.update(
+            mode="paired",
+            executor=selector(
+                "cloud",
+                "anthropic",
+                "claude",
+                {"source": "explicit", "id": "fixture/c"},
+            )
+            | {"effort": executor_effort},
+        )
+    return route
+
+
+async def test_effort_reaches_snapshot_event_and_fallback_and_only_resets_its_level(
+    db, fleet
+):
+    await policy(db, [direct()], difficulty="simple")
+    await policy(db, [native_effort("max", "low"), direct()])
+    task = await make_task(db)
+    claimed, _ = await claim(db, fleet)
+    _, route = await state(db, task.id)
+    first = route.selection
+    assert (first.harness.selector.effort, first.executor.selector.effort) == (
+        "max",
+        "low",
+    )
+    async with db.read() as conn:
+        attempts = await tasks.attempt_definitions(conn, task.id)
+        execution = attempts[0].definition["execution"]
+        assert execution["alternative"]["harness"]["effort"] == "max"
+        assert execution["executor"]["selector"]["effort"] == "low"
+        async with conn.execute(
+            "SELECT data FROM events WHERE kind='task.execution_route_selected'"
+        ) as cur:
+            data = json.loads((await cur.fetchone())[0])
+        assert data["harness"]["selector"]["effort"] == "max"
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=first.generation,
+                action="advance",
+                stopped=True,
+                reason="quota",
+            ),
+        )
+    claimed, _ = await claim(db, fleet)
+    _, route = await state(db, task.id)
+    # The fallback alternative carries its own (omitted) effort, not the previous one.
+    assert route.selection.alternative.id == "direct" and route.cursor == 1
+    assert route.selection.harness.selector.effort is None
+    assert "effort" not in route.selection.alternative.model_dump_json()
+    generation = route.generation
+    async with db.read() as conn:
+        before = await routes.policy_setting(conn, "demo")
+    # Changing one role's effort restarts only that difficulty's traversal.
+    await policy(db, [native_effort("high", "low"), direct()])
+    async with db.read() as conn:
+        after = await routes.policy_setting(conn, "demo")
+    assert after.difficulty_revisions["hard"] != before.difficulty_revisions["hard"]
+    assert after.difficulty_revisions["simple"] == before.difficulty_revisions["simple"]
+    _, route = await state(db, task.id)
+    # Generation fencing is kept: the running attempt's reports still match.
+    assert route.cursor == 0 and route.generation == generation
+
+
+@pytest.mark.parametrize(
+    "alternative,reason",
+    [
+        (direct(harness=selector() | {"effort": "high"}), "harness_effort_unsupported"),
+        (native_effort("ultra"), "harness_effort_invalid"),
+        (
+            {
+                **paired(),
+                "executor": paired()["executor"] | {"effort": "high"},
+            },
+            "executor_effort_unsupported",
+        ),
+    ],
+)
+@pytest.mark.parametrize("key", [routes.KEY, "review.chains"])
+async def test_settings_reject_unsupported_effort_for_both_chain_keys(
+    db, fleet, alternative, reason, key
+):
+    with pytest.raises(ValidationFailedError, match=reason):
+        await policy(db, [alternative], "demo", key=key)
+
+
 async def test_unrelated_difficulty_edit_keeps_cursor_and_ordinary_failure(db, fleet):
     await policy(db, [direct(), paired()])
     task = await make_task(db)
@@ -789,6 +890,22 @@ async def test_review_chain_skips_author_and_child_runs_on_fallback(db, fleet):
     _, route = await state(db, child_id)
     assert route.selection.source == "review"
     assert route.selection.harness.model == "gpt-5.5"
+
+
+async def test_review_chain_effort_is_kept_and_does_not_hide_the_author(db, fleet):
+    opus = deepcopy(OPUS_ALT)
+    opus["harness"]["effort"] = "low"
+    codex = deepcopy(CODEX_ALT)
+    codex["harness"]["effort"] = "xhigh"
+    await review_policy(db, [opus, codex])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child_id = await spawn(db, parent.id)
+    [selected] = await parent_events(db, parent.id, "review.independent_selected")
+    assert selected["skipped"] == [{"id": "opus", "reason": "author"}]
+    await claim(db, fleet)
+    _, route = await state(db, child_id)
+    assert route.selection.alternative.harness.effort == "xhigh"
+    assert route.selection.harness.selector.effort == "xhigh"
 
 
 async def test_review_chain_of_only_authors_blocks(db, fleet):

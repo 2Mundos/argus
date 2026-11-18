@@ -221,6 +221,7 @@ import { registerChannelAdapter } from "./channel-registry.js";
 export { taskAuthorizesMerge } from "./argus-merge-auth.js";
 
 import {
+  executionEffort,
   loadPolicy,
   type ModelSelection,
   policySnapshot,
@@ -6230,6 +6231,38 @@ export async function argusGroupDir(): Promise<string | null> {
   return group ? path.resolve("groups", group.folder) : null;
 }
 
+const EFFORT_MARKER = "argus-harness-effort.json";
+
+/**
+ * The container `effort` this attempt needs (execution-chains spec 3.8). A route's
+ * harness effort is applied over the operator's value, which a marker keeps so a
+ * later route that omits effort (or a legacy task) restores it. An operator edit
+ * made while a route's effort was applied wins over the marker.
+ */
+export async function harnessEffort(
+  dir: string,
+  current: string | null,
+  execution: import("./model-policy.mjs").ExecutionSelection | null | undefined,
+): Promise<string | null> {
+  const wanted = executionEffort(execution, "harness");
+  const marker = path.join(dir, EFFORT_MARKER);
+  let saved: { original: string | null; applied: string } | null;
+  try {
+    saved = JSON.parse(readFileSync(marker, "utf8"));
+  } catch {
+    saved = null; // No route effort is applied.
+  }
+  const original = saved && saved.applied === current ? saved.original : current;
+  if (wanted === null) {
+    if (saved) await unlink(marker);
+    return original;
+  }
+  await mkdir(dir, { recursive: true });
+  await writeFile(marker + ".tmp", JSON.stringify({ original, applied: wanted }) + "\n");
+  await rename(marker + ".tmp", marker);
+  return wanted;
+}
+
 export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
   // Host startup policy is the fallback for older APIs that omit claim fields.
   const hostSnapshot = loadPolicy();
@@ -6272,9 +6305,17 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       // Never leave the previous engine's model configured for the leased account's.
       throw new Error(`model policy has no harness chain for engine ${engine}`);
     }
-    if (selection.configured_model && config.model !== selection.configured_model) {
+    const dir = path.resolve("groups", group.folder);
+    const effort = await harnessEffort(dir, config.effort ?? null, task.execution);
+    const scalars = {
+      ...(selection.configured_model && config.model !== selection.configured_model
+        ? { model: selection.configured_model }
+        : {}),
+      ...((config.effort ?? null) !== effort ? { effort } : {}),
+    };
+    if (Object.keys(scalars).length) {
       if (task.execution) await stopGroupSessions(group.id);
-      await updateContainerConfigScalars(group.id, { model: selection.configured_model });
+      await updateContainerConfigScalars(group.id, scalars);
       for (const session of await getSessionsByAgentGroup(group.id)) {
         killContainer(session.id, "argus: model policy changed");
       }
@@ -6298,7 +6339,6 @@ export function modelsFromEnv(): NonNullable<ArgusConfig["selectModels"]> {
       engine_settings: held.engine_settings ?? null,
       executor_settings: held.executor_settings ?? null,
     });
-    const dir = path.resolve("groups", group.folder);
     await mkdir(dir, { recursive: true });
     const file = path.join(dir, "argus-model-policy.json");
     await writeFile(file + ".tmp", JSON.stringify(pinned) + "\n");

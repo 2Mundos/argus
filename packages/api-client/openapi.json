@@ -8618,6 +8618,38 @@
         "title": "EffectiveDecision",
         "type": "object"
       },
+      "EffortModelRule": {
+        "additionalProperties": false,
+        "description": "Levels a canonical model ID takes, overriding the adapter set.",
+        "properties": {
+          "efforts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Efforts",
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "prefixes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Prefixes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "efforts"
+        ],
+        "title": "EffortModelRule",
+        "type": "object"
+      },
       "EngineCatalog": {
         "properties": {
           "engines": {
@@ -8631,6 +8663,56 @@
             "default": [
               {
                 "adapter": "claude",
+                "effort_interface": "NanoClaw container config effort -> Agent SDK query({effort})",
+                "effort_model_rules": [
+                  {
+                    "efforts": [],
+                    "models": [
+                      "claude-opus-4",
+                      "claude-opus-4-0",
+                      "claude-opus-4-1",
+                      "claude-sonnet-4",
+                      "claude-sonnet-4-0",
+                      "claude-sonnet-4-5",
+                      "claude-haiku-4-5"
+                    ],
+                    "prefixes": [
+                      "claude-3-"
+                    ]
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "models": [
+                      "claude-opus-4-5"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "max"
+                    ],
+                    "models": [
+                      "claude-opus-4-6",
+                      "claude-sonnet-4-6"
+                    ],
+                    "prefixes": []
+                  }
+                ],
+                "effort_unlisted_models": "supported",
+                "efforts": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
                 "excluded_harness_providers": [],
                 "id": "nanoclaw:harness:claude:anthropic",
                 "model_sources": [
@@ -8647,6 +8729,8 @@
               },
               {
                 "adapter": "claude",
+                "effort_model_rules": [],
+                "efforts": [],
                 "excluded_harness_providers": [],
                 "id": "nanoclaw:harness:claude:local",
                 "model_sources": [
@@ -8663,6 +8747,8 @@
               },
               {
                 "adapter": "claude",
+                "effort_model_rules": [],
+                "efforts": [],
                 "excluded_harness_providers": [],
                 "id": "nanoclaw:harness:claude:custom",
                 "model_sources": [
@@ -8679,6 +8765,63 @@
               },
               {
                 "adapter": "codex",
+                "effort_interface": "NanoClaw container config effort -> Codex model_reasoning_effort",
+                "effort_model_rules": [
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh"
+                    ],
+                    "models": [
+                      "gpt-5.5"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ],
+                    "models": [
+                      "gpt-6-luna",
+                      "gpt-5.6-luna",
+                      "codex-auto-review"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ],
+                    "models": [
+                      "gpt-6-astra",
+                      "gpt-6.1-sol",
+                      "gpt-6-sol",
+                      "gpt-5.6-sol",
+                      "gpt-5.6-terra",
+                      "gpt-daybreak-blue-latest",
+                      "gpt-daybreak-red-latest"
+                    ],
+                    "prefixes": []
+                  }
+                ],
+                "effort_unlisted_models": "unverified",
+                "efforts": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ],
                 "excluded_harness_providers": [],
                 "id": "nanoclaw:harness:codex:openai",
                 "model_sources": [
@@ -8695,6 +8838,56 @@
               },
               {
                 "adapter": "claude",
+                "effort_interface": "claude --effort <level>",
+                "effort_model_rules": [
+                  {
+                    "efforts": [],
+                    "models": [
+                      "claude-opus-4",
+                      "claude-opus-4-0",
+                      "claude-opus-4-1",
+                      "claude-sonnet-4",
+                      "claude-sonnet-4-0",
+                      "claude-sonnet-4-5",
+                      "claude-haiku-4-5"
+                    ],
+                    "prefixes": [
+                      "claude-3-"
+                    ]
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "models": [
+                      "claude-opus-4-5"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "max"
+                    ],
+                    "models": [
+                      "claude-opus-4-6",
+                      "claude-sonnet-4-6"
+                    ],
+                    "prefixes": []
+                  }
+                ],
+                "effort_unlisted_models": "supported",
+                "efforts": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
                 "excluded_harness_providers": [
                   "local"
                 ],
@@ -8712,6 +8905,65 @@
               },
               {
                 "adapter": "codex",
+                "effort_interface": "codex exec -c model_reasoning_effort=\"<level>\"",
+                "effort_model_rules": [
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh"
+                    ],
+                    "models": [
+                      "gpt-5.5"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ],
+                    "models": [
+                      "gpt-6-luna",
+                      "gpt-5.6-luna",
+                      "codex-auto-review"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ],
+                    "models": [
+                      "gpt-6-astra",
+                      "gpt-6.1-sol",
+                      "gpt-6-sol",
+                      "gpt-5.6-sol",
+                      "gpt-5.6-terra",
+                      "gpt-daybreak-blue-latest",
+                      "gpt-daybreak-red-latest"
+                    ],
+                    "prefixes": []
+                  }
+                ],
+                "effort_unlisted_models": "unverified",
+                "efforts": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ],
                 "excluded_harness_providers": [
                   "local"
                 ],
@@ -8729,6 +8981,8 @@
               },
               {
                 "adapter": "agent",
+                "effort_model_rules": [],
+                "efforts": [],
                 "excluded_harness_providers": [],
                 "id": "nanoclaw:executor:agent:cursor",
                 "model_sources": [
@@ -8744,6 +8998,18 @@
               },
               {
                 "adapter": "copilot",
+                "effort_interface": "copilot --reasoning-effort <level>",
+                "effort_model_rules": [],
+                "effort_unlisted_models": "unverified",
+                "efforts": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
                 "excluded_harness_providers": [
                   "local"
                 ],
@@ -8761,6 +9027,8 @@
               },
               {
                 "adapter": "opencode",
+                "effort_model_rules": [],
+                "efforts": [],
                 "excluded_harness_providers": [],
                 "id": "nanoclaw:executor:opencode:local",
                 "model_sources": [
@@ -8776,6 +9044,8 @@
               },
               {
                 "adapter": "opencode",
+                "effort_model_rules": [],
+                "efforts": [],
                 "excluded_harness_providers": [],
                 "id": "nanoclaw:executor:opencode:custom",
                 "model_sources": [
@@ -9562,6 +9832,46 @@
           "adapter": {
             "title": "Adapter",
             "type": "string"
+          },
+          "effort_interface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort Interface"
+          },
+          "effort_model_rules": {
+            "items": {
+              "$ref": "#/components/schemas/EffortModelRule"
+            },
+            "title": "Effort Model Rules",
+            "type": "array"
+          },
+          "effort_unlisted_models": {
+            "anyOf": [
+              {
+                "enum": [
+                  "supported",
+                  "unverified"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort Unlisted Models"
+          },
+          "efforts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Efforts",
+            "type": "array"
           },
           "excluded_harness_providers": {
             "items": {
@@ -21260,6 +21570,18 @@
             ],
             "title": "Adapter",
             "type": "string"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z]{1,16}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort"
           },
           "model": {
             "discriminator": {

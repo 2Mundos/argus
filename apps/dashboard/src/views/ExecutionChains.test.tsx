@@ -28,6 +28,30 @@ const capabilities = vi.hoisted(() => {
       model_sources: ["account", "explicit"],
       modes: ["paired"],
     },
+    {
+      id: "nanoclaw:harness:claude:anthropic",
+      role: "harness",
+      adapter: "claude",
+      provider: "anthropic",
+      model_sources: ["explicit"],
+      modes: ["single", "paired"],
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+      effort_interface: "NanoClaw container config effort -> Agent SDK query({effort})",
+      effort_model_rules: [{ models: ["claude-opus-4-5"], efforts: ["low", "medium", "high"] }],
+      effort_unlisted_models: "supported",
+    },
+    {
+      id: "nanoclaw:executor:codex:openai",
+      role: "executor",
+      adapter: "codex",
+      provider: "openai",
+      model_sources: ["explicit"],
+      modes: ["paired"],
+      efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      effort_interface: 'codex exec -c model_reasoning_effort="<level>"',
+      effort_model_rules: [],
+      effort_unlisted_models: "unverified",
+    },
   ];
   return { all, list: all };
 });
@@ -232,6 +256,77 @@ describe("execution chain editor", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Reset review models" }));
     await waitFor(() => expect(saved.reset).toHaveBeenCalledWith("review.chains", null));
+  });
+  it("sets effort per role from the supported levels and blocks a level the model lacks", async () => {
+    render(<ExecutionChains {...base} setting={setting} />);
+    // Inherited alternatives show their effort; a local claude harness has none to set.
+    expect(screen.getByText(/local \/ local · effort runtime default/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
+    const localEffort = screen.getByLabelText("harness reasoning effort") as HTMLSelectElement;
+    expect(localEffort.disabled).toBe(true);
+    expect(
+      screen.getByText(
+        "claude / local has no reasoning effort setting for the harness; the runtime default applies.",
+      ),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("hard alternative 1 mode"), {
+      target: { value: "paired" },
+    });
+    fireEvent.change(screen.getByLabelText("harness adapter / provider"), {
+      target: { value: "nanoclaw:harness:claude:anthropic" },
+    });
+    fireEvent.change(screen.getByLabelText("harness model ID"), {
+      target: { value: "claude-opus-5-5" },
+    });
+    const harnessEffort = screen.getByLabelText("harness reasoning effort") as HTMLSelectElement;
+    expect([...harnessEffort.options].map((o) => o.value)).toEqual([
+      "",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    fireEvent.change(harnessEffort, { target: { value: "max" } });
+    fireEvent.change(screen.getByLabelText("executor adapter / provider"), {
+      target: { value: "nanoclaw:executor:codex:openai" },
+    });
+    fireEvent.change(screen.getByLabelText("executor model ID"), {
+      target: { value: "gpt-6.1-sol" },
+    });
+    expect(screen.getByText(/not in the verified list/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("executor reasoning effort"), {
+      target: { value: "ultra" },
+    });
+    // Opus 4.5 takes no max: Save names the problem until the level changes.
+    fireEvent.change(screen.getByLabelText("harness model ID"), {
+      target: { value: "claude-opus-4-5-20251101" },
+    });
+    const save = screen.getByRole("button", { name: "Save execution chains" }) as HTMLButtonElement;
+    expect(screen.getByRole("status").textContent).toBe(
+      "hard, alternative 1: harness effort: max is not supported by this claude model",
+    );
+    expect(save.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("harness reasoning effort"), {
+      target: { value: "high" },
+    });
+    fireEvent.click(save);
+    await waitFor(() => expect(saved.put).toHaveBeenCalled());
+    const [, value] = saved.put.mock.calls[0] as unknown as [
+      string,
+      { difficulties: { hard: { harness: object; executor: object }[] } },
+    ];
+    expect(value.difficulties.hard[0]?.harness).toMatchObject({ effort: "high" });
+    expect(value.difficulties.hard[0]?.executor).toMatchObject({ effort: "ultra" });
+    // Runtime default removes the key so the saved alternative is the pre-effort shape.
+    fireEvent.change(screen.getByLabelText("executor reasoning effort"), { target: { value: "" } });
+    fireEvent.click(save);
+    await waitFor(() => expect(saved.put).toHaveBeenCalledTimes(2));
+    const [, again] = saved.put.mock.calls[1] as unknown as [
+      string,
+      { difficulties: { hard: { executor: object }[] } },
+    ];
+    expect(again.difficulties.hard[0]?.executor).not.toHaveProperty("effort");
   });
   it("shows each level's built-in executor order where no chain exists", () => {
     render(<ExecutionChains {...base} setting={undefined} />);

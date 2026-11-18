@@ -48,7 +48,7 @@ import {
   MILESTONE_RELAY_FILE,
   waitingInput,
 } from "./milestones.mjs";
-import { implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
+import { executionEffort, implementationScope, loadPolicy, selectModel } from "./model-policy.mjs";
 import { OPENCODE_GATEWAY_SENTINEL, opencodeGatewayProblem } from "./opencode-gateway.mjs";
 import {
   appendAuthRejectedRecord,
@@ -509,12 +509,18 @@ function backgroundShellTimeoutS(e) {
   return Number.isInteger(n) && n >= 1 ? n : BG_SHELL_TIMEOUT_S;
 }
 
-/** The exact argv for one non-interactive run. `prompt` is passed on stdin or as an argument. */
+/**
+ * The exact argv for one non-interactive run. `prompt` is passed on stdin or as an argument.
+ * `effort` is the execution route's configured reasoning effort (execution-chains spec 3.8);
+ * an executor without an effort flag refuses one rather than dropping it.
+ */
 export function buildCommand(
   executor,
-  { cwd, model, readOnly, lastMessageFile, settings = null, overlayFile = null },
+  { cwd, model, readOnly, lastMessageFile, settings = null, overlayFile = null, effort = null },
   e = process.env,
 ) {
+  if (effort !== null && !["claude", "codex", "copilot"].includes(executor))
+    throw new Error(`${executor} has no reasoning effort interface`);
   switch (executor) {
     case "claude":
       return {
@@ -529,6 +535,7 @@ export function buildCommand(
           readOnly ? "plan" : "acceptEdits",
           ...(readOnly ? [] : ["--allowed-tools", CLAUDE_WORKSPACE_TOOLS]),
           ...(model ? ["--model", model] : []),
+          ...(effort ? ["--effort", effort] : []),
         ],
         promptVia: "stdin",
         readOnlyEnforcement: readOnly ? "prompt_and_plan_mode" : "acceptEdits_plus_tool_allowlist",
@@ -549,6 +556,7 @@ export function buildCommand(
           lastMessageFile,
           ...(settings ? codexProviderArgs(settings) : []),
           ...(model ? ["-m", model] : []),
+          ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : []),
           "-",
         ],
         promptVia: "stdin",
@@ -607,6 +615,7 @@ export function buildCommand(
           ...(readOnly
             ? ["--deny-tool", "write", "--deny-tool", "shell"]
             : ["--allow-tool", "write"]),
+          ...(effort ? ["--reasoning-effort", effort] : []),
           "-p",
         ],
         promptVia: "argv",
@@ -1385,6 +1394,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
         (opts.model && opts.model !== execution.executor.model))
     )
       throw new Error("executor/model not authorized by the complete execution alternative");
+    const effort = executionEffort(execution, "executor");
     // --model, then the task's pin and the account's model (fixed choices: no chain),
     // then the policy chain.
     selection = selectModel(
@@ -1399,6 +1409,8 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
         settings?.model ||
         undefined,
     );
+    // Configured, never observed: no executor reports the effort it applied.
+    if (effort) selection = { ...selection, configured_effort: effort, observed_effort: null };
   } catch (err) {
     finish(64, { ...identity, error: "model_policy_invalid", detail: err.message });
   }
@@ -1553,7 +1565,7 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       )
     )
       break;
-    const previousModel = selection.configured_model;
+    const previous = selection;
     selection = selectModel(
       snapshot,
       selection.scope,
@@ -1561,7 +1573,12 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       selection.model_attempt + 1,
       outcome.report.executor_error?.kind || "executor_failed",
     );
-    selection.previous_model = previousModel;
+    selection.previous_model = previous.configured_model;
+    if (previous.configured_effort)
+      Object.assign(selection, {
+        configured_effort: previous.configured_effort,
+        observed_effort: null,
+      });
   } while (Date.now() < deadline);
   finish(outcome.exit, { ...outcome.report, attempts });
 }
@@ -1654,6 +1671,7 @@ async function runAttempt(
       lastMessageFile,
       settings,
       overlayFile,
+      effort: selection.configured_effort ?? null,
     },
     e,
   );
