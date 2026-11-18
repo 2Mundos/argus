@@ -170,20 +170,82 @@ describe("waitCap", () => {
 });
 
 describe("wait ci", () => {
-  it("keeps waiting after a failure until every check has finished", async () => {
+  const mixed = [
+    { id: 1, context: "lint", status: "failure" },
+    { id: 2, context: "node", status: "pending" },
+    { id: 3, context: "python", status: "in_progress" },
+  ];
+
+  it("fails fast on the first failed check while others still run", async () => {
+    const r = await run(["wait", "ci", "--pr", "7"], {
+      routes: { "GET /pulls/7": pr(), [`GET /statuses/${HEAD}`]: mixed },
+    });
+    assert.equal(r.code, EXIT.ok);
+    assert.equal(r.elapsed, 0);
+    assert.deepEqual([r.out.state, r.out.failed, r.out.running], ["failure", ["lint"], 2]);
+    assert.match(r.out.action, /job-logs.*2 checks are still running.*superseded/);
+    // The terminal record carries the fail-fast outcome and is not continued by a later wait.
+    const file = join(signals(r.cwd), "waiting.json");
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).outcome, {
+      state: "failure",
+      failed: ["lint"],
+    });
+    const later = await run(["wait", "ci", "--pr", "7", "--max", "10"], {
+      cwd: r.cwd,
+      routes: { "GET /pulls/7": pr(), [`GET /statuses/${HEAD}`]: [mixed[1]] },
+    });
+    assert.equal(later.code, EXIT.pending);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).outcome, undefined);
+  });
+
+  it("says nothing about running checks when none are left", async () => {
+    const r = await run(["wait", "ci", "--pr", "7"], {
+      routes: { "GET /pulls/7": pr(), [`GET /statuses/${HEAD}`]: [mixed[0]] },
+    });
+    assert.equal(r.out.running, 0);
+    assert.doesNotMatch(r.out.action, /still running/);
+  });
+
+  it("with --all keeps waiting after a failure until every check has finished", async () => {
     let checks = 0;
+    const routes = {
+      "GET /pulls/7": pr(),
+      [`GET /statuses/${HEAD}`]: () => [
+        { id: 1, context: "lint", status: "failure" },
+        { id: 2, context: "test", status: ++checks < 3 ? "pending" : "success" },
+      ],
+    };
+    const capped = await run(["wait", "ci", "--pr", "7", "--all", "--max", "2"], { routes });
+    assert.equal(capped.code, EXIT.pending);
+    assert.equal(capped.out.running, 1);
+    checks = 0;
+    const r = await run(["wait", "ci", "--pr", "7", "--all"], { routes });
+    assert.equal(r.code, EXIT.ok);
+    assert.equal(r.elapsed, 9);
+    assert.deepEqual([r.out.state, r.out.failed, r.out.running], ["failure", ["lint"], 0]);
+    assert.equal(r.out.action, undefined);
+  });
+
+  it("does not fail fast on a failure of a commit the PR no longer points at", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--sha", NEW, "--max", "5"], {
+      routes: { "GET /pulls/7": pr(), [`GET /statuses/${NEW}`]: mixed },
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.out.head_matches, false);
+    assert.match(r.out.status, /is not the watched/);
+  });
+
+  it("reports success only when every check finished and none failed", async () => {
     const r = await run(["wait", "ci", "--pr", "7"], {
       routes: {
         "GET /pulls/7": pr(),
-        [`GET /statuses/${HEAD}`]: () => [
-          { id: 1, context: "lint", status: "failure" },
-          { id: 2, context: "test", status: ++checks < 2 ? "pending" : "success" },
+        [`GET /statuses/${HEAD}`]: [
+          { id: 1, context: "a", status: "success" },
+          { id: 2, context: "b", status: "success" },
         ],
       },
     });
-    assert.equal(r.code, EXIT.ok);
-    assert.equal(r.elapsed, 3); // first re-check is fast: the wait reacts in seconds
-    assert.deepEqual([r.out.state, r.out.failed, r.out.running], ["failure", ["lint"], 0]);
+    assert.deepEqual([r.code, r.out.state, r.out.action], [EXIT.ok, "success", undefined]);
   });
 
   for (const [name, status, state] of [
@@ -378,7 +440,7 @@ describe("wait ci pins one commit", () => {
   // The first check sees head X with a failure and a running check; then Y is pushed and pending.
   it("does not finish on the checks of a previous head", async () => {
     let heads = 0;
-    const r = await run(["wait", "ci", "--pr", "7", "--max", "100"], {
+    const r = await run(["wait", "ci", "--pr", "7", "--all", "--max", "100"], {
       routes: {
         "GET /pulls/7": () => prAt(++heads === 1 ? X : NEW),
         [`GET /statuses/${X}`]: () => [...failedX, ...(heads < 3 ? pendingY : [])],
@@ -660,6 +722,15 @@ describe("wait deadline", () => {
     });
     assert.equal(r.code, EXIT.interrupted);
     assert.equal(existsSync(join(signals(cwd), "waiting.json")), false);
+  });
+
+  it("prints the pending result inside a caller's 115 s timeout by default", async () => {
+    const r = await run(["wait", "ci", "--pr", "7"], {
+      routes: { "GET /pulls/7": pr(), [statuses]: [pending(1)] },
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.elapsed, 110);
+    assert.ok(r.out.status);
   });
 
   it("keeps the --max and ARGUS_TASK_WAIT_MAX_S clamp as the deadline", async () => {

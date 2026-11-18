@@ -187,11 +187,13 @@ export function waitingMessage(w: Waiting): string {
  * posted, and again every few minutes while it lasts. Call `posted` after a successful post.
  */
 export function createWaitingRelay() {
-  let last: { key: string; at: number } | null = null;
-  // An outcome is posted once; only a pending wait is repeated to stay out of the quiet flag.
+  let last: { key: string; at: number; failed: string[] } | null = null;
+  // An outcome is posted once; only a pending wait is repeated to stay out of the quiet flag. A
+  // failure is posted again only when its failed set grows: a fail-fast wait reports the first
+  // failures, and a later call on the same commit that sees more of them updates the milestone.
   const keyOf = (w: Waiting) =>
     w.outcome
-      ? `${w.on}|${w.ref}|${w.sha}|${w.outcome.state}|${w.outcome.failed.join("\n")}`
+      ? `${w.on}|${w.ref}|${w.sha}|${w.outcome.state}`
       : `${w.on}|${w.ref}|${w.since}|${w.sha ?? ""}`;
   return {
     due(w: Waiting | null, nowMs: number): boolean {
@@ -199,10 +201,14 @@ export function createWaitingRelay() {
         last = null;
         return false;
       }
-      return !last || last.key !== keyOf(w) || (!w.outcome && nowMs - last.at >= REPOST_MS);
+      if (!last || last.key !== keyOf(w)) return true;
+      if (!w.outcome) return nowMs - last.at >= REPOST_MS;
+      return w.outcome.failed.some((c) => !last?.failed.includes(c));
     },
     posted(w: Waiting, nowMs: number): void {
-      last = { key: keyOf(w), at: nowMs };
+      const failed = last?.key === keyOf(w) ? last.failed : [];
+      const seen = new Set([...failed, ...(w.outcome?.failed ?? [])]);
+      last = { key: keyOf(w), at: nowMs, failed: [...seen] };
     },
     reset(): void {
       last = null;

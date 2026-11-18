@@ -202,6 +202,9 @@ describe("createWaitingRelay", () => {
     expect(relay.due(done, NOW + 10 * 60_000)).toBe(false); // no five-minute repost
     const other = { ...done, outcome: { state: "failure" as const, failed: ["lint", "test"] } };
     expect(relay.due(other, NOW + 60_000)).toBe(true);
+    relay.posted(other, NOW + 60_000);
+    expect(relay.due(other, NOW + 120_000)).toBe(false); // updated once for the grown set
+    expect(relay.due(done, NOW + 120_000)).toBe(false); // a smaller set is not an update
     expect(relay.due(pending, NOW + 60_000)).toBe(true); // a new wait after the outcome
   });
 
