@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cut a release: infer the next version, write notes, commit and tag.
+"""Cut a release: notes through a pull request, then tag the merged commit.
 
 See docs/specs/releases.spec.md. Standard library only, like validate_docs.py.
 """
@@ -7,6 +7,7 @@ See docs/specs/releases.spec.md. Standard library only, like validate_docs.py.
 import argparse
 import datetime as dt
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ MIGRATIONS = "apps/api/src/argus_api/db/migrations"
 SPECS = "docs/specs"
 REPO_URL = "https://github.com/2Mundos/argus"
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+NOTES_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}\.(v\d+-\d+-\d+)\.ref\.md$")
 PR_MERGE = re.compile(
     r"^Merge pull request '(?P<title>.+)' \(#(?P<pr>\d+)\) from "
 )  # Gitea
@@ -160,7 +162,7 @@ class Repo:
         )
 
 
-def release(a: argparse.Namespace, repo: Repo) -> int:
+def sync_main(a: argparse.Namespace, repo: Repo) -> None:
     branch = repo.git("branch", "--show-current")
     if branch != BRANCH:
         raise ReleaseError(
@@ -171,10 +173,85 @@ def release(a: argparse.Namespace, repo: Repo) -> int:
     if not a.no_fetch:
         repo.git("fetch", "--quiet", "--tags", REMOTE, BRANCH)
         if repo.git("rev-parse", "HEAD") != repo.git("rev-parse", f"{REMOTE}/{BRANCH}"):
-            msg = f"HEAD differs from {REMOTE}/{BRANCH}; pull or push first"
+            msg = f"HEAD differs from {REMOTE}/{BRANCH}; pull first"
             if not a.dry_run:
                 raise ReleaseError(msg)
             print(f"warning: {msg}", file=sys.stderr)
+
+
+def published_tags(repo: Repo) -> set[str]:
+    raw = repo.git("ls-remote", "--tags", "--refs", REMOTE, "refs/tags/v*")
+    return {
+        line.rsplit("refs/tags/", 1)[1]
+        for line in raw.splitlines()
+        if "refs/tags/" in line
+    }
+
+
+def note_tag(path: str) -> str | None:
+    m = NOTES_NAME.match(Path(path).name)
+    return m[1].replace("-", ".") if m else None
+
+
+def notes_on_main(repo: Repo) -> list[str]:
+    raw = repo.git("ls-tree", "--name-only", f"{REMOTE}/{BRANCH}", f"{NOTES_DIR}/")
+    return sorted(n for n in raw.splitlines() if n.endswith(".ref.md"))
+
+
+def untagged_notes(repo: Repo) -> list[tuple[str, str]]:
+    published = published_tags(repo)
+    return [
+        (tag, path)
+        for path in notes_on_main(repo)
+        if (tag := note_tag(path)) and tag not in published
+    ]
+
+
+def notes_for(repo: Repo, tag: str) -> str:
+    matches = [path for path in notes_on_main(repo) if note_tag(path) == tag]
+    if len(matches) != 1:
+        raise ReleaseError(f"no merged notes for {tag} in {NOTES_DIR}")
+    return matches[0]
+
+
+def open_pr(repo: Repo, branch: str, tag: str) -> int:
+    cmd = [
+        "gh",
+        "pr",
+        "create",
+        "--base",
+        BRANCH,
+        "--head",
+        branch,
+        "--title",
+        f"docs(release): {tag}",
+        "--body",
+        f"Release notes for {tag}.",
+    ]
+    if shutil.which("gh") is None:
+        print("Open the pull request with: " + " ".join(cmd))
+        return 0
+    r = subprocess.run(cmd, cwd=repo.root, capture_output=True, text=True)
+    if r.returncode:
+        raise ReleaseError(
+            f"gh pr create: {r.stderr.strip() or r.stdout.strip()}; the branch is"
+            f" pushed, open the PR with: {' '.join(cmd)}"
+        )
+    print(
+        f"Opened {r.stdout.strip()}; after it is squash-merged run"
+        " make release ARGS=--tag"
+    )
+    return 0
+
+
+def prepare(a: argparse.Namespace, repo: Repo) -> int:
+    sync_main(a, repo)
+    pending = untagged_notes(repo)
+    if pending:
+        tag, _ = pending[0]
+        raise ReleaseError(
+            f"{tag} notes are merged but not tagged; run make release ARGS=--tag"
+        )
 
     tags = repo.git("tag", "--merged", "HEAD", "--sort=-v:refname").splitlines()
     prev = next((t for t in tags if TAG.match(t)), None)
@@ -196,8 +273,8 @@ def release(a: argparse.Namespace, repo: Repo) -> int:
         m = TAG.match(prev) if prev else None
         base: Version = (int(m[1]), int(m[2]), int(m[3])) if m else (0, 0, 0)
         tag = fmt(next_version(base, changes, bool(breaking)))
-    if repo.git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}", check=False):
-        raise ReleaseError(f"tag {tag} already exists")
+    if tag in published_tags(repo):
+        raise ReleaseError(f"tag {tag} already exists on {REMOTE}")
 
     migrations = repo.added(prev, MIGRATIONS, "A") if prev else []
     specs = repo.added(prev, SPECS, "AM") if prev else []
@@ -213,21 +290,66 @@ def release(a: argparse.Namespace, repo: Repo) -> int:
         specs,
     )
     path = f"{NOTES_DIR}/{a.date}.{tag.replace('.', '-')}.ref.md"
+    branch = f"release/{tag}"
+    if repo.git(
+        "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False
+    ):
+        raise ReleaseError(f"branch {branch} already exists")
+    if repo.git("ls-remote", "--heads", REMOTE, branch):
+        raise ReleaseError(f"branch {branch} already exists on {REMOTE}")
     if a.dry_run:
         print(f"{path}\n\n{notes}", end="")
         return 0
 
-    (repo.root / NOTES_DIR).mkdir(parents=True, exist_ok=True)
-    (repo.root / path).write_text(notes)
-    repo.git("add", path)
-    repo.git("commit", "--quiet", "-m", f"docs(release): {tag}")
-    repo.git("tag", "-a", tag, "-m", f"Release {tag}", "-m", f"Notes: {path}")
-    print(f"Wrote {path}, committed, tagged {tag}")
-    if a.push:
-        repo.git("push", "--atomic", REMOTE, BRANCH, tag)
-        print(f"Pushed {BRANCH} and {tag}; the release workflow takes it from here")
+    repo.git("switch", "--quiet", "-c", branch)
+    try:
+        (repo.root / NOTES_DIR).mkdir(parents=True, exist_ok=True)
+        (repo.root / path).write_text(notes)
+        repo.git("add", path)
+        repo.git("commit", "--quiet", "-m", f"docs(release): {tag}")
+        repo.git("push", "--quiet", "-u", REMOTE, branch)
+    finally:
+        repo.git("switch", "--quiet", BRANCH)
+    print(f"Pushed {branch} with the {tag} notes")
+    if a.no_pr:
+        return 0
+    return open_pr(repo, branch, tag)
+
+
+def tag_release(a: argparse.Namespace, repo: Repo) -> int:
+    sync_main(a, repo)
+    pending = untagged_notes(repo)
+    if a.version:
+        if not TAG.match(a.version):
+            raise ReleaseError("--version must look like vX.Y.Z")
+        tag = a.version
+        path = notes_for(repo, tag)
+    elif len(pending) == 1:
+        tag, path = pending[0]
+    elif not pending:
+        raise ReleaseError(f"no untagged release notes on {BRANCH}")
     else:
-        print(f"Push with: git push --atomic {REMOTE} {BRANCH} {tag}")
+        names = ", ".join(t for t, _ in pending)
+        raise ReleaseError(f"several untagged releases ({names}); pass --version")
+
+    if tag in published_tags(repo):
+        raise ReleaseError(f"tag {tag} already exists on {REMOTE}")
+    commit = repo.git("log", "-1", "--format=%H", f"{REMOTE}/{BRANCH}", "--", path)
+    if not commit:
+        raise ReleaseError(f"{path} is not on {REMOTE}/{BRANCH}")
+    repo.git(
+        "tag",
+        "-f",
+        "-a",
+        tag,
+        "-m",
+        f"Release {tag}",
+        "-m",
+        f"Notes: {path}",
+        commit,
+    )
+    repo.git("push", "--no-verify", REMOTE, f"refs/tags/{tag}")
+    print(f"Pushed {tag}; the release workflow takes it from here")
     return 0
 
 
@@ -236,13 +358,30 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     p.add_argument("--version", help="release this vX.Y.Z instead of inferring it")
     p.add_argument("--date", default=dt.date.today().isoformat(), help="YYYY-MM-DD")
     p.add_argument("--dry-run", action="store_true", help="print the notes only")
-    p.add_argument("--push", action="store_true", help="push main and the tag")
+    p.add_argument(
+        "--tag",
+        action="store_true",
+        help="tag the merged notes commit and push the tag",
+    )
+    p.add_argument(
+        "--no-pr",
+        action="store_true",
+        help="push the notes branch without opening a pull request",
+    )
+    p.add_argument("--push", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--no-fetch", action="store_true", help="skip the origin check")
     a = p.parse_args(argv)
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.date):
         p.error("--date must be YYYY-MM-DD")
+    if a.tag and (a.dry_run or a.no_pr):
+        p.error("--tag only tags the merged notes")
     try:
-        return release(a, Repo(root))
+        if a.push:
+            raise ReleaseError(
+                "--push is retired: `make release` opens the notes pull request;"
+                " merge it, then run `make release ARGS=--tag`"
+            )
+        return tag_release(a, Repo(root)) if a.tag else prepare(a, Repo(root))
     except ReleaseError as e:
         print(f"release: {e}", file=sys.stderr)
         return 1

@@ -133,7 +133,7 @@ openapi-client-check: ## Fail if schema.d.ts does not match the committed openap
 	cmp -s "$$tmp" packages/api-client/src/schema.d.ts || { echo "schema.d.ts is stale: run \`make openapi\`"; exit 1; }
 
 .PHONY: release
-release: ## Cut a release on main: notes, commit, tag (ARGS="--dry-run" or "--push").
+release: ## Cut a release: notes PR (ARGS="--dry-run"), then tag after merge (ARGS="--tag").
 	python3 scripts/release.py $(ARGS)
 
 .PHONY: audit

@@ -107,11 +107,30 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return work
 
 
+def _merge_notes(repo: Path, branch: str, tag: str) -> None:
+    _git(repo, "fetch", "origin", branch)
+    _git(repo, "merge", "--squash", "FETCH_HEAD")
+    _git(repo, "commit", "--quiet", "-m", f"docs(release): {tag}")
+    _git(repo, "push", "--quiet")
+
+
 def test_release_end_to_end(repo: Path) -> None:
-    assert main(["--date", "2026-10-18", "--push"], root=repo) == 0
+    assert main(["--date", "2026-10-18", "--no-pr"], root=repo) == 0
+    assert _git(repo, "tag") == ""
+    assert _git(repo, "branch", "--show-current") == "main"
+    assert _git(repo, "rev-parse", "main") == _git(repo, "rev-parse", "origin/main")
+    assert not (repo / "docs/releases/2026-10-18.v0-1-0.ref.md").exists()
+    notes = _git(repo, "show", "release/v0.1.0:docs/releases/2026-10-18.v0-1-0.ref.md")
+    assert notes.startswith("# v0.1.0")
+    assert _git(repo, "ls-remote", "--heads", "origin", "release/v0.1.0")
+
+    _merge_notes(repo, "release/v0.1.0", "v0.1.0")
+    assert main(["--tag"], root=repo) == 0
     assert _git(repo, "describe", "--tags") == "v0.1.0"
-    assert (repo / "docs/releases/2026-10-18.v0-1-0.ref.md").exists()
     assert _git(repo, "ls-remote", "--tags", "origin", "v0.1.0")
+    assert _git(repo, "rev-parse", "v0.1.0^{commit}") == _git(
+        repo, "rev-parse", "origin/main"
+    )
 
     mig = repo / "apps/api/src/argus_api/db/migrations"
     mig.mkdir(parents=True)
@@ -119,10 +138,38 @@ def test_release_end_to_end(repo: Path) -> None:
     _git(repo, "add", ".")
     _git(repo, "commit", "--quiet", "-m", "fix(db): add a table")
     _git(repo, "push", "--quiet")
-    assert main(["--date", "2026-10-19"], root=repo) == 0
+    assert main(["--date", "2026-10-19", "--no-pr"], root=repo) == 0
+    _merge_notes(repo, "release/v0.1.1", "v0.1.1")
+    assert main(["--tag"], root=repo) == 0
     notes = (repo / "docs/releases/2026-10-19.v0-1-1.ref.md").read_text()
     assert "`0001_init.sql`" in notes and "- db: add a table" in notes
     assert "docs(release)" not in notes
+
+
+def test_tag_keeps_a_later_main_commit_out_of_the_release(repo: Path) -> None:
+    assert main(["--date", "2026-10-18", "--no-pr"], root=repo) == 0
+    _merge_notes(repo, "release/v0.1.0", "v0.1.0")
+    _git(repo, "commit", "--quiet", "--allow-empty", "-m", "fix: after the release")
+    _git(repo, "push", "--quiet")
+    assert main(["--tag"], root=repo) == 0
+    tagged = _git(repo, "rev-parse", "v0.1.0^{commit}")
+    assert tagged != _git(repo, "rev-parse", "HEAD")
+    assert _git(repo, "show", "--format=", "--name-only", tagged) == (
+        "docs/releases/2026-10-18.v0-1-0.ref.md"
+    )
+
+
+def test_prepare_refuses_a_merged_but_untagged_release(repo: Path) -> None:
+    assert main(["--date", "2026-10-18", "--no-pr"], root=repo) == 0
+    _merge_notes(repo, "release/v0.1.0", "v0.1.0")
+    assert main(["--date", "2026-10-19"], root=repo) == 1
+    assert _git(repo, "tag") == ""
+
+
+def test_push_is_retired(repo: Path) -> None:
+    assert main(["--push"], root=repo) == 1
+    assert _git(repo, "tag") == ""
+    assert _git(repo, "rev-parse", "main") == _git(repo, "rev-parse", "origin/main")
 
 
 def test_release_refuses_unpublished_head(repo: Path) -> None:
