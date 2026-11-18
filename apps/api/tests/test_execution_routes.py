@@ -1449,3 +1449,134 @@ async def test_backfill_repairs_only_orphaned_in_review_tasks(db, fleet):
         row, _ = await state(db, t.id)
         assert row["state"] == expected
     assert len(await parent_events(db, orphan.id, "review.decision_backfilled")) == 1
+
+
+MERGED_HEAD = "9f2c1ab3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+OLD_HEAD = "0123456789abcdef0123456789abcdef01234567"
+
+
+async def forge_checker(monkeypatch, pr: dict):
+    """A PrChecker reading `pr` from a mock forge, with a configured project repo."""
+    import httpx2 as httpx
+    from argus_api.tasks import delivery
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls/416"):
+            return httpx.Response(200, json=pr)
+        return httpx.Response(404, json={"message": "missing"})
+
+    async def bot(self, conn, provider):
+        return ("bot", "token")
+
+    monkeypatch.setattr(delivery.PrChecker, "login", bot)
+    return delivery.PrChecker(None, httpx.MockTransport(handler))  # ty: ignore
+
+
+async def reviewed_with_repository(db, fleet):
+    """A parent of a project whose repository and review mode are configured."""
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE projects SET repository_url = ? WHERE slug = 'demo'",
+            ("https://github.com/2Mundos/argus.git",),
+        )
+        await settings.put_setting(
+            tx,
+            Path(),
+            "global",
+            "review.independent",
+            {"mode": "different_model", "max_rounds": 3, "max_reviewer_failures": 2},
+            "admin:test",
+        )
+    return parent
+
+
+def merged_pr(**extra):
+    """GitHub's PR body for a PR merged before its task's completion arrived."""
+    return {
+        "number": 416,
+        "html_url": PR_URL,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-11-18T15:00:00Z",
+        "created_at": "2026-11-18T14:00:00Z",
+        "merge_commit_sha": "1" * 40,
+        "head": {"sha": MERGED_HEAD, "ref": "argus/task-repro"},
+        "base": {"sha": "2" * 40, "ref": "main"},
+        **extra,
+    }
+
+
+async def test_merged_before_completion_gives_the_gate_its_head(db, fleet, monkeypatch):
+    """Observed: a PR merged while its worker waited had its head read by the forge,
+    but the gate compared the worker's `2Mundos` against the forge's `2mundos` and
+    dropped it, so no_review_head fired. Both spellings must name the same PR."""
+    from argus_api.tasks import independent_review as review
+    from argus_core.tasks import TaskResult
+
+    parent = await reviewed_with_repository(db, fleet)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET progress_kind = 'pr_opened', progress_data = ?"
+            " WHERE id = ?",
+            (json.dumps({"number": 416, "url": PR_URL}), parent.id),
+        )
+    checker = await forge_checker(monkeypatch, merged_pr())
+    result = TaskResult(summary="opened the PR")
+    forge = await review.completion_forge_read(db, checker, parent.id, result, None)
+    async with db.read() as conn:
+        row = await tasks.task_row(conn, parent.id)
+        assert await review.has_code_delivery(conn, row, result, forge) == (
+            PR_URL,
+            MERGED_HEAD,
+        )
+    assert await gate_on_parent_complete(db, parent.id, forge) is True
+    child = await latest_child(db, parent.id)
+    async with db.read() as conn:
+        child_row = await tasks.task_row(conn, child)
+    assert json.loads(child_row["input"])["head_sha"] == MERGED_HEAD
+    row, _ = await state(db, parent.id)
+    assert row["block_reason"] is None and not await open_decisions(db, parent.id)
+
+
+async def test_head_only_in_progress_history_is_the_last_resort(db, fleet):
+    """With no forge read, the newest commit the task reported in its own milestones
+    is the head (an older one, `OLD_HEAD`, is passed over); the PR URL it named is the PR."""
+    from argus_api.tasks import independent_review as review
+    from argus_api.tasks import worker
+    from argus_core.tasks import TaskResult
+
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    async with db.write() as tx:
+        await worker.report_progress(
+            tx, A, parent.id, 1, "checks", kind="ci_running", data={"sha": OLD_HEAD}
+        )
+        await worker.report_progress(
+            tx, A, parent.id, 1, "checks", kind="ci_passed", data={"sha": HEAD}
+        )
+        await worker.report_progress(
+            tx,
+            A,
+            parent.id,
+            1,
+            "opened",
+            kind="pr_opened",
+            data={"number": 416, "url": PR_URL},
+        )
+    result = TaskResult(summary="opened the PR")
+    async with db.read() as conn:
+        row = await tasks.task_row(conn, parent.id)
+        assert row["progress_kind"] == "pr_opened"
+        assert await review.has_code_delivery(conn, row, result) == (PR_URL, HEAD)
+
+
+async def test_headless_pr_still_blocks_once_without_any_history(db, fleet):
+    """No forge head and no milestone sha anywhere: the one decision still opens."""
+    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    assert await gate_on_parent_complete(db, parent.id) is True
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "in_review" and row["block_reason"] == "no_review_head"
+    assert len(await open_decisions(db, parent.id)) == 1
