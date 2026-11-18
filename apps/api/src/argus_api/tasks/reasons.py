@@ -11,6 +11,9 @@ QUOTA_WAIT_REASONS = (AWAITING_QUOTA, "no_account")
 # `blocked` while the project's image is prepared / after its preparation failed
 # (project runtime spec 3.4): neither spends `failures` or `max_attempts`.
 RUNTIME_PREPARING = "runtime_preparing"
+# The progress note a held task carries while its image is built; cleared once the
+# image is ready (wake or claim), never on a worker-written message.
+RUNTIME_PREPARING_NOTE = "waiting for the project runtime image"
 RUNTIME_FAILED = "runtime_failed"
 # Prefix of the progress note on a ready task no live active worker can run.
 NO_COMPATIBLE_WORKER = "no compatible worker: "

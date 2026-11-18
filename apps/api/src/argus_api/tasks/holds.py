@@ -15,6 +15,7 @@ from argus_api.tasks.reasons import (
     AWAITING_QUOTA,
     RUNTIME_FAILED,
     RUNTIME_PREPARING,
+    RUNTIME_PREPARING_NOTE,
     RUNTIME_SWITCH_FAILED,
 )
 from argus_api.tasks.transitions import _apply
@@ -90,7 +91,7 @@ async def hold_for_runtime(
     changed recipe or an operator rebuild."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
     note = (
-        "waiting for the project runtime image"
+        RUNTIME_PREPARING_NOTE
         if reason == RUNTIME_PREPARING
         else f"project runtime unavailable: {error}"
     )
@@ -132,7 +133,20 @@ async def release_runtime_holds(
     rows = await runtime_holds(tx, project, reasons)
     for r in rows:
         await unblock(tx, r["id"], actor)
+        if r["block_reason"] == RUNTIME_PREPARING:
+            await clear_runtime_note(tx, r["id"])
     return [r["id"] for r in rows]
+
+
+async def clear_runtime_note(tx: Tx, task_id: str) -> None:
+    """Drop the runtime-preparing progress note (and the progress it came with), and
+    only that note: a message a worker wrote is left as it is."""
+    await tx.conn.execute(
+        "UPDATE tasks SET progress_message = NULL, progress_percent = NULL,"
+        " progress_kind = NULL, progress_data = NULL, progress_at = NULL"
+        " WHERE id = ? AND progress_message = ?",
+        (task_id, RUNTIME_PREPARING_NOTE),
+    )
 
 
 async def fail_runtime_holds(tx: Tx, project: str, error: str) -> list[str]:

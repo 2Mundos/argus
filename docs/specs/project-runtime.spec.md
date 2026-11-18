@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-14
+updated: 2026-11-18
 ---
 
 # Project runtime images
@@ -102,7 +102,10 @@ gaps for `pnpm`, `sops-age`, `minio`, and `elasticsearch` until provisioned.
   row (or no host row) cannot be gated at claim, because only `prepare` carries
   the host identity needed to create a build; that first claim is handed out and
   immediately voided by the hold above, so no attempt is spent. `runtime.ready`
-  (`release_runtime_holds`) returns the held tasks to `ready`; nothing polls. `failed` → task blocked with `runtime_failed` and the
+  (`release_runtime_holds`) returns the held tasks to `ready`; nothing polls. Its
+  progress note `waiting for the project runtime image` is cleared on that wake and
+  again on any claim that still carries it; other messages, and `runtime_failed`
+  messages, are kept. `failed` → task blocked with `runtime_failed` and the
   build reason.
 - **Readiness at pool start.** Pool discovery, launch and the reconciler's start
   report each claimable project's latest build for the current recipe on the
