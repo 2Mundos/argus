@@ -72,20 +72,25 @@ FAMILY_REASONS = {
         "attribution trailer (remove the trailer; git author and committer is enough)"
     ),
     "push_wide": (
-        "git push --all, --tags and --mirror cannot be validated safely; push "
-        "explicit branch refspecs instead"
+        "git push --all, --tags and --mirror cannot be validated safely; run "
+        "`git push origin <branch>` with an explicit branch name instead, or use "
+        "`argus-task deliver`"
     ),
     "push_non_branch_refspec": (
-        "tag and non-branch refspecs cannot be validated safely; push explicit "
-        "branch refs only (for example `git push origin my-branch`)"
+        "tag and non-branch refspecs cannot be validated safely; run `git push "
+        "origin my-branch` with a branch name, or use `argus-task deliver`"
     ),
-    "push_follow_tags": "--follow-tags cannot be validated safely",
+    "push_follow_tags": (
+        "--follow-tags cannot be validated safely; run `git push origin <branch>` "
+        "without it, or use `argus-task deliver`"
+    ),
     "git_dir_without_work_tree": (
-        "when using --git-dir you must also pass --work-tree at the repository root"
+        "--git-dir needs --work-tree at the repository root; add `--work-tree "
+        "<repo root>` or run git from inside the repository without --git-dir"
     ),
     "push_outgoing_trailer": (
-        "an outgoing commit contains a co-author attribution trailer; fix the "
-        "commit message (for example `git commit --amend`) or reset before pushing"
+        "an outgoing commit contains a co-author attribution trailer; run `git "
+        "commit --amend` (or `git rebase -i`) to remove the trailer, then push again"
     ),
 }
 ELEMENT_MAX = 120
@@ -211,7 +216,33 @@ def _git(
 def _git_fail(proc: subprocess.CompletedProcess[str], context: str) -> str:
     detail = (proc.stderr or proc.stdout or "unknown error").strip().splitlines()
     line = detail[0][:200] if detail else "unknown error"
-    return f"Argus cannot validate this git {context}: {line}"
+    return (
+        f"Argus cannot validate this git {context}: {line}. Check that the "
+        "repository and remote are reachable (`git status`, `git fetch origin`), "
+        "then run the command again, or use `argus-task deliver`."
+    )
+
+
+def _has_commit(cwd: str, sha: str, ctx: dict[str, str | None]) -> bool:
+    return _git(cwd, "cat-file", "-e", f"{sha}^{{commit}}", **ctx).returncode == 0
+
+
+def _ensure_commit(
+    cwd: str, remote: str, sha: str, ctx: dict[str, str | None]
+) -> str | None:
+    """Fetch `sha` from the validated push remote when it is not present locally.
+    Returns a refusal naming the sha when it still cannot be had."""
+    if _has_commit(cwd, sha, ctx):
+        return None
+    if _git(cwd, "fetch", "--quiet", remote, sha, **ctx).returncode != 0:
+        _git(cwd, "fetch", "--quiet", remote, **ctx)
+    if _has_commit(cwd, sha, ctx):
+        return None
+    return (
+        f"Argus cannot validate this push: commit {sha} at the remote is not "
+        "present locally and could not be fetched. Run `git fetch origin`, then "
+        "push again (use `argus-task deliver` to rebase onto the default branch)."
+    )
 
 
 class GitInvocation(NamedTuple):
@@ -721,12 +752,18 @@ def outgoing_shas_for_refspec(
         return [], err
 
     if remote_tip:
+        err = _ensure_commit(cwd, remote, remote_tip, ctx)
+        if err:
+            return [], err
         base = remote_tip
     else:
         default_tip, err = _remote_default_tip(cwd, remote, **ctx)
         if err:
             return [], err
         if default_tip:
+            err = _ensure_commit(cwd, remote, default_tip, ctx)
+            if err:
+                return [], err
             mb, err = _merge_base(cwd, default_tip, local_sha, **ctx)
             if err:
                 return [], err

@@ -160,8 +160,8 @@ describe("ciSummary", () => {
 });
 
 describe("waitCap", () => {
-  it("defaults to 110 s and never exceeds ARGUS_TASK_WAIT_MAX_S", () => {
-    assert.equal(waitCap(undefined, {}), 110);
+  it("defaults to 90 s and never exceeds ARGUS_TASK_WAIT_MAX_S", () => {
+    assert.equal(waitCap(undefined, {}), 90);
     assert.equal(waitCap(undefined, { ARGUS_TASK_WAIT_MAX_S: "480" }), 480);
     assert.equal(waitCap("600", { ARGUS_TASK_WAIT_MAX_S: "480" }), 480);
     assert.equal(waitCap("60", { ARGUS_TASK_WAIT_MAX_S: "480" }), 60);
@@ -404,11 +404,11 @@ describe("wait ci pins one commit", () => {
       [`GET /statuses/${NEW}`]: [{ id: 1, context: "test", status: "success" }],
       [`GET /statuses/${X}`]: failedX,
     };
-    const explicit = await run(["wait", "ci", "--pr", "7", "--sha", NEW, "--max", "100"], {
+    const explicit = await run(["wait", "ci", "--pr", "7", "--sha", NEW, "--max", "80"], {
       routes,
     });
     assert.equal(explicit.code, EXIT.pending);
-    assert.equal(explicit.elapsed, 100);
+    assert.equal(explicit.elapsed, 80);
     assert.equal(explicit.out.head_matches, false);
     assert.equal(
       explicit.out.status,
@@ -1194,6 +1194,65 @@ describe("deliver", () => {
     assert.equal(existsSync(join(s.work, ".git", "rebase-merge")), false);
   });
 
+  it("says which sync it did: rebased onto the fetched base, or already up to date", async () => {
+    const s = behind();
+    const r = await run(["deliver"], {
+      routes: forgeRoutes([]),
+      cwd: s.work,
+      ...gateFixture().options,
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.sync, "rebased the branch onto origin/main");
+    const t = setup();
+    writeFileSync(join(t.work, "b.txt"), "new\n");
+    git(["add", "."], t.work);
+    git(["commit", "-qm", "Add b"], t.work);
+    const again = await run(["deliver"], {
+      routes: forgeRoutes([]),
+      cwd: t.work,
+      ...gateFixture().options,
+    });
+    assert.equal(again.out.sync, "branch already contains origin/main; no rebase needed");
+  });
+
+  it("gives one next command for a detached HEAD, an unborn branch and a dirty tree", async () => {
+    const detached = setup();
+    git(["checkout", "-q", "--detach"], detached.work);
+    const d = await refuses(detached, "detached_head");
+    assert.match(JSON.parse(d.err).error.action, /^run `git switch -c <branch-name>`/);
+
+    const unborn = setup();
+    git(["checkout", "-q", "--orphan", "fresh"], unborn.work);
+    git(["rm", "-rqf", "."], unborn.work);
+    const u = await refuses(unborn, "unborn_branch");
+    assert.match(JSON.parse(u.err).error.message, /no commits yet/);
+    assert.match(JSON.parse(u.err).error.action, /git commit/);
+
+    const dirty = setup();
+    writeFileSync(join(dirty.work, "a.txt"), "wip\n");
+    const w = await refuses(dirty, "dirty_worktree");
+    assert.match(JSON.parse(w.err).error.action, /git add -A && git commit/);
+  });
+
+  it("names the abort command for an operation in progress and carries it as action", async () => {
+    const s = behind("a.txt");
+    git(["fetch", "-q", "origin", "main"], s.work);
+    assert.throws(() => git(["rebase", "FETCH_HEAD"], s.work));
+    const r = await refuses(s, "git_operation_in_progress");
+    const { error } = JSON.parse(r.err);
+    assert.match(error.message, /`git rebase --abort`/);
+    assert.match(error.action, /git rebase --abort/);
+  });
+
+  it("a rebase conflict result carries an action", async () => {
+    const { origin, seed, work } = setup();
+    writeFileSync(join(work, "a.txt"), "mine\n");
+    git(["commit", "-qam", "mine"], work);
+    advance(seed, origin, "a.txt", "theirs\n");
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work });
+    assert.match(r.out.action, /git rebase --continue/);
+  });
+
   it("refuses a rebase already in progress without touching it", async () => {
     const s = behind("a.txt");
     git(["fetch", "-q", "origin", "main"], s.work);
@@ -1406,5 +1465,70 @@ describe("usage", () => {
     assert.match(help, /no completion subcommand/);
     assert.match(help, /COMPLETE:/);
     assert.doesNotMatch(help, /^\s+(complete|done)\s/m);
+  });
+});
+
+describe("task plumbing", () => {
+  const unmerged = { "GET /pulls/7": pr({ state: "open", merged: false }) };
+
+  it("wait merge returns pending inside the tool timeout and says to run it again", async () => {
+    const r = await run(["wait", "merge", "--pr", "7"], { routes: unmerged });
+    assert.equal(r.code, EXIT.pending);
+    assert.ok(r.elapsed < 100, `waited ${r.elapsed} s`);
+    assert.match(r.out.next, /run the same command again \(argus-task wait merge --pr 7\)/);
+  });
+
+  it("pr-ready gives up on a slow forge as pending, not at the tool timeout", async () => {
+    const r = await run(["pr-ready", "--pr", "7"], {
+      routes: unmerged,
+      onFetch: () => 70,
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.out.ready, null);
+    assert.match(r.out.next, /argus-task pr-ready --pr 7/);
+    assert.ok(r.elapsed < 100, `waited ${r.elapsed} s`);
+  });
+
+  it("infers the repository from the task allowlist when no flag or URL is set", async () => {
+    const r = await run(["wait", "merge", "--pr", "7", "--max", "1"], {
+      routes: unmerged,
+      env: { ARGUS_REPOSITORY_URL: "", ARGUS_REPOSITORIES_JSON: JSON.stringify({ p: REPO }) },
+    });
+    assert.equal(r.code, EXIT.pending);
+    assert.equal(r.calls[0], "GET /pulls/7");
+  });
+
+  it("does not guess a repository when the allowlist names several", async () => {
+    const r = await run(["wait", "merge", "--pr", "7"], {
+      routes: unmerged,
+      env: {
+        ARGUS_REPOSITORY_URL: "",
+        ARGUS_REPOSITORIES_JSON: JSON.stringify({ a: REPO, b: `${REPO}2` }),
+      },
+    });
+    assert.equal(r.code, EXIT.error);
+    const { error } = JSON.parse(r.err);
+    assert.equal(error.code, "policy_denied");
+    assert.match(error.action, /--repository/);
+    assert.deepEqual(r.calls, []);
+  });
+
+  it("every error object carries an action", async () => {
+    const usageError = await run(["wait", "merge"], { routes: unmerged });
+    assert.match(JSON.parse(usageError.err).error.action, /argus-task --help/);
+    const internal = await main(["deliver"], ENV, {
+      fetch: forge({}).fetch,
+      cwd: repo(),
+      git: () => {
+        throw new TypeError("boom");
+      },
+      stdout: { write: () => {} },
+      stderr: {
+        write: (s) => {
+          assert.equal(typeof JSON.parse(s).error.action, "string");
+        },
+      },
+    });
+    assert.equal(internal, EXIT.error);
   });
 });
