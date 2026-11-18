@@ -168,7 +168,9 @@ different model**, with `different_provider` shown as "…from a different provi
   commit's `head_sha`, a reported `head_sha`/`sha`/`commit`), or, when the worker
   named a PR without a head, from the forge: the head the forge reports for that PR,
   read before the completion write (like the deliverable search) and matched to the
-  same PR. A PR's bound artifact is read back after the completion's own write, so
+  same PR, whatever case the worker spelled its owner or host in. Failing that, the
+  newest commit the task reported in its own milestones (`ci_passed`, `branch`, ...,
+  from its progress history) is the head. A PR's bound artifact is read back after the completion's own write, so
   the gate sees it. **A merged PR is reviewed too**, at the head that merged: a
   merge never skips the gate, so the parent always gets a reviewer, a decision or a
   verdict. If no head can be read, the task stays `in_review` with `block_reason:
@@ -176,7 +178,9 @@ different model**, with `different_provider` shown as "…from a different provi
   open `review` decision (payload `{gate: review_failed, reason: no_review_head,
   failed: []}`) with the choices `retry_reviewer`, `approve_without_review` and
   `cancel`; a second block adds no decision. `retry_reviewer` reads the forge head
-  again, before its write. No child is created while the head is unknown.
+  again, before its write. No child is created while the head is unknown. The block
+  is reached only when neither the record, the forge nor the milestone history names
+  a head.
 - **Reviewer failure.** A `code_review` child that ends `failed` or `cancelled`
   without a verdict does not strand the parent. Argus records
   `review.independent_child_failed {child_id, state, error_class, account, model,

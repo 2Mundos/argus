@@ -97,6 +97,7 @@ def normalise_result(kind: str, result: TaskResult) -> tuple[TaskResult, bool]:
 
 
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 # Engine name → account provider for harness / executor selection.
 _ENGINE_PROVIDER = {
@@ -152,13 +153,39 @@ def _delivery_refs(
 
 
 def _forge_head(pr: str | None, forge: deliverable.ForgeRead | None) -> str | None:
-    """The forge's head for `pr` when the completion's forge read names that same PR."""
+    """The forge's head for `pr` when the completion's forge read names that same PR.
+
+    The forge reports the PR URL with its host and owner lowercased, while the worker
+    may write them as it spelled them, so the comparison ignores case."""
     known = forge.delivery if forge is not None else None
     if known is None or known.head is None or not known.head.sha:
         return None
-    if pr is not None and pr not in (known.pr, known.pr.rsplit("/", 1)[-1]):
-        return None
+    if pr is not None:
+        url = known.pr.lower()
+        if pr.lower() not in (url, url.rsplit("/", 1)[-1]):
+            return None
     return known.head.sha.lower()
+
+
+async def _history_head(conn: aiosqlite.Connection, task_id: str) -> str | None:
+    """The newest commit the task itself reported in its milestones (`ci_passed`,
+    `branch`, ...), read from its progress history. The last resort before the gate
+    blocks: the task's own record, not a guess, and it names a commit it pushed."""
+    async with conn.execute(
+        "SELECT data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = 'task.progress' ORDER BY id DESC",
+        (task_id,),
+    ) as cur:
+        async for (raw,) in cur:
+            data = json.loads(raw) if raw else None
+            milestone = data.get("data") if isinstance(data, dict) else None
+            if not isinstance(milestone, dict):
+                continue
+            for key in ("sha", "head_sha"):
+                val = milestone.get(key)
+                if isinstance(val, str) and _FULL_SHA.fullmatch(val):
+                    return val.lower()
+    return None
 
 
 async def has_code_delivery(
@@ -186,6 +213,8 @@ async def has_code_delivery(
         pr = ref.url
     if sha is None:
         sha = _forge_head(pr, forge)
+    if sha is None and pr is not None:
+        sha = await _history_head(conn, row["id"])
     return pr, sha
 
 
