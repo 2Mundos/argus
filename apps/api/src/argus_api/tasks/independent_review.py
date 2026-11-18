@@ -42,11 +42,11 @@ from argus_core.tasks import (
 )
 
 from argus_api import model_policy
-from argus_api.db import Tx, ts
+from argus_api.db import Database, Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.events import record
 from argus_api.tasks import continuation as cont
-from argus_api.tasks import delivery
+from argus_api.tasks import deliverable, delivery
 from argus_api.tasks import execution_routes as routes
 
 NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
@@ -114,23 +114,75 @@ def _delivery_refs(
     return None, None
 
 
+def _forge_head(pr: str | None, forge: deliverable.ForgeRead | None) -> str | None:
+    """The forge's head for `pr` when the completion's forge read names that same PR."""
+    known = forge.delivery if forge is not None else None
+    if known is None or known.head is None or not known.head.sha:
+        return None
+    if pr is not None and pr not in (known.pr, known.pr.rsplit("/", 1)[-1]):
+        return None
+    return known.head.sha.lower()
+
+
 async def has_code_delivery(
-    conn: aiosqlite.Connection, row: aiosqlite.Row, result: TaskResult
+    conn: aiosqlite.Connection,
+    row: aiosqlite.Row,
+    result: TaskResult,
+    forge: deliverable.ForgeRead | None = None,
 ) -> tuple[str | None, str | None] | None:
-    """None when the task delivers no code; else (pr, head_sha)."""
+    """None when the task delivers no code; else (pr, head_sha).
+
+    A PR the worker named without a head takes the head the forge reports for it
+    (`forge`, read before the write); without one the reviewer has no commit to read
+    and the gate blocks for an operator decision (`no_review_head`)."""
     pr, sha = _delivery_refs(row, result)
-    if pr or sha:
-        return pr, sha
-    # Try the full delivery extractor (needs a Task-shaped read).
+    if pr is None and sha is None:
+        # Try the full delivery extractor (needs a Task-shaped read).
+        from argus_api.tasks import service as tasks_svc
+
+        task = await tasks_svc.get_task(conn, row["id"])
+        # Attach the just-completed result so extract sees it (row may lag).
+        task = task.model_copy(update={"result": result})
+        ref = await delivery.reference(conn, task)
+        if ref is None:
+            return None
+        pr = ref.url
+    if sha is None:
+        sha = _forge_head(pr, forge)
+    return pr, sha
+
+
+async def completion_forge_read(
+    db: Database,
+    checker: delivery.PrChecker,
+    task_id: str,
+    result: TaskResult,
+    search: deliverable.PrSearch | None,
+    policy_path: Path | None = None,
+) -> deliverable.ForgeRead | None:
+    """The forge's word on the PR a completion names, read before and outside the
+    write (like find_pr). Only for a task whose parent gate may apply and whose head
+    no report or bound PR already gives. None otherwise."""
+    from argus_api.settings import service as settings_svc
     from argus_api.tasks import service as tasks_svc
 
-    task = await tasks_svc.get_task(conn, row["id"])
-    # Attach the just-completed result so extract sees it (row may lag).
-    task = task.model_copy(update={"result": result})
-    ref = await delivery.reference(conn, task)
-    if ref is None:
+    if search is not None and search.match is not None and search.match.head_sha:
         return None
-    return ref.url, sha
+    async with db.read() as conn:
+        row = await tasks_svc.task_row(conn, task_id)
+        if row["kind"] == CODE_REVIEW_KIND:
+            return None
+        if _delivery_refs(row, result)[1] is not None:
+            return None
+        setting = await settings_svc.get_review(
+            conn, policy_path or model_policy_path, row["project"]
+        )
+        if setting.mode == "off":
+            return None
+        task = (await tasks_svc.get_task(conn, task_id)).model_copy(
+            update={"result": result}
+        )
+        return deliverable.ForgeRead(await delivery.delivery_of(conn, checker, task))
 
 
 async def authors(
@@ -423,6 +475,29 @@ async def _block(
     )
 
 
+async def _no_head(tx: Tx, parent: aiosqlite.Row, pr: str | None, actor: str) -> None:
+    """No commit to review: block `no_review_head` and leave exactly one operator
+    decision with the review-failed choices (retry, approve without review, cancel)."""
+    await _block(tx, parent, NO_REVIEW_HEAD, actor, pr=pr)
+    if await decisions.open_ids(tx.conn, "task", parent["id"], (DecisionKind.REVIEW,)):
+        return
+    await decisions.open_decision(
+        tx,
+        subject_type="task",
+        subject_id=parent["id"],
+        kind=DecisionKind.REVIEW,
+        question=(
+            f"Argus cannot name the commit to review for {parent['title']!r}"
+            f" (pull request {pr or 'unknown'}: the forge reported no head)."
+            " Retry the review, approve without independent review, or cancel?"
+        ),
+        options=list(REVIEW_FAILED_OPTIONS),
+        audience=Audience.HUMAN,
+        requested_by=actor,
+        payload={"gate": REVIEW_FAILED_GATE, "reason": NO_REVIEW_HEAD, "failed": []},
+    )
+
+
 async def spawn_reviewer(
     tx: Tx,
     parent: aiosqlite.Row,
@@ -446,8 +521,8 @@ async def spawn_reviewer(
 
     if head_sha is None:
         # The reviewer's input must name the commit it reviews; without one the
-        # gate blocks visibly rather than inventing a head.
-        await _block(tx, parent, NO_REVIEW_HEAD, actor)
+        # parent waits on one operator decision rather than inventing a head.
+        await _no_head(tx, parent, pr, actor)
         return None
     author_models, author_providers = await authors(tx.conn, parent["id"])
     route = await review_route(
@@ -560,18 +635,22 @@ async def on_parent_complete(
     setting: IndependentReviewSetting,
     policy: model_policy.Policy,
     actor: str,
+    forge: deliverable.ForgeRead | None = None,
 ) -> bool:
     """If the gate applies, move the parent to in_review and spawn a reviewer.
 
     Returns True when the independent-review path handled completion (caller must
     not run the normal COMPLETE transition). Returns False when the gate is off
     or the task delivers no code (and a skip event may have been recorded).
+
+    A PR that is already merged is reviewed too, at the head that merged: the review
+    is never skipped for it, so the parent always gets a reviewer or a decision.
     """
     from argus_api.tasks import service as tasks_svc
 
     if setting.mode == "off" or row["kind"] == CODE_REVIEW_KIND:
         return False
-    refs = await has_code_delivery(tx.conn, row, result)
+    refs = await has_code_delivery(tx.conn, row, result, forge)
     if refs is None:
         await record(
             tx,
@@ -998,10 +1077,16 @@ async def on_review_child_ended(
         )
 
 
-async def retry_reviewer(tx: Tx, parent_id: str, actor: str) -> str | None:
+async def retry_reviewer(
+    tx: Tx,
+    parent_id: str,
+    actor: str,
+    forge: deliverable.ForgeRead | None = None,
+) -> str | None:
     """The operator's `retry_reviewer`: select again with the failures forgotten
-    (authors stay excluded). Returns the new child id; None leaves the parent
-    `review_failed` with a fresh decision."""
+    (authors stay excluded). A head the last reviewer never got is taken from the
+    forge read made before the write (`forge`). Returns the new child id; None
+    leaves the parent blocked with a fresh decision."""
     from argus_api.tasks import service as tasks_svc
 
     parent = await tasks_svc._row(tx.conn, parent_id)
@@ -1014,13 +1099,17 @@ async def retry_reviewer(tx: Tx, parent_id: str, actor: str) -> str | None:
     ) as cur:
         last = await cur.fetchone()
     child_input = json.loads(last["input"] or "{}") if last else {}
+    pr, head_sha = child_input.get("pr"), child_input.get("head_sha")
+    if head_sha is None and forge is not None and forge.delivery is not None:
+        pr = forge.delivery.pr
+        head_sha = _forge_head(pr, forge)
     await record(tx, actor, "task", parent_id, RETRY_EVENT, {})
     setting, policy = await _load_settings(tx.conn, parent["project"])
     child_id = await spawn_reviewer(
         tx,
         parent,
-        pr=child_input.get("pr"),
-        head_sha=child_input.get("head_sha"),
+        pr=pr,
+        head_sha=head_sha,
         setting=setting,
         policy=policy,
         actor=actor,

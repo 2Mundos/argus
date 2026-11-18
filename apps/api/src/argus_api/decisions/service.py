@@ -7,6 +7,7 @@ from argus_core.auth import Scope
 from argus_core.decisions import (
     ACCEPT_WITH_DEVIATION,
     APPROVE_WITHOUT_REVIEW,
+    RETRY_REVIEWER,
     REVIEW_FAILED_GATE,
     REVIEW_OPTIONS,
     Ask,
@@ -80,7 +81,12 @@ async def forge_evidence(
     shows, read here, before and outside the write transaction (task deliverable
     spec 3.5). None when no forge read is needed or the decision cannot be read; the
     answer reports the latter itself."""
-    if choice not in ("accept", ACCEPT_WITH_DEVIATION, APPROVE_WITHOUT_REVIEW):
+    if choice not in (
+        "accept",
+        ACCEPT_WITH_DEVIATION,
+        APPROVE_WITHOUT_REVIEW,
+        RETRY_REVIEWER,
+    ):
         return None
     async with db.read() as conn:
         try:
@@ -93,6 +99,16 @@ async def forge_evidence(
             task = await tasks.get_task(conn, decision.subject_id)
         except DomainError:
             return None
+        if choice == RETRY_REVIEWER:
+            # A retry may need the head the forge reports when no reviewer had one.
+            if (
+                not review_failed_gate(decision)
+                or task.state is not TaskState.IN_REVIEW
+            ):
+                return None
+            return deliverable.ForgeRead(
+                await delivery.delivery_of(conn, checker, task)
+            )
         if (
             task.deliverable not in FORGE_DELIVERABLES
             or task.state is not TaskState.IN_REVIEW
@@ -350,7 +366,9 @@ async def _apply_answer(
         case Effect.TASK_CANCEL:
             await tasks.cancel(tx, task_id, caller.actor)
         case Effect.REVIEWER_RETRY:
-            await independent_review.retry_reviewer(tx, task_id, caller.actor)
+            await independent_review.retry_reviewer(
+                tx, task_id, caller.actor, forge=forge
+            )
         case Effect.REVIEWER_WAIVE:
             await independent_review.approve_without_review(
                 tx,

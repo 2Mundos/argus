@@ -69,6 +69,7 @@ from argus_api.tasks import (
     delivery,
     execution_routes,
     finalization,
+    independent_review,
     log,
     pr_binding,
     prerequisites,
@@ -510,6 +511,15 @@ async def complete_task(
     gate = await pr_binding.read_gate(
         db, request.app.state.pr_checker, task_id, agent_id, body.attempt, search
     )
+    # Likewise the head of a PR the worker named without one, for the review gate.
+    forge = await independent_review.completion_forge_read(
+        db,
+        request.app.state.pr_checker,
+        task_id,
+        body.result,
+        search,
+        settings.model_policy_path,
+    )
     async with db.write() as tx:
         return await service.complete(
             tx,
@@ -520,6 +530,7 @@ async def complete_task(
             model_policy_path=settings.model_policy_path,
             pr_search=search,
             pr_gate=gate,
+            forge=forge,
         )
 
 
