@@ -667,6 +667,18 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
             "execution_route_quota",
             timedelta(minutes=5),
         )
+    if body.reason == "auth_expired":
+        from argus_api.accounts import service as accounts
+
+        await accounts._login_required(
+            tx,
+            agent_id,
+            failed.account_id,
+            task_id,
+            body.attempt,
+            "execution_route",
+            role="engine" if failed is selection.harness else "executor",
+        )
     for resolved in {
         s.lease_id: s for s in (selection.harness, selection.executor) if s is not None
     }.values():
@@ -685,9 +697,17 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
         (cursor, task_id),
     )
     exhausted = cursor >= len(selection.candidates)
-    if body.reason in {"quota", "provider_unavailable"}:
+    if body.reason in {"quota", "provider_unavailable", "auth_expired"}:
         await tasks.pause_for_quota(
-            tx, agent_id, task_id, body.attempt, body.reason, wait=False
+            tx,
+            agent_id,
+            task_id,
+            body.attempt,
+            body.reason,
+            wait=False,
+            reason="auth_expired"
+            if body.reason == "auth_expired"
+            else "quota_exhausted",
         )
     else:
         await tasks.fail(

@@ -23,7 +23,8 @@ from argus_core.custom_accounts import CustomConfig, serves_role
 # `a.id`. `credential_rejected`: its last quota probe was answered 401, until a probe
 # reads or the credential is renewed. `auth_rejected`: a lease run reported an
 # authentication rejection (`account.auth_rejected`) after the last accepted run,
-# the last credential renewal and the last successful probe. A probe that only
+# the last credential renewal, the last operator "Mark available"
+# (`account.auth_cleared`) and the last successful probe. A probe that only
 # lacks the usage scope (`oauth_scope_missing`) never blocks: the token serves.
 LEASE_BLOCK_SQL = (
     "(SELECT CASE WHEN EXISTS (SELECT 1 FROM account_quota_probe p"
@@ -35,7 +36,8 @@ LEASE_BLOCK_SQL = (
     "   max(coalesce((SELECT max(u.at) FROM account_usage u WHERE u.account_id = a.id"
     "    AND u.measurement = 'measured' AND u.output_tokens > 0), ''),"
     "   coalesce((SELECT max(e.at) FROM events e WHERE e.subject_type = 'account'"
-    "    AND e.subject_id = a.id AND e.kind = 'account.credential_renewed'), ''),"
+    "    AND e.subject_id = a.id AND e.kind IN ('account.credential_renewed',"
+    "    'account.auth_cleared')), ''),"
     "   coalesce((SELECT p.at FROM account_quota_probe p WHERE p.account_id = a.id"
     "    AND p.status = 'updated'), ''))) END)"
 )

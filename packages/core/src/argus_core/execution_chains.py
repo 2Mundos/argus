@@ -218,6 +218,7 @@ class ExecutionReport(ClosedModel):
             "quota",
             "provider_unavailable",
             "auth_missing",
+            "auth_expired",
             "not_installed",
             "model_not_served",
             "provider_protocol",

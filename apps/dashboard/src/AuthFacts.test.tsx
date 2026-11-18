@@ -36,6 +36,20 @@ describe("AuthFacts", () => {
     expect(screen.getByText(/Not leased: the provider rejected the credential/)).toBeTruthy();
   });
 
+  it("shows an expired login as login required with the time, even without a credential", () => {
+    render(
+      <AuthFacts
+        account={account({
+          credential: null,
+          lease_block: "auth_rejected",
+          last_rejected_at: "2026-01-01T11:00:00Z",
+        })}
+      />,
+    );
+    expect(screen.getByText("Login required")).toBeTruthy();
+    expect(screen.getByText(/since/)).toBeTruthy();
+  });
+
   it("says never/none for an account with no evidence, and never healthy", () => {
     const { container } = render(<AuthFacts account={account({})} />);
     expect(screen.getByText("never")).toBeTruthy();

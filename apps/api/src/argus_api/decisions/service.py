@@ -19,6 +19,7 @@ from argus_core.decisions import (
 from argus_core.tasks import FORGE_DELIVERABLES, TaskState
 from pydantic import BaseModel, Field
 
+from argus_api.accounts import service as accounts
 from argus_api.auth import Identity
 from argus_api.db import Database, Tx, ts
 from argus_api.decisions import store
@@ -236,6 +237,8 @@ class Effect(StrEnum):
     POOL_SCALE_REJECT = "pool_scale_reject"
     ROUTINE_REENABLE = "routine_reenable"
     ROUTINE_STAY_OFF = "routine_stay_off"
+    ACCOUNT_MARK_AVAILABLE = "account_mark_available"
+    ACCOUNT_DISMISS = "account_dismiss"
     TASK_APPROVE = "task_approve"
     TASK_CANCEL = "task_cancel"
     REVIEW_ACCEPT = "review_accept"
@@ -266,6 +269,9 @@ def effect_of(decision: Decision, choice: str | None) -> Effect:
         case DecisionKind.POLICY if decision.subject_type == "routine":
             approve = choice == "approve"
             return Effect.ROUTINE_REENABLE if approve else Effect.ROUTINE_STAY_OFF
+        case DecisionKind.POLICY if decision.subject_type == "account":
+            approve = choice == "approve"
+            return Effect.ACCOUNT_MARK_AVAILABLE if approve else Effect.ACCOUNT_DISMISS
         case DecisionKind.APPROVAL | DecisionKind.POLICY:
             return Effect.TASK_APPROVE if choice == "approve" else Effect.TASK_CANCEL
         case DecisionKind.REVIEW if review_failed_gate(decision):
@@ -335,8 +341,10 @@ async def _apply_answer(
             )
         case Effect.ROUTINE_REENABLE:
             await routines.reenable(tx, decision.subject_id, caller.actor)
-        case Effect.ROUTINE_STAY_OFF:
+        case Effect.ROUTINE_STAY_OFF | Effect.ACCOUNT_DISMISS:
             pass
+        case Effect.ACCOUNT_MARK_AVAILABLE:
+            await accounts.mark_available(tx, decision.subject_id, caller.actor)
         case Effect.TASK_APPROVE:
             await tasks.approve(tx, task_id, caller.actor)
         case Effect.TASK_CANCEL:

@@ -47,12 +47,20 @@ async def block_switch_failed(
 
 
 async def pause_for_quota(
-    tx: Tx, agent_id: str, task_id: str, attempt: int, note: str, *, wait: bool
+    tx: Tx,
+    agent_id: str,
+    task_id: str,
+    attempt: int,
+    note: str,
+    *,
+    wait: bool,
+    reason: str = "quota_exhausted",
 ) -> Task:
     """A provider quota ended the attempt (not the task's fault): back to `ready`
     (or, with `wait`, `blocked` as `awaiting_quota` because no account is left)
     with `failures` and `attempt` untouched, so `max_attempts` is not consumed.
-    Fenced like `fail`, which it replaces for this case."""
+    Fenced like `fail`, which it replaces for this case. `reason` `auth_expired`
+    is the same pause for an expired login (failure classes 3.6)."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
     outcome = "waiting for quota" if wait else "requeued"
     await _apply(
@@ -61,13 +69,14 @@ async def pause_for_quota(
         Action.BLOCK if wait else Action.REQUEUE,
         f"agent:{agent_id}",
         set_={
-            "progress_message": f"attempt {attempt} paused: provider quota reached;"
+            "progress_message": f"attempt {attempt} paused:"
+            f" {'provider login expired' if reason == 'auth_expired' else 'provider quota reached'};"
             f" {outcome}",
             "progress_percent": None,
             "progress_at": ts(tx.now),
             **({"block_reason": AWAITING_QUOTA} if wait else {}),
         },
-        data={"reason": "quota_exhausted", "error": note[:500]},
+        data={"reason": reason, "error": note[:500]},
     )
     return await get_task(tx.conn, task_id)
 

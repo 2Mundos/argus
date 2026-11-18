@@ -375,6 +375,7 @@ async def report_execution_route(
         "quota",
         "provider_unavailable",
         "auth_missing",
+        "auth_expired",
         "not_installed",
         "model_not_served",
         "provider_protocol",
@@ -1257,6 +1258,13 @@ async def refresh_account_quota(ctx: Context, account_id: str) -> dict:
     (updated|skipped|rate_limited|failed, with a `code`), the stored windows and
     credit, and the account's resulting `quota_status`."""
     return await _call(ctx, "POST", f"/accounts/{account_id}/quota/refresh")
+
+
+@tool(ADMINS)
+async def mark_account_available(ctx: Context, account_id: str) -> dict:
+    """Clear an account's login block (expired provider login) once it is renewed."""
+    await _call(ctx, "POST", f"/accounts/{account_id}/mark-available")
+    return {"ok": True}
 
 
 LocalField = Literal["api_base_url", "model", "context_tokens"]

@@ -28054,6 +28054,7 @@
                   "quota",
                   "provider_unavailable",
                   "auth_missing",
+                  "auth_expired",
                   "not_installed",
                   "model_not_served",
                   "provider_protocol",
@@ -30145,6 +30146,47 @@
           }
         ],
         "summary": "Test Local Account",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/mark-available": {
+      "post": {
+        "description": "Clear a login block (an expired provider login) by hand, make an exhausted\naccount available and close its notice. A disabled account stays disabled.",
+        "operationId": "mark_available_api_accounts__account_id__mark_available_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Mark Available",
         "tags": [
           "accounts"
         ]

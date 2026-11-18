@@ -116,6 +116,7 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
         "archive_agents",
         "update_local_account",
         "test_local_account",
+        "mark_account_available",
     }
     assert by_scope[Scope.ORCHESTRATOR] == set(mcp_server.audiences) - admin_only
 

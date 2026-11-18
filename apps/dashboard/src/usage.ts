@@ -165,7 +165,7 @@ export const QUOTA_REASON_LABELS: Record<string, string> = {
 /** Why a dead credential keeps an available account out of lease: not a spent quota. */
 export const LEASE_BLOCK_LABELS: Record<string, string> = {
   credential_rejected: "Not leased: the provider rejected the credential (last quota read)",
-  auth_rejected: "Not leased: a run was rejected as unauthorized since the last accepted run",
+  auth_rejected: "Login required",
 };
 
 /** A human sentence per reason code. Never a blanket claim about a provider: the

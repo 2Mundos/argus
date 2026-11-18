@@ -286,11 +286,13 @@ swap one layer or keep a dangling executor from the previous alternative.
 | Ordinary task/implementation failure without route failure classification | Existing task retry on same alternative | Existing retry budget; no unrequested model switch |
 
 Route failures use an allowlist of existing classified codes (quota/provider
-unavailable, `auth_missing`, `not_installed`, `model_not_served`, provider
+unavailable, `auth_missing`, `auth_expired`, `not_installed`, `model_not_served`, provider
 protocol/transport failure); raw model text never selects a fallback. A gateway
 access denial is a security denial, not an auth-missing route failure. Unknown
 failure stays ordinary task failure. Credential rejection may disable/exhaust
 only through existing account rules; the chain creates no new auth retry loop.
+`auth_expired` (an expired login) blocks the failed account as in [failure
+classes](failure-classes.spec.md) 3.2, advances the cursor, and spends no failure.
 
 Persist cursor and transition generation with task routing state, keyed by a
 fingerprint of route-affecting task fields (not the event/state version),
