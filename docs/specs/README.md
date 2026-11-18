@@ -68,7 +68,7 @@ Every spec in this directory with its status, kept in sync by
 | [Routines](routines.spec.md) | `implemented` |
 | [Security hardening (2026-10-20 review, medium/low)](security-hardening.spec.md) | `implemented` |
 | [Settings](settings.spec.md) | `implemented` |
-| [Single-layer experiment: the Claude harness codes without the delegate hop](single-layer-experiment.spec.md) | `implemented` |
+| [Single-layer experiment: the Claude harness codes without the delegate hop](single-layer-experiment.spec.md) | `superseded` |
 | [Lightweight Single-Node Spec](single-node.spec.md) | `implemented` |
 | [Stall visibility](stall-visibility.spec.md) | `implemented` |
 | [Task archive](task-archive.spec.md) | `implemented` |

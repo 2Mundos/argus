@@ -41,6 +41,8 @@ class Upstream:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self.mcp_status = 200
+        self.mcp_status_by_method: dict[str, int] = {}
+        self.mcp_www_auth: str | None = None
         self.allowed: set[str] = {LIST}
         self.review_overrides: dict[str, dict] = {}
 
@@ -68,9 +70,13 @@ class Upstream:
                 "result": result,
                 "echo": request.headers.get("authorization", ""),
             }
-            if self.mcp_status == 302:
+            status = self.mcp_status_by_method.get(body["method"], self.mcp_status)
+            if status == 302:
                 return httpx.Response(302, headers={"Location": "https://evil.test/x"})
-            return httpx.Response(self.mcp_status, json=echo)
+            headers = (
+                {"WWW-Authenticate": self.mcp_www_auth} if self.mcp_www_auth else {}
+            )
+            return httpx.Response(status, headers=headers, json=echo)
         attrs = json.loads(request.content)["spec"]["resourceAttributes"]
         key = ":".join(
             (
@@ -317,6 +323,80 @@ def test_mcp_validation_outcomes_never_quote_the_server(
     failed = act(client, item, "validate").json()
     assert failed["validation"] == "failed" and "401" in failed["validation_detail"]
     assert SECRET not in json.dumps(failed)
+
+
+def test_mcp_oauth_challenge_is_reported_as_unsupported(
+    client: TestClient, upstream: Upstream
+) -> None:
+    item = mcp(client)
+    upstream.mcp_status = 401
+    upstream.mcp_www_auth = (
+        "Bearer resource_metadata="
+        '"https://mcp.example.test/.well-known/oauth-protected-resource"'
+    )
+    failed = act(client, item, "validate").json()
+    assert failed["validation"] == "failed"
+    assert failed["validation_detail"] == (
+        "MCP server requires OAuth sign-in, which Argus does not support."
+    )
+    assert SECRET not in json.dumps(failed)
+    # A bare 401 with no challenge is still a rejected credential.
+    upstream.mcp_www_auth = None
+    failed = act(client, item, "validate").json()
+    assert failed["validation"] == "failed"
+    assert "token rejected (HTTP 401)" in failed["validation_detail"]
+
+
+def test_mcp_oauth_challenge_on_legacy_initialize_is_unsupported(
+    client: TestClient, upstream: Upstream
+) -> None:
+    item = mcp(client)
+    # Modern discovery falls back to legacy, then the legacy initialize carries
+    # the challenge: the OAuth check must apply on both paths.
+    upstream.mcp_status = 401
+    upstream.mcp_status_by_method = {"server/discover": 404}
+    upstream.mcp_www_auth = (
+        "Bearer resource_metadata="
+        '"https://mcp.example.test/.well-known/oauth-protected-resource"'
+    )
+    failed = act(client, item, "validate").json()
+    assert failed["validation"] == "failed"
+    assert failed["validation_detail"] == (
+        "MCP server requires OAuth sign-in, which Argus does not support."
+    )
+    assert [r.url.path for r in upstream.requests] == ["/mcp", "/mcp"]
+
+
+@pytest.mark.parametrize(
+    ("header", "oauth"),
+    [
+        (None, False),
+        ("Bearer", False),
+        ("Bearer realm=", False),
+        ('Bearer realm="x", error="invalid_token"', False),
+        (
+            "Bearer resource_metadata="
+            '"https://mcp.example.test/.well-known/oauth-protected-resource"',
+            True,
+        ),
+        ('Basic realm="x", Bearer resource_metadata="https://m.example/x"', True),
+        ('bearer resource_metadata="https://m.example/x"', True),
+        ('Bearer error="a, b", resource_metadata="https://m.example/x"', True),
+        ('Bearer error_description="resource_metadata is missing", realm="x"', False),
+        # A backslash escapes the next character: the comma stays inside the
+        # quoted value and does not start a new challenge.
+        (
+            'Bearer error="a \\"one, two three\\"", '
+            'resource_metadata="https://m.example/x"',
+            True,
+        ),
+        ('Bearer resource_metadata="https://m.example/x?a=\\"1,2\\""', True),
+    ],
+)
+def test_oauth_challenge_needs_a_bearer_metadata_challenge(
+    header: str | None, oauth: bool
+) -> None:
+    assert checks.oauth_challenge(header) is oauth
 
 
 def test_validation_does_not_follow_redirects(

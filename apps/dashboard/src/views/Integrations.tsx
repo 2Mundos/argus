@@ -97,12 +97,13 @@ export function Integrations() {
       <div className="card">
         <p>
           Credentials are stored in the encrypted SOPS secret store. A connection reaches a worker
-          only when a task of the same project selects it, and only on a Claude engine. A Kubernetes
-          connection becomes an ephemeral kubeconfig pinned to the target namespace. An MCP
-          connection becomes a per-attempt server URL on the worker's Argus broker, which adds the
-          token and passes only the allowed tools; the session never sees the token. Either ends
-          when the attempt ends or the connection is revoked, edited, rotated or expires. That does
-          not revoke the token; revoke it at the cluster or MCP server too.
+          only when a task of the same project selects it. A Kubernetes connection becomes an
+          ephemeral kubeconfig pinned to the target namespace, on Claude-harness (anthropic, local,
+          custom) and Codex (openai) engines. An MCP connection becomes a per-attempt server URL on
+          the worker's Argus broker, which adds the token and passes only the allowed tools, on
+          Claude-harness engines only; the session never sees the token. Either ends when the
+          attempt ends or the connection is revoked, edited, rotated or expires. That does not
+          revoke the token; revoke it at the cluster or MCP server too.
         </p>
         <p className="muted small">
           Encrypted secret store:{" "}

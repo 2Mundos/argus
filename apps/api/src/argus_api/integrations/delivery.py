@@ -29,9 +29,15 @@ from argus_api.integrations.service import (
 from argus_api.secrets import SecretStore, SecretStoreError, ref_name
 from argus_api.tasks import service as tasks
 
-# Engines whose sessions Argus can confine to the attempt's kubeconfig and MCP
-# servers: the Claude harness and Claude delegates only (spec 3.6 engine matrix).
-SUPPORTED_PROVIDERS = frozenset({"anthropic"})
+# Providers whose harness Argus can confine to the attempt's kubeconfig:
+# anthropic, local and custom run the same Claude harness session, and the
+# Codex harness reads the installed file the same CLI-level way (spec 3.6
+# engine matrix). MCP servers additionally need NanoClaw's Claude provider to
+# consume the session config, which is only verified for the Claude harness.
+# A delegated executor is confined only for Claude.
+KUBERNETES_ENGINES = frozenset({"anthropic", "local", "custom", "openai"})
+MCP_ENGINES = frozenset({"anthropic", "local", "custom"})
+EXECUTOR_PROVIDERS = frozenset({"anthropic"})
 
 Readiness = Literal[
     "ready",
@@ -221,9 +227,11 @@ async def _held(
     return await tasks.check_lease(tx, task_id, attempt, agent_id)
 
 
-async def _engine_supported(tx: Tx, agent_id: str) -> None:
-    """The worker's engine and any delegated executor must be one whose session
-    Argus can confine to the attempt's kubeconfig and MCP servers."""
+async def _engine_supported(tx: Tx, agent_id: str, kind: str) -> None:
+    """The worker's harness and any delegated executor must run a session Argus
+    can confine to the attempt's credential: a Kubernetes kubeconfig is
+    CLI-level and reads the same on every harness, while MCP servers need the
+    Claude harness session; a delegated executor is confined only for Claude."""
     async with tx.conn.execute(
         "SELECT l.role, a.provider FROM account_leases l"
         " JOIN accounts a ON a.id = l.account_id"
@@ -233,12 +241,18 @@ async def _engine_supported(tx: Tx, agent_id: str) -> None:
     ) as cur:
         leases = {r["role"]: r["provider"] for r in await cur.fetchall()}
     engine = leases.get("engine")
-    if engine not in SUPPORTED_PROVIDERS:
+    allowed = KUBERNETES_ENGINES if kind == "kubernetes" else MCP_ENGINES
+    if engine not in allowed:
+        want = (
+            "a Kubernetes-capable harness engine (anthropic, local, custom or openai)"
+            if kind == "kubernetes"
+            else "a Claude-harness engine (anthropic, local or custom)"
+        )
         raise EngineUnsupportedError(
-            f"Task integrations need a Claude engine; this worker runs"
+            f"Task integrations need {want}; this worker runs"
             f" {engine or 'no leased engine'}"
         )
-    if (executor := leases.get("executor")) not in (None, *SUPPORTED_PROVIDERS):
+    if (executor := leases.get("executor")) not in (None, *EXECUTOR_PROVIDERS):
         raise EngineUnsupportedError(
             f"Task integrations need a Claude executor; this worker delegates"
             f" to {executor}"
@@ -310,7 +324,7 @@ async def deliver(
             code="integration_not_selected",
         )
     row = rows[0]
-    await _engine_supported(tx, agent_id)
+    await _engine_supported(tx, agent_id, row["kind"])
     readiness = _readiness(row, ts(tx.now), store, store_available, exact_version=True)
     name = row["name"]
     if readiness == "revoked":

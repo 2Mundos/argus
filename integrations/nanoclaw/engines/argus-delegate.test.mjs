@@ -617,6 +617,27 @@ test("commands are non-interactive, scoped to the cwd, and read-only on request"
   }
 });
 
+test("delegated runs inherit no session MCP servers: no executor spawn carries MCP configuration", () => {
+  // The harness session's argus-integration-* servers live in NanoClaw's container
+  // config, which only the agent-runner reads. The delegate spawns a bare CLI, so a
+  // delegated run has no MCP servers unless its argv says so; adding any MCP flag
+  // here needs an integrations-spec review first.
+  for (const e of ["claude", "codex", "opencode", "agent"]) {
+    for (const readOnly of [true, false]) {
+      const c = buildCommand(e, { cwd: "/w", model: "m", readOnly, lastMessageFile: "/o" });
+      for (const arg of c.args) {
+        assert.equal(arg.includes("--mcp-config"), false, `${e} must not pass ${arg}`);
+        assert.equal(arg.startsWith("mcp__"), false, `${e} must not name ${arg}`);
+      }
+      assert.equal(c.args.includes("--mcp-config"), false, e);
+    }
+  }
+  // The delegate adds no MCP variables to the executor environment either: only the
+  // attempt kubeconfig is scoped in, for Claude, by scopeKubeconfig.
+  const env = prepareExecutorEnv("claude", { HOME: "/h", PATH: "/bin", FOO: "bar" });
+  assert.deepEqual(env, { HOME: "/h", PATH: "/bin", FOO: "bar" });
+});
+
 test("configured executor effort is the exact flag each CLI documents, or a refusal", () => {
   const argv = (executor, effort) =>
     buildCommand(executor, { cwd: "/w", model: "m", lastMessageFile: "/o", effort }).args;

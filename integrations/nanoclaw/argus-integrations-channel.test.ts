@@ -143,6 +143,14 @@ function world(provider: string, readiness: string, kind: "kubernetes" | "mcp" =
         },
       ]);
     if (p === `/tasks/${TASK}/integrations/int-1/credential`) {
+      // The API enforces the per-kind engine rule; MCP needs the Claude harness.
+      if (kind === "mcp" && provider === "openai")
+        return json(409, {
+          detail: {
+            code: "integration_engine_unsupported",
+            message: "Task integrations need a Claude-harness engine",
+          },
+        });
       // A rotated fetch outlasts a heartbeat interval: the next one overlaps it.
       if (state.holdRotation && body.secret_version === 2)
         await new Promise<void>((r) => {
@@ -419,13 +427,12 @@ describe("task integrations through the channel", () => {
   });
 
   it.each([
-    ["anthropic", "expired", "env_integration_unavailable"],
-    ["anthropic", "store_unavailable", "env_integration_unavailable"],
-    ["openai", "ready", "env_integration_unsupported"],
+    ["expired", "env_integration_unavailable"],
+    ["store_unavailable", "env_integration_unavailable"],
   ])(
-    "a %s engine with a %s integration blocks with %s before the model starts",
-    async (provider, readiness, reason) => {
-      const r = await run(provider, readiness);
+    "an anthropic engine with a %s integration blocks with %s before the model starts",
+    async (readiness, reason) => {
+      const r = await run("anthropic", readiness);
       await until(() => r.posts("/block").length > 0, 8000, "the block");
       expect(r.posts("/block")[0]!.body).toMatchObject({ attempt: 1, reason });
       expect(r.inbound).toHaveLength(0);
@@ -433,6 +440,31 @@ describe("task integrations through the channel", () => {
       expect(r.posts("/integrations/int-1/credential")).toHaveLength(0);
     },
   );
+
+  it("an openai engine installs a ready Kubernetes integration before the model", async () => {
+    // The kubeconfig is CLI-level and reads the same on the Codex harness.
+    const r = await run("openai", "ready");
+    await until(() => r.inbound.length > 0, 8000, "the task prompt");
+    const [file] = kubeconfigs(r.root);
+    expect(readFileSync(file!, "utf8")).toContain(TOKEN);
+    const prompt = r.inbound[0].content.text as string;
+    expect(prompt).toContain("Kubernetes access");
+    expect(prompt).not.toContain(TOKEN);
+  });
+
+  it("an openai engine blocks an MCP integration the API refuses for it", async () => {
+    const mcp = recordingMcp();
+    const r = await run("openai", "ready", null, mcp);
+    await until(() => r.posts("/block").length > 0, 8000, "the block");
+    expect(r.posts("/block")[0]!.body).toMatchObject({
+      attempt: 1,
+      reason: "env_integration_unsupported",
+    });
+    expect(r.posts("/integrations/int-1/credential")).toHaveLength(1);
+    expect(mcp.tokens).toEqual([]);
+    expect(r.inbound).toHaveLength(0);
+    expect(existsSync(r.root)).toBe(false);
+  });
 
   it.each([
     [
