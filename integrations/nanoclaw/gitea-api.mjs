@@ -2230,6 +2230,7 @@ export const internals = {
   token,
   timestamp,
   byNewest,
+  requireMergeAuthorization,
 };
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -587,6 +587,32 @@ describe("renderTask", () => {
     expect(text).not.toContain("Do not merge pull requests unless");
   });
 
+  it("points at argus-task merge only for a task with a merge grant; others get the observation", () => {
+    const repo = {
+      repository_url: "https://git.example.test/org/repo.git",
+      required_capabilities: ["repository:write"],
+    };
+    const granted = renderTask(
+      task({ ...repo, deliverable: "pr_merged", auto_merge: true }) as any,
+      new Map(),
+    );
+    expect(granted).toContain("argus-task deliver, argus-task merge --pr N");
+    expect(granted).toContain("`argus-task wait merge` only observes and never merges");
+    for (const over of [
+      { deliverable: "pr_open", auto_merge: true },
+      { deliverable: "pr_green", auto_merge: true },
+      { deliverable: "pr_merged", auto_merge: false },
+      { deliverable: "pr_merged", auto_merge: true, required_capabilities: ["repository:read"] },
+    ]) {
+      const text = renderTask(task({ ...repo, ...over }) as any, new Map());
+      expect(text, JSON.stringify(over)).not.toContain("argus-task merge --pr N");
+      // A read-only task gets no helper guidance at all, so only the writable ones name the observation.
+      if (!("required_capabilities" in over)) {
+        expect(text, JSON.stringify(over)).toContain("wait merge --pr N (it only observes");
+      }
+    }
+  });
+
   it("lets the auto_merge setting authorize merge for a pr_merged task only", () => {
     const repo = {
       repository_url: "https://git.example.test/org/repo.git",
