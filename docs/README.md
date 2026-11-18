@@ -351,6 +351,12 @@ why you are here.
   `/healthz` is fine: stop the stale `sshd-session` listeners on the VPS, confirm
   the public URL, and set `ClientAliveInterval` / `ClientAliveCountMax` as a
   prevention note
+- [Execution chains never admitting work after Setup saves chains](runbooks/2026-11-18.execution-chains-no-worker.ref.md) —
+  tasks of configured difficulties stay `ready` and `POST /api/tasks/claim`
+  keeps returning `204` after chains are saved in Setup: a worker admits a route
+  only when its pool `capabilities` declare `execution-chains-v1` plus the
+  adapter `nanoclaw:harness`/`nanoclaw:executor` capability IDs; PATCH the pool
+  `capabilities` and recycle idle instances one at a time (see the runbook)
 
 ### Reports
 
