@@ -1127,12 +1127,20 @@ describe("ci-digest", () => {
 
 describe("deliver", () => {
   /** origin (bare) with main, and a clone on branch `feature` one commit ahead. */
-  function setup() {
+  // pathScript: whether the repository carries scripts/check_paths.py (Argus does, Radar does not).
+  function setup({ pathScript = true } = {}) {
     const origin = join(scratch, `o${repoCount++}.git`);
     git(["init", "-q", "--bare", "-b", "main", origin]);
     const seed = repo();
     identity(seed);
     writeFileSync(join(seed, "a.txt"), "one\n");
+    if (pathScript) {
+      mkdirSync(join(seed, "scripts"));
+      writeFileSync(
+        join(seed, "scripts", "check_paths.py"),
+        "# fake; the fixture's python3 stands in\n",
+      );
+    }
     git(["add", "."], seed);
     git(["commit", "-qm", "seed"], seed);
     git(["push", "-q", origin, "main"], seed);
@@ -1180,7 +1188,8 @@ describe("deliver", () => {
       `echo "python3 $*" >> "$ARGUS_TEST_LOG"\n` +
         `if [ "$ARGUS_TEST_FAIL" = "check-paths" ]; then\n` +
         `echo '[{"path":"pr-body.txt","rule":"root-file","action":"pr-body.txt is a stray file: keep it under /tmp"}]'\n` +
-        `exit 1\nfi\nexit 0\n`,
+        `exit 1\nfi\n` +
+        `if [ "$ARGUS_TEST_FAIL" = "check-paths-crash" ]; then echo "Traceback: boom" >&2; exit 1; fi\nexit 0\n`,
     );
     if (scanner) script("gitleaks", `echo "gitleaks $*" >> "$ARGUS_TEST_LOG"\nexit 0\n`);
     const options = {
@@ -1531,6 +1540,68 @@ describe("deliver", () => {
     const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
     assert.equal(r.code, EXIT.not_ready);
     assert.equal(r.out.action, "fix the failing check, commit the fix, then run deliver again");
+  });
+
+  it("reports the path check not applicable without scripts/check_paths.py and runs every other gate", async () => {
+    const { origin, work } = setup({ pathScript: false });
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture();
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.deepEqual(r.out.checks_not_applicable, [
+      { check: "path check", reason: "scripts/check_paths.py not found" },
+    ]);
+    const head = git(["rev-parse", "HEAD"], work);
+    assert.deepEqual(g.lines(), [
+      "make check-changed",
+      `head ${head}`,
+      "gitleaks version",
+      "make secret-scan",
+      `head ${head}`,
+      "push --quiet origin HEAD:refs/heads/feature",
+    ]);
+    assert.notEqual(git(["for-each-ref", "refs/heads/feature"], origin), "");
+  });
+
+  for (const target of ["make check-changed", "make secret-scan"]) {
+    it(`without the path script, a failing ${target} still blocks the push`, async () => {
+      const { origin, work } = setup({ pathScript: false });
+      writeFileSync(join(work, "b.txt"), "new\n");
+      git(["add", "."], work);
+      git(["commit", "-qm", "Add b"], work);
+      const g = gateFixture({ fail: target.replace("make ", "") });
+      const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+      assert.equal(r.code, EXIT.not_ready);
+      assert.equal(r.out.check, target);
+      assert.ok(!g.lines().some((l) => l.startsWith("push")));
+      assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+    });
+  }
+
+  it("without the path script, a missing gitleaks still fails closed", async () => {
+    const { origin, work } = setup({ pathScript: false });
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture({ scanner: false });
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+    assert.notEqual(r.code, EXIT.ok);
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+  });
+
+  it("with the path script, an execution failure without violations blocks the push", async () => {
+    const { origin, work } = setup();
+    writeFileSync(join(work, "b.txt"), "new\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "Add b"], work);
+    const g = gateFixture({ fail: "check-paths-crash" });
+    const r = await run(["deliver"], { routes: forgeRoutes([]), cwd: work, ...g.options });
+    assert.equal(r.code, EXIT.not_ready);
+    assert.equal(r.out.check, "path check");
+    assert.equal(r.out.violations, undefined);
+    assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
   });
 
   it("a path violation prevents every push and passes its action through", async () => {

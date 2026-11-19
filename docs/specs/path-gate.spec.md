@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-18
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 # Path and type gate
@@ -60,8 +60,13 @@ only way to add an unusual file.
   because it judges commits rather than the file contents the record fingerprints.
   With no merge base it runs `--all`.
 - `argus-task deliver` runs `python3 scripts/check_paths.py --json` as the first
-  pre-push check; a failure returns the violations and joins their `action` texts into
-  the error's `action`.
+  pre-push check when the checked-out repository contains that script; a failure
+  returns the violations and joins their `action` texts into the error's `action`,
+  and a script that crashes or cannot run fails closed. `deliver` is also used on
+  repositories without the script (the path policy is Argus-specific); there the check
+  is skipped and the result carries `checks_not_applicable: [{check, reason}]`. Only a
+  clear absence counts (a dangling symlink still runs and fails). Every other
+  pre-push check (`make check-changed`, gitleaks, `make secret-scan`) runs either way.
 - CI job `path-gate`: the PR check against the base sha, and `--all` on every run.
 - Models are told in `AGENTS.md` and the worker prompt's delivery-path sentence
   (`integrations/nanoclaw/argus.ts`): scratch text, PR bodies and logs go under
@@ -92,5 +97,7 @@ only way to add an unusual file.
   `python3 scripts/check_paths.py --all`.
 - Verified: each rule, rename and existing-file handling, the policy notice and the
   JSON shape on temporary git repos; the real tree at HEAD has zero violations;
-  deliver passes a violation's action through (fake `python3`).
+  deliver passes a violation's action through (fake `python3`), fails closed when the
+  script crashes, reports the check not applicable when the script is absent while
+  `make check-changed`, gitleaks and `make secret-scan` still block (fake tools).
 - Not verified: the CI job on a real pull request.
