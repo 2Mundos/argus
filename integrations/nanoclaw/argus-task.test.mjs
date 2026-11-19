@@ -118,7 +118,7 @@ const pr = (extra = {}) => ({
 });
 
 describe("ciSummary", () => {
-  it("keeps the newest status per context and leaves agentic review out", () => {
+  it("keeps the newest status per context including agentic review", () => {
     assert.deepEqual(
       ciSummary([
         { id: 1, context: "test", status: "failure" },
@@ -126,7 +126,7 @@ describe("ciSummary", () => {
         { id: 3, context: "lint", status: "pending" },
         { id: 4, context: "agentic-review", status: "pending" },
       ]),
-      { state: "pending", total: 2, running: 1, failed: [] },
+      { state: "pending", total: 3, running: 2, failed: [] },
     );
     assert.equal(ciSummary([]).state, "missing");
     assert.equal(ciSummary([{ context: "a", state: "error" }]).state, "failure");
@@ -521,7 +521,7 @@ describe("wait ci pins one commit", () => {
       });
       assert.equal(r.code, extra.code ?? EXIT.ok);
       assert.equal(r.out.state, state);
-      assert.deepEqual(r.out.failed, state === "failure" ? ["lint"] : []);
+      assert.deepEqual(r.out.failed, state === "failure" ? ["lint", "agentic-review"] : []);
     });
 
   it("survives a waiting file it cannot write, and never writes through a symlink", async () => {
@@ -792,6 +792,29 @@ describe("pr-ready", () => {
     ],
     ...overrides,
   });
+
+  for (const [state, reason] of [
+    ["pending", "ci_running"],
+    ["failure", "ci_failed"],
+    ["bogus", "ci_unknown"],
+    [undefined, "ci_unknown"],
+    ["success", null],
+    ["skipped", null],
+  ]) {
+    it(`includes agentic-review ${state ?? "missing state"} with review policy off`, async () => {
+      const r = await run(["pr-ready", "--pr", "7", "--skip-review"], {
+        env: { ARGUS_FORGE_REVIEW: "off" },
+        routes: routes({
+          [`GET /statuses/${HEAD}`]: [
+            { id: 1, context: "test", status: "success" },
+            { id: 2, context: "agentic-review", status: state },
+          ],
+        }),
+      });
+      assert.equal(r.code, reason ? EXIT.not_ready : EXIT.ok, r.err);
+      assert.deepEqual(r.out.reasons, reason ? [reason] : []);
+    });
+  }
 
   it("is ready when CI is green, the review covers the head, and no change request stands", async () => {
     const r = await run(["pr-ready", "--pr", "7"], { routes: routes() });

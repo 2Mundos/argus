@@ -115,7 +115,7 @@ argus-task wait merge --pr N
 - `review` returns when a review or comment newer than `--since` appears. The JSON
   carries the new items' ids, authors and kinds (not their bodies; the agent reads those
   with the forge helper) and a `cursor` for the next call.
-- `ci` ignores agentic-review contexts (they are review, not CI) and keeps the newest
+- `ci` includes agentic-review contexts as CI checks, independent of review-comment policy, and keeps the newest
   status per context. No status at all is "no checks reported yet", still pending.
 - A merged or closed PR ends a `ci` wait at once, with `status` `merged` or
   `closed without merge`, `merged` and, when present, `merged_at` and `merge_commit_sha`: no
