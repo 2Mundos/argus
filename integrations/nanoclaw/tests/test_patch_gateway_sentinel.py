@@ -24,7 +24,10 @@ export function looksLikeCredential(value: string): boolean {
 
 def _run(root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), str(root)], capture_output=True, text=True, timeout=30
+        [sys.executable, str(SCRIPT), str(root)],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
 
@@ -41,13 +44,18 @@ def test_exempts_only_the_exact_sentinel_pair_and_is_idempotent(tmp_path: Path) 
     stub = (NANOCLAW / "argus-copilot-stub.ts").read_text()
     sentinel = text.split("COPILOT_GITHUB_TOKEN: '")[1].split("'")[0]
     assert f'"{sentinel}"' in stub
-    assert text.count("!isArgusGatewaySentinel(key, value) && looksLikeCredential(value)") == 1
+    assert (
+        text.count("!isArgusGatewaySentinel(key, value) && looksLikeCredential(value)")
+        == 1
+    )
     assert text.count("COPILOT_GITHUB_TOKEN:") == 1
     assert _run(root).returncode == 0
     assert (root / "src/drivers/types.ts").read_text() == text
 
 
-@pytest.mark.parametrize("body", ["", EXCERPT.replace("looksLikeCredential(value)) {", "other(value)) {", 1)])
+@pytest.mark.parametrize(
+    "body", ["", EXCERPT.replace("looksLikeCredential(value)) {", "other(value)) {", 1)]
+)
 def test_refuses_a_changed_upstream_shape(tmp_path: Path, body: str) -> None:
     root = _checkout(tmp_path, body)
     result = _run(root)

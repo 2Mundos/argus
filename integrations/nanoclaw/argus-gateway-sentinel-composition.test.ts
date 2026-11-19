@@ -52,7 +52,10 @@ import { getGatewayProviderRegistration } from "./gateway-providers/gateway-prov
 import "./gateway-providers/onecli.js";
 
 // Same constant as integrations/nanoclaw/argus-copilot-stub.ts (installed alongside).
-import { COPILOT_INJECTED, COPILOT_SENTINEL_TOKEN } from "./gateway-providers/argus-copilot-stub.js";
+import {
+  COPILOT_INJECTED,
+  COPILOT_SENTINEL_TOKEN,
+} from "./gateway-providers/argus-copilot-stub.js";
 
 // Fake only: stands in for real material that must never be admitted.
 const FAKE_REAL_PAT = "github_pat_FAKE_REAL_VALUE_NEVER_IN_CONTAINER";
