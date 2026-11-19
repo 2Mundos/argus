@@ -334,3 +334,16 @@ def test_put_roundtrips_hard_maps_including_a_codex_entry(client: TestClient) ->
     res = client.put("/api/models", json=POLICY, headers=ADMIN)
     assert res.json()["hard_harness"] is None
     assert res.json()["revision"] == model_policy.revision(POLICY)
+
+
+def test_put_accepts_agy_executor_chain(client: TestClient) -> None:
+    with_agy = {
+        **POLICY,
+        "implementation": {
+            **POLICY["implementation"],
+            "agy": ["gemini-4-neon-high"],
+        },
+    }
+    res = client.put("/api/models", json=with_agy, headers=ADMIN)
+    assert res.status_code == 200, res.text
+    assert res.json()["implementation"]["agy"] == ["gemini-4-neon-high"]

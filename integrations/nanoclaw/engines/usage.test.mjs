@@ -129,6 +129,33 @@ test("dsh (synthetic fixture): final usage, cache writes counted as input", () =
   );
 });
 
+// Recorded from real agy 1.5.12 against a local mock Gemini SSE server.
+const agyReal = fs.readFileSync(new URL("./fixtures/agy-stream.jsonl", import.meta.url), "utf8");
+
+test("agy (recorded 1.5.12 fixture): result usage and init model", () => {
+  assert.deepEqual(parseUsage("agy", agyReal), {
+    measurement: "measured",
+    input_tokens: 900,
+    output_tokens: 60,
+    cached_input_tokens: 300,
+    cost_usd: null,
+    model: "gemini-3.1-pro",
+    turns: 1,
+  });
+  const zeroErr = parseUsage(
+    "agy",
+    JSON.stringify({
+      event: "result",
+      result: {
+        status: "ERROR",
+        error: "UNAUTHENTICATED",
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
+      },
+    }),
+  );
+  assert.equal(zeroErr.measurement, "not_reported");
+});
+
 test("absent, partial or garbage usage is not_reported, never zeros", () => {
   for (const [executor, text] of [
     ["claude", ""],

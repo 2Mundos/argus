@@ -22,6 +22,11 @@ const MARKS: Record<string, { label: string; path: string }> = {
     // A visor with two eyes.
     path: "M12 3C7 3 3 6 3 10v3c0 3.9 4 7 9 7s9-3.1 9-7v-3c0-4-4-7-9-7Zm-3.500 8a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm7 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z",
   },
+  google: {
+    label: "Google Antigravity",
+    // A four-point spark.
+    path: "M12 2c.7 5.3 4.7 9.3 10 10-5.3.7-9.3 4.7-10 10-.7-5.3-4.7-9.3-10-10 5.3-.7 9.3-4.7 10-10Z",
+  },
   gitea: {
     label: "Gitea",
     // A cup with a branch.
@@ -40,6 +45,14 @@ export function providerForTool(name: string | null | undefined): string {
   if (raw === "cursor" || /\b(cursor)\b/.test(raw)) return "cursor";
   if (raw === "gitea") return "gitea";
   if (raw === "copilot") return "copilot";
+  if (
+    raw === "agy" ||
+    raw === "google" ||
+    raw === "antigravity" ||
+    /\b(antigravity|gemini|google)\b/.test(raw)
+  ) {
+    return "google";
+  }
   return raw;
 }
 

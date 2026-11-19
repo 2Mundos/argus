@@ -2007,7 +2007,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },
@@ -9026,6 +9027,72 @@
                 "same_provider_same_account": true
               },
               {
+                "adapter": "agy",
+                "effort_interface": "agy --effort <level>",
+                "effort_model_rules": [
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh"
+                    ],
+                    "models": [
+                      "gemini-4-neon",
+                      "gemini-4-hydrogen"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "models": [
+                      "gemini-4-carbon",
+                      "gemini-4-argon",
+                      "gemini-3.8-flash",
+                      "gemini-3.7-flash",
+                      "gemini-3.6-flash"
+                    ],
+                    "prefixes": []
+                  },
+                  {
+                    "efforts": [
+                      "low",
+                      "high"
+                    ],
+                    "models": [
+                      "gemini-3.1-pro"
+                    ],
+                    "prefixes": []
+                  }
+                ],
+                "effort_unlisted_models": "unverified",
+                "efforts": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "excluded_harness_providers": [
+                  "local"
+                ],
+                "id": "nanoclaw:executor:agy:google",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "google",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
                 "adapter": "opencode",
                 "effort_model_rules": [],
                 "efforts": [],
@@ -9660,7 +9727,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },
@@ -10060,7 +10128,8 @@
               "codex",
               "agent",
               "opencode",
-              "copilot"
+              "copilot",
+              "agy"
             ],
             "title": "Executor",
             "type": "string"
@@ -13111,7 +13180,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },
@@ -21380,7 +21450,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },
@@ -21502,7 +21573,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },
@@ -21566,7 +21638,8 @@
               "codex",
               "agent",
               "copilot",
-              "opencode"
+              "opencode",
+              "agy"
             ],
             "title": "Adapter",
             "type": "string"
@@ -21608,7 +21681,8 @@
               "local",
               "custom",
               "cursor",
-              "copilot"
+              "copilot",
+              "google"
             ],
             "title": "Provider",
             "type": "string"
@@ -28617,7 +28691,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },
@@ -28831,7 +28906,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },
@@ -28977,7 +29053,8 @@
                   "codex",
                   "opencode",
                   "agent",
-                  "copilot"
+                  "copilot",
+                  "agy"
                 ],
                 "type": "string"
               },

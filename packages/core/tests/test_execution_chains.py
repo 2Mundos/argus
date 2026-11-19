@@ -429,6 +429,16 @@ def test_capabilities_publish_effort_support_per_role():
         "--reasoning-effort"
         in caps["nanoclaw:executor:copilot:copilot"].effort_interface
     )
+    assert (
+        caps["nanoclaw:executor:agy:google"].effort_interface == "agy --effort <level>"
+    )
+    assert caps["nanoclaw:executor:agy:google"].efforts == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
     for id in [
         "nanoclaw:harness:claude:local",
         "nanoclaw:harness:claude:custom",

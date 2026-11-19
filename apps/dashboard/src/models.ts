@@ -20,9 +20,10 @@ const optionals = (d: Partial<Record<OptionalScope, Chains | null>>, f: (c: Chai
       return c ? [[s, f(c)]] : [];
     }),
   ) as Partial<Record<OptionalScope, Chains>>;
-export const KNOWN_ENGINES = ["codex", "claude", "opencode", "agent"];
-/** The `agent` executor is the Cursor CLI. */
-export const engineLabel = (e: string) => (e === "agent" ? "agent (Cursor)" : e);
+export const KNOWN_ENGINES = ["codex", "claude", "opencode", "agent", "agy"];
+/** Friendly label for executors whose CLI name differs from the product name. */
+export const engineLabel = (e: string) =>
+  e === "agent" ? "agent (Cursor)" : e === "agy" ? "agy (Antigravity)" : e;
 // Mirrors the API: a CLI model ID, not a claim that the provider serves it.
 export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 

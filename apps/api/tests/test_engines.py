@@ -609,7 +609,7 @@ def test_catalogue_is_read_only_and_does_not_log_events(client: TestClient) -> N
         events_of(client, "engine.local_run")
     )
     assert before == after
-    assert len(client.get("/api/engines", headers=worker).json()["engines"]) == 5
+    assert len(client.get("/api/engines", headers=worker).json()["engines"]) == 6
 
 
 def test_catalogue_over_rest_for_any_token(client: TestClient) -> None:
@@ -618,7 +618,14 @@ def test_catalogue_over_rest_for_any_token(client: TestClient) -> None:
     assert res.status_code == 200
     body = res.json()
     ids = [e["id"] for e in body["engines"]]
-    assert ids == ["codex", "claude", "opencode", "cursor-agent", "local"]
+    assert ids == [
+        "codex",
+        "claude",
+        "opencode",
+        "cursor-agent",
+        "antigravity",
+        "local",
+    ]
     assert body["local"]["n_ctx"] == 65536
     assert client.get("/api/engines").status_code == 401
     # no secret-looking field anywhere

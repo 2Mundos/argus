@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-17
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 # Execution chains
@@ -132,16 +132,16 @@ The initial implementation targets these existing adapter combinations:
 | NanoClaw | `claude` | `local` | target | target |
 | NanoClaw | `claude` | `custom` | target | target |
 | NanoClaw | `codex` | `openai` | target | target |
-| Any | `agent`, `opencode`, `copilot` | any | unsupported | not harnesses |
+| Any | `agent`, `opencode`, `copilot`, `agy` | any | unsupported | not harnesses |
 
 The matrix mirrors what the NanoClaw worker runs: harness engines are `claude`
 (anthropic, local, custom) and `codex` (openai); each provider has exactly one
 delegate CLI (`EXECUTOR_BY_PROVIDER` in `integrations/nanoclaw/argus-accounts.ts`).
 Intentionally unsupported, because the worker cannot run them: `codex` on
-local/custom (the Codex harness speaks only OpenAI), `opencode`/`agent`/`copilot` as
+local/custom (the Codex harness speaks only OpenAI), `opencode`/`agent`/`copilot`/`agy` as
 harnesses (executor-only CLIs), and an executor adapter on a provider other than
-its own (for example `claude` on `custom`). A local harness with a `claude`, `codex`
-or `copilot` executor stays refused: those CLIs would run on the redirected local
+its own (for example `claude` on `custom`). A local harness with a `claude`, `codex`,
+`copilot` or `agy` executor stays refused: those CLIs would run on the redirected local
 endpoint. Setup shows each adapter/provider as harness-capable or executor-only and
 disables an executor option with its reason.
 | Built-in orchestrator | any | any | unsupported as task worker | unsupported |
@@ -153,7 +153,7 @@ Anthropic. Its eligibility must not be reused to silently exclude local direct
 routes or to claim all providers are verified. Do not enable its env flags.
 
 Paired executors are `claude`/`anthropic`, `codex`/`openai`, `agent`/`cursor`,
-`copilot`/`copilot`, `opencode`/`local`, and `opencode`/`custom`, subject to the
+`copilot`/`copilot`, `agy`/`google`, `opencode`/`local`, and `opencode`/`custom`, subject to the
 existing account role and harness pairing restrictions. In particular a local
 harness must not run `argus-delegate claude` on its redirected endpoint; the
 initial local pair accepts `agent` or `opencode`, matching current pinned-route
@@ -395,6 +395,7 @@ it; Setup renders from it.
 | executor | `claude` / `anthropic` | low, medium, high, xhigh, max | `claude --effort <level>` | Claude CLI rules; unlisted models supported |
 | executor | `codex` / `openai` | low, medium, high, xhigh, max, ultra | `codex exec -c model_reasoning_effort="<level>"` | Codex catalogue; unlisted models unverified |
 | executor | `copilot` / `copilot` | none, minimal, low, medium, high, xhigh, max | `copilot --reasoning-effort <level>` | none known; all models unverified |
+| executor | `agy` / `google` | low, medium, high, xhigh, max | `agy --effort <level>` | agy 1.5.12 model list; unlisted models unverified |
 | executor | `agent` / `cursor` | unsupported | only bracketed model parameters, which model IDs forbid | — |
 | executor | `opencode` / `local`, `opencode` / `custom` | unsupported | `--variant` needs provider variants Argus does not define | — |
 
@@ -402,7 +403,7 @@ Sources: claude-code 2.1.296 (`--effort`, per-model support functions), Claude
 Agent SDK 0.3.296 (`EffortLevel`), codex-cli 0.162.1 (bundled model catalogue
 `supported_reasoning_levels`), the NanoClaw agent-runner's `normalizeCodexEffort`
 (none, minimal, low, medium, high, xhigh), copilot 1.0.105 (`--reasoning-effort`),
-cursor-agent 2026.10.16 and the pinned NanoClaw host, whose `container_configs`
+agy 1.5.12 (`--effort` and `agy models`), cursor-agent 2026.10.16 and the pinned NanoClaw host, whose `container_configs`
 row has an `effort` column written to `container.json`. All from help text,
 type definitions and static inspection; no inference was run.
 

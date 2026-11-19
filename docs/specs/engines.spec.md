@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-16
+updated: 2026-11-19
 ---
 
 # Engines, executors and the local model
@@ -18,7 +18,7 @@ Four axes are kept apart because one string ("anthropic", "codex") hides them:
 |---|---|---|
 | model provider / model | whose model answers? | `openai/gpt-*`, `anthropic/claude-*`, `local/qwen3.8-flash-next-iq3_xxs` |
 | **engine** (harness/runtime) | what runs the agent loop of the worker? | NanoClaw provider `codex` or `claude`, whichever the best-priority leased account runs |
-| **executor** (CLI) | what a worker delegates non-interactive jobs to | `claude`, `codex`, `opencode`, `agent` (Cursor), `dsh` (opt-in) |
+| **executor** (CLI) | what a worker delegates non-interactive jobs to | `claude`, `codex`, `opencode`, `agent` (Cursor), `copilot`, `agy` (Antigravity), `dsh` (opt-in) |
 | account / auth | which credential or login makes it work? | Argus account (`provider` string), a native CLI login in a private volume |
 
 In scope:
@@ -125,8 +125,9 @@ In scope:
   login proves nothing about a container.
 - **Two layers per engine.** An engine is a *harness* (the NanoClaw provider that
   runs the agent loop) and/or an *executor* (the CLI `argus-delegate` runs for
-  the code). Matrix: Claude and Codex are both; opencode, Cursor (`agent`) and `dsh` are
-  executors only; `local` is an executor only. Each layer has its own
+  the code). Matrix: Claude and Codex are both; opencode, Cursor (`agent`),
+  Antigravity (`agy`, [Google accounts](google-accounts.spec.md)), Copilot and
+  `dsh` are executors only; `local` is an executor only. Each layer has its own
   `readiness`, `accounts` and `usable` in `layers[]`: validating Claude as a
   harness proves nothing about Claude as an executor. The top-level `readiness`,
   `accounts` and `usable` are kept and equal the primary layer (the harness when
@@ -298,8 +299,9 @@ In scope:
   eligibility, harness selection and arm marker, wired into `argus.ts`; its vitest
   includes a fake-API end-to-end run of both arms and the fallbacks.
 - `integrations/nanoclaw/engines/`: installer for the Codex payload and the
-  CLI manifest, the image steps for opencode and the Cursor agent (checksum
-  pinned), `install-dsh.sh` (and its test), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
+  CLI manifest, the image steps for opencode, the Cursor agent (checksum
+  pinned), Copilot CLI, and Antigravity CLI (`install-agy.sh`, SHA-512 pinned),
+  `install-dsh.sh` (and its test), `argus-delegate.mjs` and its tests, `smoke.sh`, and the tools layer
   (`Dockerfile.tools-layer`, `apply-tools-layer.sh`: openssh-client, rsync, ripgrep (`rg`), jq, wget, patch (Debian packages via apt, so
   every variant built through `apply-tools-layer.sh` and every project image derived from it has them;
   probed offline as uid 1000 by `engines/probe-worker-tools.sh IMAGE`) and

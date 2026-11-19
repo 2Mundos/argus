@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 # Settings
@@ -253,7 +253,7 @@ routine one catch-up run. Run now still works while it is off.
 
 Key `difficulty.executors`, scopes `global` and `project`. Value: a partial map
 of difficulty (`trivial` | `simple` | `standard` | `hard`) → ordered list of
-executor CLIs (`claude` | `codex` | `opencode` | `agent`), or `[]` / `["none"]`
+executor CLIs (`claude` | `codex` | `opencode` | `agent` | `agy`), or `[]` / `["none"]`
 for no delegated executor ([task difficulty](task-difficulty.spec.md)). Default
 `{}` means the built-in defaults for every level. Unnamed levels inherit those
 defaults. `ARGUS_DIFFICULTY_EXECUTORS` (same JSON shape, validated at startup)

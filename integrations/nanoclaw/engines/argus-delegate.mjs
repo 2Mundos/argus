@@ -7,7 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 //                  [--model-attempt N --fallback-reason REASON]
 //   argus-delegate EXECUTOR --auth-probe [--result-file F]
 //
-// EXECUTOR is claude | codex | opencode | agent | copilot | dsh. The prompt comes from stdin or
+// EXECUTOR is claude | codex | opencode | agent | copilot | agy | dsh. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
 // engine that delegated and the executor that did the work, how it ended, and
 // the artifacts, and the run's token usage (`usage`, `run_key`, `usage_report`; see
@@ -62,7 +62,7 @@ import {
   USAGE_RELAY_FILE,
 } from "./usage.mjs";
 
-export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot", "dsh"];
+export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot", "agy", "dsh"];
 
 /**
  * Not a credential: the value the NanoClaw host gives the worker when every Copilot
@@ -71,6 +71,67 @@ export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot", "ds
  */
 export const COPILOT_SENTINEL_TOKEN =
   "github_pat_ARGUS_ONECLI_SENTINEL_not_a_credential_0000000000000000000000000000000000";
+
+/**
+ * Not credentials: the values the NanoClaw host gives the worker when a Google
+ * Antigravity secret set is assigned in the vault (argus-agy-stub.ts, keep in step).
+ */
+export const AGY_SENTINEL_API_KEY = "AIzaSyARGUS_ONECLI_SENTINEL_not_a_credential_00000";
+export const AGY_SENTINEL_OAUTH_TOKEN = "ya29.ARGUS_ONECLI_SENTINEL_not_a_credential";
+
+/**
+ * Did the Antigravity CLI (`agy 1.5.12`) reject its credential? Reads structured
+ * `AGY_ERROR` stderr lines and `result.error` lines observed on HTTP 401/403;
+ * free text never counts.
+ */
+export function agyAuthRejected(text) {
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith("AGY_ERROR:")) {
+      try {
+        const err = JSON.parse(line.slice("AGY_ERROR:".length).trim());
+        if (
+          err?.status === "UNAUTHENTICATED" ||
+          err?.error_code === 401 ||
+          err?.error_code === 403
+        ) {
+          return true;
+        }
+      } catch {
+        /* ignore malformed diagnostic line */
+      }
+      continue;
+    }
+    if (
+      /^error:\s*Eligibility check failed:\s*UNAUTHENTICATED\s*\(code 401\)/i.test(line) ||
+      /^error:.*\bError (?:401|403)\b.*(?:API key not valid|UNAUTHENTICATED|PERMISSION_DENIED)/i.test(
+        line,
+      )
+    ) {
+      return true;
+    }
+    if (line.startsWith("{")) {
+      try {
+        const ev = JSON.parse(line);
+        const msg =
+          ev?.event === "result" && ev?.result?.status === "ERROR" ? ev?.result?.error : "";
+        if (
+          typeof msg === "string" &&
+          (/(?:Eligibility check failed:\s*)?UNAUTHENTICATED\s*\(code 401\)/i.test(msg) ||
+            /\bError (?:401|403)\b.*(?:API key not valid|UNAUTHENTICATED|PERMISSION_DENIED)/i.test(
+              msg,
+            ))
+        ) {
+          return true;
+        }
+      } catch {
+        /* ignore non-JSON */
+      }
+    }
+  }
+  return false;
+}
 
 /** Exact lines the pinned CLI (1.0.105) prints when it rejects a credential (exit 1). */
 export const COPILOT_AUTH_REJECTED = [
@@ -257,6 +318,17 @@ export function authStatus(executor, e = process.env, home = os.homedir(), setti
             ok: false,
             need: "no usable copilot account: the copilot provider has no executor lease for this task (the gateway's COPILOT_GITHUB_TOKEN sentinel is absent); Argus leases copilot only for an executor pin to copilot",
           };
+    case "agy": {
+      if (e.GEMINI_API_KEY === AGY_SENTINEL_API_KEY) return { ok: true, mode: "api_key" };
+      const oauthStub =
+        e.ARGUS_AGY_OAUTH_STUB ||
+        path.join(e.HOME || home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+      if (present(oauthStub)) return { ok: true, mode: "oauth" };
+      return {
+        ok: false,
+        need: "no usable google account: the google provider has no executor lease for this task (neither the gateway's GEMINI_API_KEY sentinel nor antigravity-oauth-token stub is present)",
+      };
+    }
     case "dsh":
       return env(e, CUSTOM_KEY_ENV)
         ? { ok: true }
@@ -519,7 +591,7 @@ export function buildCommand(
   { cwd, model, readOnly, lastMessageFile, settings = null, overlayFile = null, effort = null },
   e = process.env,
 ) {
-  if (effort !== null && !["claude", "codex", "copilot"].includes(executor))
+  if (effort !== null && !["claude", "codex", "copilot", "agy"].includes(executor))
     throw new Error(`${executor} has no reasoning effort interface`);
   switch (executor) {
     case "claude":
@@ -621,6 +693,26 @@ export function buildCommand(
         promptVia: "argv",
         readOnlyEnforcement: readOnly ? "copilot_deny_write_and_shell" : "copilot_allow_write_only",
       };
+    case "agy": {
+      const apiKeyMode = e.GEMINI_API_KEY === AGY_SENTINEL_API_KEY;
+      return {
+        bin: "agy",
+        args: [
+          ...(apiKeyMode ? ["--settings", '{"modelProvider":"gemini"}'] : []),
+          "--output-format",
+          "stream-json",
+          // --mode plan is ineffective when --disable-slash-commands is set (verified on agy 1.5.12).
+          ...(readOnly
+            ? ["--mode", "plan"]
+            : ["--dangerously-skip-permissions", "--disable-slash-commands"]),
+          ...(model ? ["--model", model] : []),
+          ...(effort ? ["--effort", effort] : []),
+          "-p",
+        ],
+        promptVia: "argv",
+        readOnlyEnforcement: readOnly ? "agy_plan_mode" : "agy_skip_permissions",
+      };
+    }
     case "dsh":
       // --patch is a launcher flag: it goes before the profile's own arguments.
       return {
@@ -724,6 +816,40 @@ export function prepareCopilotEnv(e, runtimeRoot) {
   };
 }
 
+/**
+ * Antigravity CLI (`agy`) runtime: isolate HOME in a per-run private directory under the
+ * authorized cwd (removed on exit) so logs, SQLite summaries and state never mutate read-only
+ * mounts or persist across tasks. In OAuth mode, copy the read-only sentinel stub into the
+ * private HOME and scrub GEMINI_API_KEY; in API key mode, keep only the sentinel GEMINI_API_KEY.
+ */
+export function prepareAgyEnv(e, runtimeRoot) {
+  const apiKeyMode = e.GEMINI_API_KEY === AGY_SENTINEL_API_KEY;
+  const origHome = e.HOME || os.homedir();
+  const oauthStub =
+    e.ARGUS_AGY_OAUTH_STUB ||
+    path.join(origHome, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+  const hasOauth = !apiKeyMode && present(oauthStub);
+  if (!apiKeyMode && !hasOauth) return e;
+
+  const home = path.join(runtimeRoot, "agy-home", randomUUID());
+  const cliDir = path.join(home, ".gemini", "antigravity-cli");
+  fs.mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(home, 0o700);
+  process.once("exit", () => fs.rmSync(home, { recursive: true, force: true }));
+
+  const out = { ...e, HOME: home, NO_BROWSER: "1" };
+  if (apiKeyMode) {
+    delete out.ARGUS_AGY_OAUTH_STUB;
+    return out;
+  }
+  delete out.GEMINI_API_KEY;
+  const dest = path.join(cliDir, "antigravity-oauth-token");
+  fs.copyFileSync(oauthStub, dest);
+  fs.chmodSync(dest, 0o600);
+  out.ARGUS_AGY_OAUTH_STUB = dest;
+  return out;
+}
+
 /** dsh writes sessions under DSH_HOME: a fresh private tree, removed when the delegate exits. */
 export function prepareDshEnv(e, runtimeRoot) {
   const home = path.join(runtimeRoot, "dsh-home", randomUUID());
@@ -742,6 +868,7 @@ export function prepareExecutorEnv(
   runtimeRoot = "/tmp/argus-cursor-runtime",
 ) {
   if (executor === "copilot") return prepareCopilotEnv(e, runtimeRoot);
+  if (executor === "agy") return prepareAgyEnv(e, runtimeRoot);
   if (executor === "dsh") return prepareDshEnv(e, runtimeRoot);
   if (executor !== "agent") return e;
   const home = e.HOME || os.homedir();
@@ -1010,9 +1137,26 @@ export function executorJsonFailure(executor, stdoutText) {
     const rows = trimmed.split("\n").filter(Boolean);
     // A stream's answer is its `result` event; a system line may follow it.
     const resultRow =
-      executor === "agent" ? rows.findLast((r) => /^\{\s*"type"\s*:\s*"result"/.test(r)) : null;
+      executor === "agent"
+        ? rows.findLast((r) => /^\{\s*"type"\s*:\s*"result"/.test(r))
+        : executor === "agy"
+          ? rows.findLast((r) => /^\{\s*"event"\s*:\s*"result"/.test(r))
+          : null;
     parsed = JSON.parse(resultRow ?? rows.at(-1) ?? trimmed);
   } catch {
+    return null;
+  }
+  if (executor === "agy" && parsed?.event === "result") {
+    const res = parsed.result;
+    if (res?.status === "ERROR") {
+      return {
+        kind: "is_error",
+        detail: String(res.error ?? res.finished_reason ?? "agy reported error"),
+      };
+    }
+    if (typeof res?.response === "string" && !res.response.trim()) {
+      return { kind: "empty_result", detail: "executor JSON had an empty final answer" };
+    }
     return null;
   }
   if (parsed && parsed.is_error === true) {
@@ -1167,6 +1311,30 @@ export function providerRequest(executor, e, settings) {
           accept: "application/json",
         },
       };
+    case "agy": {
+      if (e.GEMINI_API_KEY === AGY_SENTINEL_API_KEY) {
+        return {
+          url: "https://generativelanguage.googleapis.com/v1beta/models",
+          headers: {
+            "x-goog-api-key": e.GEMINI_API_KEY,
+            accept: "application/json",
+          },
+        };
+      }
+      const oauthStub =
+        e.ARGUS_AGY_OAUTH_STUB ||
+        path.join(e.HOME || os.homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token");
+      if (present(oauthStub)) {
+        return {
+          url: "https://www.googleapis.com/oauth2/v2/userinfo",
+          headers: {
+            authorization: `Bearer ${AGY_SENTINEL_OAUTH_TOKEN}`,
+            accept: "application/json",
+          },
+        };
+      }
+      return { unproven: "credential_not_in_env" };
+    }
     case "agent":
       return { unproven: "no_read_only_endpoint" };
     default:
@@ -1927,7 +2095,12 @@ async function runAttempt(
             !interrupted &&
             copilotAuthRejected(`${stdoutText}\n${stderrText}`)
           ? { kind: "auth_rejected", detail: "GitHub Copilot rejected the credential" }
-          : null;
+          : executor === "agy" &&
+              !timedOut &&
+              !interrupted &&
+              agyAuthRejected(`${stdoutText}\n${stderrText}`)
+            ? { kind: "auth_rejected", detail: "Google Antigravity rejected the credential" }
+            : null;
   const dshBlocked = dsh?.auth && !timedOut && !interrupted;
   const exit = timedOut ? 124 : dshBlocked ? 78 : interrupted || jsonFail || code !== 0 ? 1 : 0;
   const taskId = taskIdEarly;

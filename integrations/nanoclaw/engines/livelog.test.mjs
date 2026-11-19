@@ -811,6 +811,51 @@ test("dsh stream: failed final, error event, unfinished tail, noise and secrets"
   ]);
 });
 
+// Recorded from real agy 1.5.12 against a local mock Gemini SSE server.
+const agyFixture = fs.readFileSync(new URL("./fixtures/agy-stream.jsonl", import.meta.url), "utf8");
+
+test("agy stream over the recorded 1.5.12 fixture: init model, streamed lines, no duplicate on result", () => {
+  const got = [];
+  const p = createStreamParser({ executor: "agy", onLines: (l) => got.push(...l) });
+  p.push(agyFixture.slice(0, 220));
+  p.push(agyFixture.slice(220));
+  p.end();
+  assert.deepEqual(got, [
+    "agy started (gemini-3.1-pro)",
+    "Checking the repository.",
+    "All tests pass.",
+    "agy finished",
+  ]);
+});
+
+test("agy stream: error result, tool step, and secret redaction", () => {
+  const got = [];
+  const p = createStreamParser({
+    executor: "agy",
+    secrets: ["AIzaSySECRET_VALUE"],
+    onLines: (l) => got.push(...l),
+  });
+  p.push(
+    ev({
+      event: "step_update",
+      step_update: { step_type: "tool_call", tool_name: "run_command", state: "DONE" },
+    }),
+  );
+  p.push(
+    ev({
+      event: "step_update",
+      step_update: { step_type: "agent_response", text_delta: "key AIzaSySECRET_VALUE\n" },
+    }),
+  );
+  p.push(ev({ event: "result", result: { status: "ERROR", error: "UNAUTHENTICATED" } }));
+  p.end();
+  assert.deepEqual(got, [
+    "agy step: run_command",
+    "key [redacted]",
+    "agy finished with an error: UNAUTHENTICATED",
+  ]);
+});
+
 test("relay writer refuses symlinks, hard links and non-regular targets, and never throws", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-safe-"));
   const victim = path.join(dir, "victim");

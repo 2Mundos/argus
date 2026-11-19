@@ -867,3 +867,49 @@ def test_route_bind_env_is_optional_and_refused_at_startup_when_invalid(
     monkeypatch.setenv(name, "0.0.0.0")
     with pytest.raises(ValueError, match=name):
         Settings.from_env()
+
+
+def test_settings_schemas_stay_in_sync_with_model_policy_and_difficulty_executors(
+    client: TestClient,
+) -> None:
+    from argus_api import model_policy
+    from argus_api.settings.registry import REGISTRY
+    from argus_core.difficulty import DIFFICULTY_EXECUTOR_CLIS, NONE_EXECUTOR
+
+    models_schema = REGISTRY["models"].schema_
+    for scope in (
+        "harness",
+        "implementation",
+        "trivial",
+        "hard_harness",
+        "hard_implementation",
+    ):
+        enum = models_schema["properties"][scope]["propertyNames"]["enum"]
+        assert set(enum) == set(model_policy.ENGINES)
+
+    diff_schema = REGISTRY["difficulty.executors"].schema_
+    arr = diff_schema["patternProperties"][".*"]
+    assert set(arr["items"]["enum"]) == set(DIFFICULTY_EXECUTOR_CLIS) | {NONE_EXECUTOR}
+    assert arr["maxItems"] == len(DIFFICULTY_EXECUTOR_CLIS)
+
+    # Round-trip agy through both settings endpoints (global difficulty + project models override).
+    client.put(
+        "/api/projects/demo", json={"name": "Demo", "description": "d"}, headers=ADMIN
+    )
+    diff_res = client.put(
+        "/api/settings/difficulty.executors",
+        json={"value": {"hard": ["agy"]}},
+        headers=ADMIN,
+    )
+    assert diff_res.status_code == 200, diff_res.text
+    assert diff_res.json()["value"] == {"hard": ["agy"]}
+
+    proj_models = client.put(
+        "/api/projects/demo/settings/models",
+        json={"value": {"implementation": {"agy": ["gemini-4-neon-high"]}}},
+        headers=ADMIN,
+    )
+    assert proj_models.status_code == 200, proj_models.text
+    assert proj_models.json()["value"]["implementation"]["agy"] == [
+        "gemini-4-neon-high"
+    ]

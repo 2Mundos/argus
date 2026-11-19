@@ -85,7 +85,7 @@ PROVIDER_AUTH_NOTICES = re.compile(
     r"^(?:http\s*)?(?:401|403)\b"
     r"|^(?:token_expired|credential_rejected|auth_rejected|auth_missing|codex_credential_missing"
     r"|invalid[_ ]api[_ ]key)\b"
-    r"|^(?:(?:codex|claude|cursor|copilot|opencode):\s*)?not logged in\b",
+    r"|^(?:(?:codex|claude|cursor|copilot|opencode|agy):\s*)?not logged in\b",
     re.I,
 )
 

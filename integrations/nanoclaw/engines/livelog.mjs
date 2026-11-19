@@ -397,12 +397,79 @@ export function dshEventLines(ev, secrets = [], state = { seen: new Set(), parti
   return lines;
 }
 
+/**
+ * Readable lines for one `agy --output-format stream-json` event (verified on agy 1.5.12,
+ * fixtures/agy-stream.jsonl). Shown: `init`, `step_update` agent_response text_delta (a line
+ * at a time; `state.partial` holds the unfinished tail) and tool steps, and `result`.
+ */
+export function agyEventLines(ev, secrets = [], state = { seen: new Set(), partial: "" }) {
+  if (!isObject(ev)) return [];
+  const lines = [];
+  const text = (raw) => {
+    for (const l of textLines(raw, secrets)) {
+      if (!l.trim() || state.seen.has(l)) continue;
+      state.seen.add(l);
+      lines.push(l);
+    }
+  };
+  switch (ev.event) {
+    case "init": {
+      const model =
+        typeof ev.init?.model === "string" && ev.init.model ? ` (${ev.init.model})` : "";
+      lines.push(`agy started${model}`);
+      break;
+    }
+    case "step_update": {
+      const s = ev.step_update;
+      if (!isObject(s)) break;
+      if (typeof s.text_delta === "string" && s.text_delta) {
+        state.partial += s.text_delta;
+        const cutAt = state.partial.lastIndexOf("\n");
+        if (cutAt >= 0) {
+          text(state.partial.slice(0, cutAt));
+          state.partial = state.partial.slice(cutAt + 1);
+        }
+      } else if (
+        typeof s.step_type === "string" &&
+        s.step_type !== "user_input" &&
+        s.step_type !== "agent_response" &&
+        s.step_type !== "error_message" &&
+        s.state === "DONE"
+      ) {
+        const name = typeof s.tool_name === "string" && s.tool_name ? s.tool_name : s.step_type;
+        lines.push(`agy step: ${cut(oneLine(name), RESULT_MAX)}`);
+      }
+      break;
+    }
+    case "result": {
+      const tail = state.partial;
+      state.partial = "";
+      if (tail) text(tail);
+      const res = ev.result;
+      if (isObject(res)) {
+        if (res.status === "SUCCESS") {
+          if (typeof res.response === "string") text(res.response);
+          lines.push("agy finished");
+        } else {
+          lines.push(
+            `agy finished with an error: ${cut(oneLine(res.error ?? res.finished_reason ?? res.status ?? ""), RESULT_MAX)}`,
+          );
+        }
+      }
+      break;
+    }
+    default:
+  }
+  return lines;
+}
+
 /** Feed it stdout chunks; calls `onLines` with the readable lines of each complete event. */
 export function createStreamParser({ executor, onLines, secrets = [] }) {
   let rest = "";
   const agentState = { seen: new Set(), partial: "" };
   const codexState = { started: new Set() };
   const dshState = { seen: new Set(), partial: "" };
+  const agyState = { seen: new Set(), partial: "" };
   const handle = (raw) => {
     const line = raw.trim();
     if (!line) return;
@@ -428,6 +495,12 @@ export function createStreamParser({ executor, onLines, secrets = [] }) {
     } else if (executor === "dsh") {
       try {
         lines = dshEventLines(JSON.parse(line), secrets, dshState);
+      } catch {
+        return;
+      }
+    } else if (executor === "agy") {
+      try {
+        lines = agyEventLines(JSON.parse(line), secrets, agyState);
       } catch {
         return;
       }
