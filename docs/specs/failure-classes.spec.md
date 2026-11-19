@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 # Failure classes
@@ -546,6 +546,7 @@ Per executor (audit; the delegate's `providerRequest` is the code):
 | `codex` | probed; the Codex stub | `GET api.openai.com/v1/models` with `OPENAI_API_KEY` when it is in the env | a ChatGPT login lives only in `auth.json` (never read) and is served from another host: unproven |
 | `agent` (Cursor) | probed; the Cursor stub | none | unproven: the gateway injects only on `/agent.v1.*` and `/aiserver.v1.*`, so there is no read-only call that is safe to make |
 | `copilot` | probed; the gateway contribution sets the sentinel for the agent group | `GET api.individual.githubcopilot.com/models`, a path the vault injects on, with the sentinel | none |
+| `agy` (Antigravity) | probed; the gateway contribution sets the `GEMINI_API_KEY` sentinel (API key mode) or mounts the `antigravity-oauth-token` stub (OAuth mode) | API key mode: `GET generativelanguage.googleapis.com/v1beta/models` (`x-goog-api-key`); OAuth mode: `GET www.googleapis.com/oauth2/v2/userinfo` (`Authorization: Bearer`) | none |
 | `opencode` | probed for an explicitly leased custom/OpenRouter executor; scoped sentinel and settings from the gateway contribution | `GET openrouter.ai/api/v1/models` | native `auth.json`, attached-server and local routes are not probed |
 | other custom account routes (on `codex`, `dsh`) | not probed | with settings and credential in the delegate env: `GET <base_url>/models` | no managed executor gateway contribution |
 | local account (on `opencode`) | not probed | as above; the server ignores the token, so it sends the run's placeholder | same reason as custom |

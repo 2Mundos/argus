@@ -10,6 +10,9 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  AGY_SENTINEL_API_KEY,
+  AGY_SENTINEL_OAUTH_TOKEN,
+  agyAuthRejected,
   authorizedCwd,
   authProbeWithProvider,
   authStatus,
@@ -3151,4 +3154,135 @@ test("explicit complete routes forbid delegation in single mode and executor/mod
     assert.equal(code, expected, JSON.stringify(report));
     if (expected === 64) assert.equal(report.error, "model_policy_invalid");
   }
+});
+
+test("agy: authStatus, buildCommand, prepareExecutorEnv and --auth-probe for API key and OAuth", async (t) => {
+  const s = sandbox(t);
+  s.fake("agy", 'if [ "$1" = "--version" ]; then echo "1.5.12"; exit 0; fi');
+
+  // Unauthenticated (and non-sentinel real-looking GEMINI_API_KEY) is refused.
+  assert.equal(authStatus("agy", { HOME: s.home }, s.home).ok, false);
+  assert.equal(
+    authStatus("agy", { HOME: s.home, GEMINI_API_KEY: "AIzaSyREAL_KEY_REJECTED" }, s.home).ok,
+    false,
+  );
+
+  // API key mode: sentinel accepted, --settings modelProvider=gemini, plan vs skip-permissions, effort.
+  const apiEnv = { ...s.env, GEMINI_API_KEY: AGY_SENTINEL_API_KEY };
+  assert.deepEqual(authStatus("agy", apiEnv, s.home), { ok: true, mode: "api_key" });
+  const roCmd = buildCommand(
+    "agy",
+    { cwd: s.work, model: "gemini-4-neon", readOnly: true, effort: "high" },
+    apiEnv,
+  );
+  assert.equal(roCmd.bin, "agy");
+  assert.equal(roCmd.promptVia, "argv");
+  assert.equal(roCmd.readOnlyEnforcement, "agy_plan_mode");
+  assert.deepEqual(roCmd.args, [
+    "--settings",
+    '{"modelProvider":"gemini"}',
+    "--output-format",
+    "stream-json",
+    "--mode",
+    "plan",
+    "--model",
+    "gemini-4-neon",
+    "--effort",
+    "high",
+    "-p",
+  ]);
+  const rwCmd = buildCommand(
+    "agy",
+    { cwd: s.work, model: "gemini-3.1-pro", readOnly: false },
+    apiEnv,
+  );
+  assert.equal(rwCmd.readOnlyEnforcement, "agy_skip_permissions");
+  assert.ok(rwCmd.args.includes("--dangerously-skip-permissions"));
+  assert.ok(rwCmd.args.includes("--disable-slash-commands"));
+
+  // OAuth mode: stub file accepted, no --settings, private HOME copies stub with 0600 and scrubs GEMINI_API_KEY.
+  const stubDir = path.join(s.dir, "ro-stub");
+  fs.mkdirSync(stubDir, { recursive: true });
+  const stubFile = path.join(stubDir, "antigravity-oauth-token");
+  fs.writeFileSync(
+    stubFile,
+    JSON.stringify({ token: { access_token: AGY_SENTINEL_OAUTH_TOKEN }, auth_method: "consumer" }),
+  );
+  const oauthEnv = { ...s.env, ARGUS_AGY_OAUTH_STUB: stubFile };
+  assert.deepEqual(authStatus("agy", oauthEnv, s.home), { ok: true, mode: "oauth" });
+  const oauthCmd = buildCommand("agy", { cwd: s.work, model: null, readOnly: false }, oauthEnv);
+  assert.equal(oauthCmd.args.includes("--settings"), false);
+  const prepared = prepareExecutorEnv(
+    "agy",
+    { ...oauthEnv, GEMINI_API_KEY: "AIzaSyLEAKED" },
+    path.join(s.work, ".argus-delegate-runtime"),
+  );
+  assert.notEqual(prepared.HOME, s.home);
+  assert.equal(prepared.NO_BROWSER, "1");
+  assert.equal(prepared.GEMINI_API_KEY, undefined);
+  assert.equal(fs.existsSync(prepared.ARGUS_AGY_OAUTH_STUB), true);
+  assert.equal(fs.statSync(prepared.ARGUS_AGY_OAUTH_STUB).mode & 0o777, 0o600);
+
+  // --auth-probe: API key hits generativelanguage.googleapis.com, OAuth hits www.googleapis.com.
+  const seen = [];
+  const probeApi = await authProbeWithProvider("agy", apiEnv, {
+    request: async (url, headers) => {
+      seen.push({ url, headers });
+      return 200;
+    },
+  });
+  assert.equal(probeApi.code, 0);
+  assert.equal(seen[0].url, "https://generativelanguage.googleapis.com/v1beta/models");
+  assert.equal(seen[0].headers["x-goog-api-key"], AGY_SENTINEL_API_KEY);
+
+  const probeOauthRejected = await authProbeWithProvider("agy", oauthEnv, {
+    request: async (url, headers) => {
+      seen.push({ url, headers });
+      return 401;
+    },
+  });
+  assert.equal(probeOauthRejected.code, 79);
+  assert.equal(seen[1].url, "https://www.googleapis.com/oauth2/v2/userinfo");
+  assert.equal(seen[1].headers.authorization, `Bearer ${AGY_SENTINEL_OAUTH_TOKEN}`);
+});
+
+test("agy: agyAuthRejected and executorJsonFailure classify real agy 1.5.12 error envelopes", () => {
+  assert.equal(
+    agyAuthRejected(
+      'AGY_ERROR: {"short_error":"API key not valid","status":"UNAUTHENTICATED","error_code":401}',
+    ),
+    true,
+  );
+  assert.equal(
+    agyAuthRejected("error: Eligibility check failed: UNAUTHENTICATED (code 401): bad token"),
+    true,
+  );
+  assert.equal(
+    agyAuthRejected(
+      JSON.stringify({
+        event: "result",
+        result: { status: "ERROR", error: "Error 401, Message: API key not valid." },
+      }),
+    ),
+    true,
+  );
+  assert.equal(agyAuthRejected("random output mentioning 401 or unauthorized"), false);
+  assert.equal(
+    agyAuthRejected('AGY_ERROR: {"status":"DEADLINE_EXCEEDED","reason":"print_timeout"}'),
+    false,
+  );
+
+  const errFail = executorJsonFailure(
+    "agy",
+    JSON.stringify({ event: "result", result: { status: "ERROR", error: "model failed" } }),
+  );
+  assert.equal(errFail?.kind, "is_error");
+  assert.equal(errFail?.detail, "model failed");
+  assert.equal(
+    executorJsonFailure(
+      "agy",
+      JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "ok" } }),
+    ),
+    null,
+  );
 });

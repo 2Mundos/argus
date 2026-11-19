@@ -1713,8 +1713,8 @@ describe("runExecutorPreflight: argus-delegate --auth-probe in the same bounded 
     expect(cli.started).toHaveLength(1);
   });
 
-  it("probes exactly claude, codex, agent and copilot", () => {
-    expect([...PROBED_EXECUTORS].sort()).toEqual(["agent", "claude", "codex", "copilot"]);
+  it("probes exactly claude, codex, agent, copilot and agy", () => {
+    expect([...PROBED_EXECUTORS].sort()).toEqual(["agent", "agy", "claude", "codex", "copilot"]);
   });
 
   it("an executor the session cannot see is not probed: no container, no lease", async () => {

@@ -97,6 +97,9 @@ why you are here.
   for the delegated Cursor CLI; executor lease and OneCLI path-scoped injection
 - [Copilot accounts](specs/copilot-accounts.spec.md) — import a GitHub Copilot token for
   the delegated Copilot CLI; executor lease, sentinel env and OneCLI injection
+- [Google (Antigravity) accounts](specs/google-accounts.spec.md) — import a Gemini API
+  key or Google OAuth login for the delegated Antigravity CLI (`agy`); executor lease,
+  sentinel env/stub and OneCLI injection
 - [Custom accounts](specs/custom-accounts.spec.md) — an OpenAI-compatible endpoint
   (OpenRouter first) as an account: model and routing per role, probe, 402/429 failover
 - [Custom harness](specs/custom-harness.spec.md) — NanoClaw Claude Code on a custom

@@ -6,6 +6,8 @@ import {
   copilotTokenNotice,
   GITEA_PROVIDER,
   GITHUB_PROVIDER,
+  GOOGLE_PROVIDER,
+  googleCredentialNotice,
   localBrokerNotice,
   nativeAuthNotice,
   PROVIDER_PICK_CUSTOM,
@@ -246,6 +248,7 @@ export function ReplaceCredential({
   const isGitea = account.provider === GITEA_PROVIDER;
   const isGithub = account.provider === GITHUB_PROVIDER;
   const isCopilot = account.provider === COPILOT_PROVIDER;
+  const isGoogle = account.provider === GOOGLE_PROVIDER;
   const [text, setText] = useState("");
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
@@ -324,6 +327,7 @@ export function ReplaceCredential({
           stores it but cannot tell here whether it signs in.
         </p>
         {isCopilot && <p className="muted small">{copilotTokenNotice()}</p>}
+        {isGoogle && <p className="muted small">{googleCredentialNotice()}</p>}
         {isCopilot ? (
           <label>
             Copilot token

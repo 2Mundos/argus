@@ -34,8 +34,10 @@ class ExplicitModel(ClosedModel):
 
 
 class Selector(ClosedModel):
-    adapter: Literal["claude", "codex", "agent", "copilot", "opencode"]
-    provider: Literal["anthropic", "openai", "local", "custom", "cursor", "copilot"]
+    adapter: Literal["claude", "codex", "agent", "copilot", "opencode", "agy"]
+    provider: Literal[
+        "anthropic", "openai", "local", "custom", "cursor", "copilot", "google"
+    ]
     # None = any available account of this provider that can serve the role; admission
     # picks one and records it. A value pins that exact account.
     account_id: Annotated[str, Field(min_length=1, max_length=64)] | None = Field(
@@ -61,6 +63,7 @@ _SELECTOR_SOURCES = {
     ("executor", "codex", "openai"): {"explicit"},
     ("executor", "agent", "cursor"): {"explicit"},
     ("executor", "copilot", "copilot"): {"explicit"},
+    ("executor", "agy", "google"): {"explicit"},
     ("executor", "opencode", "local"): {"account"},
     ("executor", "opencode", "custom"): {"account", "explicit"},
 }
@@ -154,6 +157,28 @@ _EFFORT = {
     ("executor", "copilot", "copilot"): EffortSupport(
         interface="copilot --reasoning-effort <level>",
         efforts=["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        unlisted_models="unverified",
+    ),
+    ("executor", "agy", "google"): EffortSupport(
+        interface="agy --effort <level>",
+        efforts=["low", "medium", "high", "xhigh", "max"],
+        model_rules=[
+            EffortModelRule(
+                models=["gemini-4-neon", "gemini-4-hydrogen"],
+                efforts=["low", "medium", "high", "xhigh"],
+            ),
+            EffortModelRule(
+                models=[
+                    "gemini-4-carbon",
+                    "gemini-4-argon",
+                    "gemini-3.8-flash",
+                    "gemini-3.7-flash",
+                    "gemini-3.6-flash",
+                ],
+                efforts=["low", "medium", "high"],
+            ),
+            EffortModelRule(models=["gemini-3.1-pro"], efforts=["low", "high"]),
+        ],
         unlisted_models="unverified",
     ),
 }

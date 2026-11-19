@@ -87,6 +87,22 @@ _DECLARED: list[tuple[str, str, tuple[EngineLayer, ...], Axes, list[str], str]] 
         "imported login or an API key) reaches it through the vault; blocked "
         "without one or a login made in the container.",
     ),
+    (
+        "antigravity",
+        "Antigravity (Google)",
+        (X,),
+        Axes(
+            model_provider="google",
+            model=None,
+            harness="agy -p",
+            executor="agy",
+            account_provider="google",
+        ),
+        ["argus-account", "GEMINI_API_KEY", "google-oauth"],
+        "Code executor only (never a harness). An Argus google account (a Gemini API "
+        "key or an imported Google OAuth subscription login) reaches it through the "
+        "vault; blocked without a gateway sentinel.",
+    ),
 ]
 
 # Opt-in executor: build() lists it only when the operator enables it (engines spec).

@@ -111,6 +111,8 @@ cp "$here/argus-cursor-stub.ts" "$target/src/gateway-providers/argus-cursor-stub
 cp "$here/argus-cursor-stub.test.ts" "$target/src/gateway-providers/argus-cursor-stub.test.ts"
 cp "$here/argus-copilot-stub.ts" "$target/src/gateway-providers/argus-copilot-stub.ts"
 cp "$here/argus-copilot-stub.test.ts" "$target/src/gateway-providers/argus-copilot-stub.test.ts"
+cp "$here/argus-agy-stub.ts" "$target/src/gateway-providers/argus-agy-stub.ts"
+cp "$here/argus-agy-stub.test.ts" "$target/src/gateway-providers/argus-agy-stub.test.ts"
 cp "$here/argus-opencode-stub.ts" "$target/src/gateway-providers/argus-opencode-stub.ts"
 cp "$here/argus-opencode-stub.test.ts" "$target/src/gateway-providers/argus-opencode-stub.test.ts"
 cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub.ts"
@@ -308,6 +310,23 @@ s = s.replace(tail, tail[:-2] + "), async () =>\n      onecliUrl ? opencodeExecu
 open(p, "w").write(s)
 PY
 fi
+if [ -f "$onecli_ts" ] && ! grep -q "withAgyDelegateRuntime" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { opencodeExecutorAssigned, withOpencodeDelegateRuntime } from './argus-opencode-stub.js';"
+assert needle in s, "run install after the OpenCode delegate hook is present"
+s = s.replace(needle, needle + "\nimport { agyExecutorAssigned, withAgyDelegateRuntime } from './argus-agy-stub.js';", 1)
+head = "  const config = await withOpencodeDelegateRuntime("
+tail = "onecliUrl ? opencodeExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : false);"
+assert head in s and tail in s, "onecli.ts ensureSession shape changed upstream"
+s = s.replace(head, "  const config = await withAgyDelegateRuntime(await withOpencodeDelegateRuntime(", 1)
+s = s.replace(tail, tail[:-2] + "), async () =>\n      onecliUrl ? agyExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : null);", 1)
+open(p, "w").write(s)
+PY
+  echo "patched $onecli_ts (Antigravity delegate sentinel runtime)"
+fi
 onecli_test="$target/src/gateway-providers/onecli.test.ts"
 if [ -f "$onecli_test" ] && grep -q 'expect(fetchMock).toHaveBeenCalledTimes(1);' "$onecli_test"; then
   python3 - "$onecli_test" <<'PY'
@@ -441,6 +460,8 @@ if "GIT_HTTP_PROXY_AUTHMETHOD" not in s:
     s = s.replace(old, new, 1)
 runtime_keys = [
     "CURSOR_CONFIG_DIR",
+    "GEMINI_API_KEY",
+    "ARGUS_AGY_OAUTH_STUB",
     "XDG_CONFIG_HOME",
     "ARGUS_REPOSITORIES_JSON",
     "ARGUS_GIT_AUTHOR_NAME",

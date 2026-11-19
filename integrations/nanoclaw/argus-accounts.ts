@@ -330,6 +330,89 @@ export function copilotProblem(c: Record<string, unknown>): string | null {
 }
 
 /**
+ * Where the pinned Antigravity CLI (`agy 1.5.12`) sends credentials in each mode
+ * (verified by offline proxy probe; google accounts spec 3).
+ * - API key mode: `x-goog-api-key` on generativelanguage.googleapis.com `/v1beta/models*`.
+ * - OAuth subscription mode: `Authorization: Bearer` on userinfo and Cloud Code endpoints.
+ */
+const GOOGLE_GEMINI_HOST = "generativelanguage.googleapis.com";
+export const GOOGLE_GEMINI_ENDPOINTS = [
+  { suffix: "-gemini", host: GOOGLE_GEMINI_HOST, pathPattern: "/v1beta/models*" },
+];
+export const GOOGLE_OAUTH_ENDPOINTS = [
+  { suffix: "-userinfo", host: "www.googleapis.com", pathPattern: "/oauth2/v2/userinfo" },
+  {
+    suffix: "-cloudcode-daily",
+    host: "daily-cloudcode-pa.googleapis.com",
+    pathPattern: "/v1internal*",
+  },
+  { suffix: "-cloudcode", host: "cloudcode-pa.googleapis.com", pathPattern: "/v1internal*" },
+];
+
+const GOOGLE_EXPIRY_MARGIN_MS = 5 * 60 * 1000;
+
+function googleOauthFields(c: Record<string, unknown>): Record<string, unknown> | null {
+  if (c.token && typeof c.token === "object" && !Array.isArray(c.token)) {
+    return c.token as Record<string, unknown>;
+  }
+  if ("access_token" in c) return c;
+  return null;
+}
+
+export function googleCredentialMode(c: Record<string, unknown>): "api_key" | "oauth" | null {
+  if ("api_key" in c) return "api_key";
+  if ("token" in c || "access_token" in c) return "oauth";
+  return null;
+}
+
+export function googleOauthAccessToken(c: Record<string, unknown>): string | null {
+  const fields = googleOauthFields(c);
+  return fields ? text(fields.access_token) : null;
+}
+
+export function googleOauthExpiryMs(c: Record<string, unknown>): number | null {
+  const fields = googleOauthFields(c);
+  if (!fields || typeof fields.expiry !== "string") return null;
+  const ms = Date.parse(fields.expiry);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Validate a Google (Antigravity) credential before OneCLI apply; names fields only. */
+export function googleProblem(c: Record<string, unknown>, now = Date.now()): string | null {
+  const hasKey = "api_key" in c;
+  const hasOauth = "token" in c || "access_token" in c;
+  if (!hasKey && !hasOauth) {
+    return "google credential needs api_key or an OAuth login document with access_token";
+  }
+  if (hasKey && hasOauth) {
+    return "google credential must give only one of api_key or an OAuth login document";
+  }
+  if (hasKey) {
+    const key = text(c.api_key);
+    if (!key) return "google api_key must be a non-empty string";
+    if (key.startsWith("ya29.") || key.startsWith("1//")) {
+      return "google api_key holds an OAuth token; import it as an OAuth login document";
+    }
+    return null;
+  }
+  const fields = googleOauthFields(c);
+  if (!fields) return "google token must be a JSON object";
+  const access = text(fields.access_token);
+  if (!access) return "google OAuth credential is missing access_token";
+  if (access.startsWith("AIza")) {
+    return "google access_token holds an API key; put it in api_key instead";
+  }
+  if (fields.expiry !== undefined && fields.expiry !== null) {
+    const exp = googleOauthExpiryMs(c);
+    if (exp === null) return "google OAuth expiry must be a valid ISO-8601 timestamp";
+    if (exp <= now + GOOGLE_EXPIRY_MARGIN_MS) {
+      return "google OAuth access_token is expired or within 5m of expiry; renew it in Argus";
+    }
+  }
+  return null;
+}
+
+/**
  * Where the pinned Copilot CLI (1.0.105) sends its bearer token for an individual
  * seat, from the fake-credential probe (fixtures/copilot-cli): token validation on
  * api.github.com and model calls on api.individual.githubcopilot.com. Exact paths
@@ -445,6 +528,23 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
     problem: (c) => copilotProblem(c),
     pick: (c) => text(c.token),
   },
+  // Google Antigravity (`agy`): API key (`x-goog-api-key` on Gemini API) or imported
+  // OAuth subscription (`Authorization: Bearer` on userinfo + Cloud Code). `mappingForLease`
+  // picks the mode's secret set from the credential shape; real credentials never enter the worker.
+  google: {
+    type: "generic",
+    host: GOOGLE_GEMINI_HOST,
+    engine: "",
+    executorOnly: true,
+    secretSuffix: "-google",
+    generic: {
+      headerName: "x-goog-api-key",
+      valueFormat: "{value}",
+      endpoints: GOOGLE_GEMINI_ENDPOINTS,
+    },
+    problem: googleProblem,
+    pick: (c) => text(c.api_key) ?? googleOauthAccessToken(c),
+  },
 };
 
 /**
@@ -464,6 +564,7 @@ const EXECUTOR_BY_PROVIDER: Record<string, string> = {
   openai: "codex",
   cursor: "agent",
   copilot: "copilot",
+  google: "agy",
   local: "opencode",
   custom: "opencode",
 };
@@ -484,6 +585,21 @@ export function providerForExecutor(
 
 /** Custom engine bridges never authorize a CLI: only an explicit executor lease does. */
 function mappingForLease(lease: AccountLease): ProviderMapping | undefined {
+  if (lease.provider === "google") {
+    const mode = googleCredentialMode(lease.credential);
+    if (mode === "oauth") {
+      return {
+        ...PROVIDERS.google!,
+        host: "daily-cloudcode-pa.googleapis.com",
+        generic: {
+          headerName: "Authorization",
+          valueFormat: "Bearer {value}",
+          endpoints: GOOGLE_OAUTH_ENDPOINTS,
+        },
+      };
+    }
+    return PROVIDERS.google;
+  }
   if (lease.provider !== "custom" || lease.role !== "executor") return PROVIDERS[lease.provider];
   if (!openRouterExecutorSettings(lease.settings) || !lease.settings?.model)
     throw new Error("custom executor requires OpenRouter settings and an executor model");
@@ -1035,7 +1151,11 @@ async function applyLeasesPrepared(
     if (done.has(names[0]!)) continue; // one account per provider: the first lease wins
     done.add(names[0]!);
     if (mapping.harnessEnvOnly) continue;
-    if (lease.role === "executor") executorExpiresAt = jwtExpiryMs(value);
+    if (lease.role === "executor") {
+      executorExpiresAt =
+        jwtExpiryMs(value) ??
+        (lease.provider === "google" ? googleOauthExpiryMs(lease.credential) : null);
+    }
     for (const [index, secretName] of names.entries()) {
       const endpoint = mapping.generic?.endpoints[index];
       const body = endpoint

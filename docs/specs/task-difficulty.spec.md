@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-17
+updated: 2026-11-19
 ---
 
 # Task difficulty, executor routing and the hard tier
@@ -74,7 +74,7 @@ explicit list, or when task model/account pins choose the whole legacy pin path.
   Routing with no chain configured is unchanged. The legacy override is the setting `difficulty.executors`
   ([settings](settings.spec.md)) or `ARGUS_DIFFICULTY_EXECUTORS` (env wins), a
   JSON object of difficulty → ordered list of `claude` | `codex` | `opencode` |
-  `agent`. An **empty list** (or the sole sentinel `none`) means **no delegated
+  `agent` | `agy`. An **empty list** (or the sole sentinel `none`) means **no delegated
   executor**: NanoClaw (the harness) does the work itself — no executor lease,
   no mandatory `argus-delegate`. That pairs with `trivial`'s **soft** preference
   for the `local` account: `{"trivial": []}` means “harness does everything”,

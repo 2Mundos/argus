@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-17
+updated: 2026-11-19
 ---
 
 # Task models
@@ -52,9 +52,9 @@ explicit list, or when task model/account pins choose the whole legacy pin path.
 | Field | Shape | Provider it needs |
 | --- | --- | --- |
 | `harness_model` | `{engine: claude \| codex, model}` or `null` | `claude` → `anthropic`, `codex` → `openai` |
-| `executor_model` | `{executor: claude \| codex \| agent \| opencode \| copilot, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local`, `copilot` → `copilot` |
+| `executor_model` | `{executor: claude \| codex \| agent \| opencode \| copilot \| agy, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local`, `copilot` → `copilot`, `agy` → `google` |
 
-The `copilot` executor is executor-only: it runs on the `copilot` provider, never an engine.
+The `copilot` and `agy` executors are executor-only: they run on `copilot` and `google` respectively, never as an engine.
 
 An OpenCode pin optionally carries `account_provider: local | custom`. Omitted or
 null preserves the existing `local` route; `custom` strictly leases the existing

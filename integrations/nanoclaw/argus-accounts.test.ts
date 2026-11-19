@@ -36,6 +36,7 @@ import {
   exchangeCursorApiKey,
   executorFirst,
   executorFor,
+  googleProblem,
   jwtExpiryMs,
   OneCliClient,
   preferredExecutorForLease,
@@ -1055,7 +1056,15 @@ describe("engine and executor leases in the channel", () => {
       { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
+        runtime_providers: [
+          "anthropic",
+          "openai",
+          "local",
+          "custom",
+          "cursor",
+          "copilot",
+          "google",
+        ],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1517,6 +1526,156 @@ describe("copilot credential documents", () => {
   });
 });
 
+// -- google (Antigravity) accounts (docs/specs/google-accounts.spec.md) ----------------
+
+const GOOGLE_API_KEY = "AIzaFAKE_TEST_KEY_NOT_REAL";
+const GOOGLE_OAUTH_ACCESS = "ya29.FAKE_TEST_ACCESS_NOT_REAL";
+const GOOGLE_OAUTH_EXPIRY = "2099-01-01T00:00:00Z";
+const googleApiKeyLease = (over: Partial<AccountLease> = {}) =>
+  lease("google-1", "", {
+    provider: "google",
+    kind: "api_key",
+    credential: { api_key: GOOGLE_API_KEY },
+    role: "executor",
+    ...over,
+  });
+const googleOauthLease = (over: Partial<AccountLease> = {}) =>
+  lease("google-2", "", {
+    provider: "google",
+    kind: "subscription",
+    credential: {
+      token: {
+        access_token: GOOGLE_OAUTH_ACCESS,
+        token_type: "Bearer",
+        expiry: GOOGLE_OAUTH_EXPIRY,
+      },
+    },
+    role: "executor",
+    ...over,
+  });
+
+describe("google credential documents", () => {
+  const target = { identifier: "g", name: "G" };
+
+  it("is an executor-only provider run by the agy delegate", () => {
+    expect(runtimeProviders("engine")).not.toContain("google");
+    expect(runtimeProviders("executor")).toContain("google");
+    expect(executorFor("google")).toBe("agy");
+    expect(providerForExecutor("agy")).toBe("google");
+    expect(preferredExecutorForLease(codexLease(), googleApiKeyLease())).toBe("agy");
+  });
+
+  it("maps an API key to x-goog-api-key on generativelanguage.googleapis.com", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    const out = await applyLeasesDetailed(onecli, target, [codexLease(), googleApiKeyLease()]);
+    expect(out.executorExpiresAt).toBeNull();
+    const posts = w.calls
+      .filter((c) => c.path === "/secrets" && c.method === "POST")
+      .map((c) => c.body)
+      .filter((b) => String(b.name).startsWith("argus-g-google-"));
+    expect(posts).toEqual([
+      {
+        name: "argus-g-google-gemini",
+        type: "generic",
+        value: GOOGLE_API_KEY,
+        hostPattern: "generativelanguage.googleapis.com",
+        pathPattern: "/v1beta/models*",
+        injectionConfig: { headerName: "x-goog-api-key", valueFormat: "{value}" },
+      },
+    ]);
+    expect(
+      injects(posts, "generativelanguage.googleapis.com", "/v1beta/models/gemini:generateContent"),
+    ).toBe(true);
+    expect(injects(posts, "generativelanguage.googleapis.com", "/v1/files")).toBe(false);
+    expect(injects(posts, "daily-cloudcode-pa.googleapis.com", "/v1internal:generateContent")).toBe(
+      false,
+    );
+  });
+
+  it("maps an OAuth login document to Bearer secrets and reports expiry", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    const out = await applyLeasesDetailed(onecli, target, [codexLease(), googleOauthLease()]);
+    expect(out.executorExpiresAt).toBe(Date.parse(GOOGLE_OAUTH_EXPIRY));
+    const posts = w.calls
+      .filter((c) => c.path === "/secrets" && c.method === "POST")
+      .map((c) => c.body)
+      .filter((b) => String(b.name).startsWith("argus-g-google-"));
+    expect(posts.map((b) => [b.name, b.hostPattern, b.pathPattern])).toEqual([
+      ["argus-g-google-userinfo", "www.googleapis.com", "/oauth2/v2/userinfo"],
+      ["argus-g-google-cloudcode-daily", "daily-cloudcode-pa.googleapis.com", "/v1internal*"],
+      ["argus-g-google-cloudcode", "cloudcode-pa.googleapis.com", "/v1internal*"],
+    ]);
+    for (const b of posts) {
+      expect(b).toMatchObject({
+        type: "generic",
+        value: GOOGLE_OAUTH_ACCESS,
+        injectionConfig: { headerName: "Authorization", valueFormat: "Bearer {value}" },
+      });
+    }
+    expect(injects(posts, "www.googleapis.com", "/oauth2/v2/userinfo")).toBe(true);
+    expect(
+      injects(posts, "daily-cloudcode-pa.googleapis.com", "/v1internal:streamGenerateContent"),
+    ).toBe(true);
+    expect(injects(posts, "cloudcode-pa.googleapis.com", "/v1internal:loadCodeAssist")).toBe(true);
+    expect(injects(posts, "generativelanguage.googleapis.com", "/v1beta/models")).toBe(false);
+    expect(injects(posts, "www.googleapis.com", "/drive/v3/files")).toBe(false);
+  });
+
+  it("unassigns prior google secrets when switching modes or releasing", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    await applyLeases(onecli, target, [codexLease(), googleApiKeyLease()]);
+    await applyLeases(onecli, target, [codexLease(), googleOauthLease()]);
+    const assignedOauth = w.onecli.agents[0]!.secrets.map(
+      (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
+    );
+    expect(assignedOauth).toEqual([
+      "argus-g-openai",
+      "argus-g-google-userinfo",
+      "argus-g-google-cloudcode-daily",
+      "argus-g-google-cloudcode",
+    ]);
+    await applyLeases(onecli, target, [codexLease()]);
+    const after = w.onecli.agents[0]!.secrets.map(
+      (id) => w.onecli.secrets.find((s) => s.id === id)!.name,
+    );
+    expect(after).toEqual(["argus-g-openai"]);
+  });
+
+  it.each([
+    [{}, /needs api_key or an OAuth/],
+    [{ api_key: GOOGLE_API_KEY, access_token: GOOGLE_OAUTH_ACCESS }, /only one of api_key/],
+    [{ api_key: GOOGLE_OAUTH_ACCESS }, /holds an OAuth token/],
+    [{ token: { access_token: GOOGLE_API_KEY } }, /holds an API key/],
+    [
+      { token: { access_token: GOOGLE_OAUTH_ACCESS, expiry: "2020-01-01T00:00:00Z" } },
+      /expired or within 5m/,
+    ],
+  ])("rejects %j without echoing the secret", async (credential, message) => {
+    expect(googleProblem(credential)).toMatch(message);
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    const err = await applyLeases(onecli, target, [
+      codexLease(),
+      googleApiKeyLease({ credential }),
+    ]).catch((e) => e);
+    expect(String(err.message)).toMatch(/google-1 \(google\)/);
+    expect(String(err.message)).not.toContain(GOOGLE_API_KEY);
+    expect(String(err.message)).not.toContain(GOOGLE_OAUTH_ACCESS);
+    expect(w.onecli.secrets).toEqual([]);
+  });
+
+  it("is never an engine lease", async () => {
+    const w = world({ leases: [] });
+    const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
+    await expect(
+      applyLeases(onecli, target, [googleApiKeyLease({ role: "engine" })]),
+    ).rejects.toThrow(/executor, not an engine/);
+  });
+});
+
 describe("exchangeCursorApiKey", () => {
   it("refuses a response without a usable JWT accessToken", async () => {
     const bad = (body: unknown, status = 200) =>
@@ -1545,7 +1704,15 @@ describe("cursor executor selection in the channel", () => {
       { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
+        runtime_providers: [
+          "anthropic",
+          "openai",
+          "local",
+          "custom",
+          "cursor",
+          "copilot",
+          "google",
+        ],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -1863,7 +2030,15 @@ describe("task-scoped repository auth", () => {
         },
         {
           role: "executor",
-          runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
+          runtime_providers: [
+            "anthropic",
+            "openai",
+            "local",
+            "custom",
+            "cursor",
+            "copilot",
+            "google",
+          ],
           reuse_held: true,
           task_id: REPO_ID,
           attempt: 1,
@@ -3174,7 +3349,15 @@ describe("global account selection in the channel", () => {
     expect(calls).toEqual([
       {
         role: "executor",
-        runtime_providers: ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
+        runtime_providers: [
+          "anthropic",
+          "openai",
+          "local",
+          "custom",
+          "cursor",
+          "copilot",
+          "google",
+        ],
         reuse_held: true,
         task_id: "t1",
         attempt: 1,
@@ -4154,7 +4337,7 @@ describe("Cursor first on a local or custom engine lease", () => {
     const { calls } = await executorCalls(["no_account", "no_account"]);
     expect(calls).toEqual([
       ["cursor"],
-      ["anthropic", "openai", "local", "custom", "cursor", "copilot"],
+      ["anthropic", "openai", "local", "custom", "cursor", "copilot", "google"],
     ]);
   });
 

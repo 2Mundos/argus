@@ -4425,7 +4425,7 @@ export interface components {
          */
         Alternative: {
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** Model */
             model?: string | null;
             /** Provider */
@@ -7033,6 +7033,72 @@ export interface components {
              *         "same_provider_same_account": true
              *       },
              *       {
+             *         "adapter": "agy",
+             *         "effort_interface": "agy --effort <level>",
+             *         "effort_model_rules": [
+             *           {
+             *             "efforts": [
+             *               "low",
+             *               "medium",
+             *               "high",
+             *               "xhigh"
+             *             ],
+             *             "models": [
+             *               "gemini-4-neon",
+             *               "gemini-4-hydrogen"
+             *             ],
+             *             "prefixes": []
+             *           },
+             *           {
+             *             "efforts": [
+             *               "low",
+             *               "medium",
+             *               "high"
+             *             ],
+             *             "models": [
+             *               "gemini-4-carbon",
+             *               "gemini-4-argon",
+             *               "gemini-3.8-flash",
+             *               "gemini-3.7-flash",
+             *               "gemini-3.6-flash"
+             *             ],
+             *             "prefixes": []
+             *           },
+             *           {
+             *             "efforts": [
+             *               "low",
+             *               "high"
+             *             ],
+             *             "models": [
+             *               "gemini-3.1-pro"
+             *             ],
+             *             "prefixes": []
+             *           }
+             *         ],
+             *         "effort_unlisted_models": "unverified",
+             *         "efforts": [
+             *           "low",
+             *           "medium",
+             *           "high",
+             *           "xhigh",
+             *           "max"
+             *         ],
+             *         "excluded_harness_providers": [
+             *           "local"
+             *         ],
+             *         "id": "nanoclaw:executor:agy:google",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "google",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": true
+             *       },
+             *       {
              *         "adapter": "opencode",
              *         "effort_model_rules": [],
              *         "efforts": [],
@@ -7276,7 +7342,7 @@ export interface components {
             /** Evidence Reason */
             evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** Id */
             id: string;
             /** Key */
@@ -7398,7 +7464,7 @@ export interface components {
              * Executor
              * @enum {string}
              */
-            executor: "claude" | "codex" | "agent" | "opencode" | "copilot";
+            executor: "claude" | "codex" | "agent" | "opencode" | "copilot" | "agy";
             /** Model */
             model: string;
         };
@@ -8404,7 +8470,7 @@ export interface components {
             /** Executions */
             executions: number;
             /** Executor */
-            executor: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            executor: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** Observed Model */
             observed_model: string | null;
             /** Provider */
@@ -11388,7 +11454,7 @@ export interface components {
             /** From Account Id */
             from_account_id?: string | null;
             /** From Executor */
-            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** From Model */
             from_model?: string | null;
             /** From Provider */
@@ -11423,7 +11489,7 @@ export interface components {
             /** To Account Id */
             to_account_id?: string | null;
             /** To Executor */
-            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** To Model */
             to_model?: string | null;
             /** To Provider */
@@ -11437,7 +11503,7 @@ export interface components {
              * Adapter
              * @enum {string}
              */
-            adapter: "claude" | "codex" | "agent" | "copilot" | "opencode";
+            adapter: "claude" | "codex" | "agent" | "copilot" | "opencode" | "agy";
             /** Effort */
             effort?: string | null;
             /** Model */
@@ -11446,7 +11512,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "anthropic" | "openai" | "local" | "custom" | "cursor" | "copilot";
+            provider: "anthropic" | "openai" | "local" | "custom" | "cursor" | "copilot" | "google";
         };
         /** ServiceContract */
         ServiceContract: {
@@ -13726,7 +13792,7 @@ export interface components {
             /** Evidence Reason */
             evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** Key */
             key: string;
             /**
@@ -13778,7 +13844,7 @@ export interface components {
             /** From Account Name */
             from_account_name?: string | null;
             /** From Executor */
-            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** From Model */
             from_model?: string | null;
             /** From Provider */
@@ -13824,7 +13890,7 @@ export interface components {
             /** To Account Name */
             to_account_name?: string | null;
             /** To Executor */
-            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot") | null;
+            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
             /** To Model */
             to_model?: string | null;
             /** To Provider */

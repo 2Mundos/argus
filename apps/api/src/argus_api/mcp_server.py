@@ -2200,7 +2200,7 @@ async def get_model_policy(ctx: Context) -> dict:
 @tool(ADMINS)
 async def set_model_policy(ctx: Context, harness: dict, implementation: dict) -> dict:
     """Replace the whole model policy (admin only). Both maps are required; each maps an
-    engine (codex, claude, opencode, agent) to a nonempty chain of at most 10 distinct
+    engine (codex, claude, opencode, agent, agy) to a nonempty chain of at most 10 distinct
     model IDs. A bad chain is a 422 naming it. New NanoClaw instances pick it up."""
     return await _call(
         ctx,
@@ -2221,9 +2221,9 @@ async def reset_model_policy(ctx: Context) -> dict:
 
 @tool(ANYONE)
 async def list_engines(ctx: Context) -> dict:
-    """Engines (claude, codex, opencode, cursor-agent) and the local model. Each entry
+    """Engines (claude, codex, opencode, cursor-agent, antigravity) and the local model. Each entry
     lists its `layers`: the NanoClaw `harness` and the code `executor` (claude and codex
-    have both, cursor-agent and opencode only the executor). Every layer has its own
+    have both, cursor-agent, antigravity and opencode only the executor). Every layer has its own
     `readiness` (installed, authenticated, validated; ok=null is unknown), `accounts` and
     `usable` (true only when all three hold). Validating one layer proves nothing about
     the other. The top-level `readiness`, `accounts`, `usable` and `role` are the

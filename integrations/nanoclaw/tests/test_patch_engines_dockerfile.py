@@ -19,6 +19,7 @@ REQUIRED = {
     "/usr/local/bin/argus-delegate",
     "/usr/local/bin/argus-gitea-api",
     "/usr/local/bin/argus-github-api",
+    "/tmp/argus-engines/install-agy.sh",
     "/tmp/argus-engines/account-settings.mjs",
     "/tmp/argus-engines/opencode-gateway.mjs",
     "/tmp/argus-engines/anthropic-redirect.mjs",
@@ -51,7 +52,7 @@ def patch(path: Path) -> subprocess.CompletedProcess[str]:
 def argus_block(s: str) -> tuple[list[str], str]:
     """The Argus COPY line's sources and its RUN step (up to the cleanup)."""
     (copy,) = re.findall(
-        r"^COPY (install-cursor-agent\.sh(?: install-copilot-cli\.sh)? argus-delegate\.mjs.*) "
+        r"^COPY (install-cursor-agent\.sh(?: install-copilot-cli\.sh)?(?: install-agy\.sh)? argus-delegate\.mjs.*) "
         + re.escape(STAGE)
         + "$",
         s,

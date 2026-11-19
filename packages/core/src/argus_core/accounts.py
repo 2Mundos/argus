@@ -18,7 +18,7 @@ LeaseRole = Literal["engine", "executor", "repository"]
 # (never a NanoClaw harness) can run on.
 GITHUB_HOST = "github.com"
 REPOSITORY_PROVIDERS = frozenset({"gitea", "github"})
-EXECUTOR_ONLY = frozenset({"cursor", "copilot"})
+EXECUTOR_ONLY = frozenset({"cursor", "copilot", "google"})
 # The node's own model, served on loopback (local harness spec): harness and/or
 # OpenCode executor, holding no real credential and no quota of its own.
 LOCAL_PROVIDER = "local"

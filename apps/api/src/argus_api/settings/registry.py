@@ -2,10 +2,16 @@
 
 from typing import Any
 
-from argus_core.difficulty import Difficulty
+from argus_core.difficulty import (
+    DIFFICULTY_EXECUTOR_CLIS,
+    NONE_EXECUTOR,
+    Difficulty,
+)
 from argus_core.execution_chains import ExecutionChains
 from argus_core.settings import IndependentReviewSetting, SettingDefinition
 from argus_core.tasks import Deliverable
+
+from argus_api.model_policy import ENGINES as MODEL_POLICY_ENGINES
 
 # JSON Schema for a model-policy map (engine -> nonempty chain). Used for both the
 # full global policy and a partial project override.
@@ -22,7 +28,7 @@ _CHAIN = {
 _ENGINE_MAP = {
     "type": "object",
     "additionalProperties": False,
-    "propertyNames": {"enum": ["codex", "claude", "opencode", "agent"]},
+    "propertyNames": {"enum": sorted(MODEL_POLICY_ENGINES)},
     "patternProperties": {".*": _CHAIN},
 }
 _MODELS_SCHEMA: dict[str, Any] = {
@@ -58,10 +64,10 @@ _DIFFICULTY_EXECUTORS_SCHEMA: dict[str, Any] = {
     "patternProperties": {
         ".*": {
             "type": "array",
-            "maxItems": 4,
+            "maxItems": len(DIFFICULTY_EXECUTOR_CLIS),
             "items": {
                 "type": "string",
-                "enum": ["claude", "codex", "opencode", "agent", "none"],
+                "enum": [*sorted(DIFFICULTY_EXECUTOR_CLIS), NONE_EXECUTOR],
             },
             "uniqueItems": True,
         }

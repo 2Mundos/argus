@@ -829,6 +829,7 @@ _AUTH_REJECTED_REASONS = {
     "openai": "OpenAI/Codex authentication expired",
     "anthropic": "Claude authentication failed",
     "copilot": "The executor CLI rejected the account credential",
+    "google": "The executor CLI rejected the account credential",
 }
 
 

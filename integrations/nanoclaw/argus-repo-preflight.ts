@@ -406,8 +406,9 @@ export function sessionRepositoryProbe(
 /**
  * Executors whose credential the preflight session can see. The session gets the gateway
  * contribution (onecli.ts `ensureSession`, keyed by the agent group): the Claude and Cursor
- * stubs, the Codex stub, and the Copilot sentinel, so `claude`, `codex`, `agent` and
- * `copilot` are probed. OpenCode on an explicit custom executor lease is also probed:
+ * stubs, the Codex stub, the Copilot sentinel, and the Antigravity (`agy`) sentinel/stub,
+ * so `claude`, `codex`, `agent`, `copilot` and `agy` are probed. OpenCode on an explicit
+ * custom executor lease is also probed:
  * its scoped OpenRouter sentinel and probe settings are part of the gateway contribution.
  * Other `opencode` routes are not: their credential is an `auth.json`, an attached
  * server (`ARGUS_OPENCODE_ATTACH`), or a custom or local account whose base URL and key
@@ -422,6 +423,7 @@ export const PROBED_EXECUTORS: ReadonlySet<string> = new Set([
   "codex",
   "agent",
   "copilot",
+  "agy",
 ]);
 
 /** Exit codes of `argus-delegate` (engines spec) and the fixed text each blocks with. */

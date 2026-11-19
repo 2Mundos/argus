@@ -14,6 +14,8 @@ export const GITEA_PROVIDER = "gitea";
 export const GITHUB_PROVIDER = "github";
 /** Executor-only subscription account: a token the operator already owns. */
 export const COPILOT_PROVIDER = "copilot";
+/** Executor-only Google Antigravity account: Gemini API key or imported OAuth login. */
+export const GOOGLE_PROVIDER = "google";
 
 const PROVIDER_ID = /^[a-z0-9_-]{1,50}$/;
 
@@ -96,10 +98,21 @@ export function nativeAuthNotice(providerId: string): string | undefined {
     );
   }
   if (providerId === COPILOT_PROVIDER) return copilotTokenNotice();
+  if (providerId === GOOGLE_PROVIDER) return googleCredentialNotice();
   return undefined;
 }
 
 const COPILOT_PREFIXES = ["github_pat_", "gho_", "ghu_"];
+
+/** Accepted Google/Antigravity credential shapes, as the import form states them. */
+export function googleCredentialNotice(): string {
+  return (
+    'A Google (Antigravity) account accepts either a Gemini API key ({"api_key": "…"}) ' +
+    "or an imported agy OAuth login file (antigravity-oauth-token JSON with access_token). " +
+    "The account kind (api_key or subscription) is derived from the credential. " +
+    "It is used only as an executor (agy), never as an engine, and is write-only."
+  );
+}
 
 /** Accepted and rejected Copilot token types, as the import form states them. */
 export function copilotTokenNotice(): string {

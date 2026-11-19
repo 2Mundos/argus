@@ -13,6 +13,9 @@
 // Provenance of the parsers:
 //   claude   - verified against a real `claude -p --output-format json` result
 //              (fixtures/claude-result.json, trimmed).
+//   agy      - verified against a real `agy 1.5.12 --output-format stream-json` run
+//              (fixtures/agy-stream.jsonl): input_tokens already excludes cache_read_tokens,
+//              output_tokens already includes thinking_tokens.
 //   dsh      - SYNTHETIC / UNVERIFIED: fixtures/dsh-headless.jsonl is written from the
 //              draft (docs/drafts/2026-11-04.dsh-engine.draft.md), not recorded. Re-record
 //              it with the pinned dsh before trusting a figure; until then a miss is
@@ -207,12 +210,37 @@ function parseDsh(objects) {
   return measured(sum, typeof final.model === "string" ? final.model : null, 1);
 }
 
+/** agy --output-format stream-json: `result` event's `result.usage` (verified on agy 1.5.12). */
+function parseAgy(objects) {
+  const init = objects.find((o) => o.event === "init" && isObject(o.init));
+  const resEvent = [...objects].reverse().find((o) => o.event === "result" && isObject(o.result));
+  if (!resEvent) return notReported("no_result_object");
+  const res = resEvent.result;
+  const u = res.usage;
+  const input = first(u, "input_tokens");
+  const output = first(u, "output_tokens");
+  if (input === null || output === null) return notReported("no_usage_in_result");
+  const cached = first(u, "cache_read_tokens") ?? 0;
+  // agy emits all-zero usage on pre-call errors (401, invalid model); never report that as measured.
+  if (res.status === "ERROR" && input === 0 && output === 0 && cached === 0) {
+    return notReported("no_usage_in_result");
+  }
+  const model = typeof init?.init?.model === "string" && init.init.model ? init.init.model : null;
+  const turns = num(res.num_turns) ?? 1;
+  return measured(
+    sumTokens([{ input, output, cached, cost: null, turns }]),
+    model,
+    turns > 0 ? turns : 1,
+  );
+}
+
 const PARSERS = {
   claude: parseClaude,
   codex: parseCodex,
   agent: parseAgent,
   opencode: parseOpencode,
   dsh: parseDsh,
+  agy: parseAgy,
   // copilot -s prints the answer only: the pinned CLI (1.0.105) has no usage output.
   copilot: () => notReported("no_usage_output"),
 };

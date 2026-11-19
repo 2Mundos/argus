@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { copilotAuthRejected } from "./engines/argus-delegate.mjs";
+import { agyAuthRejected, copilotAuthRejected } from "./engines/argus-delegate.mjs";
 import { parseUsage } from "./engines/usage.mjs";
 import {
   claudeAuthExpiredError,
@@ -110,6 +110,30 @@ export function deriveCopilot(run: string | { stdout?: string; stderr?: string }
   };
 }
 
+interface AgyEvent {
+  event?: string;
+  result?: {
+    status?: string;
+    error?: string;
+    finished_reason?: string;
+    usage?: unknown;
+  };
+}
+
+/** Antigravity CLI (`agy --output-format stream-json`) transcript derivation. */
+export function deriveAgy(events: AgyEvent[]) {
+  const stdout = events.map((ev) => JSON.stringify(ev)).join("\n");
+  const result = events.findLast((ev) => ev.event === "result");
+  return {
+    result: {
+      status: result?.result?.status,
+      finished_reason: result?.result?.finished_reason,
+    },
+    authRejected: agyAuthRejected(stdout),
+    usage: parseUsage("agy", stdout),
+  };
+}
+
 /** The host-side facts of one claim, as the `tasks` row and its attempt carry them (stall visibility 3.7). */
 export interface StallRow {
   state: "claimed" | "queued";
@@ -171,6 +195,7 @@ export const DERIVE = {
   codex: deriveCodex,
   cursor: deriveCursor,
   copilot: deriveCopilot,
+  agy: deriveAgy,
 } as const;
 
 /** Engines whose recordings are plain text rather than JSON lines. */

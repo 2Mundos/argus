@@ -29,7 +29,7 @@ export type IndependentReview = {
 };
 
 export type DifficultyLevel = "trivial" | "simple" | "standard" | "hard";
-export type DifficultyExecutor = "claude" | "codex" | "opencode" | "agent";
+export type DifficultyExecutor = "claude" | "codex" | "opencode" | "agent" | "agy";
 export const DIFFICULTY_LEVELS: DifficultyLevel[] = ["trivial", "simple", "standard", "hard"];
 
 /** Built-in executor order where a level has no execution chain (task difficulty spec). */

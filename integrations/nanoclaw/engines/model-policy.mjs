@@ -102,6 +102,7 @@ export const EFFORTS = {
   "executor:claude:anthropic": CLAUDE_EFFORTS,
   "executor:codex:openai": ["low", "medium", "high", "xhigh", "max", "ultra"],
   "executor:copilot:copilot": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+  "executor:agy:google": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /** The configured effort of one role of an execution route; null when omitted. */

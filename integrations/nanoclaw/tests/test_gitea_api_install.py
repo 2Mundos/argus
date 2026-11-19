@@ -484,6 +484,22 @@ def test_install_sh_wires_copilot_delegate_runtime() -> None:
     assert "install-copilot-cli.sh" in engines
 
 
+def test_install_sh_wires_agy_delegate_runtime() -> None:
+    """Channel install copies the Antigravity stub and patches OneCLI when present."""
+    script = INSTALL_SH.read_text(encoding="utf-8")
+    for needle in (
+        "argus-agy-stub.ts",
+        "argus-agy-stub.test.ts",
+        "withAgyDelegateRuntime",
+        "agyExecutorAssigned",
+    ):
+        assert needle in script, needle
+    assert (NANOCLAW / "argus-agy-stub.ts").is_file()
+    assert (NANOCLAW / "engines" / "install-agy.sh").is_file()
+    engines = INSTALL_ENGINES.read_text(encoding="utf-8")
+    assert "install-agy.sh" in engines
+
+
 def test_install_sh_forwards_git_identity_to_worker_shells() -> None:
     script = INSTALL_SH.read_text(encoding="utf-8")
     assert "if (value?.trim()) contributedEnv[key] = value;" in script
