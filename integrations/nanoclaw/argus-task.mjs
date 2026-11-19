@@ -1050,6 +1050,9 @@ const PRE_PUSH_CHECKS = [
     name: "path check",
     argv: ["python3", "scripts/check_paths.py", "--json"],
     violations: true,
+    // Argus-specific: a repository without the script has no path policy, so the check is
+    // reported as not applicable. A script that is present always runs and fails closed.
+    onlyIfPresent: "scripts/check_paths.py",
   },
   { name: "make check-changed", argv: ["make", "check-changed"] },
   { name: "gitleaks", argv: ["gitleaks", "version"], probe: true },
@@ -1097,6 +1100,16 @@ function defaultRunCheck(argv, cwd, env) {
   return { missing: false, status: r.status, output: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+/** True when anything, even a dangling symlink, is at the path: only a clear absence is "not applicable". */
+function pathExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (e) {
+    return e?.code !== "ENOENT" && e?.code !== "ENOTDIR";
+  }
+}
+
 /** The `[{path, rule, action}]` list `check_paths.py --json` prints, or null when the output is not that. */
 function parseViolations(output) {
   try {
@@ -1109,10 +1122,11 @@ function parseViolations(output) {
 
 /**
  * Run the pre-push checks on HEAD, the commit deliver is about to push. Returns null when every
- * check passed, or the failed check. Throws when the tree is not clean at HEAD, a check cannot run,
+ * check passed, or the failed check. A check that does not apply to the repository is pushed onto
+ * `notApplicable` and skipped; every other check still runs. Throws when the tree is not clean at HEAD, a check cannot run,
  * or HEAD or the tree changed while the checks ran (the checks would not describe the pushed commit).
  */
-function prePushChecks(git, cwd, ctx) {
+function prePushChecks(git, cwd, ctx, notApplicable = []) {
   const clean = () => gitStep(git, ["status", "--porcelain"], cwd) === "";
   const head = gitStep(git, ["rev-parse", "HEAD"], cwd);
   if (!clean())
@@ -1122,6 +1136,10 @@ function prePushChecks(git, cwd, ctx) {
       COMMIT_ACTION,
     );
   for (const check of PRE_PUSH_CHECKS) {
+    if (check.onlyIfPresent && !pathExists(resolve(cwd, check.onlyIfPresent))) {
+      notApplicable.push({ check: check.name, reason: `${check.onlyIfPresent} not found` });
+      continue;
+    }
     const r = ctx.runCheck(check.argv, cwd, ctx.env);
     if (r.missing)
       throw failure(
@@ -1254,7 +1272,8 @@ async function deliver(api, o, ctx) {
     rebased = true;
   }
   // After any rebase, so the checks run on the commit that is pushed.
-  const failed = prePushChecks(git, cwd, ctx);
+  const notApplicable = [];
+  const failed = prePushChecks(git, cwd, ctx, notApplicable);
   if (failed)
     return {
       code: EXIT.not_ready,
@@ -1263,6 +1282,7 @@ async function deliver(api, o, ctx) {
         base,
         reasons: ["pre_push_failed"],
         action: "fix the failing check, commit the fix, then run deliver again",
+        ...(notApplicable.length ? { checks_not_applicable: notApplicable } : {}),
         ...failed,
       },
     };
@@ -1295,6 +1315,7 @@ async function deliver(api, o, ctx) {
       base,
       created: !existing,
       rebased,
+      ...(notApplicable.length ? { checks_not_applicable: notApplicable } : {}),
       sync: rebased
         ? `rebased the branch onto origin/${base}`
         : `branch already contains origin/${base}; no rebase needed`,
