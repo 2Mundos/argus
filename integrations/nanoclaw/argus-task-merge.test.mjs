@@ -144,6 +144,42 @@ const agentic = (n, sha = HEAD) => [
   },
 ];
 
+describe("merge: agentic-review CI with review policy off", () => {
+  for (const [name, review, code, reason] of [
+    ["pending", { status: "in_progress", conclusion: null }, EXIT.pending, "ci_running"],
+    ["failure", { conclusion: "failure" }, EXIT.not_ready, "ci_failed"],
+    ["unknown", { conclusion: "unrecognized" }, EXIT.pending, "ci_unknown"],
+    ["missing conclusion", { conclusion: null }, EXIT.pending, "ci_unknown"],
+  ]) {
+    it(`${name} blocks a green neighboring check`, async () => {
+      const f = forge({
+        runs: [checkRun(), checkRun({ id: 12, name: "agentic-review", ...review })],
+      });
+      const r = await merge(f, ["--max", "20"]);
+      assert.equal(r.code, code, r.err);
+      assert.ok((r.out.waiting ?? r.out.blocked).includes(reason), JSON.stringify(r.out));
+      assert.deepEqual(f.writes, []);
+    });
+  }
+  for (const conclusion of ["success", "skipped"]) {
+    it(`${conclusion} permits merge alongside an executed successful check`, async () => {
+      const f = forge({
+        runs: [checkRun(), checkRun({ id: 12, name: "agentic-review", conclusion })],
+      });
+      const r = await merge(f);
+      assert.equal(r.code, EXIT.ok, r.err);
+      assert.equal(f.s.mergeBody.sha, HEAD);
+    });
+  }
+  it("all-skipped review is not execution", async () => {
+    const f = forge({ runs: [checkRun({ name: "agentic-review", conclusion: "skipped" })] });
+    const r = await merge(f);
+    assert.equal(r.code, EXIT.not_ready, r.err);
+    assert.ok(r.out.blocked.includes("ci_not_executed"));
+    assert.deepEqual(f.writes, []);
+  });
+});
+
 describe("merge: happy path", () => {
   it("merges once at the exact head and confirms the PR through a forge read", async () => {
     const f = forge();

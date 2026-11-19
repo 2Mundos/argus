@@ -71,7 +71,6 @@ const ERROR_LINE =
   /\b(?:errors?|failed|failure|fail|traceback|panic)\b|[a-z](?:Error|Exception)\b|\bassert|exit (?:code|status) [1-9]/i;
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 const TIMESTAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\s?/;
-const AGENTIC_REVIEW = /agentic[\s_-]*review/i;
 
 // ---- git and the .git/argus/ file channel ----
 
@@ -148,11 +147,10 @@ function canonicalState(state) {
   return state === "skipped" ? "skipped" : "unknown";
 }
 
-/** Newest status per context; agentic-review contexts are review, not CI. */
+/** Newest status per context, including review jobs that are also CI checks. */
 export function ciSummary(statuses) {
   const latest = new Map();
   for (const s of Array.isArray(statuses) ? statuses : []) {
-    if (AGENTIC_REVIEW.test(s.context ?? "")) continue;
     const prev = latest.get(s.context);
     if (!prev || (s.id ?? 0) > (prev.id ?? 0)) latest.set(s.context, s);
   }
