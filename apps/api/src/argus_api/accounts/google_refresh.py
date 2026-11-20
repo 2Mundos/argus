@@ -385,6 +385,65 @@ class GoogleTokenRefresher:
             self._locks[account_id] = lock
         return lock
 
+    async def _refresh_row(
+        self,
+        db: Database,
+        secrets: SecretStore,
+        account_id: str,
+        account_name: str,
+        secret_ref: str | None,
+        *,
+        now: datetime,
+    ) -> None:
+        secret_name = ref_name(secret_ref) if secret_ref else None
+        if not secret_name:
+            return
+        doc = secrets.get(secret_name)
+        if not isinstance(doc, dict) or not google_auth.needs_refresh(doc, now=now):
+            return
+        async with self._lock_for(account_id):
+            latest = secrets.get(secret_name)
+            if not isinstance(latest, dict) or not google_auth.needs_refresh(
+                latest, now=now
+            ):
+                return
+            try:
+                refreshed = await refresh_oauth_credential(
+                    latest,
+                    now=now,
+                    post_form=self.post_form,
+                    agy_bin=self.agy_bin,
+                    settings=self.settings,
+                )
+            except GoogleRefreshError as exc:
+                log.warning(
+                    "Google OAuth refresh failed for account %s (%s): %s",
+                    account_name,
+                    account_id,
+                    exc,
+                )
+                if exc.permanent:
+                    async with db.write() as tx:
+                        await record(
+                            tx,
+                            "system",
+                            "account",
+                            account_id,
+                            "account.auth_rejected",
+                            {
+                                "role": "executor",
+                                "source": "oauth_refresh",
+                                "reason": "Google OAuth refresh token rejected; renew the account in Argus",
+                            },
+                        )
+                return
+            await secrets.put(secret_name, refreshed)
+            log.info(
+                "Refreshed Google OAuth access_token for account %s (%s)",
+                account_name,
+                account_id,
+            )
+
     async def refresh_for_lease(
         self,
         db: Database,
@@ -392,7 +451,8 @@ class GoogleTokenRefresher:
         *,
         now: datetime | None = None,
     ) -> None:
-        """Refresh any usable Google OAuth accounts nearing expiry before leasing.
+        """Refresh any usable Google OAuth accounts nearing expiry before leasing
+        or claiming an execution chain.
 
         Runs outside any write transaction. Permanent refresh failures record
         `account.auth_rejected` with a fixed non-secret reason so the account is
@@ -411,55 +471,51 @@ class GoogleTokenRefresher:
             rows = await cur.fetchall()
 
         for row in rows:
-            account_id = str(row["id"])
-            account_name = str(row["name"])
-            secret_name = ref_name(row["secret_ref"])
-            if not secret_name:
-                continue
-            doc = secrets.get(secret_name)
-            if not isinstance(doc, dict) or not google_auth.needs_refresh(
-                doc, now=current
-            ):
-                continue
-            async with self._lock_for(account_id):
-                latest = secrets.get(secret_name)
-                if not isinstance(latest, dict) or not google_auth.needs_refresh(
-                    latest, now=current
-                ):
-                    continue
-                try:
-                    refreshed = await refresh_oauth_credential(
-                        latest,
-                        now=current,
-                        post_form=self.post_form,
-                        agy_bin=self.agy_bin,
-                        settings=self.settings,
-                    )
-                except GoogleRefreshError as exc:
-                    log.warning(
-                        "Google OAuth refresh failed for account %s (%s): %s",
-                        account_name,
-                        account_id,
-                        exc,
-                    )
-                    if exc.permanent:
-                        async with db.write() as tx:
-                            await record(
-                                tx,
-                                "system",
-                                "account",
-                                account_id,
-                                "account.auth_rejected",
-                                {
-                                    "role": "executor",
-                                    "source": "oauth_refresh",
-                                    "reason": "Google OAuth refresh token rejected; renew the account in Argus",
-                                },
-                            )
-                    continue
-                await secrets.put(secret_name, refreshed)
-                log.info(
-                    "Refreshed Google OAuth access_token for account %s (%s)",
-                    account_name,
-                    account_id,
-                )
+            await self._refresh_row(
+                db,
+                secrets,
+                str(row["id"]),
+                str(row["name"]),
+                row["secret_ref"],
+                now=current,
+            )
+
+    async def refresh_account(
+        self,
+        db: Database,
+        secrets: SecretStore,
+        account_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        """Refresh one Google OAuth account if nearing expiry (e.g. after a
+        long-poll claim wait, right before delivering an execution-chain lease)."""
+        current = now or datetime.now(UTC)
+        async with (
+            db.read() as conn,
+            conn.execute(
+                "SELECT id, name, secret_ref FROM accounts"
+                " WHERE id = ? AND provider = 'google'",
+                (account_id,),
+            ) as cur,
+        ):
+            row = await cur.fetchone()
+        if row is None:
+            return
+        await self._refresh_row(
+            db,
+            secrets,
+            str(row["id"]),
+            str(row["name"]),
+            row["secret_ref"],
+            now=current,
+        )
+
+
+def refresher_for(state: Any) -> GoogleTokenRefresher:
+    """Return the app's shared GoogleTokenRefresher, creating one if absent."""
+    refresher = getattr(state, "google_refresher", None)
+    if refresher is None:
+        refresher = GoogleTokenRefresher(settings=getattr(state, "settings", None))
+        state.google_refresher = refresher
+    return refresher
