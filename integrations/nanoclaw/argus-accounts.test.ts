@@ -3713,11 +3713,7 @@ describe("quota notices shared with Argus", () => {
     reset_status?: string;
   }>;
   it.each(cases)("$provider: $notice", (c) => {
-    const f = classifyFailure(
-      c.notice,
-      c.provider === "anthropic" ? "anthropic" : c.provider === "custom" ? "custom" : "openai",
-      c.now ? new Date(c.now) : undefined,
-    );
+    const f = classifyFailure(c.notice, c.provider, c.now ? new Date(c.now) : undefined);
     expect(f.kind).toBe(c.exhausted ? "exhausted" : "failed");
     if (c.exhausted) {
       // The fixture's `until` is any ISO form with a zone: compare instants.

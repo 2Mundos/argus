@@ -190,18 +190,18 @@ async def _refresh_via_http(
     return merged
 
 
-def _staged_oauth_doc(doc: dict[str, Any]) -> dict[str, Any]:
+def _staged_doc(doc: dict[str, Any]) -> dict[str, Any]:
     """Native `antigravity-oauth-token` shape with past expiry to force CLI refresh."""
-    fields = google_auth.extract_oauth_fields(doc)
-    token_obj: dict[str, Any] = {
-        "access_token": fields.get("access_token", ""),
-        "token_type": fields.get("token_type") or "Bearer",
-        "refresh_token": fields.get("refresh_token", ""),
+    inner = doc.get("token")
+    fields = inner if isinstance(inner, dict) else doc
+    payload: dict[str, Any] = {
+        **fields,
         "expiry": "1970-01-01T00:00:00Z",
-        "expires_in": fields.get("expires_in") or 3600,
     }
+    payload.setdefault("token_type", "Bearer")
+    payload.setdefault("expires_in", 3600)
     staged: dict[str, Any] = {
-        "token": token_obj,
+        "token": payload,
         "auth_method": doc.get("auth_method") or "consumer",
     }
     if "id_token_email" in doc:
@@ -214,10 +214,11 @@ def _stage_temp_home(doc: dict[str, Any]) -> tuple[Path, Path]:
     tmp.chmod(0o700)
     cli_dir = tmp / ".gemini" / "antigravity-cli"
     cli_dir.mkdir(parents=True, mode=0o700)
-    token_file = cli_dir / "antigravity-oauth-token"
-    token_file.write_text(json.dumps(_staged_oauth_doc(doc)))
-    token_file.chmod(0o600)
-    return tmp, token_file
+    dest = cli_dir / "antigravity-oauth-token"
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(_staged_doc(doc), fh)
+    return tmp, dest
 
 
 def _read_json_file(path: Path) -> dict[str, Any] | None:
