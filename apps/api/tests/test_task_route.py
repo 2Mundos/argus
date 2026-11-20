@@ -43,7 +43,9 @@ async def account(db: Database, account_id: str, provider: str) -> None:
         )
 
 
-async def failed_attempt(db: Database, error: str, error_code: str, **kw):
+async def failed_attempt(
+    db: Database, error: str, error_code: str, reason: str = "worker_fail", **kw
+):
     """A task whose attempt ran the delegate on Anthropic and failed with `error`."""
     async with db.write() as tx:
         task = await tasks.create_task(
@@ -67,7 +69,7 @@ async def failed_attempt(db: Database, error: str, error_code: str, **kw):
                 error_code=error_code,
             ),
         )
-        await tasks.fail(tx, A, task.id, claimed.attempt, error)
+        await tasks.fail(tx, A, task.id, claimed.attempt, error, reason)
     return task
 
 
@@ -180,3 +182,84 @@ def test_route_is_manager_only_on_rest_and_mcp(client: TestClient) -> None:
         "/api/tasks/ghost/route", headers={"Authorization": f"Bearer {orchestrator}"}
     )
     assert missing.status_code == 404
+
+
+async def test_a_blocking_credential_error_is_current(db: Database) -> None:
+    task = await failed_attempt(db, f"auth_missing (key {KEY})", "auth_missing")
+    async with db.snapshot() as snap:
+        blocked = await tasks.get_task(snap.conn, task.id)
+    assert (blocked.state, blocked.error_attempt, blocked.error_scope) == (
+        "blocked",
+        1,
+        "current",
+    )
+    got = await diagnose(db, task.id)
+    assert got.error and got.previous_failure is None
+
+
+async def test_a_previous_attempts_error_is_not_presented_as_current(
+    db: Database,
+) -> None:
+    task = await failed_attempt(
+        db,
+        "connection reset by peer",
+        "channel_error",
+        "session_lost",
+        max_attempts=5,
+    )
+    # Failed once and requeued: the error is the last attempt's, not a current one.
+    async with db.snapshot() as snap:
+        ready = await tasks.get_task(snap.conn, task.id)
+    assert ready.state == "ready"
+    assert (ready.error, ready.error_attempt, ready.error_scope) == (
+        "connection reset by peer",
+        1,
+        "previous",
+    )
+    assert ready.error_at is not None
+    got = await diagnose(db, task.id)
+    assert got.error is None and got.failure_class is None
+    assert got.previous_failure is not None
+    assert got.previous_failure.attempt == 1
+    assert got.previous_failure.error == "connection reset by peer"
+    assert got.previous_failure.at == ready.error_at
+    # A new claim: attempt 2 has not failed; attempt 1's evidence is still there.
+    async with db.write() as tx:
+        claimed = await tasks.claim(tx, A, [])
+    assert claimed is not None and claimed.attempt == 2
+    assert (claimed.error_attempt, claimed.error_scope) == (1, "previous")
+    got = await diagnose(db, task.id)
+    assert got.state == "claimed"
+    assert got.error is None and got.failure_class is None
+    assert got.worker is not None and got.worker.gateway_access.status == "unknown"
+    assert got.previous_failure is not None and got.previous_failure.attempt == 1
+    # Attempt 2 fails for good: its own error is the current one, attributed to it.
+    async with db.write() as tx:
+        failed = await tasks.fail(
+            tx, A, task.id, 2, "second attempt: out of memory", "session_lost"
+        )
+    assert (failed.state, failed.error_attempt, failed.error_scope) == (
+        "failed",
+        2,
+        "current",
+    )
+    got = await diagnose(db, task.id)
+    assert got.error == "second attempt: out of memory"
+    assert got.previous_failure is None
+
+
+async def test_a_task_without_errors_has_no_failure_to_distinguish(
+    db: Database,
+) -> None:
+    async with db.write() as tx:
+        task = await tasks.create_task(tx, TaskCreate(project="demo", title="t"), WHO)
+    async with db.write() as tx:
+        claimed = await tasks.claim(tx, A, [])
+    assert claimed is not None and claimed.id == task.id
+    assert (claimed.error, claimed.error_attempt, claimed.error_scope) == (
+        None,
+        None,
+        None,
+    )
+    got = await diagnose(db, task.id)
+    assert got.error is None and got.previous_failure is None

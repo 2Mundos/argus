@@ -608,6 +608,12 @@ class Task(BaseModel):
     max_attempts: int
     result: TaskResult | None
     error: str | None
+    # Which attempt reported `error` and when; null when unknown (older rows).
+    error_attempt: int | None = None
+    error_at: datetime | None = None
+    # `current`: the error ends or holds the task as it stands. `previous`: it is an
+    # earlier attempt's, and the task was requeued or claimed again since.
+    error_scope: Literal["current", "previous"] | None = None
     block_reason: str | None
     # Set when the task succeeds: accepted, with a deviation, or not reviewed.
     review_disposition: ReviewDisposition | None = None

@@ -120,6 +120,9 @@ async def _apply(
         "retry_at": None,  # only a transient fail's requeue waits (failure classes 3.2)
         **(set_ or {}),
     }
+    if fields.get("error"):
+        fields["error_attempt"] = row["attempt"]
+        fields["error_at"] = bumped
     if over_budget is not None:
         fields |= _budget_block(over_budget)
         data = {**(data or {}), "block_reason": BUDGET_EXHAUSTED}

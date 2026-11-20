@@ -784,7 +784,7 @@ async def get_task_continuation(ctx: Context, task_id: str) -> dict:
 async def get_task_route(ctx: Context, task_id: str) -> dict:
     """Read-only: why a task ran where it did and what it would use now. State, pins,
     account_providers, the resolved engine providers/account, the current attempt's
-    executions (provider, account_id, error_code) and redacted error, per-provider
+    executions (provider, account_id, error_code) and redacted `error` (current attempt only; an earlier attempt's is `previous_failure` with its attempt and time), per-provider
     accounts (usable | exhausted | disabled; copilot unsupported) and the worker's
     readiness. gateway_access and executor_binary stay `unknown` unless an attempt
     reported denied/missing: an available account never proves agent access. Fix a

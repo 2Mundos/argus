@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta
+from typing import Literal
 
 import aiosqlite
 from argus_core.agents import AgentState
@@ -112,6 +113,7 @@ async def _to_task(conn: aiosqlite.Connection, row: aiosqlite.Row) -> Task:
     data["serving_account"] = await _serving_account(conn, row)
     data["failover"] = await _last_failover(conn, row)
     data["failure_class"] = _failure_class(row, data["failover"])
+    data["error_scope"] = error_scope(row)
     data["models"] = (await modeltrace.summaries(conn, [row["id"]]))[row["id"]]
     async with conn.execute(
         "SELECT page_id FROM task_knowledge WHERE task_id = ? ORDER BY page_id",
@@ -211,6 +213,15 @@ async def _last_failover(
         apply_error=apply_error,
         applied_at=applied_at,
     )
+
+
+def error_scope(row: aiosqlite.Row) -> Literal["current", "previous"] | None:
+    """`tasks.error` outlives a requeue and the next claim; a task that is waiting
+    for or running another attempt shows it as the previous attempt's."""
+    if not row["error"]:
+        return None
+    waiting = (S.AWAITING_APPROVAL, S.PENDING, S.READY, S.CLAIMED)
+    return "previous" if row["state"] in waiting else "current"
 
 
 def _failure_class(row: aiosqlite.Row, failover: Failover | None) -> str | None:

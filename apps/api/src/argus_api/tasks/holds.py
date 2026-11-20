@@ -164,11 +164,13 @@ async def fail_runtime_holds(tx: Tx, project: str, error: str) -> list[str]:
     rows = await runtime_holds(tx, project, (RUNTIME_PREPARING,))
     for r in rows:
         await tx.conn.execute(
-            "UPDATE tasks SET block_reason = ?, error = ?, progress_message = ?,"
-            " updated_at = ? WHERE id = ?",
+            "UPDATE tasks SET block_reason = ?, error = ?, error_attempt = ?, error_at = ?,"
+            " progress_message = ?, updated_at = ? WHERE id = ?",
             (
                 RUNTIME_FAILED,
                 error,
+                r["attempt"],
+                ts(tx.now),
                 "project runtime unavailable",
                 ts(max(tx.now, datetime.fromisoformat(r["updated_at"]) + _TICK)),
                 r["id"],

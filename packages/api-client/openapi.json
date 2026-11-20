@@ -4479,6 +4479,44 @@
             ],
             "title": "Error"
           },
+          "error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error At"
+          },
+          "error_attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Attempt"
+          },
+          "error_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "current",
+                  "previous"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Scope"
+          },
           "execution": {
             "anyOf": [
               {
@@ -17759,6 +17797,64 @@
         "title": "PreviewTransition",
         "type": "object"
       },
+      "PreviousFailure": {
+        "description": "The error of an attempt that ended before the one now waiting or running.",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failure_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Class"
+          }
+        },
+        "required": [
+          "attempt",
+          "at",
+          "error",
+          "failure_class"
+        ],
+        "title": "PreviousFailure",
+        "type": "object"
+      },
       "PricingInfo": {
         "properties": {
           "as_of": {
@@ -22632,6 +22728,44 @@
             ],
             "title": "Error"
           },
+          "error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error At"
+          },
+          "error_attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Attempt"
+          },
+          "error_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "current",
+                  "previous"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Scope"
+          },
           "executor_model": {
             "anyOf": [
               {
@@ -24141,6 +24275,44 @@
             ],
             "title": "Error"
           },
+          "error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error At"
+          },
+          "error_attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Attempt"
+          },
+          "error_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "current",
+                  "previous"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Scope"
+          },
           "executor_model": {
             "anyOf": [
               {
@@ -25510,6 +25682,44 @@
             ],
             "title": "Error"
           },
+          "error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error At"
+          },
+          "error_attempt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Attempt"
+          },
+          "error_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "current",
+                  "previous"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Scope"
+          },
           "executor_model": {
             "anyOf": [
               {
@@ -26198,6 +26408,16 @@
             "default": "Account status is registry state. It does not prove that this agent may use the account through the credential gateway, nor that the executor binary is installed; those are `unknown` until an attempt reports them.",
             "title": "Note",
             "type": "string"
+          },
+          "previous_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviousFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "providers": {
             "items": {
