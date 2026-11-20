@@ -4779,7 +4779,10 @@ describe("complete execution contract consumption", () => {
     // Enforce the API's tuple-ownership rule: a blanket /accounts/release breaks advance.
     let tupleOwned = true;
     const baseFetch = w.fetchImpl;
-    w.fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    w.fetchImpl = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
       const url = String(input);
       if (url.includes("/accounts/release")) tupleOwned = false;
       if (url.endsWith("/execution") && String(init?.body).includes('"advance"') && !tupleOwned) {
@@ -4833,7 +4836,10 @@ describe("complete execution contract consumption", () => {
     fallback.execution.generation = 8;
     const w = world({ leases: [], tasks: [first, fallback] });
     const baseFetch = w.fetchImpl;
-    w.fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    w.fetchImpl = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
       if (String(input).includes("api2.cursor.sh/auth/exchange_user_api_key")) {
         return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
       }
@@ -4878,7 +4884,10 @@ describe("complete execution contract consumption", () => {
     const first = explicit(engine, "paired", expiredGoogle, "agy");
     const w = world({ leases: [], tasks: [first] });
     const baseFetch = w.fetchImpl;
-    w.fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    w.fetchImpl = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
       if (String(input).endsWith("/execution") && String(init?.body).includes('"advance"')) {
         return new Response(
           JSON.stringify({
