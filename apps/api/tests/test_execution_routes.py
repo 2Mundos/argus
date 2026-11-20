@@ -1697,3 +1697,60 @@ async def test_headless_pr_still_blocks_once_without_any_history(db, fleet):
     row, _ = await state(db, parent.id)
     assert row["state"] == "in_review" and row["block_reason"] == "no_review_head"
     assert len(await open_decisions(db, parent.id)) == 1
+
+
+async def test_lost_tuple_ownership_on_advance_is_bounded_and_scoped_to_tuple(
+    db, fleet
+):
+    """Lost ownership on `advance` releases only remaining leases of that exact
+    tuple (preserving unrelated leases on other agents and newer leases on the
+    same agent) and fails boundedly."""
+    await insert_agent(db, "agent-b")
+    await policy(db, [paired()])
+    task = await make_task(db, max_attempts=1)
+    claimed, _engine = await claim(db, fleet)
+    _, route = await state(db, task.id)
+    sel = route.selection
+    async with db.write() as tx:
+        # Unrelated lease held by another agent must survive.
+        other_agent = await accounts._try_lease(
+            tx, "agent-b", fleet, "engine", ["anthropic"], only_account="cloud"
+        )
+        # Drop only the executor half of the execution tuple, then give agent A
+        # a different executor lease ID (must also survive since release is by tuple ID).
+        await tx.conn.execute(
+            "UPDATE account_leases SET released_at = ?, release_reason = 'external'"
+            " WHERE id = ?",
+            ("2026-11-20T00:00:00+00:00", sel.executor.lease_id),
+        )
+        same_agent_other = await accounts._try_lease(
+            tx, A, fleet, "executor", ["anthropic"], only_account="cloud"
+        )
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=sel.generation,
+                action="advance",
+                stopped=True,
+                reason="provider_unavailable",
+                failed_role="executor",
+            ),
+        )
+    row, after_route = await state(db, task.id)
+    assert row["state"] == "failed"
+    assert row["assignee_agent_id"] is None
+    assert row["failures"] == 1
+    assert after_route.generation > sel.generation
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT id FROM account_leases WHERE released_at IS NULL ORDER BY id"
+        ) as cur,
+    ):
+        assert {r[0] for r in await cur.fetchall()} == {
+            other_agent.lease_id,
+            same_agent_other.lease_id,
+        }

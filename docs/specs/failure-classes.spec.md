@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-19
+updated: 2026-11-20
 ---
 
 # Failure classes
@@ -51,7 +51,7 @@ service and the dashboard read it; nothing else maps reasons.
 | --- | --- |
 | `admission` | `quota`, `account_unavailable` |
 | `environment` | `env_*` block reasons (3.3), `worker_env` (3.4), `env_oom` (3.2; the promoted, pool-level block only, not a per-task reason) |
-| `transient` | `provider_failure`, `channel_error`, `runtime_switch_failed` |
+| `transient` | `provider_failure`, `channel_error`, `runtime_switch_failed`, `execution_lease_missing` |
 | `session` | `session_lost`, `stalled`, `timeout`, `lease_expired`, `agent_ended`; fact `oom_kill` (the session container was OOM-killed) |
 | `task` | `worker_fail`, `context_overflow`, `verification_failed` |
 

@@ -60,6 +60,7 @@ import {
   executorFirst,
   type FailureKind,
   isGenericFailureNotice,
+  LeaseApplyError,
   normalizeRepositoryUrl,
   OneCliClient,
   preferredExecutorForLease,
@@ -2217,6 +2218,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   // Why `ensureAccount` returned false: `quota` when no account is usable, else a
   // lease/apply error that is not a provider limit (both leave the attempt unspent).
   let admissionFailure: "quota" | "account_unavailable" = "quota";
+  let executionAdmissionFailure: {
+    reason: ExecutionFailureReason;
+    failedRole: "harness" | "executor";
+  } | null = null;
   let completedAttempt: string | null = null; // "<task>:<attempt>" once Argus accepted the result
   let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
@@ -3301,32 +3306,73 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
    * the next one, then give the agent the task again; otherwise the attempt is
    * a failure and Argus decides whether to retry.
    */
-  async function advanceExecution(task: ArgusTask, reason: ExecutionFailureReason): Promise<void> {
-    if (!task.execution || !cfg.accounts?.recycleRuntime)
-      throw new Error("execution runtime stop unavailable");
-    try {
-      await cfg.accounts.recycleRuntime();
-    } catch {
-      recycleOnLease = true;
-      await client.call("POST", `/tasks/${task.id}/fail`, {
-        attempt: task.attempt,
-        reason: "runtime_switch_failed",
-        error: "execution runtime did not stop",
-      });
+  async function advanceExecution(
+    task: ArgusTask,
+    reason: ExecutionFailureReason,
+    failedRole: "harness" | "executor" = "harness",
+  ): Promise<void> {
+    const clearLocal = () => {
+      account = null;
+      executor = null;
+      activeAccountLeases = [];
+      sessionCarriesTask = false;
+    };
+    const reportFail = async (failReason: string, error: string): Promise<void> => {
+      await client
+        .call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          reason: failReason,
+          error: safeText(error, 500),
+        })
+        .catch((failErr) => {
+          log.error("Could not fail execution-chain task after advance failure", {
+            task: task.id,
+            reason: failReason,
+            err: safeText(failErr instanceof Error ? failErr.message : String(failErr), 300),
+          });
+        });
+    };
+    if (!task.execution || !cfg.accounts?.recycleRuntime) {
+      await reportFail("channel_error", "execution runtime stop unavailable");
+      clearLocal();
       finishTask();
       return;
     }
-    await client.call("POST", `/tasks/${task.id}/execution`, {
-      attempt: task.attempt,
-      generation: task.execution.generation,
-      action: "advance",
-      stopped: true,
-      reason,
-    });
-    account = null;
-    executor = null;
-    activeAccountLeases = [];
-    sessionCarriesTask = false;
+    try {
+      await cfg.accounts.recycleRuntime();
+    } catch (err) {
+      recycleOnLease = true;
+      log.warn("Execution runtime did not stop before advance", {
+        task: task.id,
+        err: safeText(err instanceof Error ? err.message : String(err), 300),
+      });
+      await reportFail("runtime_switch_failed", "execution runtime did not stop");
+      finishTask();
+      return;
+    }
+    const effectiveRole: "harness" | "executor" =
+      failedRole === "executor" && task.execution.executor ? "executor" : "harness";
+    try {
+      await client.call("POST", `/tasks/${task.id}/execution`, {
+        attempt: task.attempt,
+        generation: task.execution.generation,
+        action: "advance",
+        stopped: true,
+        reason,
+        failed_role: effectiveRole,
+      });
+    } catch (err) {
+      const detail = safeText(err instanceof Error ? err.message : String(err), 300);
+      log.error("Execution route advance failed; failing attempt to avoid stranded claim", {
+        task: task.id,
+        attempt: task.attempt,
+        reason,
+        failed_role: effectiveRole,
+        err: detail,
+      });
+      await reportFail("channel_error", `execution advance failed (${reason}): ${detail}`);
+    }
+    clearLocal();
     finishTask();
   }
 
@@ -4281,32 +4327,54 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     claimedAt = cfg.now?.() ?? Date.now();
     waitingRelay.reset();
     switchFailure = null;
-    if (!(await ensureRuntime(task))) return;
-    if (!(await ensureAccount(task))) {
-      const stale = switchFailure !== null;
-      if (task.execution && !stale) {
-        await advanceExecution(task, "provider_unavailable");
-        return;
-      }
-      await client
-        .call("POST", `/tasks/${task.id}/fail`, {
-          attempt: task.attempt,
-          error: stale
-            ? `the previous worker runtime could not be stopped: ${switchFailure}`
-            : admissionFailure === "quota"
-              ? "no usable provider account for claimed task"
-              : "could not lease or apply a provider account for the claimed task",
-          reason: stale ? "runtime_switch_failed" : admissionFailure,
-        })
-        .catch(() => undefined);
-      if (stale) {
+    try {
+      if (!(await ensureRuntime(task))) return;
+      if (!(await ensureAccount(task))) {
+        const stale = switchFailure !== null;
+        if (task.execution && !stale) {
+          const failure = executionAdmissionFailure ?? {
+            reason: "provider_unavailable" as const,
+            failedRole: "harness" as const,
+          };
+          await advanceExecution(task, failure.reason, failure.failedRole);
+          return;
+        }
+        await client
+          .call("POST", `/tasks/${task.id}/fail`, {
+            attempt: task.attempt,
+            error: stale
+              ? `the previous worker runtime could not be stopped: ${safeText(switchFailure ?? "", 300)}`
+              : admissionFailure === "quota"
+                ? "no usable provider account for claimed task"
+                : "could not lease or apply a provider account for the claimed task",
+            reason: stale ? "runtime_switch_failed" : admissionFailure,
+          })
+          .catch(() => undefined);
+        if (stale) {
+          finishTask();
+          return;
+        }
+        await client
+          .call("POST", "/accounts/awaiting-quota", {
+            capabilities: cfg.capabilities,
+            runtime_providers: runtimeProviders("engine"),
+          })
+          .catch(() => undefined);
         finishTask();
         return;
       }
+    } catch (err) {
+      const detail = safeText(err instanceof Error ? err.message : String(err), 500);
+      log.error("Claim startup failed before task session; failing attempt", {
+        task: task.id,
+        attempt: task.attempt,
+        err: detail,
+      });
       await client
-        .call("POST", "/accounts/awaiting-quota", {
-          capabilities: cfg.capabilities,
-          runtime_providers: runtimeProviders("engine"),
+        .call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          error: `claim startup failed: ${detail}`,
+          reason: "channel_error",
         })
         .catch(() => undefined);
       finishTask();
@@ -4324,11 +4392,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         });
       }
     } catch (err) {
-      await client.call("POST", `/tasks/${task.id}/fail`, {
+      const detail = safeText(err instanceof Error ? err.message : String(err), 500);
+      log.error("Model policy or execution applied report failed; failing attempt", {
+        task: task.id,
         attempt: task.attempt,
-        error: `model policy could not be applied/recorded: ${String(err)}`,
-        reason: "channel_error",
+        err: detail,
       });
+      await client
+        .call("POST", `/tasks/${task.id}/fail`, {
+          attempt: task.attempt,
+          error: `model policy could not be applied/recorded: ${detail}`,
+          reason: "channel_error",
+        })
+        .catch(() => undefined);
       finishTask();
       return;
     }
@@ -4377,7 +4453,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           envBlock.reason,
         )
       ) {
-        await advanceExecution(task, "not_installed");
+        await advanceExecution(task, "not_installed", "executor");
         return;
       }
       let workspace: TaskWorkspace | null = null;
@@ -4930,6 +5006,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   /** Lease and apply an account for the currently claimed task. */
   async function ensureAccount(task: ArgusTask): Promise<boolean> {
+    executionAdmissionFailure = null;
     const acc = cfg.accounts;
     if (task.execution) {
       const route = task.execution;
@@ -5014,7 +5091,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         await applyAndSelect(acc, lease, "lease", task);
       } catch (err) {
         // Do not sit on an account we cannot use: give it back, then retry later.
-        await client.call("POST", "/accounts/release").catch(() => undefined);
+        // An execution-chain claim owns a reserved tuple that `advanceExecution`
+        // releases atomically through the fenced `/execution` endpoint; a blanket
+        // release here would drop the tuple before the advance check and strand it.
+        if (!task.execution) {
+          await client.call("POST", "/accounts/release").catch(() => undefined);
+        }
         account = null;
         throw err;
       }
@@ -5028,24 +5110,35 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     } catch (err) {
       if (!task.execution && rebalancing && account) {
         // The held lease is still valid (a failed lease rolls back); keep working.
-        log.warn("Could not re-evaluate the account lease; keeping the current one", { err });
+        log.warn("Could not re-evaluate the account lease; keeping the current one", {
+          err: safeText(err instanceof Error ? err.message : String(err), 300),
+        });
         return true;
       }
       if (switchFailure) {
         // recycleRuntime failed: runTask must fail fast with runtime_switch_failed.
         return false;
       }
+      if (task.execution) {
+        executionAdmissionFailure =
+          err instanceof LeaseApplyError
+            ? { reason: err.reason, failedRole: err.role }
+            : { reason: "provider_unavailable", failedRole: "harness" };
+      }
       if (err instanceof ArgusError && err.code === "no_account") {
         log.warn("No Argus account is usable for this claimed task", {
-          message: err.message,
+          message: safeText(err.message, 300),
         });
       } else {
         admissionFailure = "account_unavailable";
-        log.warn("Could not lease/apply an account (will retry)", { err });
+        log.warn("Could not lease/apply an account (will retry)", {
+          err: safeText(err instanceof Error ? err.message : String(err), 300),
+        });
       }
       // A runtime that did not stop blocks the task now (runtime_switch_failed);
-      // only a lease that may yet succeed waits before the next claim.
-      if (switchFailure === null) await sleep(5000);
+      // an explicit execution route advances immediately; only a legacy lease
+      // that may yet succeed waits before the next claim.
+      if (switchFailure === null && !task.execution) await sleep(5000);
       return false;
     }
   }

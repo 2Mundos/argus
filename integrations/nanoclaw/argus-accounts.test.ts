@@ -4534,11 +4534,14 @@ describe("complete execution contract consumption", () => {
     "nanoclaw:harness:claude:custom",
     "nanoclaw:harness:codex:openai",
     "nanoclaw:executor:opencode:custom",
+    "nanoclaw:executor:agy:google",
+    "nanoclaw:executor:agent:cursor",
   ];
   function explicit(
     engine: AccountLease,
     mode: "single" | "paired" = "single",
     executor?: AccountLease,
+    executorAdapter?: string,
   ) {
     const selector = (l: AccountLease, adapter: string) => ({
       account_id: l.account_id,
@@ -4546,6 +4549,13 @@ describe("complete execution contract consumption", () => {
       model: "fixture/model",
       selector: { adapter, provider: l.provider },
     });
+    const execAdapter =
+      executorAdapter ??
+      (executor?.provider === "google"
+        ? "agy"
+        : executor?.provider === "cursor"
+          ? "agent"
+          : "opencode");
     return {
       ...task(),
       command_guard_enabled: false,
@@ -4558,7 +4568,7 @@ describe("complete execution contract consumption", () => {
         revision: "fixture-revision",
         alternative: { id: "fixture", mode, runtime: "nanoclaw" as const },
         harness: selector(engine, engine.provider === "openai" ? "codex" : "claude"),
-        ...(executor ? { executor: selector(executor, "opencode") } : {}),
+        ...(executor ? { executor: selector(executor, execAdapter) } : {}),
       },
     };
   }
@@ -4741,5 +4751,199 @@ describe("complete execution contract consumption", () => {
     );
     expect(report?.body).toMatchObject({ generation: 7, stopped: true, reason: "quota" });
     expect(w.calls.some((c) => /\/exhausted$/.test(c.path))).toBe(false);
+  });
+
+  it("expired Google executor credential advances without blanket release and reaches fallback", async () => {
+    const engine = lease("route", "fixture-key");
+    const expiredGoogle: AccountLease = {
+      lease_id: "exec-google-1",
+      account_id: "google-acc-1",
+      name: "google-exec",
+      provider: "google",
+      kind: "subscription",
+      role: "executor",
+      credential: {
+        token: {
+          access_token: "ya29.FAKE_EXPIRED_OAUTH_TOKEN_0000",
+          refresh_token: "1//FAKE_REFRESH_TOKEN_0000",
+          expiry: "2020-01-01T00:00:00Z",
+          expires_in: 3600,
+        },
+        auth_method: "consumer",
+      },
+    };
+    const first = explicit(engine, "paired", expiredGoogle, "agy");
+    const fallback = explicit({ ...engine, lease_id: "next-engine" }, "single");
+    fallback.execution.generation = 8;
+    const w = world({ leases: [], tasks: [first, fallback] });
+    // Enforce the API's tuple-ownership rule: a blanket /accounts/release breaks advance.
+    let tupleOwned = true;
+    const baseFetch = w.fetchImpl;
+    w.fetchImpl = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      const url = String(input);
+      if (url.includes("/accounts/release")) tupleOwned = false;
+      if (url.endsWith("/execution") && String(init?.body).includes('"advance"') && !tupleOwned) {
+        return new Response(
+          JSON.stringify({
+            detail: { code: "execution_lease_missing", message: "execution tuple no longer owned" },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return baseFetch(input, init);
+    }) as typeof fetch;
+    const recycleRuntime = vi.fn(async () => {});
+    const h = harness(w, true, { recycleRuntime }, { capabilities, selectModels });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(w.calls.some((c) => c.path.startsWith("/accounts/release"))).toBe(false);
+    expect(recycleRuntime).toHaveBeenCalledTimes(1);
+    const adv = w.calls.find(
+      (c) => c.path === "/tasks/t1/execution" && c.body.action === "advance",
+    );
+    expect(adv?.body).toMatchObject({
+      attempt: 1,
+      generation: 7,
+      stopped: true,
+      reason: "auth_expired",
+      failed_role: "executor",
+    });
+    const applied = w.calls.find(
+      (c) => c.path === "/tasks/t1/execution" && c.body.action === "applied",
+    );
+    expect(applied?.body).toMatchObject({ attempt: 1, generation: 8, action: "applied" });
+    expect(JSON.stringify(w.calls)).not.toContain("ya29.FAKE_EXPIRED_OAUTH_TOKEN_0000");
+    expect(JSON.stringify(w.calls)).not.toContain("1//FAKE_REFRESH_TOKEN_0000");
+  });
+
+  it("rejected executor credential advances with auth_expired and failed_role=executor", async () => {
+    const engine = lease("route", "fixture-key");
+    const rejectedCursor: AccountLease = {
+      lease_id: "exec-cursor-1",
+      account_id: "cursor-acc-1",
+      name: "cursor-exec",
+      provider: "cursor",
+      kind: "api_key",
+      role: "executor",
+      credential: { api_key: "key_FAKE_REJECTED_CURSOR_SECRET" },
+    };
+    const first = explicit(engine, "paired", rejectedCursor, "agent");
+    const fallback = explicit({ ...engine, lease_id: "next-engine" }, "single");
+    fallback.execution.generation = 8;
+    const w = world({ leases: [], tasks: [first, fallback] });
+    const baseFetch = w.fetchImpl;
+    w.fetchImpl = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      if (String(input).includes("api2.cursor.sh/auth/exchange_user_api_key")) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+      }
+      return baseFetch(input, init);
+    }) as typeof fetch;
+    const h = harness(w, true, { recycleRuntime: async () => {} }, { capabilities, selectModels });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(w.calls.some((c) => c.path.startsWith("/accounts/release"))).toBe(false);
+    const adv = w.calls.find(
+      (c) => c.path === "/tasks/t1/execution" && c.body.action === "advance",
+    );
+    expect(adv?.body).toMatchObject({
+      generation: 7,
+      stopped: true,
+      reason: "auth_expired",
+      failed_role: "executor",
+    });
+    expect(JSON.stringify(w.calls)).not.toContain("key_FAKE_REJECTED_CURSOR_SECRET");
+  });
+
+  it("never strands a claim when advance fails with 409 execution_lease_missing", async () => {
+    const engine = lease("route", "fixture-key");
+    const expiredGoogle: AccountLease = {
+      lease_id: "exec-google-1",
+      account_id: "google-acc-1",
+      name: "google-exec",
+      provider: "google",
+      kind: "subscription",
+      role: "executor",
+      credential: {
+        token: {
+          access_token: "ya29.FAKE_EXPIRED_OAUTH_TOKEN_0000",
+          refresh_token: "1//FAKE_REFRESH_TOKEN_0000",
+          expiry: "2020-01-01T00:00:00Z",
+          expires_in: 3600,
+        },
+        auth_method: "consumer",
+      },
+    };
+    const first = explicit(engine, "paired", expiredGoogle, "agy");
+    const w = world({ leases: [], tasks: [first] });
+    const baseFetch = w.fetchImpl;
+    w.fetchImpl = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      if (String(input).endsWith("/execution") && String(init?.body).includes('"advance"')) {
+        return new Response(
+          JSON.stringify({
+            detail: { code: "execution_lease_missing", message: "execution tuple no longer owned" },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return baseFetch(input, init);
+    }) as typeof fetch;
+    const h = harness(w, true, { recycleRuntime: async () => {} }, { capabilities, selectModels });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((c) => c.path === "/tasks/t1/fail"));
+    const fail = w.calls.find((c) => c.path === "/tasks/t1/fail");
+    expect(fail?.body).toMatchObject({ attempt: 1, reason: "channel_error" });
+    expect(fail?.body.error).toContain("execution advance failed (auth_expired)");
+    expect(fail?.body.error).not.toContain("ya29.FAKE_EXPIRED_OAUTH_TOKEN_0000");
+    // finishTask() ran: claimLoop advances to a second claim instead of stranding t1.
+    await until(() => w.calls.filter((c) => c.path === "/tasks/claim").length >= 2);
+  });
+
+  it("valid fake Google executor credential starts and records applied without release", async () => {
+    const engine = lease("route", "fixture-key");
+    const validGoogle: AccountLease = {
+      lease_id: "exec-google-ok",
+      account_id: "google-acc-ok",
+      name: "google-exec-ok",
+      provider: "google",
+      kind: "subscription",
+      role: "executor",
+      credential: {
+        token: {
+          access_token: "ya29.FAKE_VALID_OAUTH_TOKEN_0000",
+          refresh_token: "1//FAKE_REFRESH_TOKEN_0000",
+          expiry: new Date(Date.now() + 3600_000).toISOString(),
+          expires_in: 3600,
+        },
+        auth_method: "consumer",
+      },
+    };
+    const w = world({ leases: [], tasks: [explicit(engine, "paired", validGoogle, "agy")] });
+    const h = harness(
+      w,
+      true,
+      { recycleRuntime: async () => {} },
+      { capabilities, selectModels, probeExecutor: async () => null },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    expect(w.calls.some((c) => c.path.startsWith("/accounts/release"))).toBe(false);
+    expect(w.calls.find((c) => c.path === "/tasks/t1/execution")?.body).toMatchObject({
+      attempt: 1,
+      generation: 7,
+      action: "applied",
+    });
   });
 });
