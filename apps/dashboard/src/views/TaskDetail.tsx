@@ -44,13 +44,13 @@ const OWNER_STATUS_TEXT = {
   unknown: "owner may no longer be running",
 } as const;
 
-function LastError({ text }: { text: string }) {
+function LastError({ text, label, previous }: { text: string; label: string; previous: boolean }) {
   const [open, setOpen] = useState(false);
   const needsMore = text.length > ERROR_EXCERPT;
   const shown = open || !needsMore ? text : `${text.slice(0, ERROR_EXCERPT).trimEnd()}…`;
   return (
-    <p className="error last-error">
-      Last error: {shown}
+    <p className={previous ? "muted last-error previous-error" : "error last-error"}>
+      {label}: {shown}
       {needsMore && (
         <>
           {" "}
@@ -61,6 +61,17 @@ function LastError({ text }: { text: string }) {
       )}
     </p>
   );
+}
+
+// A requeued or re-claimed task still carries its last failure; say whose it is.
+function errorLabel(task: {
+  error_attempt?: number | null;
+  error_scope?: "current" | "previous" | null;
+}): string {
+  const attempt = task.error_attempt ? ` (attempt ${task.error_attempt})` : "";
+  return task.error_scope === "previous"
+    ? `Previous attempt's error${attempt}`
+    : `Last error${attempt}`;
 }
 
 export function TaskDetail({
@@ -591,7 +602,14 @@ export function TaskDetail({
             />
           )}
           {error && <p className="error">{error}</p>}
-          {task.error && <LastError key={task.error} text={task.error} />}
+          {task.error && (
+            <LastError
+              key={`${task.error_attempt}:${task.error}`}
+              text={task.error}
+              previous={task.error_scope === "previous"}
+              label={errorLabel(task)}
+            />
+          )}
           {editing ? (
             <TaskEditForm
               task={task}

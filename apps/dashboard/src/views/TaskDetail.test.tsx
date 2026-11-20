@@ -242,6 +242,44 @@ describe("TaskDetail retry", () => {
   });
 });
 
+describe("TaskDetail last error", () => {
+  const shown = async (patch: object) => {
+    mock.task = { ...base, ...patch };
+    mock.trace = { executions: [], timeline: [] };
+    await act(async () => {
+      render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    });
+  };
+
+  it("labels an error kept across a requeue and a new claim as the previous attempt's", async () => {
+    for (const state of ["ready", "claimed"]) {
+      cleanup();
+      await shown({
+        state,
+        attempt: 2,
+        error: "auth_missing for anthropic",
+        error_attempt: 1,
+        error_scope: "previous",
+      });
+      expect(screen.getByText(/Previous attempt's error \(attempt 1\): auth_missing/)).toBeTruthy();
+      expect(screen.queryByText(/Last error/)).toBeNull();
+    }
+  });
+
+  it("keeps the plain label for a current failure and shows nothing without an error", async () => {
+    await shown({
+      state: "failed",
+      error: "boom",
+      error_attempt: 2,
+      error_scope: "current",
+    });
+    expect(screen.getByText(/Last error \(attempt 2\): boom/)).toBeTruthy();
+    cleanup();
+    await shown({ state: "claimed", error: null, error_attempt: null, error_scope: null });
+    expect(screen.queryByText(/error/i)).toBeNull();
+  });
+});
+
 describe("TaskDetail model trace", () => {
   it("renders attempt grouped harness and delegate executions, evidence, accounts, usage and switches", async () => {
     mock.task = base;

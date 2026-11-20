@@ -5255,6 +5255,12 @@ export interface components {
             engine_lease?: components["schemas"]["AccountLease"] | null;
             /** Error */
             error: string | null;
+            /** Error At */
+            error_at?: string | null;
+            /** Error Attempt */
+            error_attempt?: number | null;
+            /** Error Scope */
+            error_scope?: ("current" | "previous") | null;
             execution?: components["schemas"]["ExecutionSelection"] | null;
             executor_lease?: components["schemas"]["AccountLease"] | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
@@ -10138,6 +10144,20 @@ export interface components {
              */
             provenance?: "stored" | "derived" | "unknown";
         };
+        /**
+         * PreviousFailure
+         * @description The error of an attempt that ended before the one now waiting or running.
+         */
+        PreviousFailure: {
+            /** At */
+            at: string | null;
+            /** Attempt */
+            attempt: number | null;
+            /** Error */
+            error: string | null;
+            /** Failure Class */
+            failure_class: string | null;
+        };
         /** PricingInfo */
         PricingInfo: {
             /** As Of */
@@ -11856,6 +11876,12 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            /** Error At */
+            error_at?: string | null;
+            /** Error Attempt */
+            error_attempt?: number | null;
+            /** Error Scope */
+            error_scope?: ("current" | "previous") | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
@@ -12326,6 +12352,12 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            /** Error At */
+            error_at?: string | null;
+            /** Error Attempt */
+            error_attempt?: number | null;
+            /** Error Scope */
+            error_scope?: ("current" | "previous") | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
@@ -12752,6 +12784,12 @@ export interface components {
             editable_fields?: string[];
             /** Error */
             error: string | null;
+            /** Error At */
+            error_at?: string | null;
+            /** Error Attempt */
+            error_attempt?: number | null;
+            /** Error Scope */
+            error_scope?: ("current" | "previous") | null;
             executor_model?: components["schemas"]["ExecutorModel"] | null;
             failover?: components["schemas"]["Failover"] | null;
             /** Failure Class */
@@ -12932,6 +12970,7 @@ export interface components {
              * @default Account status is registry state. It does not prove that this agent may use the account through the credential gateway, nor that the executor binary is installed; those are `unknown` until an attempt reports them.
              */
             note?: string;
+            previous_failure?: components["schemas"]["PreviousFailure"] | null;
             /** Providers */
             providers: components["schemas"]["RouteProvider"][];
             resolution: components["schemas"]["RouteResolution"] | null;

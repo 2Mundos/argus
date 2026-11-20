@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-19
+updated: 2026-11-20
 ---
 
 # Task models
@@ -193,7 +193,14 @@ name and status; error text is redacted and bounded). It returns:
 - `attempt`: the current attempt's agent and its recorded model executions
   (layer, engine, executor, provider, account id, error code, for example an
   Anthropic delegate run with `auth_missing`), with the task's redacted `error`
-  and its `failure_class`;
+  and its `failure_class` when the error is current. The task keeps its last
+  error across a requeue and the next claim, recorded with `error_attempt` and
+  `error_at`; while the task is waiting (`awaiting_approval`, `pending`, `ready`)
+  or `claimed`, `Task.error_scope` is `previous`, `error` and `failure_class` are
+  null here and the error is `previous_failure` (attempt, time, redacted error,
+  class). A `blocked`, `in_review` or terminal task's error is `current`. A
+  failure from before `error_attempt` existed is attributed to the attempt whose
+  claim ended last. Earlier errors stay in the task's events;
 - `providers`: every engine, executor-only and registered provider, with
   whether a harness can run on it, the `executor_model` executor that names it
   (`copilot` has neither: unsupported), whether `account_providers` allows it,

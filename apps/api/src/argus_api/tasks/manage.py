@@ -88,6 +88,7 @@ async def retry(
         applied = {f: _diff(f, getattr(current, f), v) for f, v in changed.items()}
     await tx.conn.execute(
         "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"
+        " error_attempt = NULL, error_at = NULL,"
         " assignee_agent_id = NULL, lease_expires_at = NULL, timeout_at = NULL,"
         " progress_message = NULL, progress_percent = NULL, progress_at = NULL,"
         " progress_kind = NULL, progress_data = NULL, output_at = NULL,"
@@ -235,6 +236,8 @@ async def release_claim(tx: Tx, row: aiosqlite.Row, actor: str, reason: str) -> 
         actor,
         set_={
             "error": None,
+            "error_attempt": None,
+            "error_at": None,
             "progress_message": f"attempt {row['attempt']} released: {reason};"
             " requeued",
             "progress_percent": None,

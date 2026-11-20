@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from argus_api.tasks import service
 from argus_api.tasks.execution_routes import RoutePolicy, resolve
+from argus_api.tasks.reads import error_scope
 
 _TEXT_MAX = 500
 NOTE = (
@@ -110,6 +111,15 @@ class RouteResolution(BaseModel):
     executor_provider: str | None  # the executor pin's provider
 
 
+class PreviousFailure(BaseModel):
+    """The error of an attempt that ended before the one now waiting or running."""
+
+    attempt: int | None  # None: recorded before attempts were tracked
+    at: datetime | None
+    error: str | None
+    failure_class: str | None
+
+
 class TaskRoute(BaseModel):
     execution: RoutePolicy | None = None
     task_id: str
@@ -122,8 +132,10 @@ class TaskRoute(BaseModel):
     harness_account: str | None
     resolution: RouteResolution | None
     attempt: RouteAttempt | None
+    # The current failure only; an earlier attempt's is `previous_failure`.
     error: str | None
     failure_class: str | None
+    previous_failure: PreviousFailure | None = None
     providers: list[RouteProvider]
     worker: RouteWorker | None
     note: str = NOTE
@@ -150,7 +162,9 @@ async def diagnose_route(
         else ExecutorModel.model_validate_json(row["executor_model"])
     )
     attempt = await _attempt(conn, task_id, row["attempt"])
-    error = clean(row["error"], _TEXT_MAX)
+    previous = error_scope(row) == "previous"
+    shown = clean(row["error"], _TEXT_MAX)
+    error = None if previous else shown
     worker = None
     if attempt is not None:
         worker = await _worker(conn, attempt, error)
@@ -184,9 +198,17 @@ async def diagnose_route(
         error=error,
         failure_class=(
             failure_class(row["error"], row["block_reason"] or "")
-            if row["error"]
+            if error is not None
             else None
         ),
+        previous_failure=PreviousFailure(
+            attempt=row["error_attempt"],
+            at=row["error_at"],
+            error=shown,
+            failure_class=failure_class(row["error"], row["block_reason"] or ""),
+        )
+        if previous
+        else None,
         providers=await _providers(conn, now, stored),
         worker=worker,
     )
