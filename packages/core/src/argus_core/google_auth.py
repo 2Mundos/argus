@@ -10,20 +10,6 @@ from pydantic import BaseModel
 PROVIDER = "google"
 MAX_TOKEN_LEN = 8192
 _API_KEY_ONLY = frozenset({"api_key"})
-_OAUTH_TOP_KEYS = frozenset({"token", "auth_method"})
-_OAUTH_FLAT_KEYS = frozenset(
-    {
-        "access_token",
-        "refresh_token",
-        "expiry",
-        "expires_in",
-        "token_type",
-        "auth_method",
-    }
-)
-_OAUTH_INNER_KEYS = frozenset(
-    {"access_token", "refresh_token", "expiry", "expires_in", "token_type"}
-)
 
 
 class GoogleAuthError(ValueError):
@@ -71,23 +57,16 @@ def parse_expiry(raw: Any) -> datetime:
 
 
 def extract_oauth_fields(doc: dict[str, Any]) -> dict[str, Any]:
-    """Return the token dict from either native `{"token": {...}}` or flat form."""
+    """Return the token dict from either native `{"token": {...}}` or flat form.
+
+    Extra CLI metadata fields (such as `id_token_email`, `auth_method`, `scope`)
+    are ignored, matching Codex and Cursor OAuth imports.
+    """
     if "token" in doc:
         inner = doc.get("token")
         if not isinstance(inner, dict):
             raise GoogleAuthError("token must be a JSON object")
-        extra_top = sorted(set(doc) - _OAUTH_TOP_KEYS)
-        if extra_top:
-            raise GoogleAuthError(
-                f"unexpected field in OAuth credential: {extra_top[0]}"
-            )
-        extra_inner = sorted(set(inner) - _OAUTH_INNER_KEYS)
-        if extra_inner:
-            raise GoogleAuthError(f"unexpected field in token object: {extra_inner[0]}")
         return inner
-    extra = sorted(set(doc) - _OAUTH_FLAT_KEYS)
-    if extra:
-        raise GoogleAuthError(f"unexpected field in OAuth credential: {extra[0]}")
     return doc
 
 
