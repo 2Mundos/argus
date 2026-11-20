@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-20
 ---
 
 # Login clients
@@ -9,12 +9,14 @@ updated: 2026-11-03
 # 1. Purpose and Scope
 
 The dedicated Claude and Codex logins ([claude accounts](claude-accounts.spec.md),
-[codex accounts](codex-accounts.spec.md)) and the Codex quota probe
-([account usage](account-usage.spec.md)) run the pinned official client. A
-container install (the [launcher](launcher.spec.md), `docker run`, Compose) had
-neither client, and `ARGUS_*_LOGIN_IMAGE` cannot work from inside a container
-(no `docker` CLI, and the session directory is a path the host daemon cannot
-mount). "Sign in with Claude" therefore failed on every packaged install.
+[codex accounts](codex-accounts.spec.md)), the Codex quota probe
+([account usage](account-usage.spec.md)) and Google Antigravity OAuth token
+refresh ([google accounts](google-accounts.spec.md)) run the pinned official
+client. A container install (the [launcher](launcher.spec.md), `docker run`,
+Compose) had none of those clients, and `ARGUS_*_LOGIN_IMAGE` cannot work from
+inside a container (no `docker` CLI, and the session directory is a path the
+host daemon cannot mount). "Sign in with Claude" and containerized Google OAuth
+refresh therefore failed on every packaged install.
 
 Argus now downloads the pinned client the first time it is needed and keeps it
 in the data volume. The image stays the same size; installs that set a client
@@ -27,8 +29,10 @@ explicitly behave as before.
   step most installs run a few times.
 - No auto-update and no "latest". A client changes only when a release changes
   its pin, after it has been measured against that client (claude accounts 3).
-- No download for anything but a login the operator starts. Background loops
-  (the quota probe) use a client already present and never fetch one.
+- No download for background quota polling (the Codex quota probe uses a client
+  already present and never fetches one). Operator-initiated logins and
+  pre-lease Google OAuth token refresh download their pinned client once on
+  first use unless `ARGUS_CLIENT_DOWNLOADS=0`.
 - No macOS or Windows binaries: host-run installs there set `ARGUS_CLAUDE_BIN`
   / `ARGUS_CODEX_BIN` as before.
 
@@ -44,12 +48,14 @@ three applies.
 ## 3.2 The pins
 
 `argus_api/accounts/clients.py` holds one entry per client and platform: the
-version, the URL and its SHA-256.
+version, the URL and its pinned checksum (SHA-256 for Claude and Codex; SHA-512
+for Antigravity `agy`, matching the publisher's release manifest).
 
 | Client | Version | Source |
 | --- | --- | --- |
 | `claude` | 2.1.296 | Anthropic's release bucket (`claude-code-releases/<version>/<platform>/claude`; the release manifest lists the checksums), `linux-x64` / `linux-arm64`, the `-musl` variants when the C library is not glibc |
 | `codex` | 0.162.1 | GitHub release `rust-v0.162.1`, `codex-<arch>-unknown-linux-musl.tar.gz` (static), one member extracted |
+| `agy` | 1.5.12 | Google Antigravity release bucket (`1.5.12-5281398513336320/linux-{x64,arm}/cli_linux_{x64,arm64}.tar.gz`, SHA-512 verified, matching `install-agy.sh`), `antigravity` member extracted |
 
 The versions match the agent image ([engines](engines.spec.md)): Claude Code
 2.1.296 is the client the login was measured on, Codex 0.162.1 the

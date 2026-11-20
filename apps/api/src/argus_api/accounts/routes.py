@@ -157,7 +157,9 @@ def _health(request: Request) -> local_health.LocalHealth:
 def _google_refresher(request: Request) -> google_refresh.GoogleTokenRefresher:
     refresher = getattr(request.app.state, "google_refresher", None)
     if refresher is None:
-        refresher = google_refresh.GoogleTokenRefresher()
+        refresher = google_refresh.GoogleTokenRefresher(
+            settings=getattr(request.app.state, "settings", None)
+        )
         request.app.state.google_refresher = refresher
     return refresher
 

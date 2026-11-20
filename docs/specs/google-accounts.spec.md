@@ -107,10 +107,15 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
     `ARGUS_GOOGLE_OAUTH_CLIENT_SECRET`, posts `grant_type=refresh_token` to
     `https://oauth2.googleapis.com/token`. No upstream OAuth client secret is
     committed in Argus.
-  - **CLI-delegated fallback**: otherwise, when `agy` is installed on the API
-    host (`ARGUS_AGY_BIN`, `PATH`, or `~/.local/bin/agy`), stages the credential
-    with a past `expiry` in an isolated `0700` temp `HOME` (scrubbing D-Bus,
-    keyring, `XDG_RUNTIME_DIR` and API-key env vars, with `NO_BROWSER=1`), runs
+  - **CLI-delegated fallback**: otherwise, resolves `agy` in order from
+    `ARGUS_AGY_BIN`, `PATH`, `~/.local/bin/agy`, or the pinned `agy 1.5.12`
+    client downloaded on first use into `<data_dir>/tools/agy-1.5.12/agy` via
+    `accounts/clients.py` (SHA-512 verified, matching `install-agy.sh`;
+    disabled when `ARGUS_CLIENT_DOWNLOADS=0`, so containerized API deploys
+    refresh automatically without bundling `agy` in the API image). Stages the
+    credential with a past `expiry` in an isolated `0700` temp `HOME`
+    (scrubbing D-Bus, keyring, `XDG_RUNTIME_DIR` and API-key env vars, with
+    `NO_BROWSER=1`), runs
     `agy --output-format stream-json --model __argus_refresh_probe__ -p .` so
     `agy` refreshes the token and exits before any model call, validates the
     updated file, and removes the temp directory.

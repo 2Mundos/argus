@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         )
         app.state.codex_login = CodexLoginManager(db, secrets, settings)
         app.state.claude_login = ClaudeLoginManager(db, secrets, settings)
-        app.state.google_refresher = GoogleTokenRefresher()
+        app.state.google_refresher = GoogleTokenRefresher(settings=settings)
         # The built-in orchestrator's loops run here (builtin-orchestrator 3.2).
         app.state.builtin_ready = asyncio.Event()  # set once MCP serves
         app.state.inprocess = InProcessTarget(builtin_loop.make_runner(app))
