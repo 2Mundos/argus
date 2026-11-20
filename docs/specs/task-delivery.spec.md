@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-24
-updated: 2026-11-17
+updated: 2026-11-20
 ---
 
 # Task delivery
@@ -81,7 +81,12 @@ projection is `null`, and `delivery_of` logs why) instead of a wrong one:
   the task delivered.
 - A PR whose `merged_at` precedes the task's `created_at` likewise cannot.
 - When the task declares a branch (its newest `branch` continuation artifact), a PR
-  whose `head.ref` is a different branch is someone else's work.
+  whose head branch is a different branch is someone else's work. The head branch is
+  `head.ref`, except on Gitea once the branch is deleted (as after a merge): Gitea
+  then reports `head.ref` as the PR's own `refs/pull/<number>/head` and keeps the
+  branch only in `head.label`, which is read as the head branch when `head.repo_id`
+  is the base's (a fork's label never is). Every read of a PR (this projection, the
+  completion search, `pr_opened`, reconciliation) uses this one reading.
 
 The same check gates the merge-supersede reconciler (3.7), which answers a merge
 question only for a plausible PR. Forge timestamps are read from the PR body

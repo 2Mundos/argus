@@ -1228,7 +1228,12 @@ def pushed(client: TestClient, w: dict[str, str], t: dict, sha: str) -> None:
 # (summary, head pushed by the attempt, the repository's recent pulls as
 #  (number, head ref (None: task branch), pull) or None for an unreadable list, outcome)
 ON_BRANCH = [(12, None, open_pr())]
+# Gitea once the head branch is deleted: `head.ref` is `refs/pull/<n>/head` and the
+# branch is only `head.label` (task da371c5d); from a fork it is not the task's.
+GONE, GONE_FORK = "gone", "gone-fork"
 SEARCHES = [
+    ("Opened it.", None, [(12, GONE, merged_pr())], "bound"),
+    ("Opened it.", None, [(12, GONE_FORK, merged_pr())], "zero"),
     ("Opened it, no link.", None, ON_BRANCH, "bound"),  # found by branch alone
     (f"Opened {URL}", None, ON_BRANCH, "bound"),
     ("Opened it.", HEAD, [(12, "feat", open_pr())], "bound"),  # by a pushed head
@@ -1267,10 +1272,21 @@ def test_completion_binds_the_one_pr_of_the_attempt_or_refuses(
     db: Database = client.app.state.db  # ty: ignore[unresolved-attribute]
     reads: list[str] = []
     serve = full_forge(ON_BRANCH[0][2], statuses=CI_OK)
-    listing = [
-        {**pull, "number": number, "head": {**pull["head"], "ref": ref or branch_name}}
-        for number, ref, pull in pulls or []
-    ]
+
+    def listed(number: int, ref: str | None, pull: dict) -> dict:
+        if ref not in (GONE, GONE_FORK):
+            head = {**pull["head"], "ref": ref or branch_name}
+            return {**pull, "number": number, "head": head}
+        head = {**pull["head"], "ref": f"refs/pull/{number}/head", "label": branch_name}
+        head["repo_id"] = 9 if ref == GONE_FORK else 7
+        return {
+            **pull,
+            "number": number,
+            "head": head,
+            "base": {**pull["base"], "repo_id": 7},
+        }
+
+    listing = [listed(number, ref, pull) for number, ref, pull in pulls or []]
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert not db.writing(), "forge read inside a write transaction"

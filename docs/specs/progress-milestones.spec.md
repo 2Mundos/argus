@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-18
+updated: 2026-11-20
 ---
 
 # Progress milestones
@@ -123,7 +123,10 @@ Any other kind, or `data` that does not match its kind, is `422 validation_faile
   `progress.pr_rejected` event (`attempt`, `reason`, `data`) and stores neither the
   milestone nor a PR artifact. A PR the forge cannot show, one of another repository, and
   any PR of a project with no repository configured are recorded as before (an outage
-  must not drop a real PR).
+  must not drop a real PR). The NanoClaw channel relays a PR URL once per attempt and
+  cannot tell such a rejection from a recorded milestone, so when a COMPLETE is refused
+  `deliverable_missing` it forgets the URLs it relayed: the next reply naming the PR
+  posts `pr_opened` again and Argus verifies it again.
 - `ci_failed` for a head SHA is followed by one `gate_failed` per failing status
   context of that same SHA.
 - Where a provider gives no signal (no repository allowlist, no commit status), the

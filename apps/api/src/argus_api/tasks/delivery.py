@@ -438,6 +438,34 @@ def _forge_time(raw: Any) -> datetime | None:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
+def _head_branch(
+    body: dict[str, Any], head: dict[str, Any], base: dict[str, Any], github: bool
+) -> str | None:
+    """The PR's head branch. Once a Gitea PR's head branch is deleted (as after a
+    merge), Gitea reports `head.ref` as the PR's own `refs/pull/<number>/head` and
+    keeps the branch name only in `head.label`; that label is the head branch when
+    the head is this repository (`head.repo_id` is the base's), never a fork's."""
+    ref = head.get("ref")
+    if not isinstance(ref, str):
+        return None
+    label, head_repo, base_repo = (
+        head.get("label"),
+        head.get("repo_id"),
+        base.get("repo_id"),
+    )
+    if (
+        not github
+        and ref == f"refs/pull/{body.get('number')}/head"
+        and isinstance(label, str)
+        and label
+        and isinstance(head_repo, int)
+        and head_repo > 0
+        and head_repo == base_repo
+    ):
+        return label
+    return ref
+
+
 def _created_before(item: Any, since: datetime) -> bool:
     """A listed PR created before `since`; one without a readable date is not."""
     raw = item.get("created_at") if isinstance(item, dict) else None
@@ -584,7 +612,7 @@ class PrChecker:
                         checked_at=checked_at,
                     )
                 body = res.json()
-                snap = self._parse_pr(body, checked_at)
+                snap = self._parse_pr(body, checked_at, ref.provider == "github")
                 head = snap.head_sha
                 if not head:
                     partial.append("head")
@@ -677,7 +705,9 @@ class PrChecker:
                         found.append(
                             (
                                 PrRef(*repo, item["number"]),
-                                self._parse_pr(item, checked_at),
+                                self._parse_pr(
+                                    item, checked_at, ref.provider == "github"
+                                ),
                             )
                         )
                     if len(items) < LIST_CAP or _created_before(items[-1], since):
@@ -687,7 +717,9 @@ class PrChecker:
             log.info("pr list unavailable for %s/%s/%s", *repo)
             return None
 
-    def _parse_pr(self, body: dict[str, Any], checked_at: datetime) -> ForgeSnapshot:
+    def _parse_pr(
+        self, body: dict[str, Any], checked_at: datetime, github: bool
+    ) -> ForgeSnapshot:
         merged_at = None
         if body.get("merged") is True:
             state = PrState.MERGED
@@ -713,7 +745,7 @@ class PrChecker:
         mergeable_state = body.get("mergeable_state")
         if not isinstance(mergeable_state, str):
             mergeable_state = None
-        head_ref = head["ref"] if isinstance(head.get("ref"), str) else None
+        head_ref = _head_branch(body, head, base, github)
         base_ref = base["ref"] if isinstance(base.get("ref"), str) else None
         merge_sha = body.get("merge_commit_sha")
         if state is not PrState.MERGED or not isinstance(merge_sha, str):

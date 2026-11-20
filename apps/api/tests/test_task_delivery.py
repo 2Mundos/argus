@@ -218,6 +218,70 @@ def test_implausible_rejects_a_pr_from_another_branch() -> None:
     )
 
 
+GONE = "refs/pull/1452/head"
+# (head, base repo_id, github, head branch read). The first row is task da371c5d:
+# Gitea's merged #1452 after its branch was deleted.
+HEAD_BRANCHES = [
+    (
+        {"ref": GONE, "label": "argus/task-da371c5d", "repo_id": 7},
+        7,
+        False,
+        "argus/task-da371c5d",
+    ),
+    (
+        {"ref": "argus/task-da371c5d", "label": "argus/task-da371c5d"},
+        None,
+        False,
+        "argus/task-da371c5d",
+    ),
+    (
+        {"ref": GONE, "label": "argus/task-da371c5d", "repo_id": 9},
+        7,
+        False,
+        GONE,
+    ),  # a fork
+    (
+        {"ref": GONE, "label": "argus/task-da371c5d", "repo_id": -1},
+        -1,
+        False,
+        GONE,
+    ),  # head repo gone
+    (
+        {"ref": GONE, "label": "argus/task-da371c5d"},
+        None,
+        False,
+        GONE,
+    ),  # head repo unknown
+    ({"ref": GONE, "label": "", "repo_id": 7}, 7, False, GONE),  # AGit flow: no branch
+    (
+        {"ref": "refs/pull/9/head", "label": "argus/task-da371c5d", "repo_id": 7},
+        7,
+        False,
+        "refs/pull/9/head",
+    ),
+    (
+        {"ref": GONE, "label": "argus/task-da371c5d", "repo_id": 7},
+        7,
+        True,
+        GONE,
+    ),  # GitHub
+    ({"label": "argus/task-da371c5d", "repo_id": 7}, 7, False, None),
+]
+
+
+@pytest.mark.parametrize(("head", "base_repo", "github", "branch"), HEAD_BRANCHES)
+def test_the_head_branch_of_a_pr_whose_branch_was_deleted(
+    head: dict, base_repo: int | None, github: bool, branch: str | None
+) -> None:
+    """Only the PR's own `refs/pull/<n>/head` in its own repository falls back to the
+    label; anything else keeps the ref, which then matches no task branch."""
+    body = {"number": 1452, "head": {"sha": HEAD, **head}, "base": {"ref": "main"}}
+    if base_repo is not None:
+        body["base"]["repo_id"] = base_repo
+    snap = delivery.PrChecker(MemorySecretStore())._parse_pr(body, SOON_AT, github)
+    assert snap.head_ref == branch
+
+
 def test_repository_url_parsing() -> None:
     assert delivery.parse_repository(f"https://{HOST.upper()}/Team/Argus.git") == (
         HOST,
