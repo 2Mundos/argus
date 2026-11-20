@@ -66,9 +66,11 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   - OAuth subscription (`kind: "subscription"`): either the native
     `antigravity-oauth-token` document (`{"token": {"access_token": …}, …}`) or
     a flat object with `access_token` (and optional `refresh_token`, `expiry`,
-    `token_type`, `expires_in`, `auth_method`). Rejects API keys (`AIza…`) in
-    `access_token`, malformed `expiry`, or expired access tokens at import.
-    `refresh_token` is stored in SOPS if supplied but never leaves Argus.
+    `token_type`, `expires_in`, `auth_method`). Additional CLI metadata fields
+    (such as `id_token_email` or `scope`) are tolerated and ignored, never
+    echoed. Rejects API keys (`AIza…`) in `access_token`, malformed `expiry`, or
+    expired access tokens at import. `refresh_token` is stored in SOPS if
+    supplied but never leaves Argus.
   Kind is derived from the credential on create and credential update. Responses
   and events never echo any token or key.
 - **Dashboard onboarding**: the Add account wizard's **Google AI Studio** tile

@@ -28,8 +28,10 @@ def test_oauth_native_and_flat_shapes_yield_subscription_kind() -> None:
                 "refresh_token": FAKE_REFRESH,
                 "expiry": FUTURE,
                 "expires_in": 3600,
+                "scope": "openid email",
             },
             "auth_method": "consumer",
+            "id_token_email": "operator@example.test",
         },
         now=NOW,
     )
@@ -38,9 +40,15 @@ def test_oauth_native_and_flat_shapes_yield_subscription_kind() -> None:
     assert native.access_expires_at == datetime(2026, 11, 19, 19, 0, tzinfo=UTC)
     assert FAKE_ACCESS not in native.model_dump_json()
     assert FAKE_REFRESH not in native.model_dump_json()
+    assert "operator@example.test" not in native.model_dump_json()
 
     flat = google_auth.validate(
-        {"access_token": FAKE_ACCESS, "refresh_token": FAKE_REFRESH, "expiry": FUTURE},
+        {
+            "access_token": FAKE_ACCESS,
+            "refresh_token": FAKE_REFRESH,
+            "expiry": FUTURE,
+            "id_token_email": "operator@example.test",
+        },
         now=NOW,
     )
     assert flat.mode == "oauth"
@@ -69,7 +77,6 @@ def test_oauth_native_and_flat_shapes_yield_subscription_kind() -> None:
         ({"access_token": FAKE_ACCESS, "expiry": PAST}, "expired"),
         ({"access_token": FAKE_ACCESS, "expiry": "not-a-date"}, "ISO-8601"),
         ({"access_token": FAKE_ACCESS, "expiry": "2026-11-19T19:00:00"}, "timezone"),
-        ({"token": {"access_token": FAKE_ACCESS, "bogus": 1}}, "unexpected field"),
     ],
 )
 def test_rejections_name_the_rule_and_never_echo_secrets(
