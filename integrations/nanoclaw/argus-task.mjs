@@ -70,7 +70,21 @@ const LOG_BYTES = 20 * 1024 * 1024;
 const ERROR_LINE =
   /\b(?:errors?|failed|failure|fail|traceback|panic)\b|[a-z](?:Error|Exception)\b|\bassert|exit (?:code|status) [1-9]/i;
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g; // keeps tab and newline
 const TIMESTAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\s?/;
+const LINK_CHARS = 300;
+// Secret-looking values in forge output; each match keeps its label and loses the value.
+const SECRETS = [
+  [/\b(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[REDACTED]@"],
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})/g, "[REDACTED]"],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED]"],
+  [/(\bAuthorization\s*[:=]\s*)[^\n]*/gi, "$1[REDACTED]"],
+  [/(\bBearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[REDACTED]"],
+  [
+    /([A-Za-z0-9_]*(?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*)(["']?)[^\s"'&,;]+/gi,
+    "$1$2[REDACTED]",
+  ],
+];
 
 // ---- git and the .git/argus/ file channel ----
 
@@ -147,14 +161,18 @@ function canonicalState(state) {
   return state === "skipped" ? "skipped" : "unknown";
 }
 
-/** Newest status per context, including review jobs that are also CI checks. */
-export function ciSummary(statuses) {
+function latestPerContext(statuses) {
   const latest = new Map();
   for (const s of Array.isArray(statuses) ? statuses : []) {
     const prev = latest.get(s.context);
     if (!prev || (s.id ?? 0) > (prev.id ?? 0)) latest.set(s.context, s);
   }
-  const checks = [...latest.values()].map((s) => ({
+  return [...latest.values()];
+}
+
+/** Newest status per context, including review jobs that are also CI checks. */
+export function ciSummary(statuses) {
+  const checks = latestPerContext(statuses).map((s) => ({
     context: String(s.context ?? "ci").slice(0, 200),
     state: canonicalState(s.status ?? s.state),
   }));
@@ -271,7 +289,8 @@ async function checkCi(api, o, watch) {
     watch.sha ??= head;
   }
   const sha = watch.sha;
-  const ci = ciSummary(await api.ciStatuses(sha));
+  watch.statuses = await api.ciStatuses(sha);
+  const ci = ciSummary(watch.statuses);
   const headMatches = head.startsWith(sha); // an abbreviated --sha matches by prefix
   const evidence = {
     sha,
@@ -288,16 +307,7 @@ async function checkCi(api, o, watch) {
       ...evidence,
     };
   // Fail fast: the first failed check ends the wait unless --all asks for the whole run (spec 3.3).
-  if (ci.failed.length && !o.all)
-    return {
-      done: true,
-      ...evidence,
-      action: `read the failing job log with argus-github-api job-logs, fix, push, then run wait ci again${
-        ci.running
-          ? `; ${ci.running} checks are still running on this commit and will be superseded by the new push`
-          : ""
-      }`,
-    };
+  if (ci.failed.length && !o.all) return { done: true, ...evidence };
   if (ci.state !== "missing" && ci.running === 0) return { done: true, ...evidence };
   const failedSoFar = ci.failed.length ? `, ${ci.failed.length} failed` : "";
   const status =
@@ -305,6 +315,50 @@ async function checkCi(api, o, watch) {
       ? "no checks reported yet"
       : `${ci.running} of ${ci.total} checks running${failedSoFar}`;
   return { done: false, status, ...evidence };
+}
+
+/**
+ * `failureDiagnostics` stopped early enough that one more PR head read fits before `deadline`:
+ * one request timeout, or half the time left when less remains.
+ */
+async function diagnose(api, sha, statuses, deadline, now) {
+  const reserve = Math.min(PROBE_REQUEST_MS, (deadline - now()) / 2);
+  api.deadline = { at: deadline - reserve, now };
+  try {
+    return await failureDiagnostics(api, sha, { statuses });
+  } finally {
+    api.deadline = { at: deadline, now };
+  }
+}
+
+/**
+ * A failed ci result made actionable in the same call: the failed checks and the bounded,
+ * sanitized job-log excerpts of the watched commit, then one more PR head read. A push during
+ * the fetch makes the failure an old head's: it is no outcome and the wait goes on (spec 3.3).
+ * Out of time, the diagnostics are unavailable and the observed failure stands.
+ */
+async function ciFailure(api, o, check, watch, deadline, now) {
+  // The PR head matched the watched (maybe abbreviated) sha: it is the full commit to filter by.
+  const diagnostics = await diagnose(api, check.pr_head_sha, watch.statuses, deadline, now);
+  const head = await headSha(api, o.number);
+  if (!head.startsWith(check.sha)) {
+    const { done: _, ...evidence } = check;
+    return {
+      done: false,
+      status: `PR head ${short(head)} is not the watched ${short(check.sha)}`,
+      ...evidence,
+      pr_head_sha: head,
+      head_matches: false,
+    };
+  }
+  const running = check.running
+    ? `; ${check.running} checks are still running on this commit and will be superseded by the new push`
+    : "";
+  return {
+    ...check,
+    diagnostics,
+    action: `diagnostics holds the failed jobs' error lines for ${short(check.sha)}; for more, run argus-task ci-digest --sha ${check.sha} or the forge helper's job-logs; fix, push, then run wait ci again${running}`,
+  };
 }
 
 const reviewTime = (r) => r.submitted_at ?? r.updated_at ?? r.created_at ?? null;
@@ -462,6 +516,11 @@ async function wait(api, o, ctx) {
             : on === "merge"
               ? await checkMerge(api, o)
               : await checkReview(api, o, cursor);
+        // A check that finished after the budget is late: report pending, never success.
+        if (check.done && ctx.now() >= deadline)
+          check = { done: false, status: "wait budget spent" };
+        else if (check.done && check.state === "failure")
+          check = await ciFailure(api, o, check, watch, deadline, ctx.now);
       } catch (error) {
         if (!(error instanceof GiteaError)) throw error;
         if (error.code === "deadline_exceeded") return pending({ status: "wait budget spent" });
@@ -469,8 +528,6 @@ async function wait(api, o, ctx) {
         check = { done: false, status: `forge not answering (${error.code}); will check again` };
       }
       publish();
-      // A check that finished after the budget is late: report pending, never success.
-      if (check.done && ctx.now() >= deadline) check = { done: false, status: "wait budget spent" };
       if (check.done) {
         finish(check);
         return {
@@ -616,8 +673,7 @@ const MERGE_BLOCKED = {
  * believed only when its own workflow run, read from the forge, is completed and successful for
  * this exact head. Anything else stays `unknown`, never success.
  */
-async function authoritativeCi(api, sha) {
-  const statuses = await api.ciStatuses(sha);
+async function authoritativeCi(api, sha, statuses) {
   const runs = new Map();
   const resolved = [];
   for (const s of Array.isArray(statuses) ? statuses : []) {
@@ -647,7 +703,8 @@ async function authoritativeCi(api, sha) {
 async function mergeGates(api, pr, head, { needsReview }) {
   const blockers = [];
   const waiting = [];
-  const ci = await authoritativeCi(api, head);
+  const statuses = await api.ciStatuses(head);
+  const ci = await authoritativeCi(api, head, statuses);
   if (ci.state === "failure") blockers.push("ci_failed");
   else if (ci.state === "skipped") blockers.push("ci_not_executed");
   else if (ci.state === "pending") waiting.push("ci_running");
@@ -655,7 +712,7 @@ async function mergeGates(api, pr, head, { needsReview }) {
   else if (ci.state === "unknown")
     waiting.push(ci.contradictory.length ? "ci_contradictory" : "ci_unknown");
   const evidence = { ci };
-  if (blockers.length) return { blockers, waiting, evidence };
+  if (blockers.length) return { blockers, waiting, evidence, statuses };
   const review = await api.reviewFindings(pr.number);
   evidence.review = {
     matches_head: review.matches_head,
@@ -683,13 +740,13 @@ async function mergeGates(api, pr, head, { needsReview }) {
 }
 
 const BLOCKER_ACTION = {
-  ci_failed:
-    "read the failing job log with argus-task ci-digest --pr N, fix, push with argus-task deliver, then run merge again",
   ci_not_executed: "every check was skipped, which is not execution; make the required checks run",
   review_findings: "resolve the agentic review findings for this head, push, then run merge again",
   changes_requested: "address the standing changes-requested review, push, then run merge again",
   not_mergeable: "the forge reports the PR as not mergeable; fix it, then run merge again",
 };
+const ciFailedAction = (head) =>
+  `diagnostics holds the failed jobs' error lines for ${short(head)}; for more, run argus-task ci-digest --sha ${head}; fix, push with argus-task deliver, then run merge again`;
 
 /**
  * `merge`: wait for the exact head's checks, apply the review policy and the forge's branch rules,
@@ -788,15 +845,29 @@ async function mergePr(api, o, ctx) {
           });
         gatedHead = head;
         const gates = await mergeGates(api, pr, head, { needsReview });
-        if (gates.blockers.length)
+        let diagnostics;
+        if (gates.blockers[0] === "ci_failed") {
+          // Same diagnostics and head re-read as a failed wait ci (spec 3.3): a push during the
+          // fetch makes it an old head's failure, and the new head is gated instead.
+          diagnostics = await diagnose(api, head, gates.statuses, deadline, ctx.now);
+          const now = await headSha(api, number);
+          if (now !== head) observation = { waiting: ["head_moved"], pr_head_sha: now };
+        }
+        if (observation) {
+          // the head moved under a failed check: re-gate it at the next check
+        } else if (gates.blockers.length)
           return stop(EXIT.not_ready, {
             blocked: gates.blockers,
             pr_head_sha: head,
             ...gates.evidence,
+            ...(diagnostics ? { diagnostics } : {}),
             action:
-              BLOCKER_ACTION[gates.blockers[0]] ?? MERGE_BLOCKED[gates.evidence.mergeable_state],
+              gates.blockers[0] === "ci_failed"
+                ? ciFailedAction(head)
+                : (BLOCKER_ACTION[gates.blockers[0]] ??
+                  MERGE_BLOCKED[gates.evidence.mergeable_state]),
           });
-        if (gates.waiting.length) {
+        else if (gates.waiting.length) {
           observation = { waiting: gates.waiting, pr_head_sha: head, ...gates.evidence };
         } else {
           // Every gate holds for `head`; merge only if it still is the head and time is left.
@@ -893,35 +964,99 @@ export function digestLog(text, budget) {
 
 const failed = (x) => FAILED_STATES.has(x.conclusion ?? x.status);
 
-async function ciDigest(api, o) {
-  if ((o.number === undefined) === (o["run-id"] === undefined))
-    throw usage("ci-digest takes --pr N or --run-id ID");
-  const budget = seconds(o["max-bytes"], "max-bytes", DIGEST_BYTES, 256, 64 * 1024);
-  let runs;
-  let sha = null;
-  if (o["run-id"] !== undefined) runs = [await api.getRun(o["run-id"])];
-  else {
-    sha = await headSha(api, o.number);
-    runs = (await api.listRuns({ headSha: sha, all: true, limit: 50 })).items;
+/** Forge text made safe to print: no escape or control sequences, secret-looking values redacted. */
+export function sanitize(text) {
+  let s = String(text).replace(ANSI, "").replace(CONTROL, "");
+  for (const [pattern, replacement] of SECRETS) s = s.replace(pattern, replacement);
+  return s;
+}
+
+const oneLine = (v) =>
+  typeof v === "string" ? sanitize(v.replace(/\s+/g, " ")).slice(0, 200) : null;
+
+/** `url` when it is a short https link on the forge's own host, else undefined. */
+function safeLink(api, url) {
+  if (typeof url !== "string" || url.length > LINK_CHARS || sanitize(url) !== url) return undefined;
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return undefined;
   }
+  const hosts = new Set();
+  for (const base of [api.repository?.origin, api.base])
+    try {
+      hosts.add(new URL(base).host);
+    } catch {}
+  return u.protocol === "https:" && !u.username && !u.password && hosts.has(u.host)
+    ? url
+    : undefined;
+}
+
+/**
+ * Bounded, sanitized evidence of why CI failed on exactly `sha`: an excerpt of every failed job
+ * of the failed runs for that head, and, given `statuses`, the failed checks with a forge link.
+ * Runs for any other head are ignored. A forge error never throws: an unreadable log is a note
+ * on its excerpt, an unreadable run or job list is `diagnostics_unavailable`.
+ */
+export async function failureDiagnostics(
+  api,
+  sha,
+  { budget = DIGEST_BYTES, statuses, runId } = {},
+) {
+  const head = sha ? sha.toLowerCase() : null;
+  const out = { head_sha: head, failed_runs: 0, excerpts: [], truncated: false };
+  if (statuses)
+    out.checks = latestPerContext(statuses)
+      .filter((s) => canonicalState(s.status ?? s.state) === "failure")
+      .slice(0, MAX_FAILED)
+      .map((s) => {
+        const link = safeLink(api, s.target_url);
+        return {
+          context: contextName(sanitize(s.context ?? "ci")),
+          state: "failure",
+          ...(link ? { link } : {}),
+        };
+      });
+  const unavailable = (error) => {
+    if (!(error instanceof GiteaError)) throw error;
+    out.diagnostics_unavailable ??= error.code;
+  };
+  let runs = [];
+  try {
+    runs =
+      runId !== undefined
+        ? [await api.getRun(runId)]
+        : (await api.listRuns({ headSha: head, all: true, limit: 50 })).items;
+  } catch (error) {
+    unavailable(error);
+  }
+  if (head)
+    runs = runs.filter((r) => typeof r?.head_sha === "string" && r.head_sha.toLowerCase() === head);
+  runs = runs.filter(failed);
+  out.failed_runs = runs.length;
   const jobs = [];
-  for (const run of runs.filter(failed))
-    for (const job of (await api.listJobs(run.id, { all: true, limit: 50 })).items.filter(failed))
-      jobs.push({ run, job });
-  const failedRuns = runs.filter(failed).length;
-  const excerpts = [];
+  for (const run of runs)
+    try {
+      for (const job of (await api.listJobs(run.id, { all: true, limit: 50 })).items.filter(failed))
+        jobs.push({ run, job });
+    } catch (error) {
+      unavailable(error);
+    }
+  const excerpts = out.excerpts;
   const size = (v) => Buffer.byteLength(JSON.stringify(v));
-  // The budget bounds the printed line: the envelope, every excerpt's fields and the
+  // The budget bounds the printed value: the envelope, every excerpt's fields and the
   // escaped text all count.
-  let left =
-    budget - size({ head_sha: sha, failed_runs: failedRuns, excerpts: [], truncated: true });
+  let left = budget - size({ ...out, truncated: true });
   let truncated = false;
   for (const { run, job } of jobs) {
+    const link = safeLink(api, job.html_url) ?? safeLink(api, run.html_url);
     const excerpt = {
       run_id: run.id,
       job_id: job.id,
-      job: typeof job.name === "string" ? job.name.slice(0, 200) : null,
-      step: (job.steps ?? []).find(failed)?.name?.slice(0, 200) ?? null,
+      job: oneLine(job.name),
+      step: oneLine((job.steps ?? []).find(failed)?.name),
+      ...(link ? { link } : {}),
       text: "",
     };
     const room = left - size(excerpt) - (excerpts.length ? 1 : 0);
@@ -932,7 +1067,7 @@ async function ciDigest(api, o) {
     const chunks = [];
     try {
       await api.jobLogs(job.id, { maxBytes: LOG_BYTES, sink: (c) => chunks.push(Buffer.from(c)) });
-      const log = Buffer.concat(chunks).toString("utf8");
+      const log = sanitize(Buffer.concat(chunks).toString("utf8"));
       // JSON escaping can grow the text; shrink the raw budget until the escaped text fits.
       for (let raw = room; raw > 0; raw -= Math.max(16, size(excerpt.text) - 2 - room)) {
         const d = digestLog(log, raw);
@@ -951,10 +1086,20 @@ async function ciDigest(api, o) {
     excerpts.push(excerpt);
     left -= size(excerpt) + (excerpts.length > 1 ? 1 : 0);
   }
-  return {
-    code: EXIT.ok,
-    result: { head_sha: sha, failed_runs: failedRuns, excerpts, truncated },
-  };
+  out.truncated = truncated;
+  return out;
+}
+
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+
+async function ciDigest(api, o) {
+  const targets = [o.number, o["run-id"], o.sha].filter((v) => v !== undefined);
+  if (targets.length !== 1) throw usage("ci-digest takes one of --pr N, --sha SHA or --run-id ID");
+  if (o.sha !== undefined && !FULL_SHA.test(o.sha)) throw usage("--sha must be a full commit SHA");
+  const budget = seconds(o["max-bytes"], "max-bytes", DIGEST_BYTES, 256, 64 * 1024);
+  const sha = o["run-id"] !== undefined ? null : (o.sha ?? (await headSha(api, o.number)));
+  const result = await failureDiagnostics(api, sha, { budget, runId: o["run-id"] });
+  return { code: EXIT.ok, result };
 }
 
 // ---- deliver ----
@@ -1765,8 +1910,8 @@ const COMMANDS = {
   },
   "ci-digest": {
     summary:
-      "--pr N | --run-id ID: failed jobs and steps with error lines, at most --max-bytes (2048)",
-    options: { "run-id": "string", "max-bytes": "int" },
+      "--pr N | --sha SHA | --run-id ID: failed jobs and steps with error lines, at most --max-bytes (2048)",
+    options: { sha: "string", "run-id": "string", "max-bytes": "int" },
     optionalPr: true,
     run: ciDigest,
   },

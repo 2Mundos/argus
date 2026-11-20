@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-02
-updated: 2026-11-18
+updated: 2026-11-20
 ---
 
 # Task helpers (`argus-task`)
@@ -95,9 +95,10 @@ argus-task wait merge --pr N
   `watched_sha`, `pr_head_sha` and `head_matches` (the head equals the watched sha; an
   abbreviated `--sha` matches by prefix). It fails fast: it returns as soon as one check on
   the watched commit has failed, with `state` `failure`, the checks failed so far, the number
-  still `running` and an `action` (read the failing job log, fix, push, wait again; it
-  names the checks still running, which the new push supersedes), so the worker does not
-  idle while slow jobs finish a run that is already red. `--all` restores the whole-run
+  still `running`, the `diagnostics` below and an `action` (read the diagnostics, fix, push,
+  wait again; it names `ci-digest --sha` for more and the checks still running, which the
+  new push supersedes), so the worker does not idle while slow jobs finish a run that is
+  already red. `--all` restores the whole-run
   wait: it returns only when no check is pending. Success always needs every check
   finished and none failed. Either way it returns only while `head_matches` is true. If the head is another commit the wait keeps
   going, bounded like any wait, with the status "PR head abc1234 is not the watched
@@ -112,6 +113,16 @@ argus-task wait merge --pr N
   `success` (success, neutral: executed, non-blocking), `skipped` (every check skipped;
   a mix of skipped and success is `success`), or `missing` (no checks). An `unknown`
   result exits 0 with state `unknown`: the wait is over, but the evidence is not a pass.
+- A done `ci` wait with state `failure` (fail-fast or `--all`) carries `diagnostics`: the
+  `ci-digest` evidence (3.5) of exactly the watched commit within the default 2048 bytes,
+  plus `checks`, the failed checks as `{context, state, link?}` (at most 20; `link` is the
+  status's or check run's `target_url` under the 3.5 link rule). The fetch stops one request
+  timeout (10 s, or half the time left when less remains) before the deadline. After it the
+  PR head is read once more: if it moved, the failure belongs to an old head and is no
+  outcome; the wait goes on with the "is not the watched" status. Unreadable logs, run or
+  job lists, or a fetch out of time keep the failure and say so in the diagnostics (3.5).
+  No other state (`success`, `skipped`, `unknown`, `missing`, pending) fetches or carries
+  diagnostics. They stay in the command output: the terminal record (3.4) is unchanged.
 - `review` returns when a review or comment newer than `--since` appears. The JSON
   carries the new items' ids, authors and kinds (not their bodies; the agent reads those
   with the forge helper) and a `cursor` for the next call.
@@ -173,7 +184,10 @@ with `git rev-parse --absolute-git-dir`, and outside a repository it runs withou
     and its next milestone replaces the `waiting` one.
   - The helper never reads or writes through a symlink there, and the file is best effort:
     a failed write is skipped, the wait carries on and returns the same result, only the
-    milestone is lost. A file not modified for 15 minutes is stale and ignored.
+    milestone is lost. A file not modified for 15 minutes is stale and ignored, and so is one
+    last modified before the current attempt was claimed: a record a previous attempt left
+    in the same workspace is never relayed as this attempt's progress. The host reads only
+    the claimed task's workspace and resets its repost state when a new attempt starts.
 
 The workspace belongs to the container, which can swap any directory in it for a symlink
 at any moment, so the host treats both files as untrusted. It walks from its own group
@@ -189,17 +203,28 @@ contexts, else the whole record is refused).
 ## 3.5 `ci-digest`
 
 ```
-argus-task ci-digest --pr N | --run RUN_ID [--max-bytes 2048]
+argus-task ci-digest --pr N | --sha SHA | --run-id RUN_ID [--max-bytes 2048]
 ```
 
-Finds the failed jobs and steps for the PR's head SHA (or one run), and from each
-failed step's log keeps the lines that look like errors (`error`, `failed`, `FAIL`,
-`Traceback`, `assert`, `panic`, exit-status lines) plus the last 20 lines. It strips ANSI
-codes and timestamps, and removes repeated lines. `--max-bytes` (default 2048) bounds the
+Finds the failed jobs and steps for one commit (the PR's current head, or a full `--sha`)
+or one run, and from each failed job's log keeps the lines that look like errors (`error`,
+`failed`, `FAIL`, `Traceback`, `assert`, `panic`, exit-status lines) plus the last 20 lines.
+Only runs whose `head_sha` equals the commit (case-insensitive) count, so a run of another
+head is never attributed to it. `--max-bytes` (default 2048) bounds the
 printed JSON line itself, field names and escaping included: excerpts are added until the
-next one would not fit, and `truncated` says something was left out. The JSON names the job, step and run id of each
-excerpt, so the agent can fetch the full log with the forge helper when the digest is not
-enough. Parsers for specific formats (pytest, vitest, ruff, tsc, biome) are added only for
+next one would not fit, and `truncated` says something was left out. Each excerpt names
+its `run_id`, `job_id`, `job` and failed `step`, so the agent can fetch the full log with
+the forge helper when the digest is not enough, and a `link` to the job (else the run)
+only when it is an https URL without credentials on the forge's own host, at most 300
+characters.
+
+Forge output is untrusted. Every log, job, step and context name is sanitized before it is
+printed: ANSI and other control sequences and timestamps are stripped, names are one line,
+and secret-looking values (URL credentials, GitHub and AWS tokens, `Authorization` headers,
+`Bearer` tokens, `password=`/`token=`/`secret=`/`api_key=` values) become `[REDACTED]`.
+A forge error never fails the digest: a log that cannot be read is an excerpt with
+`note: "log not read: <code>"`, and a run or job list that cannot be read sets
+`diagnostics_unavailable: <code>`; the result still exits 0. Parsers for specific formats (pytest, vitest, ruff, tsc, biome) are added only for
 a format this pass handles badly, each with a fixture.
 
 ## 3.6 `pr-ready` and `deliver`
@@ -428,7 +453,7 @@ on `--interval`, cap as in 3.3):
 | Merged | exit 0, `already_merged`; never a second PUT. A merged PR without a merge commit is an error |
 | Closed without merge | exit 12, `blocked: ["pr_closed"]` |
 | `--sha` is not the head | exit 12, `head_moved` |
-| Failed check | exit 12 at once, `ci_failed`, `action` points at `ci-digest` |
+| Failed check | exit 12 at once, `ci_failed` with `diagnostics` for the head (3.3), `action` points at `ci-digest --sha` |
 | Every check skipped | exit 12, `ci_not_executed` (skipped is not execution) |
 | Running, no checks yet, unknown state, forge error, rate limit | waiting; at the cap exit 10, `waiting` names why |
 | Review policy `required` (or unset or unknown) and no zero-finding agentic review of the exact head | waiting `review_missing` |
@@ -448,6 +473,11 @@ GitHub enforces on the PUT too.
 pending; `merge` accepts it only when its own workflow run (from `details_url`), read from the
 forge, is `completed`/`success` for this exact head. Otherwise the state is unknown (`ci_contradictory`):
 waiting, never success. Fixture: `argus-task-merge.test.mjs`.
+
+**Failure diagnostics.** A `ci_failed` head gets the same `diagnostics` and head re-read as a
+failed `wait ci` (3.3). Every gate reads the current head's statuses only, so a failure on an
+old head never blocks or is reported for a newer one; if the head moved during the fetch, the
+new head is gated at the next poll instead.
 
 **Merge.** When every gate holds, it re-reads the PR, confirms the head is unchanged, checks the
 steer marker and the budget, then calls `mergePullRequest` (PUT `/pulls/N/merge` with the head
@@ -483,7 +513,13 @@ after a cap, a steer or an ambiguous response never merges twice. A steer ends t
   intervals; `deliver` runs against real temporary git repositories. Covered: each
   `wait` condition, a failure while other checks run, a 5xx without retry, the cap
   clamp, interrupt by a newer marker and not an older one, the `pr-ready` reasons
-  including a moved head, digest deduplication and the printed-size bound, `deliver` on
+  including a moved head, digest deduplication and the printed-size bound, failure
+  diagnostics (a pending check that fails with its sanitized excerpt and redacted tokens,
+  several failures within the budget, a head that moves during the fetch, runs of other
+  heads ignored, unreadable logs and run lists, a fetch out of time, none for success or
+  unknown), `merge` gating only the current head (an old head's failure with a green new
+  head merges that head; a green head replaced by a failed or pending one is refused),
+  `ci-digest --sha`, the host ignoring an earlier attempt's or another task's record, `deliver` on
   a clean rebase and on a conflict, the pre-push gate (order, the rebased commit, a failing check or scanner, a dirty tree; no push on failure), the `waiting` kind validation, the host's symlink
   refusals at each component, FIFOs, stale records and repost timing. `attach`
   (`argus-task-attach.test.mjs`, the real CLI against the real bridge with a fake store

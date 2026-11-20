@@ -3276,7 +3276,8 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       return;
     }
     const now = nowMs();
-    const waiting = await readWaiting(groupDir, task.id, now);
+    // A record older than this attempt is an earlier attempt's wait, not this one's progress.
+    const waiting = await readWaiting(groupDir, task.id, now, claimedAt);
     if (!waiting || !waitingRelay.due(waiting, now)) {
       if (!waiting) waitingRelay.reset();
       return;
@@ -4278,6 +4279,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     });
     currentClaim = task;
     claimedAt = cfg.now?.() ?? Date.now();
+    waitingRelay.reset();
     switchFailure = null;
     if (!(await ensureRuntime(task))) return;
     if (!(await ensureAccount(task))) {

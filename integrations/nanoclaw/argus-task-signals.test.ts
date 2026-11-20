@@ -92,6 +92,16 @@ describe("readWaiting", () => {
     expect(await readWaiting(root, TASK, NOW)).toBeNull();
   });
 
+  it("never reads an earlier attempt's record or another task's", async () => {
+    const { root, signals } = group();
+    writeWaiting(signals, NOW - 60_000);
+    // The attempt started after the record was written: it belongs to the previous attempt.
+    expect(await readWaiting(root, TASK, NOW, NOW - 30_000)).toBeNull();
+    expect(await readWaiting(root, TASK, NOW, NOW - 60_000)).toEqual(record);
+    const other = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+    expect(await readWaiting(root, other, NOW)).toBeNull();
+  });
+
   it("refuses a symlinked record or directory", async () => {
     const { root, signals } = group();
     const elsewhere = temp("argus-elsewhere-");
