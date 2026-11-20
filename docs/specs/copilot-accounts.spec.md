@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-30
-updated: 2026-11-17
+updated: 2026-11-19
 ---
 
 # Copilot accounts: import, executor lease, delegated CLI
@@ -94,6 +94,14 @@ on create and replace, and deliver it to the **delegated** GitHub Copilot CLI
   `{authorized cwd}/.argus-delegate-runtime/copilot-home/` so the CLI never
   writes a plaintext token fallback (`config.json`) into a shared or read-only
   location, and nothing persists across tasks.
+- **Session admission** (NanoClaw): the sentinel looks like a fine-grained PAT, so
+  upstream `validateSpec` would refuse it as a credential value in
+  `contributedEnv`. The install patches that check
+  (`patch-gateway-sentinel.py`) to exempt exactly the pair
+  `COPILOT_GITHUB_TOKEN` and the sentinel constant, in the contributed lane
+  only. A real token under that key, the sentinel under any other key, and the
+  ordinary `env` lane stay refused; preflight and task sessions behave alike,
+  with or without a lease (`argus-gateway-sentinel-composition.test.ts`).
 - **Invocation**: `copilot -p <prompt> --model <explicit> -s --no-ask-user`;
   the model is always explicit, never the CLI default. Read-only delegation
   grants only read tools; write mode adds `--allow-tool` for the narrow tools

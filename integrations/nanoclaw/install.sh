@@ -723,6 +723,10 @@ cp "$here/overlays/docker-stop-removal.ts" "$here/overlays/docker-stop-removal.t
   "$here/overlays/docker-driver-teardown.test.ts" "$target/src/drivers/"
 python3 "$here/patch-docker-teardown.py" "$target"
 
+# Spec admission: admit the exact Copilot gateway sentinel in the contributed env lane only.
+python3 "$here/patch-gateway-sentinel.py" "$target"
+cp "$here/argus-gateway-sentinel-composition.test.ts" "$target/src/argus-gateway-sentinel-composition.test.ts"
+
 # Pre-create session bind-mount stubs as the host uid (workspace-cleanup.spec.md 3.3).
 cp "$here/overlays/session-mount-stubs.ts" "$here/overlays/session-mount-stubs.test.ts" \
   "$target/src/"
