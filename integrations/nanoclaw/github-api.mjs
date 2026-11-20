@@ -205,6 +205,9 @@ export class GitHubApi extends GiteaApi {
       id: r.id,
       context: r.name,
       state: checkState(r),
+      ...(typeof r.html_url === "string" && r.html_url.length <= 300
+        ? { target_url: r.html_url }
+        : {}),
       // A run that reports a conclusion or completion time while its status is not `completed`
       // contradicts itself; `state` stays pending and the reader must find the authority.
       ...(r.status !== "completed" && (r.conclusion || r.completed_at)

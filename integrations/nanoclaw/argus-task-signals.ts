@@ -119,11 +119,16 @@ function parseOutcome(raw: unknown): Outcome | null {
   return { state: state as Outcome["state"], failed: [...failed] };
 }
 
-/** The waiting record, or null when there is none, it is stale, or it is not valid. */
+/**
+ * The waiting record, or null when there is none, it is stale, it is not valid, or it was last
+ * written before `notBeforeMs` (the attempt's start): a record from an earlier attempt in the
+ * same workspace is never relayed as this attempt's progress.
+ */
 export async function readWaiting(
   groupDir: string,
   taskId: string,
   nowMs: number,
+  notBeforeMs = 0,
 ): Promise<Waiting | null> {
   return inSignalDir(groupDir, taskId, false, async (dir) => {
     let fh: FileHandle;
@@ -135,7 +140,7 @@ export async function readWaiting(
     }
     try {
       const st = await fh.stat();
-      if (!st.isFile() || nowMs - st.mtimeMs > STALE_MS) return null;
+      if (!st.isFile() || nowMs - st.mtimeMs > STALE_MS || st.mtimeMs < notBeforeMs) return null;
       const buf = Buffer.alloc(READ_MAX);
       const { bytesRead } = await fh.read(buf, 0, READ_MAX, 0);
       return parseWaiting(JSON.parse(buf.subarray(0, bytesRead).toString("utf8")), nowMs);

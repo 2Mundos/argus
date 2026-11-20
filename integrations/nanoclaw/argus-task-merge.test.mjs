@@ -60,6 +60,11 @@ function forge(over = {}) {
       head: { sha: HEAD },
     },
     runs: [checkRun()],
+    movedRuns: [],
+    // Workflow runs, their jobs and job logs for the failure diagnostics.
+    actionRuns: [],
+    jobs: {},
+    logs: {},
     statuses: [],
     comments: [],
     reviews: [],
@@ -99,13 +104,25 @@ function forge(over = {}) {
         check_runs: s.runs,
       }),
       [`/commits/${HEAD}/check-runs`]: () => ({ total_count: s.runs.length, check_runs: s.runs }),
-      [`/commits/${MOVED}/check-runs`]: () => ({ total_count: 0, check_runs: [] }),
+      [`/commits/${MOVED}/check-runs`]: () => ({
+        total_count: s.movedRuns.length,
+        check_runs: s.movedRuns,
+      }),
       [`/commits/${HEAD}/status`]: () => ({ statuses: s.statuses }),
       [`/commits/${MOVED}/status`]: () => ({ statuses: [] }),
       "/issues/7/comments": () => s.comments,
       "/pulls/7/reviews": () => s.reviews,
       "/actions/runs/900": () => s.workflow,
+      "/actions/runs": () => {
+        const sha = url.searchParams.get("head_sha");
+        const runs = s.actionRuns.filter((r) => r.head_sha === sha);
+        return { total_count: runs.length, workflow_runs: runs };
+      },
     }[path];
+    const jobs = path.match(/^\/actions\/runs\/(\d+)\/jobs$/)?.[1];
+    if (jobs && s.jobs[jobs]) return json({ total_count: s.jobs[jobs].length, jobs: s.jobs[jobs] });
+    const log = path.match(/^\/actions\/jobs\/(\d+)\/logs$/)?.[1];
+    if (log && s.logs[log] !== undefined) return new Response(s.logs[log]);
     return route ? json(route()) : json({ message: "Not Found" }, 404);
   };
   return { s, writes, calls, fetch };
@@ -135,6 +152,13 @@ async function merge(f, argv = [], { env = {}, onSleep } = {}) {
   );
   return { code, out: out.length ? JSON.parse(out.join("")) : null, err: err.join(""), dir };
 }
+
+/** A failed workflow run `runId` of `sha` with one failed job `jobId` and its log. */
+const failedRun = (sha, runId, jobId, log) => ({
+  actionRuns: [{ id: runId, head_sha: sha, conclusion: "failure" }],
+  jobs: { [runId]: [{ id: jobId, name: "test", conclusion: "failure" }] },
+  logs: { [jobId]: log },
+});
 
 const agentic = (n, sha = HEAD) => [
   {
@@ -269,14 +293,64 @@ describe("merge: fails closed", () => {
   it("fails fast on a failed check with an actionable result", async () => {
     const f = forge({
       runs: [
-        checkRun({ conclusion: "failure" }),
+        checkRun({ conclusion: "failure", html_url: `${REPO}/runs/11` }),
         checkRun({ id: 12, name: "lint", status: "in_progress", conclusion: null }),
       ],
+      ...failedRun(HEAD, 900, 11, "Error: boom Bearer abc"),
     });
     const r = await blocked(f, [], {}, "ci_failed");
-    assert.match(r.out.action, /ci-digest/);
+    assert.match(r.out.action, new RegExp(`ci-digest --sha ${HEAD}`));
     assert.equal(r.out.waited_s, 0);
+    assert.equal(r.out.pr_head_sha, HEAD);
+    const d = r.out.diagnostics;
+    assert.deepEqual(d.checks, [{ context: "test", state: "failure", link: `${REPO}/runs/11` }]);
+    assert.deepEqual(
+      d.excerpts.map((e) => [e.run_id, e.job_id, e.text]),
+      [[900, 11, "Error: boom Bearer [REDACTED]"]],
+    );
   });
+
+  it("gates only the new head: an old head's failure does not block a green one", async () => {
+    const f = forge({
+      pr: { ...forge().s.pr, head: { sha: MOVED } },
+      runs: [checkRun({ conclusion: "failure" })],
+      movedRuns: [checkRun({ id: 13 })],
+      ...failedRun(HEAD, 900, 11, "Error: old head"),
+    });
+    const r = await merge(f);
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.diagnostics, undefined);
+    assert.equal(f.s.mergeBody.sha, MOVED);
+    assert.ok(!f.calls.some((c) => c.startsWith("GET /actions/")), f.calls.join());
+  });
+
+  for (const [name, run, code] of [
+    ["failed", { conclusion: "failure" }, EXIT.not_ready],
+    ["pending", { status: "in_progress", conclusion: null }, EXIT.pending],
+  ])
+    it(`refuses the merge when a green head is replaced by a ${name} one`, async () => {
+      const f = forge({
+        movedRuns: [checkRun({ id: 13, details_url: `${REPO}/actions/runs/901/job/13`, ...run })],
+        ...failedRun(MOVED, 901, 13, "Error: new head"),
+      });
+      // An old head's failed run must never be attributed to the new head.
+      f.s.actionRuns.push({ id: 900, head_sha: HEAD, conclusion: "failure" });
+      let reads = 0;
+      const base = f.s.pr;
+      f.s.pr = () => (++reads <= 1 ? base : { ...base, head: { sha: MOVED } });
+      const r = await merge(f, ["--max", "20"]);
+      assert.equal(r.code, code, JSON.stringify(r.out));
+      assert.equal(r.out.pr_head_sha, MOVED);
+      assert.deepEqual(f.writes, []);
+      if (code === EXIT.not_ready) {
+        assert.deepEqual(r.out.blocked, ["ci_failed"]);
+        assert.equal(r.out.diagnostics.head_sha, MOVED);
+        assert.deepEqual(
+          r.out.diagnostics.excerpts.map((e) => [e.run_id, e.text]),
+          [[901, "Error: new head"]],
+        );
+      } else assert.equal(r.out.diagnostics, undefined);
+    });
 
   it("does not treat an all-skipped run as execution", async () => {
     await blocked(

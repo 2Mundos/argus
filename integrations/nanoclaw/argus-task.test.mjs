@@ -223,7 +223,8 @@ describe("wait ci", () => {
     assert.equal(r.code, EXIT.ok);
     assert.equal(r.elapsed, 9);
     assert.deepEqual([r.out.state, r.out.failed, r.out.running], ["failure", ["lint"], 0]);
-    assert.equal(r.out.action, undefined);
+    assert.deepEqual(r.out.diagnostics.checks, [{ context: "lint", state: "failure" }]);
+    assert.doesNotMatch(r.out.action, /still running/);
   });
 
   it("does not fail fast on a failure of a commit the PR no longer points at", async () => {
@@ -233,6 +234,185 @@ describe("wait ci", () => {
     assert.equal(r.code, EXIT.pending);
     assert.equal(r.out.head_matches, false);
     assert.match(r.out.status, /is not the watched/);
+  });
+
+  const TOKEN = `ghp_${"x".repeat(36)}`;
+  /** A failed run 11 of HEAD with failed jobs `ids`, plus a failed run 12 of another head. */
+  const failedRuns = (ids, log = () => new Response("ok\nFAILED test_x\n")) => {
+    const routes = {
+      "GET /actions/runs": (url) => {
+        assert.equal(url.searchParams.get("head_sha"), HEAD);
+        return {
+          workflow_runs: [
+            { id: 11, head_sha: HEAD.toUpperCase(), conclusion: "failure" },
+            { id: 12, head_sha: NEW, conclusion: "failure" },
+          ],
+        };
+      },
+      "GET /actions/runs/11/jobs": {
+        jobs: ids.map((id) => ({
+          id,
+          name: `test ${id}`,
+          conclusion: "failure",
+          html_url: `${REPO}/actions/runs/11/jobs/${id}`,
+        })),
+      },
+      "GET /actions/runs/12/jobs": () => assert.fail("a run of another head was read"),
+    };
+    for (const id of ids) routes[`GET /actions/jobs/${id}/logs`] = log;
+    return routes;
+  };
+
+  it("attaches sanitized diagnostics of the watched head when a pending check fails", async () => {
+    let checks = 0;
+    const r = await run(["wait", "ci", "--pr", "7"], {
+      routes: {
+        "GET /pulls/7": pr(),
+        [`GET /statuses/${HEAD}`]: () => [
+          {
+            id: 1,
+            context: "lint",
+            status: ++checks < 2 ? "pending" : "failure",
+            target_url: `${REPO}/actions/runs/11`,
+          },
+          {
+            id: 2,
+            context: "ext",
+            status: checks < 2 ? "pending" : "failure",
+            target_url: "https://evil.example/x",
+          },
+          { id: 3, context: "ok", status: "success" },
+        ],
+        ...failedRuns(
+          [21],
+          () =>
+            new Response(
+              `\x1b[31mError: push to https://u:${TOKEN}@git.example.com failed\x07\nAuthorization: Bearer abc\ncurl -H "Bearer abc"\ntoken=${TOKEN}\n`,
+            ),
+        ),
+      },
+    });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.state, "failure");
+    const d = r.out.diagnostics;
+    assert.deepEqual(d.checks, [
+      { context: "lint", state: "failure", link: `${REPO}/actions/runs/11` },
+      { context: "ext", state: "failure" },
+    ]);
+    assert.equal(d.head_sha, HEAD);
+    assert.equal(d.failed_runs, 1);
+    assert.deepEqual(
+      d.excerpts.map((e) => [e.run_id, e.job_id, e.job, e.link]),
+      [[11, 21, "test 21", `${REPO}/actions/runs/11/jobs/21`]],
+    );
+    const text = d.excerpts[0].text;
+    assert.doesNotMatch(r.raw, /ghp_|Bearer abc|\\u001b|\\u0007/);
+    assert.match(text, /^Error: push to https:\/\/\[REDACTED\]@git\.example\.com failed$/m);
+    assert.match(text, /^Authorization: \[REDACTED\]$/m);
+    assert.match(text, /Bearer \[REDACTED\]"/);
+    assert.match(text, /^token=\[REDACTED\]$/m);
+    assert.match(r.out.action, new RegExp(`ci-digest --sha ${HEAD}`));
+    // The terminal record keeps its shape: the diagnostics stay in the command output.
+    const record = JSON.parse(readFileSync(join(signals(r.cwd), "waiting.json"), "utf8"));
+    assert.deepEqual(record.outcome, { state: "failure", failed: ["lint", "ext"] });
+    assert.equal(record.diagnostics, undefined);
+  });
+
+  it("bounds the diagnostics of many failed jobs and marks them truncated", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => 30 + i);
+    const log = () => new Response(Array.from({ length: 60 }, (_, i) => `error ${i}`).join("\n"));
+    const r = await run(["wait", "ci", "--pr", "7"], {
+      routes: {
+        "GET /pulls/7": pr(),
+        [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "failure" }],
+        ...failedRuns(ids, log),
+      },
+    });
+    const d = r.out.diagnostics;
+    assert.equal(d.truncated, true);
+    assert.ok(d.excerpts.length >= 1 && d.excerpts.length < ids.length);
+    assert.ok(Buffer.byteLength(JSON.stringify(d)) <= 2048, `${JSON.stringify(d).length} bytes`);
+  });
+
+  it("does not report a failure whose head moved during the diagnostics fetch", async () => {
+    let moved = false;
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "5"], {
+      routes: {
+        "GET /pulls/7": () => pr(moved ? { head: { sha: NEW, ref: "feature" } } : {}),
+        [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "failure" }],
+        ...failedRuns([21], () => {
+          moved = true;
+          return new Response("FAILED\n");
+        }),
+      },
+    });
+    assert.equal(r.code, EXIT.pending, JSON.stringify(r.out));
+    assert.equal(r.out.head_matches, false);
+    assert.match(
+      r.out.status,
+      new RegExp(`PR head ${NEW.slice(0, 7)} is not the watched ${HEAD.slice(0, 7)}`),
+    );
+    assert.equal(r.out.diagnostics, undefined);
+    assert.equal(
+      JSON.parse(readFileSync(join(signals(r.cwd), "waiting.json"), "utf8")).outcome,
+      undefined,
+    );
+  });
+
+  for (const [name, routes, want] of [
+    [
+      "a job log cannot be read",
+      { ...failedRuns([21], () => new Response("{}", { status: 404 })) },
+      (d) => {
+        assert.equal(d.excerpts[0].note, "log not read: not_found");
+        assert.equal(d.diagnostics_unavailable, undefined);
+      },
+    ],
+    [
+      "the run list cannot be read",
+      { "GET /actions/runs": () => new Response("{}", { status: 403 }) },
+      (d) => {
+        assert.deepEqual([d.failed_runs, d.excerpts], [0, []]);
+        assert.ok(d.diagnostics_unavailable);
+      },
+    ],
+    [
+      "the job list cannot be read",
+      {
+        ...failedRuns([21]),
+        "GET /actions/runs/11/jobs": () => new Response("{}", { status: 404 }),
+      },
+      (d) => {
+        assert.deepEqual([d.failed_runs, d.excerpts], [1, []]);
+        assert.equal(d.diagnostics_unavailable, "not_found");
+      },
+    ],
+  ])
+    it(`still reports the failure when ${name}`, async () => {
+      const r = await run(["wait", "ci", "--pr", "7"], {
+        routes: {
+          "GET /pulls/7": pr(),
+          [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "failure" }],
+          ...routes,
+        },
+      });
+      assert.deepEqual([r.code, r.out.state, r.out.failed], [EXIT.ok, "failure", ["test"]]);
+      assert.deepEqual(r.out.diagnostics.checks, [{ context: "test", state: "failure" }]);
+      want(r.out.diagnostics);
+    });
+
+  it("keeps the failure when the diagnostics run out of time", async () => {
+    const r = await run(["wait", "ci", "--pr", "7", "--max", "15"], {
+      routes: {
+        "GET /pulls/7": pr(),
+        [`GET /statuses/${HEAD}`]: [{ id: 1, context: "test", status: "failure" }],
+        ...failedRuns([21]),
+      },
+      onFetch: (key) => (key === "GET /actions/runs" ? 8 : 0),
+    });
+    assert.deepEqual([r.code, r.out.state], [EXIT.ok, "failure"]);
+    assert.equal(r.out.diagnostics.diagnostics_unavailable, "deadline_exceeded");
+    assert.deepEqual(r.out.diagnostics.excerpts, []);
   });
 
   it("reports success only when every check finished and none failed", async () => {
@@ -264,6 +444,8 @@ describe("wait ci", () => {
       });
       assert.equal(r.code, EXIT.ok);
       assert.equal(r.out.state, state);
+      assert.equal(r.out.diagnostics, undefined);
+      assert.equal(r.calls.filter((c) => c.includes("/actions/")).length, 0);
     });
 
   it("does not retry a failing request inside a wait; the next check is the retry", async () => {
@@ -1112,8 +1294,9 @@ describe("ci-digest", () => {
           assert.equal(url.searchParams.get("head_sha"), HEAD);
           return {
             workflow_runs: [
-              { id: 11, conclusion: "failure" },
-              { id: 12, conclusion: "success" },
+              { id: 11, head_sha: HEAD, conclusion: "failure" },
+              { id: 12, head_sha: HEAD, conclusion: "success" },
+              { id: 13, head_sha: NEW, conclusion: "failure" },
             ],
           };
         },
@@ -1131,7 +1314,9 @@ describe("ci-digest", () => {
             { id: 22, name: "lint", conclusion: "success" },
           ],
         },
-        "GET /actions/jobs/21/logs": () => new Response("FAILED tests/test_x.py::test_y\ndone\n"),
+        "GET /actions/runs/13/jobs": () => assert.fail("a run of another head was read"),
+        "GET /actions/jobs/21/logs": () =>
+          new Response("FAILED tests/test_x.py::test_y password=hunter2\x1b[0m\ndone\n"),
       },
     });
     assert.equal(r.code, EXIT.ok, r.err);
@@ -1141,10 +1326,23 @@ describe("ci-digest", () => {
         job_id: 21,
         job: "test",
         step: "pytest",
-        text: "FAILED tests/test_x.py::test_y\ndone",
+        text: "FAILED tests/test_x.py::test_y password=[REDACTED]\ndone",
       },
     ]);
     assert.equal(r.out.failed_runs, 1);
+    // --sha reads that exact commit without the PR; a short sha is refused.
+    const bySha = await run(["ci-digest", "--sha", NEW], {
+      routes: {
+        "GET /actions/runs": (url) => {
+          assert.equal(url.searchParams.get("head_sha"), NEW);
+          return { workflow_runs: [{ id: 13, head_sha: NEW, conclusion: "failure" }] };
+        },
+        "GET /actions/runs/13/jobs": { jobs: [] },
+      },
+    });
+    assert.deepEqual([bySha.code, bySha.out.head_sha, bySha.out.failed_runs], [EXIT.ok, NEW, 1]);
+    assert.equal((await run(["ci-digest", "--sha", "abc1234"])).code, EXIT.usage);
+    assert.equal((await run(["ci-digest", "--sha", NEW, "--pr", "7"])).code, EXIT.usage);
   });
 });
 
