@@ -499,3 +499,508 @@ def test_claim_advance_exhaust_and_reset_over_http(client: TestClient) -> None:
     assert {s["reason"] for s in route["execution"]["skips"]} == {
         "engine_account_unavailable"
     }
+
+
+FAKE_GOOGLE_ACCESS = "ya29.FAKE_OAUTH_EXEC_CHAIN_0000000000"
+FAKE_GOOGLE_REFRESH = "1//FAKE_OAUTH_REFRESH_CHAIN_00000000"
+GOOGLE_CAPS = [*CAPS, "nanoclaw:executor:agy:google"]
+
+
+def _register_worker(client: TestClient) -> dict[str, str]:
+    boot = client.post("/api/agents/bootstrap-tokens", json={}, headers=ADMIN).json()
+    reg = client.post("/api/agents/register", json={"bootstrap_token": boot["token"]})
+    assert reg.status_code == 201, reg.text
+    return {"Authorization": f"Bearer {reg.json()['token']}"}
+
+
+def _google_oauth_account(
+    client: TestClient, *, expiry: str, name: str = "google-exec"
+) -> str:
+    res = client.post(
+        "/api/accounts",
+        json={
+            "name": name,
+            "provider": "google",
+            "credential": {
+                "token": {
+                    "access_token": FAKE_GOOGLE_ACCESS,
+                    "token_type": "Bearer",
+                    "refresh_token": FAKE_GOOGLE_REFRESH,
+                    "expiry": expiry,
+                    "expires_in": 3600,
+                },
+                "auth_method": "consumer",
+                "id_token_email": "exec@example.test",
+            },
+        },
+        headers=ADMIN,
+    )
+    assert res.status_code == 201, res.text
+    return res.json()["id"]
+
+
+def _paired_google(harness_id: str, google_id: str, id: str = "claude-agy") -> dict:
+    return {
+        "id": id,
+        "mode": "paired",
+        "runtime": "nanoclaw",
+        "harness": {
+            "account_id": harness_id,
+            "provider": "anthropic",
+            "adapter": "claude",
+            "model": {"source": "explicit", "id": "claude-sonnet-4-6"},
+        },
+        "executor": {
+            "account_id": google_id,
+            "provider": "google",
+            "adapter": "agy",
+            "model": {"source": "explicit", "id": "gemini-4-neon"},
+        },
+    }
+
+
+def _create_ready_task(
+    client: TestClient,
+    *,
+    project_slug: str = "demo",
+    title: str = "google chain task",
+    difficulty: str = "hard",
+    max_attempts: int = 3,
+) -> str:
+    res = client.post(
+        "/api/tasks",
+        json={
+            "project": project_slug,
+            "title": title,
+            "difficulty": difficulty,
+            "max_attempts": max_attempts,
+        },
+        headers=ADMIN,
+    )
+    assert res.status_code == 201, res.text
+    task = res.json()
+    if task["state"] == "awaiting_approval":
+        approve = client.post(f"/api/tasks/{task['id']}/approve", headers=ADMIN)
+        assert approve.status_code == 200, approve.text
+    return task["id"]
+
+
+def test_expired_google_executor_advances_to_fallback_and_exhausts_without_stranding(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Expired Google OAuth executor whose refresh transiently fails reaches
+    fallback (or exhaustion when last) via fenced advance without stranding or
+    blocking the healthy harness account."""
+    from argus_api.accounts.google_refresh import GoogleTokenRefresher
+
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", "cid-test")
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", "csec-test")
+
+    async def transient_fail(_url: str, _form: dict[str, str]) -> tuple[int, dict]:
+        return 503, {"error": "temporarily_unavailable"}
+
+    app.state.google_refresher = GoogleTokenRefresher(post_form=transient_fail)
+
+    project(client)
+    harness_id = account(client, "anthropic", max_leases=2)
+    google_id = _google_oauth_account(client, expiry="2020-01-01T00:00:00Z")
+    worker_a = _register_worker(client)
+    worker_b = _register_worker(client)
+
+    # Unrelated agent B holds its own lease (must survive worker A's failure path).
+    unrelated_task = _create_ready_task(
+        client, title="unrelated task", difficulty="simple"
+    )
+    b_claim = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": [], "runtime_providers": ["anthropic"]},
+        headers=worker_b,
+    )
+    assert b_claim.status_code == 200 and b_claim.json()["id"] == unrelated_task
+
+    chain = {
+        "version": 1,
+        "difficulties": {
+            "hard": [
+                _paired_google(harness_id, google_id, id="claude-agy"),
+                direct(harness_id, "anthropic", id="claude-fallback"),
+            ]
+        },
+    }
+    assert put(client, chain).status_code == 200
+
+    task_id = _create_ready_task(client, title="expired google executor")
+    first = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": GOOGLE_CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker_a,
+    )
+    assert first.status_code == 200, first.text
+    claimed = first.json()
+    assert claimed["execution"]["alternative"]["id"] == "claude-agy"
+    assert claimed["executor_lease"]["account_id"] == google_id
+
+    # Worker reports fenced executor auth_expired advance (no blanket /accounts/release).
+    adv = client.post(
+        f"/api/tasks/{task_id}/execution",
+        json={
+            "attempt": claimed["attempt"],
+            "generation": claimed["execution"]["generation"],
+            "action": "advance",
+            "stopped": True,
+            "reason": "auth_expired",
+            "failed_role": "executor",
+        },
+        headers=worker_a,
+    )
+    assert adv.status_code == 204, adv.text
+
+    # Task is requeued (not stranded), Google executor is auth_rejected, harness is untouched.
+    after = client.get(f"/api/tasks/{task_id}", headers=ADMIN).json()
+    assert after["state"] == "ready"
+    assert after["assignee_agent_id"] is None
+    assert after["failures"] == 0
+    accounts_by_id = {
+        a["id"]: a for a in client.get("/api/accounts", headers=ADMIN).json()
+    }
+    assert accounts_by_id[google_id]["lease_block"] == "auth_rejected"
+    assert accounts_by_id[harness_id]["lease_block"] is None
+    # Unrelated worker B still holds its lease on harness_id (1 active lease, not 0).
+    assert accounts_by_id[harness_id]["active_leases"] == 1
+
+    # Next claim lands cleanly on the fallback alternative and records applied.
+    second = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": GOOGLE_CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker_a,
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["execution"]["alternative"]["id"] == "claude-fallback"
+    applied = client.post(
+        f"/api/tasks/{task_id}/execution",
+        json={
+            "attempt": second_body["attempt"],
+            "generation": second_body["execution"]["generation"],
+            "action": "applied",
+        },
+        headers=worker_a,
+    )
+    assert applied.status_code == 204, applied.text
+
+    # No fake credential value ever appears in task or route diagnostics.
+    route_text = client.get(f"/api/tasks/{task_id}/route", headers=ADMIN).text
+    assert FAKE_GOOGLE_ACCESS not in route_text
+    assert FAKE_GOOGLE_REFRESH not in route_text
+    assert SECRET not in route_text
+
+    # Single-alternative chain exhausts cleanly into blocked execution_chain_exhausted.
+    google_id_2 = _google_oauth_account(
+        client, expiry="2020-01-01T00:00:00Z", name="google-exec-2"
+    )
+    assert (
+        put(
+            client,
+            {
+                "version": 1,
+                "difficulties": {
+                    "standard": [_paired_google(harness_id, google_id_2, id="only-agy")]
+                },
+            },
+        ).status_code
+        == 200
+    )
+    worker_c = _register_worker(client)
+    single_task = _create_ready_task(
+        client, title="single expired google", difficulty="standard"
+    )
+    # Free harness slot from worker_b so worker_c can claim.
+    assert client.post("/api/accounts/release", headers=worker_b).status_code == 204
+    c_claim = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": GOOGLE_CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker_c,
+    )
+    assert c_claim.status_code == 200, c_claim.text
+    c_body = c_claim.json()
+    c_adv = client.post(
+        f"/api/tasks/{single_task}/execution",
+        json={
+            "attempt": c_body["attempt"],
+            "generation": c_body["execution"]["generation"],
+            "action": "advance",
+            "stopped": True,
+            "reason": "auth_expired",
+            "failed_role": "executor",
+        },
+        headers=worker_c,
+    )
+    assert c_adv.status_code == 204, c_adv.text
+    exhausted = client.get(f"/api/tasks/{single_task}", headers=ADMIN).json()
+    assert exhausted["state"] == "blocked"
+    assert exhausted["block_reason"] == "execution_chain_exhausted"
+    assert exhausted["assignee_agent_id"] is None
+
+
+def test_rejected_google_executor_skips_to_fallback_or_blocks_without_claim(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revoked Google OAuth refresh token (`invalid_grant`) blocks the account at
+    claim time and moves straight to the fallback (or awaits route with 0 claims)."""
+    from argus_api.accounts.google_refresh import GoogleTokenRefresher
+
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", "cid-test")
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", "csec-test")
+
+    async def revoked(_url: str, _form: dict[str, str]) -> tuple[int, dict]:
+        return 400, {"error": "invalid_grant"}
+
+    app.state.google_refresher = GoogleTokenRefresher(post_form=revoked)
+
+    project(client)
+    harness_id = account(client, "anthropic")
+    google_id = _google_oauth_account(client, expiry="2020-01-01T00:00:00Z")
+    worker = _register_worker(client)
+
+    # 1. With a fallback alternative, claim skips the revoked Google pair cleanly.
+    assert (
+        put(
+            client,
+            {
+                "version": 1,
+                "difficulties": {
+                    "hard": [
+                        _paired_google(harness_id, google_id, id="revoked-agy"),
+                        direct(harness_id, "anthropic", id="claude-fallback"),
+                    ],
+                    "standard": [_paired_google(harness_id, google_id, id="only-agy")],
+                },
+            },
+        ).status_code
+        == 200
+    )
+    t_fallback = _create_ready_task(
+        client, title="revoked with fallback", difficulty="hard"
+    )
+    claimed = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": GOOGLE_CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
+    assert claimed.status_code == 200, claimed.text
+    body = claimed.json()
+    assert body["id"] == t_fallback
+    assert body["execution"]["alternative"]["id"] == "claude-fallback"
+    assert (
+        client.post(
+            f"/api/tasks/{t_fallback}/execution",
+            json={
+                "attempt": body["attempt"],
+                "generation": body["execution"]["generation"],
+                "action": "applied",
+            },
+            headers=worker,
+        ).status_code
+        == 204
+    )
+
+    # 2. With no fallback alternative, task blocks awaiting_execution_route with 0 claims.
+    worker_2 = _register_worker(client)
+    t_only = _create_ready_task(
+        client, title="revoked only option", difficulty="standard"
+    )
+    res = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": GOOGLE_CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker_2,
+    )
+    assert res.status_code == 204, res.text
+    blocked = client.get(f"/api/tasks/{t_only}", headers=ADMIN).json()
+    assert blocked["state"] == "blocked"
+    assert blocked["block_reason"] == "awaiting_execution_route"
+    assert blocked["attempt"] == 0
+    assert blocked["assignee_agent_id"] is None
+    route_text = client.get(f"/api/tasks/{t_only}/route", headers=ADMIN).text
+    assert FAKE_GOOGLE_ACCESS not in route_text
+    assert FAKE_GOOGLE_REFRESH not in route_text
+
+
+def test_lost_tuple_ownership_before_advance_fails_fenced_and_preserves_other_leases(
+    client: TestClient,
+) -> None:
+    """When a tuple lease is released before `action=advance`, the API must not
+    strand the task claimed: it releases any remaining lease of this exact tuple,
+    fails the attempt with a sanitized reason, preserves unrelated leases, and
+    keeps old-attempt/old-generation fencing intact."""
+    from datetime import UTC, datetime, timedelta
+
+    project(client)
+    harness_id = account(client, "anthropic", max_leases=2)
+    google_id = _google_oauth_account(
+        client, expiry=(datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    )
+    worker_a = _register_worker(client)
+    worker_b = _register_worker(client)
+
+    # Unrelated worker B holds a lease on harness_id.
+    _create_ready_task(client, title="other task", difficulty="simple")
+    b_claim = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": [], "runtime_providers": ["anthropic"]},
+        headers=worker_b,
+    )
+    assert b_claim.status_code == 200
+
+    assert (
+        put(
+            client,
+            {
+                "version": 1,
+                "difficulties": {
+                    "hard": [
+                        _paired_google(harness_id, google_id, id="claude-agy"),
+                        direct(harness_id, "anthropic", id="claude-fallback"),
+                    ]
+                },
+            },
+        ).status_code
+        == 200
+    )
+    task_id = _create_ready_task(client, title="lost ownership race", max_attempts=3)
+    claimed = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": GOOGLE_CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker_a,
+    )
+    assert claimed.status_code == 200, claimed.text
+    body = claimed.json()
+    attempt = body["attempt"]
+    generation = body["execution"]["generation"]
+
+    # Simulate lost-ownership race: executor lease is released externally while
+    # harness lease and task claim are still live.
+    assert (
+        client.post("/api/accounts/release?role=executor", headers=worker_a).status_code
+        == 204
+    )
+
+    # `applied` must still be refused when the tuple is no longer owned.
+    applied = client.post(
+        f"/api/tasks/{task_id}/execution",
+        json={"attempt": attempt, "generation": generation, "action": "applied"},
+        headers=worker_a,
+    )
+    assert applied.status_code == 409
+    assert applied.json()["detail"]["code"] == "execution_lease_missing"
+
+    # `advance` must NOT leave the task claimed or strand the remaining harness lease.
+    adv = client.post(
+        f"/api/tasks/{task_id}/execution",
+        json={
+            "attempt": attempt,
+            "generation": generation,
+            "action": "advance",
+            "stopped": True,
+            "reason": "provider_unavailable",
+            "failed_role": "executor",
+        },
+        headers=worker_a,
+    )
+    assert adv.status_code == 204, adv.text
+
+    after = client.get(f"/api/tasks/{task_id}", headers=ADMIN).json()
+    assert after["state"] == "ready"
+    assert after["assignee_agent_id"] is None
+    assert after["failures"] == 1
+    assert "execution tuple no longer owned" in (after["error"] or "")
+    assert "provider_unavailable" in (after["error"] or "")
+    assert FAKE_GOOGLE_ACCESS not in (after["error"] or "")
+    assert SECRET not in (after["error"] or "")
+
+    # Worker A's remaining harness lease was released, while worker B's lease survived.
+    accounts_by_id = {
+        a["id"]: a for a in client.get("/api/accounts", headers=ADMIN).json()
+    }
+    assert accounts_by_id[google_id]["active_leases"] == 0
+    assert accounts_by_id[harness_id]["active_leases"] == 1
+
+    # Fencing: late/duplicate /execution and /fail for the old attempt/generation fail with 409.
+    assert (
+        client.post(
+            f"/api/tasks/{task_id}/execution",
+            json={
+                "attempt": attempt,
+                "generation": generation,
+                "action": "advance",
+                "stopped": True,
+                "reason": "provider_unavailable",
+                "failed_role": "executor",
+            },
+            headers=worker_a,
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            f"/api/tasks/{task_id}/fail",
+            json={"attempt": attempt, "error": "late fail", "reason": "channel_error"},
+            headers=worker_a,
+        ).status_code
+        == 409
+    )
+
+
+def test_valid_google_executor_credential_claims_and_records_applied(
+    client: TestClient,
+) -> None:
+    """Negative control: a valid fake Google executor credential claims cleanly,
+    records `applied`, and retains both tuple leases."""
+    from datetime import UTC, datetime, timedelta
+
+    project(client)
+    harness_id = account(client, "anthropic")
+    google_id = _google_oauth_account(
+        client, expiry=(datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    )
+    worker = _register_worker(client)
+
+    assert (
+        put(
+            client,
+            {
+                "version": 1,
+                "difficulties": {
+                    "hard": [_paired_google(harness_id, google_id, id="claude-agy")]
+                },
+            },
+        ).status_code
+        == 200
+    )
+    task_id = _create_ready_task(client, title="valid google executor")
+    claimed = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": GOOGLE_CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
+    assert claimed.status_code == 200, claimed.text
+    body = claimed.json()
+    assert body["execution"]["alternative"]["id"] == "claude-agy"
+    assert body["executor_lease"]["account_id"] == google_id
+    applied = client.post(
+        f"/api/tasks/{task_id}/execution",
+        json={
+            "attempt": body["attempt"],
+            "generation": body["execution"]["generation"],
+            "action": "applied",
+        },
+        headers=worker,
+    )
+    assert applied.status_code == 204, applied.text
+    route = client.get(f"/api/tasks/{task_id}/route", headers=ADMIN).json()
+    assert route["state"] == "claimed"
+    assert route["execution"]["selection"]["alternative"]["id"] == "claude-agy"
+    accounts_by_id = {
+        a["id"]: a for a in client.get("/api/accounts", headers=ADMIN).json()
+    }
+    assert accounts_by_id[harness_id]["active_leases"] == 1
+    assert accounts_by_id[google_id]["active_leases"] == 1

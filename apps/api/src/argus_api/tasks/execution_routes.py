@@ -614,6 +614,7 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
         raise ConflictError(
             "stale execution selection", code="execution_generation_mismatch"
         )
+    tuple_owned = True
     for role, resolved in (
         ("engine", selection.harness),
         ("executor", selection.executor),
@@ -628,10 +629,13 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
             (resolved.lease_id, resolved.account_id, agent_id, actual_role),
         ) as cur:
             if await cur.fetchone() is None:
-                raise ConflictError(
-                    "execution tuple no longer owned", code="execution_lease_missing"
-                )
+                tuple_owned = False
+                break
     if body.action == "applied":
+        if not tuple_owned:
+            raise ConflictError(
+                "execution tuple no longer owned", code="execution_lease_missing"
+            )
         if not state["applied"]:
             await tx.conn.execute(
                 "UPDATE task_execution_routes SET applied=1 WHERE task_id = ?",
@@ -656,6 +660,33 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
     failed = selection.harness if body.failed_role == "harness" else selection.executor
     if failed is None:
         raise ValidationFailedError("single layer has no executor failure")
+    if not tuple_owned:
+        # Lost-ownership race: release any still-active lease of this exact tuple
+        # only, bump generation so duplicate reports stay fenced, and fail the
+        # attempt cleanly so the task is never stranded claimed.
+        for resolved in {
+            s.lease_id: s
+            for s in (selection.harness, selection.executor)
+            if s is not None
+        }.values():
+            await tx.conn.execute(
+                "UPDATE account_leases SET released_at=?, release_reason='execution_lease_missing' "
+                "WHERE id=? AND account_id=? AND agent_id=? AND released_at IS NULL",
+                (ts(tx.now), resolved.lease_id, resolved.account_id, agent_id),
+            )
+        await tx.conn.execute(
+            "UPDATE task_execution_routes SET generation=generation+1, applied=0 WHERE task_id=?",
+            (task_id,),
+        )
+        await tasks.fail(
+            tx,
+            agent_id,
+            task_id,
+            body.attempt,
+            f"execution tuple no longer owned before advance ({body.reason})",
+            "execution_lease_missing",
+        )
+        return
     if body.reason == "quota":
         from argus_api.accounts import service as accounts
 

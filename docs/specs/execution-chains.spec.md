@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-17
-updated: 2026-11-19
+updated: 2026-11-20
 ---
 
 # Execution chains
@@ -270,7 +270,19 @@ Account credentials/endpoints stay exclusively in existing lease delivery.
 The generation and task/attempt/agent fence apply to lease, model-selection and
 transition reports. Stale or duplicate reports cannot release a newer tuple or
 advance twice. Before starting execution the channel acknowledges that exact
-contract/generation. A channel without support must refuse it, not run legacy.
+contract/generation (`action: "applied"`), which still refuses with `409`
+`execution_lease_missing` if the tuple is no longer owned. A channel without
+support must refuse it, not run legacy. When credential application fails on a
+claimed execution-chain tuple, the channel never issues a blanket
+`/accounts/release`; it preserves the reserved tuple for the fenced
+`action: "advance"` (naming `failed_role` and classified `reason`, e.g.
+`auth_expired` for expired/rejected credentials), and falls back to a sanitized
+`/fail` plus local claim cleanup if the report itself fails so the claim can
+never strand. If `action: "advance"` arrives for a live claim and matching
+generation after tuple ownership was already lost externally, the API releases
+only any still-active lease of that exact tuple, increments generation, and
+fails the attempt with transient reason `execution_lease_missing` rather than
+leaving the task claimed.
 
 ## 3.5 Fallback and exhaustion
 

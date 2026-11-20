@@ -1062,33 +1062,85 @@ function secretNames(identifier: string, mapping: ProviderMapping): string[] {
   return mapping.generic ? mapping.generic.endpoints.map((e) => `${base}${e.suffix}`) : [base];
 }
 
+export type LeaseApplyFailureReason = "auth_expired" | "auth_missing" | "provider_unavailable";
+
+/** Structured credential-application error so execution chains classify role and cause. */
+export class LeaseApplyError extends Error {
+  readonly role: "harness" | "executor";
+  readonly reason: LeaseApplyFailureReason;
+
+  constructor(message: string, role: "harness" | "executor", reason: LeaseApplyFailureReason) {
+    super(message);
+    this.name = "LeaseApplyError";
+    this.role = role;
+    this.reason = reason;
+  }
+}
+
+function classifyCredentialProblem(problem: string): LeaseApplyFailureReason {
+  if (
+    /\bexpired\b|about to expire|not accepted \(HTTP (?:401|403)\)|no usable accessToken/i.test(
+      problem,
+    )
+  ) {
+    return "auth_expired";
+  }
+  if (/\bmissing\b|\bneither\b|needs api_key|must be a non-empty|holds an? /i.test(problem)) {
+    return "auth_missing";
+  }
+  return "provider_unavailable";
+}
+
 /** Validate a lease and turn its credential into what OneCLI stores. */
 async function secretFor(
   lease: AccountLease,
   fetchImpl: typeof fetch,
 ): Promise<{ mapping: ProviderMapping; value: string; host: string }> {
+  const role: "harness" | "executor" = lease.role === "executor" ? "executor" : "harness";
   const mapping = mappingForLease(lease);
   if (!mapping) {
-    throw new Error(
+    throw new LeaseApplyError(
       `provider ${JSON.stringify(lease.provider)} cannot be applied to OneCLI (known: ${Object.keys(PROVIDERS).join(", ")})`,
+      role,
+      "provider_unavailable",
     );
   }
   const problem = mapping.problem?.(lease.credential, Date.now());
-  if (problem) throw new Error(`account ${lease.name} (${lease.provider}): ${problem}`);
+  if (problem) {
+    throw new LeaseApplyError(
+      `account ${lease.name} (${lease.provider}): ${problem}`,
+      role,
+      classifyCredentialProblem(problem),
+    );
+  }
   if (mapping.expired?.(lease.credential, Date.now())) {
-    throw new Error(
+    throw new LeaseApplyError(
       `account ${lease.name} has an expired ${lease.provider} access token: renew it in Argus (the channel does not refresh OAuth tokens)`,
+      role,
+      "auth_expired",
     );
   }
   if (mapping.malformed?.(lease.credential)) {
-    throw new Error(
+    throw new LeaseApplyError(
       `account ${lease.name} holds an ${lease.provider} credential that is not a token (expected sk-ant-oat…): renew it in Argus with the token from \`claude setup-token\``,
+      role,
+      "auth_expired",
     );
   }
-  const value =
-    mapping.pick(lease.credential) ?? (await mapping.exchange?.(lease.credential, fetchImpl));
+  let value: string | null | undefined;
+  try {
+    value =
+      mapping.pick(lease.credential) ?? (await mapping.exchange?.(lease.credential, fetchImpl));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new LeaseApplyError(msg, role, classifyCredentialProblem(msg));
+  }
   if (!value) {
-    throw new Error(`account ${lease.name} has no usable credential field for ${lease.provider}`);
+    throw new LeaseApplyError(
+      `account ${lease.name} has no usable credential field for ${lease.provider}`,
+      role,
+      "auth_missing",
+    );
   }
   const host = typeof mapping.host === "function" ? mapping.host(lease.credential) : mapping.host;
   return { mapping, value, host };
@@ -1116,7 +1168,11 @@ export async function applyLeasesDetailed(
     return await applyLeasesPrepared(onecli, target, leases, fetchImpl);
   } catch (err) {
     if (leases.some((l) => l.provider === "custom" && l.role === "executor"))
-      throw new Error("could not apply the custom executor lease to OneCLI");
+      throw new LeaseApplyError(
+        "could not apply the custom executor lease to OneCLI",
+        "executor",
+        "provider_unavailable",
+      );
     throw err;
   }
 }

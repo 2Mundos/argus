@@ -376,6 +376,7 @@ FAILURE_CLASS: dict[str, RetryClass] = {
     "provider_failure": RetryClass.TRANSIENT,
     "channel_error": RetryClass.TRANSIENT,
     "runtime_switch_failed": RetryClass.TRANSIENT,
+    "execution_lease_missing": RetryClass.TRANSIENT,
     "session_lost": RetryClass.SESSION,
     "stalled": RetryClass.SESSION,
     "timeout": RetryClass.SESSION,
