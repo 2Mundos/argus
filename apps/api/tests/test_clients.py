@@ -152,5 +152,35 @@ async def test_downloads_off_or_no_build_never_fetch(
 def test_every_pin_is_https_and_has_a_checksum() -> None:
     for (client, platform_), p in clients.PINS.items():
         assert p.url.startswith("https://"), (client, platform_)
-        assert len(p.sha256) == 64 and int(p.sha256, 16) >= 0, (client, platform_)
-    assert {c for c, _ in clients.PINS} == {"claude", "codex"}
+        if p.sha512 is not None:
+            assert len(p.sha512) == 128 and int(p.sha512, 16) >= 0, (client, platform_)
+        else:
+            assert len(p.sha256) == 64 and int(p.sha256, 16) >= 0, (client, platform_)
+    assert {c for c, _ in clients.PINS} == {"claude", "codex", "agy"}
+
+
+async def test_sha512_archive_verifies_and_rejects_mismatch(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tgz("antigravity", BINARY)
+    digest = hashlib.sha512(archive).hexdigest()
+    p = Pin(
+        "1.5.12",
+        "https://x/cli_linux_x64.tar.gz",
+        member="antigravity",
+        sha512=digest,
+    )
+    use(monkeypatch, p, archive)
+    path = await clients.ensure(settings, "agy")
+    assert path == settings.data_dir / "tools" / "agy-1.5.12" / "agy"
+    assert path.read_bytes() == BINARY
+
+    bad = Pin(
+        "1.5.13",
+        "https://x/cli_linux_x64.tar.gz",
+        member="antigravity",
+        sha512="0" * 128,
+    )
+    use(monkeypatch, bad, archive)
+    with pytest.raises(ClientDownloadError, match="checksum"):
+        await clients.ensure(settings, "agy")

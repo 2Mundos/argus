@@ -26,7 +26,9 @@ from typing import Any
 
 from argus_core import google_auth
 
+from argus_api.accounts import clients
 from argus_api.accounts.eligibility import LEASE_BLOCK_SQL
+from argus_api.config import Settings
 from argus_api.db import Database
 from argus_api.events import record
 from argus_api.secrets import SecretStore, ref_name
@@ -330,9 +332,11 @@ async def refresh_oauth_credential(
     now: datetime | None = None,
     post_form: PostForm | None = None,
     agy_bin: str | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Refresh an expiring Google OAuth credential via direct HTTP (when client
-    credentials are configured) or the local `agy` binary."""
+    credentials are configured), an installed `agy` binary, or the pinned `agy`
+    client downloaded on first use via `accounts/clients.py`."""
     current = now or datetime.now(UTC)
     creds = _client_credentials(doc)
     if creds is not None:
@@ -344,6 +348,13 @@ async def refresh_oauth_credential(
             post_form=post_form,
         )
     resolved = resolve_agy_bin(agy_bin)
+    if resolved is None and settings is not None:
+        try:
+            resolved = str(await clients.ensure(settings, "agy"))
+        except clients.ClientDownloadError as exc:
+            raise GoogleRefreshError(
+                f"cannot download pinned agy client for OAuth refresh: {exc}"
+            ) from None
     if resolved is not None:
         return await _refresh_via_agy(doc, agy_bin=resolved, now=current)
     raise GoogleRefreshError(
@@ -358,9 +369,11 @@ class GoogleTokenRefresher:
     def __init__(
         self,
         *,
+        settings: Settings | None = None,
         post_form: PostForm | None = None,
         agy_bin: str | None = None,
     ) -> None:
+        self.settings = settings
         self.post_form = post_form
         self.agy_bin = agy_bin
         self._locks: dict[str, asyncio.Lock] = {}
@@ -420,6 +433,7 @@ class GoogleTokenRefresher:
                         now=current,
                         post_form=self.post_form,
                         agy_bin=self.agy_bin,
+                        settings=self.settings,
                     )
                 except GoogleRefreshError as exc:
                     log.warning(

@@ -31,14 +31,20 @@ _CODEX = (
     "https://github.com/openai/codex/releases/download/rust-v0.162.1"
     "/codex-{0}-unknown-linux-musl.tar.gz"
 )
+_AGY_BUILD = "1.5.12-5281398513336320"
+_AGY = (
+    "https://storage.googleapis.com/antigravity-public/antigravity-cli"
+    f"/{_AGY_BUILD}/{{subdir}}/{{tarball}}"
+)
 
 
 @dataclass(frozen=True)
 class Pin:
     version: str
     url: str
-    sha256: str
+    sha256: str = ""
     member: str | None = None  # the binary inside a .tar.gz
+    sha512: str | None = None
 
 
 def _claude(platform_: str, sha256: str) -> Pin:
@@ -54,11 +60,32 @@ def _codex(arch: str, sha256: str) -> Pin:
     )
 
 
+def _agy(subdir: str, tarball: str, sha512: str) -> Pin:
+    return Pin(
+        "1.5.12",
+        _AGY.format(subdir=subdir, tarball=tarball),
+        member="antigravity",
+        sha512=sha512,
+    )
+
+
 _CODEX_X64 = _codex(
     "x86_64", "86f268d81b898f3e144c5ecff2ad2fda2c5802e042d6195b72538fe0fa125057"
 )
 _CODEX_ARM64 = _codex(
     "aarch64", "bf3ca2719f1143b1440fbd85c149379e696c782c50ad7991f8bfcec60b2600c1"
+)
+_AGY_X64 = _agy(
+    "linux-x64",
+    "cli_linux_x64.tar.gz",
+    "26de25fccb3fbf0b093e090ce14a14ac1df1ec3e90ef4ea6106887d3a81b0cc9"
+    "edb0dadea7b9101d07f9606eba159062a6fb7b78e91b73f7520684a24db73428",
+)
+_AGY_ARM64 = _agy(
+    "linux-arm",
+    "cli_linux_arm64.tar.gz",
+    "1030d89ce9e5cb39509e272cb89b71fde0e0d5d6527b7392525d5ef2683da54f"
+    "b49230449107486d91c02ded39a678faaa649b2041304a6cf82a3a332d5819d9",
 )
 
 # (client, platform) -> pin; platform is linux-<arch>[-musl].
@@ -83,6 +110,9 @@ PINS: dict[tuple[str, str], Pin] = {
     ("codex", "linux-x64-musl"): _CODEX_X64,
     ("codex", "linux-arm64"): _CODEX_ARM64,
     ("codex", "linux-arm64-musl"): _CODEX_ARM64,
+    # Antigravity CLI (`agy`) glibc builds (match install-agy.sh).
+    ("agy", "linux-x64"): _AGY_X64,
+    ("agy", "linux-arm64"): _AGY_ARM64,
 }
 
 
@@ -167,7 +197,8 @@ def _install(settings: Settings, client: str, p: Pin) -> Path:
     fd, tmp = tempfile.mkstemp(dir=tools, prefix=f".{client}-")
     binary = tmp + ".bin"
     try:
-        digest = hashlib.sha256()
+        digest = hashlib.sha512() if p.sha512 is not None else hashlib.sha256()
+        expected = p.sha512 if p.sha512 is not None else p.sha256
         size = 0
         with os.fdopen(fd, "wb") as out, fetch(p.url) as resp:
             while chunk := resp.read(1 << 20):
@@ -176,7 +207,7 @@ def _install(settings: Settings, client: str, p: Pin) -> Path:
                     raise ClientDownloadError("the download is larger than expected")
                 digest.update(chunk)
                 out.write(chunk)
-        if digest.hexdigest() != p.sha256:
+        if digest.hexdigest() != expected:
             raise ClientDownloadError("the download does not match its pinned checksum")
         if p.member is None:
             os.replace(tmp, binary)

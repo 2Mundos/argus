@@ -420,3 +420,63 @@ def test_permanent_invalid_grant_blocks_revoked_google_oauth_account(
     assert exe.status_code == 409
     assert FAKE_REFRESH not in exe.text
     assert FAKE_ACCESS not in exe.text
+
+
+def test_lease_downloads_pinned_agy_client_when_host_has_no_agy(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In containerized API installs (`deploy/Dockerfile.api`), `agy` is not on PATH;
+    `GoogleTokenRefresher` downloads the pinned client via `accounts/clients.py`."""
+    from argus_api.accounts import clients, google_refresh
+
+    monkeypatch.delenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
+    monkeypatch.setattr(google_refresh, "resolve_agy_bin", lambda explicit=None: None)
+
+    future_iso = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    fake_agy = tmp_path / "downloaded-agy"
+    fake_agy.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "tok = pathlib.Path(os.environ['HOME']) / '.gemini' / 'antigravity-cli' / 'antigravity-oauth-token'\n"
+        "doc = json.loads(tok.read_text())\n"
+        "doc['token']['access_token'] = 'ya29.DOWNLOADED_AGY_REFRESH_00000'\n"
+        f"doc['token']['expiry'] = {future_iso!r}\n"
+        "tok.write_text(json.dumps(doc))\n"
+        "sys.exit(1)\n"
+    )
+    fake_agy.chmod(0o755)
+    ensured: list[str] = []
+
+    async def fake_ensure(settings, name: str) -> Path:
+        ensured.append(name)
+        return fake_agy
+
+    monkeypatch.setattr(clients, "ensure", fake_ensure)
+    app.state.google_refresher = GoogleTokenRefresher(settings=app.state.settings)
+
+    created = _create(
+        client,
+        {
+            "token": {
+                "access_token": FAKE_ACCESS,
+                "refresh_token": FAKE_REFRESH,
+                "expiry": "2020-01-01T00:00:00Z",
+            },
+            "auth_method": "consumer",
+        },
+        name="google-docker-refresh",
+    )
+    assert created.status_code == 201, created.text
+    worker, claim = _seed_claim(client)
+
+    exe = client.post(
+        "/api/accounts/lease",
+        headers=worker,
+        json={"role": "executor", "runtime_providers": ["google"], **claim},
+    )
+    assert exe.status_code == 200, exe.text
+    assert ensured == ["agy"]
+    assert exe.json()["credential"]["token"]["access_token"] == (
+        "ya29.DOWNLOADED_AGY_REFRESH_00000"
+    )
