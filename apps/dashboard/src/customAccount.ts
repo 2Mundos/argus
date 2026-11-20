@@ -42,10 +42,10 @@ export const CUSTOM_PRESETS: CustomPreset[] = [
   },
   {
     id: "google",
-    name: "Google AI Studio",
+    name: "Google (OpenAI-compatible)",
     label: "google",
     baseUrl: GOOGLE_AI_STUDIO_URL,
-    note: "Google AI Studio's OpenAI-compatible endpoint. Create a key in AI Studio; the key is stored encrypted and is never shown again.",
+    note: "Google AI Studio's OpenAI-compatible endpoint, saved as a custom account. The Antigravity executor cannot use it: add a Google AI Studio account for that. The key is stored encrypted and is never shown again.",
   },
 ];
 

@@ -45,10 +45,12 @@ beforeEach(() => {
 });
 
 describe("CustomAccount", () => {
-  it("starts from the Google AI Studio preset", async () => {
+  it("starts from the explicit Google OpenAI-compatible preset", async () => {
     render(<CustomAccount preset="google" onClose={() => undefined} onDone={() => undefined} />);
     expect((screen.getByLabelText("Provider preset") as HTMLSelectElement).value).toBe("google");
-    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Google AI Studio");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Google (OpenAI-compatible)",
+    );
     expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe(
       "https://generativelanguage.googleapis.com/v1beta/openai",
     );

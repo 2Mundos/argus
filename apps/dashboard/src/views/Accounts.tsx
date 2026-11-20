@@ -38,6 +38,7 @@ import { ClaudeAccount } from "./ClaudeAccount";
 import { CodexAccount } from "./CodexAccount";
 import { CustomAccount } from "./CustomAccount";
 import { AccountQuota, Sparkline } from "./charts";
+import { GoogleAccount } from "./GoogleAccount";
 import { LocalAccount } from "./LocalAccount";
 import { LocalEndpoints } from "./LocalEndpoints";
 import { ProviderMark, StateIcon } from "./providerIcons";
@@ -98,6 +99,7 @@ export function Accounts() {
   const [adding, setAdding] = useState(false);
   const [addingCodex, setAddingCodex] = useState(false);
   const [addingCustom, setAddingCustom] = useState<CustomPresetId>();
+  const [addingGoogle, setAddingGoogle] = useState(false);
   const [addingLocal, setAddingLocal] = useState(false);
   // A Claude wizard: new (`{}`) or renewing the given account.
   const [claude, setClaude] = useState<{ renew?: Account }>();
@@ -377,7 +379,7 @@ export function Accounts() {
             setPicking(false);
             if (type === "claude") setClaude({});
             else if (type === "codex") setAddingCodex(true);
-            else if (type === "google") setAddingCustom("google");
+            else if (type === "google") setAddingGoogle(true);
             else if (type === "custom") setAddingCustom("openrouter");
             else if (type === "local") setAddingLocal(true);
             else setAdding(true);
@@ -457,11 +459,18 @@ export function Accounts() {
           preset={addingCustom}
           onClose={() => setAddingCustom(undefined)}
           onDone={() => {
-            const google = addingCustom === "google";
             setAddingCustom(undefined);
-            setNotice(
-              google ? "Google AI Studio account added." : "Custom provider account added.",
-            );
+            setNotice("Custom provider account added.");
+            reloadList();
+          }}
+        />
+      )}
+      {addingGoogle && (
+        <GoogleAccount
+          onClose={() => setAddingGoogle(false)}
+          onDone={() => {
+            setAddingGoogle(false);
+            setNotice("Google AI Studio account added for the Antigravity executor.");
             reloadList();
           }}
         />

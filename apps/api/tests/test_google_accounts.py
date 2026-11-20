@@ -183,3 +183,39 @@ def test_google_leases_only_for_executor_role_and_updates_catalogue(
         json={"role": "executor", "source": "structured", **claim},
     )
     assert rej.status_code == 204
+
+
+def test_custom_google_endpoint_account_is_not_an_agy_executor_account(
+    client: TestClient,
+) -> None:
+    """A Google AI Studio key saved as `custom` (label `google`) serves only the
+    OpenAI-compatible path; the agy executor needs provider `google`."""
+    custom = client.post(
+        "/api/accounts",
+        headers=ADMIN,
+        json={
+            "name": "studio-as-custom",
+            "provider": "custom",
+            "credential": {"api_key": FAKE_KEY},
+            "config": {
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "label": "google",
+            },
+        },
+    )
+    assert custom.status_code == 201, custom.text
+    assert FAKE_KEY not in custom.text
+
+    def agy_available() -> int:
+        cat = client.get("/api/engines", headers=ADMIN).json()
+        agy = next(e for e in cat["engines"] if e["id"] == "antigravity")
+        return agy["accounts"]["available"]
+
+    assert agy_available() == 0
+
+    native = _create(client, {"api_key": FAKE_KEY}, name="studio-native")
+    assert native.status_code == 201, native.text
+    assert native.json()["provider"] == "google"
+    assert native.json()["kind"] == "api_key"
+    assert FAKE_KEY not in native.text
+    assert agy_available() == 1
