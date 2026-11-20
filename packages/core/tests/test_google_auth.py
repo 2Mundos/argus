@@ -101,3 +101,47 @@ def test_google_is_executor_only_with_agy_executor() -> None:
     assert (
         ExecutorModel(executor="agy", model="gemini-4-neon-high").provider == "google"
     )
+
+
+def test_expired_oauth_is_accepted_when_refresh_token_present_and_helpers_preserve_metadata() -> (
+    None
+):
+    expired_doc = {
+        "token": {
+            "access_token": FAKE_ACCESS,
+            "token_type": "Bearer",
+            "refresh_token": FAKE_REFRESH,
+            "expiry": PAST,
+            "expires_in": 3600,
+        },
+        "auth_method": "consumer",
+        "id_token_email": "operator@example.test",
+    }
+    summary = google_auth.validate(expired_doc, now=NOW)
+    assert summary.mode == "oauth"
+    assert summary.kind == "subscription"
+    assert google_auth.needs_refresh(expired_doc, now=NOW) is True
+    assert google_auth.needs_refresh({"api_key": FAKE_KEY}, now=NOW) is False
+    assert (
+        google_auth.needs_refresh(
+            {"access_token": FAKE_ACCESS, "expiry": PAST}, now=NOW
+        )
+        is False
+    )
+
+    fresh_exp = datetime(2026, 11, 19, 19, 0, tzinfo=UTC)
+    merged = google_auth.merge_refreshed_token(
+        expired_doc,
+        access_token="ya29.NEW_FAKE_ACCESS_TOKEN_000000000",
+        expiry=fresh_exp,
+        expires_in=3600,
+        new_refresh_token="1//ROTATED_FAKE_REFRESH_0000000",
+    )
+    assert merged["auth_method"] == "consumer"
+    assert merged["id_token_email"] == "operator@example.test"
+    assert merged["token"]["access_token"] == "ya29.NEW_FAKE_ACCESS_TOKEN_000000000"
+    assert merged["token"]["refresh_token"] == "1//ROTATED_FAKE_REFRESH_0000000"
+    assert merged["token"]["expiry"] == "2026-11-19T19:00:00Z"
+    assert google_auth.needs_refresh(merged, now=NOW) is False
+    # Original document was not mutated.
+    assert expired_doc["token"]["access_token"] == FAKE_ACCESS

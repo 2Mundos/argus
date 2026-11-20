@@ -22,6 +22,7 @@ from argus_api.accounts import local_health, pricing
 from argus_api.accounts import service as accounts
 from argus_api.accounts.claude_login import ClaudeLoginManager
 from argus_api.accounts.codex_login import CodexLoginManager
+from argus_api.accounts.google_refresh import GoogleTokenRefresher
 from argus_api.accounts.local_health import LocalHealth
 from argus_api.accounts.quota_probe import QuotaProber
 from argus_api.accounts.routes import router as accounts_router
@@ -150,6 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         )
         app.state.codex_login = CodexLoginManager(db, secrets, settings)
         app.state.claude_login = ClaudeLoginManager(db, secrets, settings)
+        app.state.google_refresher = GoogleTokenRefresher()
         # The built-in orchestrator's loops run here (builtin-orchestrator 3.2).
         app.state.builtin_ready = asyncio.Event()  # set once MCP serves
         app.state.inprocess = InProcessTarget(builtin_loop.make_runner(app))

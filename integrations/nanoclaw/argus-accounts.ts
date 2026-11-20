@@ -1284,6 +1284,7 @@ const STRUCTURED_QUOTA_CODES = new Set([
   "usage_limit_exceeded",
   "usage_limit_reached",
   "insufficient_quota",
+  "resource_exhausted",
 ]);
 
 const NOTICE_PREFIX =
@@ -1305,7 +1306,7 @@ function unwrapStructured(body: string): string {
   if (typeof err !== "object" || err === null || Array.isArray(err)) return body;
   const fields = err as Record<string, unknown>;
   const message = typeof fields.message === "string" ? fields.message : undefined;
-  for (const key of ["codexErrorInfo", "code", "type"]) {
+  for (const key of ["codexErrorInfo", "code", "type", "status"]) {
     const value = fields[key];
     if (typeof value === "string" && STRUCTURED_QUOTA_CODES.has(value.toLowerCase())) {
       return message !== undefined ? `${value}: ${message}` : value;
@@ -1341,6 +1342,13 @@ const QUOTA_NOTICES: Array<{ provider: string; pattern: RegExp }> = [
   {
     provider: "custom",
     pattern: /^(?:http\s*)?(?:402|429)\b|^(?:insufficient credits|payment required|rate limit)/i,
+  },
+  // Google / Antigravity (`agy`): HTTP 402 (prepayment credits depleted) and
+  // 429 / RESOURCE_EXHAUSTED (capacity / quota / rate limit).
+  {
+    provider: "google",
+    pattern:
+      /^(?:http\s*)?(?:402|429)\b|^resource_exhausted\b|^(?:prepayment credits are depleted|out of credits|quota exceeded|you have exhausted your capacity|exhausted your capacity|rate limit)\b/i,
   },
 ];
 

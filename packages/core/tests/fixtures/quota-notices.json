@@ -283,5 +283,34 @@
     "notice": "{\"error\": {\"message\": \"see https://x.example/a#frag\", \"codexErrorInfo\": \"usageLimitExceeded\"}}",
     "exhausted": true,
     "until": null
+  },
+  {
+    "provider": "google",
+    "notice": "HTTP 402 RESOURCE_EXHAUSTED: prepayment credits are depleted",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "google",
+    "notice": "{\"error\": {\"code\": 402, \"status\": \"RESOURCE_EXHAUSTED\", \"message\": \"prepayment credits are depleted\"}}",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "google",
+    "notice": "429 RESOURCE_EXHAUSTED: You have exhausted your capacity on this model.",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "google",
+    "notice": "prepayment credits are depleted",
+    "exhausted": true,
+    "until": null
+  },
+  {
+    "provider": "google",
+    "notice": "The agent mentioned HTTP 402 RESOURCE_EXHAUSTED in its summary.",
+    "exhausted": false
   }
 ]

@@ -2,13 +2,15 @@
 Validation never echoes a value: errors name fields and rules only, never a key
 or token."""
 
-from datetime import UTC, datetime
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
 
 PROVIDER = "google"
 MAX_TOKEN_LEN = 8192
+REFRESH_MARGIN = timedelta(minutes=10)
 _API_KEY_ONLY = frozenset({"api_key"})
 
 
@@ -114,15 +116,85 @@ def validate(doc: dict[str, Any], *, now: datetime | None = None) -> GoogleAuthS
         raise GoogleAuthError(
             "access_token holds a Gemini API key; put it in api_key instead"
         )
+    has_refresh = False
     if "refresh_token" in fields and fields["refresh_token"] is not None:
         _token(fields, "refresh_token")
+        has_refresh = True
     expires_at: datetime | None = None
     if "expiry" in fields and fields["expiry"] is not None:
         expires_at = parse_expiry(fields["expiry"])
-        if expires_at <= (now or datetime.now(UTC)):
+        if expires_at <= (now or datetime.now(UTC)) and not has_refresh:
             raise GoogleAuthError(
                 "access_token is expired; sign in again for a fresh credential"
             )
     return GoogleAuthSummary(
         mode="oauth", kind="subscription", access_expires_at=expires_at
     )
+
+
+def is_oauth(doc: dict[str, Any]) -> bool:
+    """True when `doc` has the OAuth login shape rather than an API key."""
+    return "api_key" not in doc and ("token" in doc or "access_token" in doc)
+
+
+def refresh_token(doc: dict[str, Any]) -> str | None:
+    """Return the OAuth `refresh_token` when present and valid, else None."""
+    if not is_oauth(doc):
+        return None
+    try:
+        fields = extract_oauth_fields(doc)
+    except GoogleAuthError:
+        return None
+    raw = fields.get("refresh_token")
+    return raw if _text(raw) else None
+
+
+def access_expiry(doc: dict[str, Any]) -> datetime | None:
+    """Return the parsed UTC `expiry` timestamp of an OAuth doc, else None."""
+    if not is_oauth(doc):
+        return None
+    try:
+        fields = extract_oauth_fields(doc)
+        raw = fields.get("expiry")
+        return parse_expiry(raw) if raw is not None else None
+    except GoogleAuthError:
+        return None
+
+
+def needs_refresh(
+    doc: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    margin: timedelta = REFRESH_MARGIN,
+) -> bool:
+    """True when an OAuth credential has a refresh_token and its access_token is
+    expired or within `margin` of expiry."""
+    if refresh_token(doc) is None:
+        return False
+    exp = access_expiry(doc)
+    if exp is None:
+        return False
+    return exp <= (now or datetime.now(UTC)) + margin
+
+
+def merge_refreshed_token(
+    doc: dict[str, Any],
+    *,
+    access_token: str,
+    expiry: datetime,
+    expires_in: int | None = None,
+    token_type: str | None = None,
+    new_refresh_token: str | None = None,
+) -> dict[str, Any]:
+    """Return a copy of `doc` with fresh token fields, preserving shape and metadata."""
+    updated = deepcopy(doc)
+    target = updated["token"] if isinstance(updated.get("token"), dict) else updated
+    target["access_token"] = access_token
+    target["expiry"] = expiry.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    if expires_in is not None:
+        target["expires_in"] = expires_in
+    if token_type is not None:
+        target["token_type"] = token_type
+    if new_refresh_token is not None:
+        target["refresh_token"] = new_refresh_token
+    return updated

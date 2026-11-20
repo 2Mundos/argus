@@ -46,9 +46,10 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
 - Reading host `~/.gemini/antigravity-cli`, the OS keyring, `gcloud` ADC, live
   Argus secrets or `.env` from agents. Import is something the operator does,
   naming the credential; Argus never looks in those places.
-- Refreshing Google OAuth access tokens inside the channel or worker; expired or
-  near-expired access tokens are rejected at apply time (five-minute margin,
-  matching Cursor). Operators renew in Argus when access nears expiry.
+- Refreshing Google OAuth access tokens inside the NanoClaw channel or worker
+  container; refresh runs only in the Argus control plane (which owns the SOPS
+  store) before leasing, never in workers. The channel still rejects expired or
+  near-expired tokens at apply time (five-minute margin, matching Cursor).
 - A dedicated interactive OAuth login wizard driven by Argus (the Codex and
   Claude pattern). v1 is import only.
 - Making Antigravity an engine harness; NanoClaw has no Antigravity provider.
@@ -69,8 +70,10 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
     `token_type`, `expires_in`, `auth_method`). Additional CLI metadata fields
     (such as `id_token_email` or `scope`) are tolerated and ignored, never
     echoed. Rejects API keys (`AIza…`) in `access_token`, malformed `expiry`, or
-    expired access tokens at import. `refresh_token` is stored in SOPS if
-    supplied but never leaves Argus.
+    expired access tokens without a `refresh_token` at import. When
+    `refresh_token` is supplied, an expired `access_token` is accepted so the
+    control plane can refresh it before leasing; `refresh_token` is stored in
+    SOPS and never enters worker containers.
   Kind is derived from the credential on create and credential update. Responses
   and events never echo any token or key.
 - **Dashboard onboarding**: the Add account wizard's **Google AI Studio** tile
@@ -93,6 +96,29 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   3. Keep the old custom account if its OpenAI-compatible use (harness, custom
      executor) is still wanted; otherwise disable and then delete it. Skipping
      this step is safe, since the two accounts are independent.
+- **OAuth token refresh** (`apps/api/src/argus_api/accounts/google_refresh.py`):
+  Google OAuth access tokens expire after 1 hour (`expires_in: 3600`). Before
+  `POST /api/accounts/lease` opens a write transaction for an `executor` lease
+  that includes `google`, the control plane inspects usable Google OAuth
+  accounts and refreshes any credential whose `expiry` is within 10 minutes (or
+  already past) and that carries a `refresh_token`, serialized per account:
+  - **Direct HTTP**: when `client_id` and `client_secret` are provided in the
+    credential document or via `ARGUS_GOOGLE_OAUTH_CLIENT_ID` /
+    `ARGUS_GOOGLE_OAUTH_CLIENT_SECRET`, posts `grant_type=refresh_token` to
+    `https://oauth2.googleapis.com/token`. No upstream OAuth client secret is
+    committed in Argus.
+  - **CLI-delegated fallback**: otherwise, when `agy` is installed on the API
+    host (`ARGUS_AGY_BIN`, `PATH`, or `~/.local/bin/agy`), stages the credential
+    with a past `expiry` in an isolated `0700` temp `HOME` (scrubbing D-Bus,
+    keyring, `XDG_RUNTIME_DIR` and API-key env vars, with `NO_BROWSER=1`), runs
+    `agy --output-format stream-json --model __argus_refresh_probe__ -p .` so
+    `agy` refreshes the token and exits before any model call, validates the
+    updated file, and removes the temp directory.
+  - Refreshed credentials preserve original shape (native or flat), extra
+    metadata fields, and any rotated `refresh_token`, and are written back to
+    SOPS. Permanent rejection (`invalid_grant` / `unauthorized_client`) records
+    `account.auth_rejected` with a fixed non-secret reason so the account is not
+    repeatedly leased; transient errors leave it eligible for retry.
 - **Executor-only provider**: `google` joins `cursor` and `copilot` in
   `EXECUTOR_ONLY`; the `engine` lease role never returns it, the `executor` role
   may. The `agy` executor runs on the `google` provider
@@ -156,10 +182,15 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
     `not_reported`.
   - `livelog.mjs` streams `init`, `step_update` (`agent_response` `text_delta`
     and tool calls), and `result` events.
-- **Failure classes**: `agyAuthRejected` detects `UNAUTHENTICATED` / HTTP 401
-  and 403 in `AGY_ERROR` stderr JSON or `result.error` (`Eligibility check
-  failed: UNAUTHENTICATED (code 401)` / `Error 401, Message: API key not valid`)
-  and queues `account.auth_rejected` to the host with a fixed reason.
+- **Failure classes**:
+  - `agyAuthRejected` detects `UNAUTHENTICATED` / HTTP 401 and 403 in
+    `AGY_ERROR` stderr JSON or `result.error` (`Eligibility check failed:
+    UNAUTHENTICATED (code 401)` / `Error 401, Message: API key not valid`) and
+    queues `account.auth_rejected` to the host with a fixed reason.
+  - `QUOTA_NOTICES` (`packages/core/src/argus_core/quota.py` and
+    `integrations/nanoclaw/argus-accounts.ts`) classifies Google `HTTP 402` /
+    `HTTP 429` / `RESOURCE_EXHAUSTED` (including `"prepayment credits are
+    depleted"` and `"exhausted your capacity"`) as `quota_exhausted`.
 - **Quota** ([account usage](account-usage.spec.md) 3.3): no documented
   per-account quota endpoint is polled; a `google` account reads `unknown` with
   reason `no_provider_source`, never `0`.
@@ -171,8 +202,7 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
 # 4. Open Questions
 
 - Whether a dedicated Argus-driven Google OAuth login wizard (like Codex/Claude)
-  or host-side OAuth refresh is worth adding once OAuth subscription runs are
-  observed in production.
+  is worth adding once OAuth subscription runs are observed in production.
 - Whether enterprise Google Cloud / Vertex endpoints
   (`businessaicode.googleapis.com`, regional Vertex hosts) should be added
   alongside consumer Cloud Code and Gemini API endpoints.
@@ -192,9 +222,10 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   `tasks.py` (`EXECUTOR_PROVIDERS`, `ExecutorModel`); `difficulty.py`;
   `model_trace.py`; `quota.py`; `execution_chains.py` (`agy`/`google` selector
   and effort levels).
-- `apps/api`: `google` validation on create/replace; auth-rejection reason in
-  `accounts/service.py`; `antigravity` entry in `engines/catalog.py` and
-  `engines/image_tools.py`; regenerated OpenAPI client (`make openapi`).
+- `apps/api`: `google` validation on create/replace; `accounts/google_refresh.py`
+  pre-lease OAuth refresh; auth-rejection reason in `accounts/service.py`;
+  `antigravity` entry in `engines/catalog.py` and `engines/image_tools.py`;
+  regenerated OpenAPI client (`make openapi`).
 - `integrations/nanoclaw`: `argus-accounts.ts` (API key + OAuth mappings),
   `argus-agy-stub.ts` (sentinel env / OAuth stub mount), `install.sh` (`onecli.ts`
   hook and `CODEX_ENV_ALLOWLIST`), `argus.ts` (`renderTask`),
