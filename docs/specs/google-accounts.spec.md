@@ -98,10 +98,13 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
      this step is safe, since the two accounts are independent.
 - **OAuth token refresh** (`apps/api/src/argus_api/accounts/google_refresh.py`):
   Google OAuth access tokens expire after 1 hour (`expires_in: 3600`). Before
-  `POST /api/accounts/lease` opens a write transaction for an `executor` lease
-  that includes `google`, the control plane inspects usable Google OAuth
-  accounts and refreshes any credential whose `expiry` is within 10 minutes (or
-  already past) and that carries a `refresh_token`, serialized per account:
+  `POST /api/accounts/lease` (for an `executor` lease that includes `google`)
+  and before `POST /api/tasks/claim` (pre-reservation and again right before
+  execution-chain `executor_delivery`, since claims send engine-only
+  `runtime_providers` and may long-poll), the control plane inspects usable
+  Google OAuth accounts outside any write transaction and refreshes any
+  credential whose `expiry` is within 10 minutes (or already past) and that
+  carries a `refresh_token`, serialized per account:
   - **Direct HTTP**: when `client_id` and `client_secret` are provided in the
     credential document or via `ARGUS_GOOGLE_OAUTH_CLIENT_ID` /
     `ARGUS_GOOGLE_OAUTH_CLIENT_SECRET`, posts `grant_type=refresh_token` to

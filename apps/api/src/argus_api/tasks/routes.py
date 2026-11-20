@@ -2,6 +2,7 @@ import asyncio
 from datetime import timedelta
 from typing import Annotated, Any, Literal
 
+from argus_core import google_auth
 from argus_core.accounts import NativeSessionReport
 from argus_core.auth import Scope
 from argus_core.continuation import (
@@ -43,7 +44,7 @@ from argus_api.access import (
     require_task_readable,
     worker_task_filter,
 )
-from argus_api.accounts import local_health, pricing
+from argus_api.accounts import google_refresh, local_health, pricing
 from argus_api.accounts import service as accounts
 from argus_api.artifacts.store import LocalArtifactStore
 from argus_api.db import utcnow
@@ -313,6 +314,7 @@ async def claim_task(
     local_served_models = await local_health.served_models_for_leases(
         db, secrets, request.app.state.local_health
     )
+    await google_refresh.refresher_for(request.app.state).refresh_for_lease(db, secrets)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + body.wait_s
     with db.bus.subscribe() as sub:
@@ -378,13 +380,20 @@ async def claim_task(
                     execution = await execution_routes.current(
                         conn, task.id, task.attempt
                     )
-                    executor_lease = (
-                        await execution_routes.executor_delivery(
+                if (
+                    execution is not None
+                    and execution.executor is not None
+                    and execution.executor.selector.provider == google_auth.PROVIDER
+                ):
+                    await google_refresh.refresher_for(
+                        request.app.state
+                    ).refresh_account(db, secrets, execution.executor.account_id)
+                executor_lease = None
+                if execution is not None:
+                    async with db.read() as conn:
+                        executor_lease = await execution_routes.executor_delivery(
                             conn, execution, agent_id, secrets
                         )
-                        if execution
-                        else None
-                    )
                 if engine_lease is not None:
                     # A claim is never in-process: the worker endpoint.
                     engine_lease = await local_health.deliver(

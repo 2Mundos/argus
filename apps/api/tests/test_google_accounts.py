@@ -480,3 +480,123 @@ def test_lease_downloads_pinned_agy_client_when_host_has_no_agy(
     assert exe.json()["credential"]["token"]["access_token"] == (
         "ya29.DOWNLOADED_AGY_REFRESH_00000"
     )
+
+
+def test_execution_chain_claim_refreshes_expired_google_oauth_executor(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An execution-chain claim reserves and delivers the `google` executor lease
+    atomically inside `POST /api/tasks/claim` (sending engine-only `runtime_providers`);
+    the control plane must refresh an expiring Google OAuth token before delivery."""
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", "client-id-test")
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-test")
+    calls: list[dict[str, str]] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(dict(form))
+        return (
+            200,
+            {
+                "access_token": "ya29.CHAIN_REFRESHED_ACCESS_00000",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            },
+        )
+
+    app.state.google_refresher = GoogleTokenRefresher(post_form=fake_post)
+
+    eng = client.post(
+        "/api/accounts",
+        headers=ADMIN,
+        json={
+            "name": "claude-harness",
+            "provider": "anthropic",
+            "credential": {"api_key": "sk-ant-api03-fixture-secret"},
+        },
+    )
+    assert eng.status_code == 201, eng.text
+    eng_id = eng.json()["id"]
+
+    goog = _create(
+        client,
+        {
+            "token": {
+                "access_token": FAKE_ACCESS,
+                "token_type": "Bearer",
+                "refresh_token": FAKE_REFRESH,
+                "expiry": "2020-01-01T00:00:00Z",
+                "expires_in": 3600,
+            },
+            "auth_method": "consumer",
+            "id_token_email": "operator@example.test",
+        },
+        name="google-chain-exec",
+    )
+    assert goog.status_code == 201, goog.text
+    goog_id = goog.json()["id"]
+
+    proj = client.put("/api/projects/p-chain", headers=ADMIN, json={"name": "Chain"})
+    assert proj.status_code == 200, proj.text
+    chain = {
+        "version": 1,
+        "difficulties": {
+            "standard": [
+                {
+                    "id": "claude-agy",
+                    "mode": "paired",
+                    "runtime": "nanoclaw",
+                    "harness": {
+                        "account_id": eng_id,
+                        "provider": "anthropic",
+                        "adapter": "claude",
+                        "model": {"source": "explicit", "id": "claude-sonnet-4-6"},
+                    },
+                    "executor": {
+                        "account_id": goog_id,
+                        "provider": "google",
+                        "adapter": "agy",
+                        "model": {"source": "explicit", "id": "gemini-4-neon"},
+                    },
+                }
+            ],
+        },
+    }
+    put_chain = client.put(
+        "/api/projects/p-chain/settings/execution.chains",
+        headers=ADMIN,
+        json={"value": chain},
+    )
+    assert put_chain.status_code == 200, put_chain.text
+
+    created_task = client.post(
+        "/api/tasks",
+        headers=ADMIN,
+        json={"project": "p-chain", "title": "chain google refresh", "spec": "s"},
+    )
+    assert created_task.status_code == 201, created_task.text
+    task = created_task.json()
+    if task["state"] == "awaiting_approval":
+        approve = client.post(f"/api/tasks/{task['id']}/approve", headers=ADMIN)
+        assert approve.status_code == 200, approve.text
+
+    worker = _register_worker(client)
+    claimed = client.post(
+        "/api/tasks/claim",
+        headers=worker,
+        json={
+            "capabilities": [
+                "execution-chains-v1",
+                "nanoclaw:harness:claude:anthropic",
+                "nanoclaw:executor:agy:google",
+            ],
+            "runtime_providers": ["anthropic", "openai", "local", "custom"],
+        },
+    )
+    assert claimed.status_code == 200, claimed.text
+    body = claimed.json()
+    assert body["executor_lease"] is not None
+    assert body["executor_lease"]["account_id"] == goog_id
+    assert body["executor_lease"]["credential"]["token"]["access_token"] == (
+        "ya29.CHAIN_REFRESHED_ACCESS_00000"
+    )
+    assert len(calls) == 1

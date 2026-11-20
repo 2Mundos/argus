@@ -154,16 +154,6 @@ def _health(request: Request) -> local_health.LocalHealth:
     return request.app.state.local_health
 
 
-def _google_refresher(request: Request) -> google_refresh.GoogleTokenRefresher:
-    refresher = getattr(request.app.state, "google_refresher", None)
-    if refresher is None:
-        refresher = google_refresh.GoogleTokenRefresher(
-            settings=getattr(request.app.state, "settings", None)
-        )
-        request.app.state.google_refresher = refresher
-    return refresher
-
-
 async def _presented(
     request: Request, conn: aiosqlite.Connection, listed: list[Account]
 ) -> list[Account]:
@@ -595,7 +585,9 @@ async def lease_account(
         db, secrets, _health(request)
     )
     if body.role == "executor" and google_auth.PROVIDER in body.runtime_providers:
-        await _google_refresher(request).refresh_for_lease(db, secrets)
+        await google_refresh.refresher_for(request.app.state).refresh_for_lease(
+            db, secrets
+        )
     async with db.write() as tx:
         prefer = None
         if body.task_id is None:
