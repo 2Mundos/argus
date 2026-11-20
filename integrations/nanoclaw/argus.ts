@@ -5728,6 +5728,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           err.status === 422 &&
           err.code === "deliverable_missing"
         ) {
+          // Argus holds no PR it took from what was relayed (a pr_opened it judged not the
+          // task's still answers 200), and the nudge asks the worker to name the PR again:
+          // forget what was relayed so the next mention is verified again.
+          prRelayed.clear();
           resends += 1;
           await injectTask(
             task.id,

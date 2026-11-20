@@ -286,7 +286,7 @@ function world(opts: { leases: AccountLease[]; task: object }) {
   const calls: Call[] = [];
   const leases = [...opts.leases];
   let task: object | undefined = opts.task;
-  const state = { rejectHeartbeat: false, progressStatus: 200 };
+  const state = { rejectHeartbeat: false, progressStatus: 200, refuseComplete: 0 };
   const agents: any[] = [];
   const secrets: any[] = [];
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
@@ -364,6 +364,12 @@ function world(opts: { leases: AccountLease[]; task: object }) {
       return json(state.progressStatus, {
         detail: { code: "stale_attempt", message: "the attempt is no longer current" },
       });
+    if (p === `/tasks/${REPO_ID}/complete` && state.refuseComplete > 0) {
+      state.refuseComplete -= 1;
+      return json(422, {
+        detail: { code: "deliverable_missing", message: "deliverable pr_merged is not met" },
+      });
+    }
     return json(200, {});
   }) as unknown as typeof fetch;
   return { calls, fetchImpl, state };
@@ -485,6 +491,22 @@ describe("single-layer arm, end to end", () => {
         kind: "pr_opened",
         data: { number: 7, url: PR },
       },
+    ]);
+  });
+
+  it("a PR named again after a deliverable_missing refusal is reported again", async () => {
+    // Task da371c5d: Argus did not take the first pr_opened, so the refusal tells the
+    // worker to name the PR again; a channel that remembered it as relayed sent nothing.
+    const r = await run({ arms: { [REPO_ID]: "single_layer" } });
+    r.w.state.refuseComplete = 1;
+    await r.say(`COMPLETE: done, ${PR}`);
+    await until(() => r.posts("/complete").length > 0, 8000, "the refused complete");
+    await r.say(`COMPLETE: done, ${PR}`);
+    await until(() => r.posts("/complete").length > 1, 8000, "the second complete");
+    const prOpened = r.posts("/progress").filter((c) => c.body.kind === "pr_opened");
+    expect(prOpened.map((c) => c.body.data)).toEqual([
+      { number: 7, url: PR },
+      { number: 7, url: PR },
     ]);
   });
 
