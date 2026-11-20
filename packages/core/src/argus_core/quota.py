@@ -46,6 +46,18 @@ QUOTA_NOTICES: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.I,
         ),
     ),
+    # Google / Antigravity (`agy`): HTTP 402 (prepayment credits depleted) and
+    # 429 / RESOURCE_EXHAUSTED (capacity / quota / rate limit).
+    (
+        "google",
+        re.compile(
+            r"^(?:http\s*)?(?:402|429)\b"
+            r"|^resource_exhausted\b"
+            r"|^(?:prepayment credits are depleted|out of credits|quota exceeded"
+            r"|you have exhausted your capacity|exhausted your capacity|rate limit)\b",
+            re.I,
+        ),
+    ),
 )
 
 # An expired engine login is handled like an exhausted account: lease another one.
@@ -97,6 +109,7 @@ STRUCTURED_QUOTA_CODES = frozenset(
         "usage_limit_exceeded",
         "usage_limit_reached",
         "insufficient_quota",
+        "resource_exhausted",
     }
 )
 # Failures that are the network's, not the account's or the task's. Anchored at
@@ -211,7 +224,7 @@ def _unwrap(body: str) -> str:
     if not isinstance(err, dict):
         return body
     message = err.get("message")
-    for key in ("codexErrorInfo", "code", "type"):
+    for key in ("codexErrorInfo", "code", "type", "status"):
         value = err.get(key)
         if isinstance(value, str) and value.lower() in STRUCTURED_QUOTA_CODES:
             return f"{value}: {message}" if isinstance(message, str) else value
