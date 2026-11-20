@@ -206,6 +206,32 @@ describe("Accounts", () => {
     expect(screen.queryByRole("button", { name: "Local model" })).toBeNull();
   });
 
+  it("creates a native google account from the Google AI Studio tile", async () => {
+    render(<Accounts />);
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Google AI Studio" }));
+    await screen.findByRole("dialog", { name: "Add Google AI Studio account" });
+    expect(screen.queryByLabelText("Base URL")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Gemini API key"), { target: { value: "AIzaFAKE" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(mock.postBody).toBeDefined());
+    expect(mock.postBody).toEqual({
+      name: "Google AI Studio",
+      provider: "google",
+      kind: "api_key",
+      credential: { api_key: "AIzaFAKE" },
+    });
+    expect(await screen.findByText(/Antigravity executor/)).toBeTruthy();
+  });
+
+  it("opens the custom form, not the google dialog, from the Custom provider tile", async () => {
+    render(<Accounts />);
+    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Custom provider" }));
+    expect(await screen.findByLabelText("Base URL")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Add Google AI Studio account" })).toBeNull();
+  });
+
   it("submits anthropic provider from catalogue", async () => {
     render(<Accounts />);
     fireEvent.click(screen.getByRole("button", { name: "Add account" }));

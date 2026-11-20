@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-19
-updated: 2026-11-19
+updated: 2026-11-20
 ---
 
 # Google (Antigravity) accounts: import, executor lease, delegated CLI
@@ -71,6 +71,26 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
     `refresh_token` is stored in SOPS if supplied but never leaves Argus.
   Kind is derived from the credential on create and credential update. Responses
   and events never echo any token or key.
+- **Dashboard onboarding**: the Add account wizard's **Google AI Studio** tile
+  opens a dedicated dialog (name and Gemini API key) that posts
+  `provider: "google"`, `kind: "api_key"`, `credential: {"api_key": …}`. It never
+  opens the custom-provider form. The **Custom provider** form keeps a "Google
+  (OpenAI-compatible)" preset (`provider: "custom"`, label `google`) for the
+  OpenAI-compatible endpoint only; such an account is never leased to `agy`.
+- **Remediation of Google AI Studio keys saved as `custom`** (before this
+  change the tile created `provider: "custom"`, label `google`). Nothing is
+  migrated automatically: Argus never reads a stored key back or rewrites a
+  credential or unrelated account.
+  1. Find them (read-only): `GET /api/accounts`, keep `provider == "custom"` with
+     `config.label == "google"` or a `config.base_url` on
+     `generativelanguage.googleapis.com`.
+  2. For each one the operator wants for Antigravity, add a new account with the
+     Google AI Studio tile (or `POST /api/accounts` with `provider: "google"`),
+     entering the Gemini key again. Check it under Engines (Antigravity
+     `accounts.available`).
+  3. Keep the old custom account if its OpenAI-compatible use (harness, custom
+     executor) is still wanted; otherwise disable and then delete it. Skipping
+     this step is safe, since the two accounts are independent.
 - **Executor-only provider**: `google` joins `cursor` and `copilot` in
   `EXECUTOR_ONLY`; the `engine` lease role never returns it, the `executor` role
   may. The `agy` executor runs on the `google` provider
@@ -196,7 +216,7 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
 - Commands:
   - `uv run pytest -q -p no:cacheprovider packages/core/tests/test_google_auth.py apps/api/tests/test_google_accounts.py`
   - `node --test integrations/nanoclaw/engines/argus-delegate.test.mjs integrations/nanoclaw/engines/usage.test.mjs integrations/nanoclaw/engines/livelog.test.mjs`
-  - `pnpm --filter @argus/dashboard exec vitest run src/views/AccountsGoogle.test.tsx`
+  - `pnpm --filter @argus/dashboard exec vitest run src/views/AccountsGoogle.test.tsx src/views/Accounts.test.tsx`
   - `make check`
 - Verified: unit, fake-API, and offline real-binary proxy probe level against
   `agy 1.5.12` (verified `x-goog-api-key` on `generativelanguage.googleapis.com`,

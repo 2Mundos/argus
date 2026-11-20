@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-17
+updated: 2026-11-20
 ---
 
 # Custom OpenAI-compatible accounts
@@ -18,8 +18,11 @@ Make an OpenAI-compatible endpoint (presets: OpenRouter,
 `https://generativelanguage.googleapis.com/v1beta/openai`) a normal Argus
 **account** with provider `custom`:
 
-- **Presets**: the dashboard offers both endpoints and fills their `base_url` and
-  `label` (`openrouter`, `google`); any other OpenAI-compatible endpoint stays
+- **Presets**: the custom form offers both endpoints and fills their `base_url` and
+  `label` (`openrouter`, `google`); the Google preset is named "Google
+  (OpenAI-compatible)" and says the Antigravity executor cannot use it. The
+  wizard's **Google AI Studio** tile does not open this form: it creates a native
+  `google` account ([google accounts](google-accounts.spec.md)). Any other OpenAI-compatible endpoint stays
   available by editing the two fields.
 - **Registration**: `base_url`, a provider `label` (for example `openrouter`) and an
   API key. The key is the account's only secret and lives in the SOPS store as
@@ -168,7 +171,7 @@ Make an OpenAI-compatible endpoint (presets: OpenRouter,
 - `apps/api/src/argus_api/accounts/custom.py`: probe and endpoints proxy; routes in
   `accounts/routes.py`; lease `settings` in `accounts/service.py`; test transport via
   `app.state.custom_transport`.
-- Dashboard: the custom account form (OpenRouter and Google AI Studio presets) and
+- Dashboard: the custom account form (OpenRouter and Google OpenAI-compatible presets) and
   the model and host on the attempt.
 - Delegate: `argus-delegate.mjs` (`parseAccountSettings`, `effectiveModel`,
   `applySettingsEnv`, Codex `-c` args), tests in `argus-delegate.test.mjs`.
