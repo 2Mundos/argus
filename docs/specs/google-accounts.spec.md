@@ -142,7 +142,7 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   failure or a forced refresh inside the window is answered from the last outcome.
   A failed attempt also stands for the window against a non-forced call on a
   token that still looks fresh. The token whose refresh failed stays invalid
-  (remembered by digest in memory, independent of the cooldown) until a refresh
+  (remembered in process memory, independent of the cooldown) until a refresh
   or a credential replacement changes it: after the window the provider is
   retried once, never answered with the rejected token. An access-only credential (no
   `refresh_token`) past its expiry is `409 credential_refresh_rejected`.
