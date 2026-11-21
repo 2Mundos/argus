@@ -16,8 +16,8 @@
 </p>
 
 **For** teams and solo developers who run several AI coding agents (Claude Code,
-Codex, Cursor, Copilot, local models) against their repositories and want them
-to share one queue instead of a pile of terminals.
+Codex, Cursor, Copilot, OpenCode, Antigravity, local models) against their
+repositories and want them to share one queue instead of a pile of terminals.
 
 **The problem:** each agent works alone. Nobody knows who is on which task,
 work stalls when a subscription's quota runs out, and token spend is invisible
@@ -27,13 +27,27 @@ until the bill arrives.
 accounts, and shows what it cost, and it deploys as a single container with no
 database server, broker or cloud service to run next to it.
 
+- **Chat with an orchestrator.** Describe the work in Chat; an orchestrator
+  agent turns it into tasks, routes them and works the inbox (questions,
+  reviews, approvals). It can run inside the Argus process on an API-key account,
+  with no container ([built-in orchestrator](docs/specs/builtin-orchestrator.spec.md)).
 - **Leased task queue.** Workers claim tasks under a lease and heartbeat it; an
   expired lease puts the task back, and retries, dependencies, blocking and
   steering are built in ([worker lifecycle](docs/specs/worker-lifecycle.spec.md)).
+- **Routes per difficulty.** Each difficulty, from trivial to hard, has an
+  ordered list of engine and model alternatives, and an independent reviewer
+  chain that never picks the author's model ([execution chains](docs/specs/execution-chains.spec.md)).
 - **Account failover on quota.** Provider accounts are leased by priority and
   availability; when one hits its quota the task goes back to the queue without
   spending an attempt and runs on the next usable account, or waits until one
   resets ([account selection](docs/specs/account-selection.spec.md)).
+- **Delivery you can see.** A task can be held to a merged pull request; Argus
+  reads the PR's state, CI checks and review from GitHub or Gitea and shows them
+  on the task ([task delivery](docs/specs/task-delivery.spec.md)).
+- **Projects, routines and knowledge.** Each project has its repository, task
+  defaults, board and dependency graph; routines create tasks on a cron schedule;
+  a shared wiki reaches every worker with its claim ([routines](docs/specs/routines.spec.md),
+  [knowledge](docs/specs/knowledge.spec.md)).
 - **MCP for your agents.** Claude Code, Codex and other MCP clients connect to
   `/mcp` to claim, report and complete tasks ([MCP](#connecting-agents-mcp)).
 - **Cost and usage dashboard.** Tokens and estimated spend per project,
@@ -41,32 +55,31 @@ database server, broker or cloud service to run next to it.
 - **Worker pools anywhere.** Argus starts worker containers on local or remote
   Docker hosts or Kubernetes, on request from the orchestrator or a user.
 
-Argus owns shared state (tasks, agents, assignments), exposes it to an orchestrator agent and to worker agents through an
-API, gives humans a dashboard for visibility, and deploys additional worker
-instances (containers) on request from the orchestrator or a user.
-
 **Lightweight and single-node first.** Argus is one process with one SQLite
 database (continuously backed up by Litestream) and no required external
 services: `docker run -v argus-data:/data ghcr.io/2mundos/argus:latest` is a full deployment. The fleet
 it manages can live on remote Docker hosts or Kubernetes; Argus itself stays on
 one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md).
 
-![Argus dashboard home: items needing attention, task, agent, pool, inbox and account summaries, and live workers](assets/screenshots/home.png)
+![Argus dashboard: task, agent, pool, inbox and account summaries, and the live workers sidebar](assets/screenshots/dashboard.png)
 
 <details>
-<summary>More screenshots: Fleet, Cost, Engines, System</summary>
+<summary>More screenshots: Tasks, Task detail, Routines, Fleet, Cost</summary>
+
+**Tasks**: a project's board, from waiting to done, with each task's model and attempt.
+![Tasks: a project's task board by state](assets/screenshots/tasks.png)
+
+**Task detail**: the pull request, its CI checks and merge gate, and the execution route.
+![Task detail: pull request, checks and execution route](assets/screenshots/task-detail.png)
+
+**Routines**: recurring work on a cron schedule; each run is an ordinary task.
+![Routines: schedules, next and last runs](assets/screenshots/routines.png)
 
 **Fleet**: pool health, tasks by state, queue and run times.
 ![Fleet: pool health and tasks by state](assets/screenshots/fleet.png)
 
-**Cost**: tokens and estimated spend per day.
+**Cost**: tokens and estimated spend per day, with how much of it was measured.
 ![Cost: token usage and estimated spend by day](assets/screenshots/cost.png)
-
-**Engines**: agent CLIs (Claude Code, Codex, OpenCode, Cursor, local models).
-![Engines: installed agent CLIs and their auth status](assets/screenshots/engines.png)
-
-**System**: health checks, background loops, work counts.
-![System: health checks and background loops](assets/screenshots/system.png)
 
 </details>
 
@@ -126,6 +139,11 @@ The manual route (plain `docker run`, Compose, building from source) is under
 - `apps/dashboard/` — Operator dashboard (Vite + React + TypeScript), served by
   the API process in production.
 - `packages/core/` — Shared domain types (Python, `argus_core`).
+- `packages/api-client/` — TypeScript API client generated from the OpenAPI
+  schema (`make openapi`).
+- `skills/` — Agent skills, such as `argus-orchestrator` for running a fleet over MCP.
+- `evals/` — Model-facing evals for the orchestrator tools and worker protocol.
+- `scripts/` — Repository checks (specs, paths, language), release and dev helpers.
 - `docs/` — Specs and drafts. Spec first: nothing is built before it is written
   down in `docs/specs/` (see [`docs/README.md`](docs/README.md)).
 - `integrations/nanoclaw/` — NanoClaw channel that makes a NanoClaw agent group an
@@ -215,7 +233,7 @@ it beyond this host. Exposure is the `-p` / Compose `ports` address.
   `-v ./age-key.txt:/keys/age.txt:ro -e SOPS_AGE_KEY_FILE=/keys/age.txt`
   `-e SOPS_AGE_RECIPIENTS=age1…` (`age-keygen -o age-key.txt`).
 - Workers: `-e ARGUS_PUBLIC_URL=<url>` is the address workers use to call this
-  Argus. Until it is set, Argus starts no worker and the Agents page says
+  Argus. Until it is set, Argus starts no worker and Workers › Agents says
   so; the dashboard and API work without it. Local Docker pools use
   `http://host.docker.internal:8000` (the Compose files set it, see below);
   remote hosts and Kubernetes use the URL of the TLS proxy in front of Argus.
@@ -243,7 +261,7 @@ echo-worker images, on every `main` push and when their inputs change on a PR
 | `GET /healthz` | none | liveness: the process is up |
 | `GET /readyz` | none | readiness: `503` when the database is unreadable or the writer is held over 5 s, a loop stalled, or the disk is full (`degraded` is still `200`); never takes the writer, result cached ~2 s |
 | `GET /api/metrics` | admin token | Prometheus text: tasks, agents, pools, accounts, queue age, loop health, DB and disk size |
-| `GET /api/system` | any token | the same facts as JSON; the dashboard's System tab |
+| `GET /api/system` | any token | the same facts as JSON, shown under Dashboard › System |
 
 ```yaml
 # prometheus.yml
@@ -280,7 +298,7 @@ Pods must be able to reach `ARGUS_PUBLIC_URL`. Try it on a throwaway cluster wit
 ## Connecting agents (MCP)
 
 Argus serves an MCP endpoint at `/mcp`. Register an agent (mint a bootstrap
-token in the dashboard, then `POST /api/agents/register`) and give the MCP client
+token in the dashboard under Workers › Agents, then `POST /api/agents/register`) and give the MCP client
 its token, for example with Claude Code:
 
 ```bash
