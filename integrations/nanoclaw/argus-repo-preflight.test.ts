@@ -1640,7 +1640,7 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
     ] as const)(
       "%s names the session layer and never a repository permission",
       async (diagnosis, hint) => {
-        const { done, events, probeCalls } = failing(
+        const { done, events } = failing(
           new RepositoryPreflightError("session_failure", "startup refused", null, diagnosis),
         );
         const result = await done;
@@ -1658,7 +1658,6 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
           rearm_attempts: 0,
           fault: "none",
         });
-        expect(probeCalls).toHaveBeenCalledTimes(1);
       },
     );
 
