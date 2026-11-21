@@ -193,7 +193,10 @@ sending the parent back for a full attempt.
   merge (the kind schema rejects `force_push: true`; `force_push` stays `no`).
 - The runtime enforces that scope: the channel exports `ARGUS_FIX_PR` and
   `ARGUS_FIX_BASE_SHA` from `input.fix` (a malformed `fix` exports a marker that fails
-  closed), and `argus-task deliver` then takes the fix path only. It requires the PR open
+  closed). Both names cross the host → session boundary through the container and Codex
+  env allowlists (`patch-merge-auth-env.py`, `install.sh`) and are cleared when no fix
+  scope is active, so a session without a fix scope never inherits one. `argus-task
+  deliver` then takes the fix path only. It requires the PR open
   on the current branch, `HEAD` strictly ahead of the live PR head, which must be the
   reviewed head or a descendant of it, runs the pre-push checks and pushes without
   `--force-with-lease`. It never rebases, never pushes another branch and never creates or

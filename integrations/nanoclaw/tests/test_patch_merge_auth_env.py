@@ -15,6 +15,8 @@ NAMES = [
     "ARGUS_MERGE_AUTHORIZED",
     "ARGUS_MERGE_APPROVED_PR",
     "ARGUS_MERGE_APPROVED_SHA",
+    "ARGUS_FIX_PR",
+    "ARGUS_FIX_BASE_SHA",
 ]
 BASE = "'ARGUS_GIT_AUTHOR_NAME', 'ARGUS_GIT_AUTHOR_EMAIL', 'ARGUS_COMMAND_GUARD'"
 FORGE = f"{BASE}, 'ARGUS_FORGE_REVIEW'"
@@ -78,6 +80,31 @@ def test_extends_a_patched_runner_once_and_keeps_earlier_names(
     before = re.findall(r"'([A-Z_]+)'", state)
     assert _run(root).returncode == 0
     assert _forwarded(root) == before + [n for n in NAMES if n not in before]
+    assert _dropped(root) == NAMES
+    text = (root / "src" / "container-runner.ts").read_text()
+    assert _run(root).returncode == 0
+    assert (root / "src" / "container-runner.ts").read_text() == text
+
+
+def test_upgrades_existing_drop_loop_with_new_names(tmp_path: Path) -> None:
+    earlier = NAMES[:-2]
+    earlier_list = ", ".join(f"'{n}'" for n in earlier)
+    body = (
+        "  const contributedEnv: Record<string, string> = {\n"
+        "    ...(contribution.env ?? {}),\n"
+        "  };\n"
+        "  // argus: drop stale merge authorization\n"
+        f"  for (const key of [{earlier_list}]) {{\n"
+        "    delete contributedEnv[key];\n"
+        "  }\n"
+        f"  for (const key of [{FORGE}, {earlier_list}]) {{\n"
+        "    const value = process.env[key];\n"
+        "    if (value?.trim()) contributedEnv[key] = value;\n"
+        "  }\n"
+    )
+    root = _checkout(tmp_path, body)
+    assert _run(root).returncode == 0
+    assert {"ARGUS_FIX_PR", "ARGUS_FIX_BASE_SHA"}.issubset(_forwarded(root))
     assert _dropped(root) == NAMES
     text = (root / "src" / "container-runner.ts").read_text()
     assert _run(root).returncode == 0

@@ -474,6 +474,8 @@ runtime_keys = [
     "ARGUS_MERGE_AUTHORIZED",
     "ARGUS_MERGE_APPROVED_PR",
     "ARGUS_MERGE_APPROVED_SHA",
+    "ARGUS_FIX_PR",
+    "ARGUS_FIX_BASE_SHA",
 ]
 missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
 if missing:
@@ -487,7 +489,7 @@ if s != original:
 PY
   )"
   if [ "$patch_result" = patched ]; then
-    echo "patched $codex_ts (Codex env allowlist: git, Cursor delegate, Gitea map, command guard, merge authorization)"
+    echo "patched $codex_ts (Codex env allowlist: git, Cursor delegate, Gitea map, command guard, merge authorization, fix scope)"
   fi
 fi
 

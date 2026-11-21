@@ -5,15 +5,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import {
   mergeAuthorizationToken,
+  scopeFixDelivery,
   scopeMergeAuthorization,
   taskMayMerge,
 } from "./argus-merge-auth.ts";
+import { EXIT, main as taskMain } from "./argus-task.mjs";
 import { main } from "./github-api.mjs";
 
 const NAMES = [
@@ -226,5 +228,187 @@ describe("merge authorization reaches the session env", () => {
     assert.equal(wrongPr, 13);
     assert.equal(wrongSha, 13);
     assert.equal(puts, 0);
+  });
+});
+
+describe("fix delivery scope reaches the session env and argus-task deliver", () => {
+  const FIX_REPO = "https://github.com/o/r";
+  const FIX_PR_URL = `${FIX_REPO}/pull/461`;
+  const scratch = mkdtempSync(join(tmpdir(), "argus-fix-env-"));
+  after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const git = (args, cwd) =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+
+  function identity(dir) {
+    if (process.env.ARGUS_GIT_AUTHOR_NAME && process.env.ARGUS_GIT_AUTHOR_EMAIL) return;
+    git(["config", "user.email", "t@example.com"], dir);
+    git(["config", "user.name", "t"], dir);
+  }
+
+  let repoCount = 0;
+  function fixFixture() {
+    const n = repoCount++;
+    const origin = join(scratch, `o${n}.git`);
+    const seed = join(scratch, `s${n}`);
+    const work = join(scratch, `w${n}`);
+    const bin = join(scratch, `b${n}`);
+    git(["init", "-q", "--bare", "-b", "main", origin]);
+    mkdirSync(seed);
+    git(["init", "-q", "-b", "main"], seed);
+    identity(seed);
+    writeFileSync(join(seed, "a.txt"), "one\n");
+    git(["add", "."], seed);
+    git(["commit", "-qm", "seed"], seed);
+    git(["push", "-q", origin, "main"], seed);
+
+    git(["clone", "-q", origin, work]);
+    identity(work);
+    git(["checkout", "-qb", "feature"], work);
+    writeFileSync(join(work, "impl.txt"), "impl\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "impl"], work);
+    git(["push", "-q", "origin", "feature"], work);
+    const prHead = git(["rev-parse", "HEAD"], work);
+
+    writeFileSync(join(work, "fix.txt"), "fix\n");
+    git(["add", "."], work);
+    git(["commit", "-qm", "fix"], work);
+    const fixHead = git(["rev-parse", "HEAD"], work);
+
+    // Advance main so ordinary delivery must rebase while fix delivery fast-forwards without rebase.
+    writeFileSync(join(seed, "a.txt"), "base moved\n");
+    git(["commit", "-qam", "advance main"], seed);
+    git(["push", "-q", origin, "main"], seed);
+
+    mkdirSync(bin);
+    for (const tool of ["make", "gitleaks"]) {
+      writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(bin, tool), 0o755);
+    }
+    return { origin, work, bin, prHead, fixHead };
+  }
+
+  async function cliDeliver(fixture, env) {
+    const out = [];
+    const err = [];
+    const createdPrs = [];
+    const fetch = async (target, init = {}) => {
+      const url = new URL(target);
+      const method = init.method ?? "GET";
+      const path = url.pathname;
+      if (method === "GET" && path === "/repos/o/r") {
+        return Response.json({ default_branch: "main" });
+      }
+      if (method === "GET" && path === "/repos/o/r/pulls/461") {
+        return Response.json({
+          number: 461,
+          state: "open",
+          head: { ref: "feature", sha: fixture.prHead },
+          html_url: FIX_PR_URL,
+        });
+      }
+      if (method === "GET" && path === "/repos/o/r/pulls") {
+        return Response.json([]);
+      }
+      if (method === "POST" && path === "/repos/o/r/pulls") {
+        createdPrs.push(JSON.parse(init.body));
+        return Response.json({ number: 462, html_url: `${FIX_REPO}/pull/462` });
+      }
+      return new Response("{}", { status: 404 });
+    };
+    const code = await taskMain(
+      ["deliver"],
+      {
+        PATH: fixture.bin,
+        ARGUS_REPOSITORY_URL: FIX_REPO,
+        ARGUS_REPOSITORIES_JSON: JSON.stringify({ r: FIX_REPO }),
+        ...env,
+      },
+      {
+        fetch,
+        cwd: fixture.work,
+        git,
+        retrySleep: async () => {},
+        sleep: async () => {},
+        stdout: { write: (s) => out.push(s) },
+        stderr: { write: (s) => err.push(s) },
+      },
+    );
+    return {
+      code,
+      out: out.length ? JSON.parse(out.join("")) : null,
+      err: err.length ? JSON.parse(err.join("")) : null,
+      createdPrs,
+    };
+  }
+
+  it("forwards a valid fix scope through container and Codex allowlists into deliverFix", async () => {
+    const f = fixFixture();
+    const host = {};
+    scopeFixDelivery(host, {
+      input: { fix: { pr: FIX_PR_URL, base_head_sha: f.prHead, force_push: false } },
+    });
+    assert.equal(host.ARGUS_FIX_PR, "461");
+    assert.equal(host.ARGUS_FIX_BASE_SHA, f.prHead);
+
+    const session = forwardedBy(host);
+    assert.equal(session.ARGUS_FIX_PR, "461");
+    assert.equal(session.ARGUS_FIX_BASE_SHA, f.prHead);
+    const codex = codexForwardedBy(session);
+    assert.deepEqual(codex, session);
+
+    const r = await cliDeliver(f, codex);
+    assert.equal(r.code, EXIT.ok);
+    assert.equal(r.out.fix, true);
+    assert.equal(r.out.rebased, false);
+    assert.equal(r.out.number, 461);
+    assert.equal(r.out.head_sha, f.fixHead);
+    assert.equal(r.out.base_head_sha, f.prHead);
+    assert.deepEqual(r.createdPrs, []);
+    assert.equal(git(["rev-parse", "refs/heads/feature"], f.origin), f.fixHead);
+  });
+
+  it("forwards a malformed fix scope marker so deliver fails closed with fix_scope_invalid", async () => {
+    const f = fixFixture();
+    const host = {};
+    scopeFixDelivery(host, {
+      input: { fix: { pr: FIX_PR_URL, base_head_sha: "not-a-sha", force_push: false } },
+    });
+    assert.equal(host.ARGUS_FIX_PR, "invalid");
+    assert.equal(host.ARGUS_FIX_BASE_SHA, "invalid");
+
+    const session = forwardedBy(host);
+    const codex = codexForwardedBy(session);
+    assert.equal(codex.ARGUS_FIX_PR, "invalid");
+    assert.equal(codex.ARGUS_FIX_BASE_SHA, "invalid");
+
+    const r = await cliDeliver(f, codex);
+    assert.equal(r.code, EXIT.error);
+    assert.equal(r.err.error.code, "fix_scope_invalid");
+    assert.equal(git(["rev-parse", "refs/heads/feature"], f.origin), f.prHead);
+  });
+
+  it("clears stale fix vars when absent so deliver runs the ordinary rebase and PR path", async () => {
+    const f = fixFixture();
+    const host = { ARGUS_FIX_PR: "461", ARGUS_FIX_BASE_SHA: f.prHead };
+    scopeFixDelivery(host, { input: {} });
+
+    const session = forwardedBy(host, { ARGUS_FIX_PR: "461", ARGUS_FIX_BASE_SHA: f.prHead });
+    assert.equal("ARGUS_FIX_PR" in session, false);
+    assert.equal("ARGUS_FIX_BASE_SHA" in session, false);
+    const codex = codexForwardedBy(session);
+    assert.deepEqual(codex, {});
+
+    const r = await cliDeliver(f, codex);
+    assert.equal(r.code, EXIT.ok);
+    assert.equal(r.out.fix, undefined);
+    assert.equal(r.out.rebased, true);
+    assert.equal(r.out.created, true);
+    assert.equal(r.createdPrs.length, 1);
   });
 });
