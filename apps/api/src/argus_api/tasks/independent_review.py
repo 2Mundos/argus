@@ -427,21 +427,22 @@ async def merge_gate_status(
     approved_sha = (
         data.get("head_sha") if isinstance(data.get("head_sha"), str) else None
     )
-    if approved_pr and not _same_pr(approved_pr, pr):
+    if not approved_pr or not _same_pr(approved_pr, pr):
         return False, "independent_review_pr_mismatch"
     if not _same_sha(approved_sha, head_sha):
         return False, "independent_review_head_mismatch"
     child_id = data.get("child_id") if isinstance(data.get("child_id"), str) else None
-    if child_id:
-        author_models, author_providers = await authors(conn, parent["id"])
-        if not await child_models_clean(
-            conn,
-            child_id,
-            mode=setting.mode,
-            author_models=author_models,
-            author_providers=author_providers,
-        ):
-            return False, "independent_review_same_model"
+    if not child_id:
+        return False, "independent_review_same_model"
+    author_models, author_providers = await authors(conn, parent["id"])
+    if not await child_models_clean(
+        conn,
+        child_id,
+        mode=setting.mode,
+        author_models=author_models,
+        author_providers=author_providers,
+    ):
+        return False, "independent_review_same_model"
     return True, None
 
 

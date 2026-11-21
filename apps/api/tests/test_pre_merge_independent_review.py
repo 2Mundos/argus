@@ -675,6 +675,34 @@ async def test_head_change_replacement_pr_stale_verdict_failed_review_and_no_rev
         assert allowed is False
         assert reason == indep.NO_INDEPENDENT_REVIEWER
 
+    # 4. An approval on the exact head that lacks its PR or its reviewing child
+    #    fails closed instead of skipping the PR or reviewer-model check.
+    for missing, reason_expected in (
+        ("pr", "independent_review_pr_mismatch"),
+        ("child_id", "independent_review_same_model"),
+    ):
+        bare_parent = await make_task(db)
+        approval = {
+            "child_id": "rev-child",
+            "verdict": "approve",
+            "pr": PR_450_URL,
+            "head_sha": HEAD_1,
+        }
+        del approval[missing]
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE tasks SET state = 'in_review' WHERE id = ?", (bare_parent.id,)
+            )
+            await record(
+                tx, "agent:rev", "task", bare_parent.id, indep.PASSED_EVENT, approval
+            )
+        async with db.read() as conn:
+            bare_row = await tasks.task_row(conn, bare_parent.id)
+            allowed, reason = await indep.merge_gate_status(
+                conn, bare_row, pr=PR_450_URL, head_sha=HEAD_1
+            )
+            assert (allowed, reason) == (False, reason_expected), missing
+
 
 async def test_idempotent_reviewer_spawn_retries_and_concurrent_settlements(
     db: Database, fleet, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
