@@ -143,14 +143,6 @@ function world(provider: string, readiness: string, kind: "kubernetes" | "mcp" =
         },
       ]);
     if (p === `/tasks/${TASK}/integrations/int-1/credential`) {
-      // The API enforces the per-kind engine rule; MCP needs the Claude harness.
-      if (kind === "mcp" && provider === "openai")
-        return json(409, {
-          detail: {
-            code: "integration_engine_unsupported",
-            message: "Task integrations need a Claude-harness engine",
-          },
-        });
       // A rotated fetch outlasts a heartbeat interval: the next one overlaps it.
       if (state.holdRotation && body.secret_version === 2)
         await new Promise<void>((r) => {
@@ -215,14 +207,22 @@ function recordingRoute(refuse: () => RouteResult | null = () => null) {
 const GRANT = "http://172.17.0.1:7001/mcp/fake-grant";
 
 /** An MCP broker and session config that grant and record. */
-function recordingMcp() {
+function recordingMcp(opts: { refuse?: boolean } = {}) {
   const tokens: string[] = [];
+  const limits: Array<readonly string[] | undefined> = [];
   const revoked: Array<[string, number | undefined]> = [];
   let renewed = 0;
   const sessions: Array<Record<string, McpServerEntry>> = [];
   const broker: McpTransport = {
     open: async (_who, routes) => {
       tokens.push(...routes.map((x) => x.token));
+      limits.push(...routes.map((x) => x.transports));
+      if (opts.refuse && routes.some((x) => x.transports && !x.transports.includes("sse")))
+        return {
+          ok: false,
+          reason: "env_integration_unsupported",
+          error: "this harness cannot use a legacy HTTP+SSE MCP server",
+        };
       return {
         ok: true,
         servers: Object.fromEntries(
@@ -242,7 +242,7 @@ function recordingMcp() {
       sessions.push(servers);
     },
   };
-  return { tokens, revoked, sessions, broker, sessionMcp, renewed: () => renewed };
+  return { tokens, limits, revoked, sessions, broker, sessionMcp, renewed: () => renewed };
 }
 
 async function run(
@@ -452,16 +452,25 @@ describe("task integrations through the channel", () => {
     expect(prompt).not.toContain(TOKEN);
   });
 
-  it("an openai engine blocks an MCP integration the API refuses for it", async () => {
+  it("an openai engine gets a Streamable HTTP MCP grant limited to http", async () => {
     const mcp = recordingMcp();
+    const r = await run("openai", "ready", null, mcp);
+    await until(() => r.inbound.length > 0, 8000, "the prompt");
+    expect(mcp.sessions.at(-1)).toMatchObject({
+      "argus-integration-staging": { type: "http", url: GRANT },
+    });
+    expect(mcp.limits).toEqual([["http"]]);
+  });
+
+  it("a legacy HTTP+SSE server under openai blocks before the model with no grant", async () => {
+    const mcp = recordingMcp({ refuse: true });
     const r = await run("openai", "ready", null, mcp);
     await until(() => r.posts("/block").length > 0, 8000, "the block");
     expect(r.posts("/block")[0]!.body).toMatchObject({
       attempt: 1,
       reason: "env_integration_unsupported",
     });
-    expect(r.posts("/integrations/int-1/credential")).toHaveLength(1);
-    expect(mcp.tokens).toEqual([]);
+    expect(mcp.sessions.every((s) => Object.keys(s).length === 0)).toBe(true);
     expect(r.inbound).toHaveLength(0);
     expect(existsSync(r.root)).toBe(false);
   });

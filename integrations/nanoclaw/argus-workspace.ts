@@ -30,7 +30,9 @@ export type WorkspaceFailureReason =
   | "env_workspace_remote_mismatch"
   | "env_workspace_branch_mismatch"
   | "env_workspace_unpreserved_commits"
-  | "env_workspace_limit";
+  | "env_workspace_limit"
+  | "env_workspace_prior_unverified"
+  | "env_workspace_prior_unavailable";
 
 export type WorkspaceResult =
   | { ok: true; path: string; containerPath: string; branch: string; created: boolean }
@@ -170,6 +172,86 @@ async function strandedCommits(
   )
     for (const sha of await unpublishedCommits(ws, ceiling, "HEAD", git)) found.add(sha);
   return [...found];
+}
+
+/** An earlier attempt's workspace owner as the claim reports it (`ClaimedTask.prior_workspaces`). */
+export type PriorWorkspace = {
+  attempt: number;
+  owner_agent_id: string;
+  owner_node_id?: string | null;
+  owner_status?: "live" | "stale" | "ended" | "unknown";
+  checkpoint_state?: "running" | "saved" | "nothing_to_save" | "failed" | null;
+};
+
+const describePrior = (p: PriorWorkspace): string =>
+  `attempt ${p.attempt} ran on agent ${p.owner_agent_id}` +
+  ` (node ${p.owner_node_id ?? "not reported"}, ${p.owner_status ?? "unknown"}),` +
+  ` checkpoint step ${p.checkpoint_state ?? "not reported"}`;
+
+/**
+ * A claim is about to proceed from this instance's workspace (empty, an old checkout or a
+ * restored checkpoint). Prior claim rows on other instances after this instance's newest
+ * claim row that durably finished its checkpoint may hold unpublished work this one cannot
+ * see, so "no work" must be proven, never assumed: only a worker's own `nothing_to_save`
+ * report proves it. `prior` is ordered oldest-first by claim row across all retry
+ * generations (because operator retries reset `attempt` to 1), so evaluation and the
+ * reconciliation cutoff follow list order rather than `attempt` numbers. `null` means
+ * nothing is at risk (a genuinely first claim with an empty list, an older server's silence
+ * at attempt 1, or every earlier claim ran here, where the workspace's own state is checked
+ * by `prepareTaskWorkspace`). Otherwise a typed refusal that names each attempt, owner, node
+ * and checkpoint step. `prior` undefined on attempt > 1 is an older server that cannot say
+ * where work lives: unknown, not absent. Read-only.
+ */
+export function fencePriorWorkspaces(opts: {
+  attempt: number;
+  selfAgentId: string | null;
+  prior: PriorWorkspace[] | null | undefined;
+  /** A workspace already exists or was restored: an older server's silence then keeps the legacy reuse. */
+  hasLocalWork?: boolean;
+}): { reason: WorkspaceFailureReason; error: string } | null {
+  const refuse = (reason: WorkspaceFailureReason, error: string) => ({ reason, error });
+  if (!opts.prior)
+    return opts.attempt <= 1 || opts.hasLocalWork
+      ? null
+      : refuse(
+          "env_workspace_prior_unverified",
+          `attempt ${opts.attempt} would start from an empty workspace but the server did not say ` +
+            "where earlier attempts worked, so unpublished work elsewhere cannot be ruled out. " +
+            "Nothing was created; run the retry on the instance that holds the earlier work",
+        );
+  const mine = (p: PriorWorkspace) => !!opts.selfAgentId && p.owner_agent_id === opts.selfAgentId;
+  // Work after this instance's newest *reconciled* claim row is what its checkout cannot contain
+  // (A, B, A). Ordering follows the server's claim-row sequence (`opts.prior`), not `attempt`
+  // numbers, because an operator retry resets `attempt` to 1. A claim alone proves nothing: an
+  // attempt that died or was released before its checkpoint ended (null, running, failed) never
+  // showed the earlier foreign work was absorbed, so only a recorded `saved`/`nothing_to_save`
+  // step advances the cutoff.
+  const reconciled = (p: PriorWorkspace) =>
+    p.checkpoint_state === "saved" || p.checkpoint_state === "nothing_to_save";
+  let cutoff = -1;
+  for (const [i, p] of opts.prior.entries()) {
+    if (mine(p) && reconciled(p)) cutoff = i;
+  }
+  const elsewhere = opts.prior.slice(cutoff + 1).filter((p) => !mine(p));
+  const unavailable = elsewhere.filter((p) => p.checkpoint_state === "saved");
+  if (unavailable.length)
+    return refuse(
+      "env_workspace_prior_unavailable",
+      `a checkpoint of unpublished work exists but is not restorable here: ` +
+        `${unavailable.map(describePrior).join("; ")}. The checkpoint store of that node ` +
+        "must be reachable (ARGUS_CHECKPOINT_DIR) or the work published from there; " +
+        "no empty workspace was created",
+    );
+  const unproven = elsewhere.filter((p) => p.checkpoint_state !== "nothing_to_save");
+  if (unproven.length)
+    return refuse(
+      "env_workspace_prior_unverified",
+      `earlier attempts on another instance may hold unpublished work: ` +
+        `${unproven.map(describePrior).join("; ")}. Absence is not proven; ` +
+        "publish or checkpoint that work from there, or retry on that instance. " +
+        "No empty workspace was created",
+    );
+  return null;
 }
 
 const fail = (reason: WorkspaceFailureReason, error: string): WorkspaceResult => ({

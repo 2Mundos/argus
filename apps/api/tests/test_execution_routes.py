@@ -1537,6 +1537,83 @@ async def test_waiving_the_no_reviewer_decision_succeeds_the_parent(db, fleet):
     assert row["state"] == "succeeded" and row["block_reason"] is None
 
 
+async def exhausted_rounds_parent(db, fleet):
+    """An in_review parent whose newest review requested changes at max_rounds."""
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+    from argus_core.tasks import TaskResult
+
+    await review_policy(db, [CODEX_ALT])
+    await review_setting(db, max_rounds=1)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child = await spawn(db, parent.id)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET deliverable = 'pr_merged' WHERE id = ?", (parent.id,)
+        )
+        await record_execution(tx, child, 0, "gpt-5.5", "openai", "codex")
+        await tx.conn.execute(
+            "UPDATE tasks SET state = 'succeeded', result = ? WHERE id = ?",
+            (
+                json.dumps({"summary": "x", "data": {"verdict": "request_changes"}}),
+                child,
+            ),
+        )
+        await review.on_review_child_complete(
+            tx,
+            await tasks.task_row(tx.conn, child),
+            TaskResult(summary="x", data={"verdict": "request_changes"}),
+            setting=IndependentReviewSetting(mode="different_model", max_rounds=1),
+            policy={},
+            actor="system",
+        )
+    return parent, child
+
+
+async def test_exhausted_rounds_deviation_waives_with_audit(db, fleet):
+    from argus_api.errors import ConflictError
+
+    parent, child = await exhausted_rounds_parent(db, fleet)
+    gate, decision = await manual_gate(db, parent.id)
+    assert gate == "rounds_exhausted"
+    assert decision.payload["child_id"] == child
+    with pytest.raises(ConflictError) as refused:
+        await answer(db, decision.id, "accept", "ok", forge_read("merged"))
+    assert refused.value.code == "independent_review_required"
+    await answer(
+        db,
+        decision.id,
+        "accept_with_deviation",
+        "owner merged; follow-up",
+        forge_read("merged"),
+    )
+    row, _ = await state(db, parent.id)
+    assert row["state"] == "succeeded"
+    assert json.loads(row["review_disposition"])["outcome"] == "accepted_with_deviation"
+    [waived] = await parent_events(db, parent.id, "review.independent_waived")
+    assert waived["decision_id"] == decision.id
+    assert waived["notes"] == "owner merged; follow-up"
+    assert waived["child_id"] == child
+
+
+async def test_payloadless_exhausted_decision_is_recognised(db, fleet):
+    parent, child = await exhausted_rounds_parent(db, fleet)
+    [decision] = await open_decisions(db, parent.id)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE decisions SET payload = NULL WHERE id = ?", (decision.id,)
+        )
+    await answer(
+        db,
+        decision.id,
+        "accept_with_deviation",
+        "legacy decision",
+        forge_read("merged"),
+    )
+    [waived] = await parent_events(db, parent.id, "review.independent_waived")
+    assert waived["child_id"] == child
+
+
 async def test_backfill_repairs_only_orphaned_in_review_tasks(db, fleet):
     from argus_api.tasks import independent_review as review
 

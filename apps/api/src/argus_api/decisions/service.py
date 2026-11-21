@@ -394,6 +394,20 @@ async def _apply_answer(
                 REVIEWER_FAILED_GATE,
                 GATE_DISABLED_GATE,
             )
+            if effect is Effect.REVIEW_ACCEPT_DEVIATION:
+                unresolved = await independent_review.exhausted_child_of(
+                    tx.conn, decision
+                )
+                if unresolved is not None:
+                    manual_fallback = True
+                    await independent_review.waive_exhausted(
+                        tx,
+                        task_id,
+                        caller.actor,
+                        decision_id=decision.id,
+                        notes=body.text,
+                        child_id=unresolved,
+                    )
             await tasks.review(
                 tx,
                 task_id,

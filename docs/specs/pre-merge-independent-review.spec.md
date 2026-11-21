@@ -85,6 +85,14 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   Current-attempt `result.data`, current-attempt `progress_data`, and live forge
   reads override older attempt artifacts so retry rounds always inspect the new
   head.
+- When independent review exhausts `max_rounds` with the newest review still
+  requesting changes, the human review decision carries payload
+  `{"gate": "rounds_exhausted", "child_id", "rounds"}` (decisions opened before the
+  payload existed are matched by their `review.independent_escalated` event).
+  `accept_with_deviation` on it needs text, waives the independent-review check and
+  records `review.independent_waived` (`decision_id`, `notes`, unresolved `child_id`).
+  Plain `accept` still requires an independent approval at the exact head; `reject`
+  sends the task back for rework. No other decision kind gains this waiver.
 
 ## 3.3 Pre-merge gate and merge authorization
 
@@ -216,6 +224,28 @@ sending the parent back for a full attempt.
   (`_child_already_processed`) and the spawn is idempotent per `(pr, head)`.
 - A head change during review or merge is handled as before: the approval is void
   (`head_mismatch`) and the merge fence (3.3) refuses any other head.
+
+## 3.8 Review rounds on the dashboard
+
+Each review round stays a `code_review` child task; the board does not show them. The
+dashboard board asks `GET /api/tasks` with `hide_review_children=true`, which the server
+applies before paging (so totals and cursors stay correct) by leaving out `code_review`
+tasks that have a `parent_id`. A parent with rounds then carries `review_badge
+{round, verdict, state}` for its newest round, shown on its card (for example `review 3 ·
+changes requested`). The flag is off by default, so the MCP `list_tasks` and other callers
+still see review children; a review child without a parent stays on the board, and the
+inbox and `q` search never hide review children.
+
+`GET /api/tasks/{id}/reviews` lists a task's rounds, oldest first (round 1), read-only and
+scoped like the task: child id, state, verdict (`approve`, `request_changes`, `void`, or
+null when the child ended without one), reviewed `head_sha`, findings (priority, file,
+lines, description) with counts by priority, reviewer provider and model, report artifact
+ids, `created_at` and `finished_at` (the child's last update once it has ended). It does
+not change how reviewers are spawned, picked, counted or completed.
+
+Task detail shows a Reviews section with one tab per round, the newest selected, each
+with its verdict, reviewed head, findings, a link to the child task and its report
+artifacts. A `code_review` task's own page still opens by URL and links back to its parent.
 
 # 4. Open Questions
 

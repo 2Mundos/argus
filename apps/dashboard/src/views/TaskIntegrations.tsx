@@ -94,7 +94,7 @@ function Choices({
 }
 
 const HELP =
-  "Kubernetes works on Claude-harness (anthropic, local, custom) and Codex (openai) engines; MCP on Claude-harness engines only." +
+  "Kubernetes works on Claude-harness (anthropic, local, custom) and Codex (openai) engines; MCP on those and Codex too, as Streamable HTTP only (a legacy HTTP+SSE server is refused for Codex)." +
   " Each attempt gets an ephemeral kubeconfig pinned to each namespace, and a" +
   " broker URL per MCP server that passes only the listed tools; the session never sees a token.";
 

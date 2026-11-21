@@ -152,6 +152,8 @@ export async function newestTasks(
     project?: string;
     /** Literal text search over title and spec, applied by the server on every page. */
     q?: string;
+    /** Leave out `code_review` children (the server also badges their parents). */
+    hideReviewChildren?: boolean;
     onPage?: (page: { items: TaskSummary[]; total: number }) => void;
   },
 ): Promise<{ items: TaskSummary[]; total: number }> {
@@ -169,6 +171,7 @@ export async function newestTasks(
             state: opts?.states,
             q: opts?.q,
             project: opts?.project,
+            hide_review_children: opts?.hideReviewChildren || undefined,
           },
         },
         signal: opts?.signal,
@@ -216,13 +219,17 @@ export async function boardTasks(
     onPage?: (board: TaskBoard) => void;
   },
 ): Promise<TaskBoard> {
+  // An empty query is no query: the board stays hidden-review and the full split applies.
+  const q = opts?.q || undefined;
   // A state or text filter is one chain; the active/ended split is for the full board.
-  if (opts?.states?.length || opts?.q !== undefined) {
+  if (opts && (opts.states?.length || q !== undefined)) {
     const found = await newestTasks(5, archived, {
       signal: opts.signal,
       states: opts.states?.length ? opts.states : undefined,
       project: opts.project,
-      q: opts.q,
+      q,
+      // Search stays literal: it still finds review children.
+      hideReviewChildren: q === undefined,
       onPage: (page) => opts.onPage?.({ ...page, loading: false }),
     });
     return { ...found, loading: false };
@@ -240,6 +247,7 @@ export async function boardTasks(
       signal: opts?.signal,
       states,
       project: opts?.project,
+      hideReviewChildren: true,
       onPage: (page) => {
         keep(page);
         if (active) opts?.onPage?.(merged());

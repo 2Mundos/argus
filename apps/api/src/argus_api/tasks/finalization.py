@@ -7,6 +7,7 @@ from typing import Literal
 
 import aiosqlite
 from argus_core.agents import LOST_AFTER_S
+from argus_core.tasks import PriorWorkspace
 from pydantic import BaseModel, Field
 
 from argus_api.db import Tx, ts
@@ -65,6 +66,9 @@ _CHECKPOINT_STATUS: dict[str | None, Literal["available", "unavailable"]] = {
 }
 
 
+_REPORTED_STATES = frozenset({"running", "saved", "nothing_to_save", "failed"})
+
+
 def _owner_node_id(runtime: str | None) -> str | None:
     """The `node_id` in an agent's self-reported runtime JSON, or None."""
     if not runtime:
@@ -106,6 +110,40 @@ def workspace_facts(row: aiosqlite.Row | None, now: datetime) -> WorkspaceFacts 
         ),
         checkpoint=_CHECKPOINT_STATUS.get(row["checkpoint_state"], "unknown"),
     )
+
+
+async def prior_workspaces(
+    conn: aiosqlite.Connection, task_id: str, attempt: int, now: datetime
+) -> list[PriorWorkspace]:
+    """The workspace owner and checkpoint step of every earlier claim row of
+    `task_id` across all retry generations, oldest first (ordered by
+    `task_attempts.id`, excluding the current claim's row). The claim hands it
+    to the channel, so a worker on another instance knows where earlier work
+    may live."""
+    async with conn.execute(
+        "SELECT t.*, a.state AS owner_state,"
+        " a.last_heartbeat_at AS owner_last_heartbeat_at, a.runtime AS owner_runtime"
+        " FROM task_attempts t LEFT JOIN agents a ON a.id = t.agent_id"
+        " WHERE t.task_id = ? AND t.id < ("
+        "  SELECT max(id) FROM task_attempts WHERE task_id = ? AND attempt = ?)"
+        " ORDER BY t.id",
+        (task_id, task_id, attempt),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [
+        PriorWorkspace(
+            attempt=row["attempt"],
+            owner_agent_id=row["agent_id"],
+            owner_node_id=_owner_node_id(row["owner_runtime"]),
+            owner_status=_owner_status(
+                row["owner_state"], row["owner_last_heartbeat_at"], now
+            ),
+            checkpoint_state=row["checkpoint_state"]
+            if row["checkpoint_state"] in _REPORTED_STATES
+            else None,
+        )
+        for row in rows
+    ]
 
 
 async def record_claim_end(tx: Tx, task_id: str, attempt: int, action: str) -> None:

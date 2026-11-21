@@ -44,6 +44,10 @@ REVIEW_FAILED_OPTIONS = (RETRY_REVIEWER, APPROVE_WITHOUT_REVIEW, "cancel")
 NO_REVIEWER_GATE = "no_reviewer"
 REVIEWER_FAILED_GATE = "reviewer_failed"
 GATE_DISABLED_GATE = "gate_disabled"
+# The review decision opened when independent review exhausted `max_rounds` with the
+# newest review still requesting changes. Its payload is
+# `{"gate": "rounds_exhausted", "child_id": ..., "rounds": N}`.
+ROUNDS_EXHAUSTED_GATE = "rounds_exhausted"
 
 
 class DecisionState(StrEnum):

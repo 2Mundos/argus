@@ -3,9 +3,12 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { download } from "../api";
 import { TaskDetail } from "./TaskDetail";
+import { Tasks } from "./Tasks";
 
 const mock = vi.hoisted(() => ({
   task: {} as Record<string, unknown>,
+  tasksById: {} as Record<string, Record<string, unknown>>,
+  boardItems: [] as Record<string, unknown>[],
   trace: {} as Record<string, unknown>,
   artifacts: [] as Record<string, unknown>[],
   events: [] as Record<string, unknown>[],
@@ -13,9 +16,20 @@ const mock = vi.hoisted(() => ({
   paths: [] as string[],
   prereq: {} as Record<string, unknown>,
   prereqFail: [] as Error[],
+  reviews: { rounds: [] } as Record<string, unknown>,
 }));
 vi.mock("../api", () => ({
-  api: { GET: (path: string) => path },
+  api: {
+    GET: (path: string, opts?: { params?: { path?: { task_id?: string } } }) =>
+      opts?.params?.path?.task_id ? path.replace("{task_id}", opts.params.path.task_id) : path,
+  },
+  ENDED_STATES: ["succeeded", "failed", "cancelled"],
+  boardTasks: async () => ({
+    items: mock.boardItems,
+    total: mock.boardItems.length,
+    loading: false,
+  }),
+  searchErrorMessage: (err: Error) => ({ text: err.message }),
   call: async (path: string) => {
     mock.paths.push(path);
     if (path.includes("prerequisites")) {
@@ -23,36 +37,40 @@ vi.mock("../api", () => ({
       if (failure) throw failure;
       return mock.prereq;
     }
+    if (path.endsWith("/reviews")) return mock.reviews;
     if (path.includes("delivery") && mock.deliveryGate) await mock.deliveryGate;
-    return path.includes("projects/stats")
-      ? []
-      : path.includes("/models")
-        ? mock.trace
-        : path.includes("delivery")
-          ? null
-          : path.includes("artifacts")
-            ? mock.artifacts
-            : path.includes("events")
-              ? mock.events
-              : path.includes("/attempts")
-                ? []
-                : mock.task;
+    if (path.includes("projects/stats")) return [];
+    if (path.includes("/models")) return mock.trace;
+    if (path.includes("delivery") || path.endsWith("/route")) return null;
+    if (path.includes("artifacts")) return mock.artifacts;
+    if (path.includes("events")) return mock.events;
+    if (path.includes("/attempts")) return [];
+    const taskId = path.match(/^\/api\/tasks\/([^/]+)$/)?.[1];
+    if (taskId && taskId in mock.tasksById) return mock.tasksById[taskId];
+    return mock.task;
   },
   download: vi.fn(),
 }));
 vi.mock("../live", async () => {
   const React = await import("react");
   return {
-    useLiveData: (load: () => Promise<unknown>) => {
+    reportPage: () => {},
+    useLiveData: (load: () => Promise<unknown>, deps: readonly unknown[] = []) => {
       const [data, setData] = React.useState<unknown>();
       React.useEffect(() => {
-        load().then(setData);
-      }, []);
+        let cancelled = false;
+        load().then((value) => {
+          if (!cancelled) setData(value);
+        });
+        return () => {
+          cancelled = true;
+        };
+      }, deps);
       return { data, reload: () => {} };
     },
   };
 });
-vi.mock("./Activity", () => ({ Activity: () => null }));
+vi.mock("./Activity", () => ({ Activity: () => null, useNow: () => 0 }));
 vi.mock("../WorkerChip", () => ({
   WorkerChip: ({ agentId }: { agentId: string }) => (
     <span data-testid="worker-chip">{agentId}</span>
@@ -108,12 +126,16 @@ const base = {
 
 afterEach(() => {
   cleanup();
+  mock.tasksById = {};
+  mock.boardItems = [];
   mock.artifacts = [];
   mock.events = [];
   mock.deliveryGate = null;
   mock.paths = [];
   mock.prereq = {};
   mock.prereqFail = [];
+  mock.reviews = { rounds: [] };
+  window.location.hash = "";
 });
 describe("TaskDetail loading", () => {
   it("paints the task before the forge delivery read settles", async () => {
@@ -648,5 +670,98 @@ describe("TaskDetail merge and review decisions", () => {
     const line = await text();
     expect(line).toContain("Review: required by forge review policy");
     expect(line).toContain("PR gate at aaaaaaa: review required, 0 approvals");
+  });
+});
+
+describe("TaskDetail review rounds", () => {
+  const round = (n: number, verdict: string, head: string, findings: unknown[]) => ({
+    child_id: `child-${n}`,
+    round: n,
+    state: "succeeded",
+    verdict,
+    head_sha: head,
+    findings,
+    findings_by_priority: {},
+    reviewer_provider: "openai",
+    reviewer_model: `gpt-${n}`,
+    artifact_ids: [`art-${n}`],
+    created_at: "2026-10-20T12:00:00Z",
+    finished_at: "2026-10-20T12:05:00Z",
+  });
+
+  it("shows one tab per round, newest selected, and switches on click", async () => {
+    mock.task = base;
+    mock.reviews = {
+      rounds: [
+        round(1, "request_changes", "a".repeat(40), [
+          { priority: "P1", file: "a.py", lines: "7", description: "leak" },
+        ]),
+        round(2, "approve", "b".repeat(40), []),
+      ],
+    };
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      "Round 1 · changes requested",
+      "Round 2 · approved",
+    ]);
+    expect(tabs[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("bbbbbbbbbbbb")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Review task/ }).getAttribute("href")).toBe(
+      "#tasks/child-2",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /report/ }));
+    expect(download).toHaveBeenCalledWith("/api/artifacts/art-2/content", "art-2");
+    fireEvent.click(tabs[0] as HTMLElement);
+    expect(screen.getByText("leak")).toBeTruthy();
+    expect(screen.getByText("a.py:7")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Review task/ }).getAttribute("href")).toBe(
+      "#tasks/child-1",
+    );
+  });
+
+  it("links a review child back to its parent and shows no tabs on it", async () => {
+    mock.task = { ...base, kind: "code_review", parent_id: "parent-1" };
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    const link = await screen.findByRole("link", { name: "parent task" });
+    expect(link.getAttribute("href")).toBe("#tasks/parent-1");
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("navigates between parent and review round child through hash links in Tasks", async () => {
+    const parent = {
+      ...base,
+      id: "parent-1",
+      title: "Parent task title",
+      state: "in_review",
+      priority: 0,
+    };
+    const child = {
+      ...base,
+      id: "child-1",
+      title: "Review round child title",
+      kind: "code_review",
+      parent_id: "parent-1",
+      priority: 0,
+    };
+    mock.trace = { executions: [], timeline: [] };
+    mock.boardItems = [parent];
+    mock.tasksById = { "parent-1": parent, "child-1": child };
+    mock.reviews = {
+      rounds: [round(1, "approve", "a".repeat(40), [])],
+    };
+    render(<Tasks />);
+    fireEvent.click(await screen.findByRole("button", { name: /Parent task title/ }));
+    const reviewLink = await screen.findByRole("link", { name: /Review task/ });
+    expect(reviewLink.getAttribute("href")).toBe("#tasks/child-1");
+
+    fireEvent.click(reviewLink);
+    expect(await screen.findByRole("heading", { name: /Review round child title/ })).toBeTruthy();
+    const parentLink = screen.getByRole("link", { name: "parent task" });
+    expect(parentLink.getAttribute("href")).toBe("#tasks/parent-1");
+
+    fireEvent.click(parentLink);
+    expect(await screen.findByRole("heading", { name: /Parent task title/ })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: /Review task/ })).toBeTruthy();
   });
 });

@@ -215,6 +215,8 @@ WORKSPACE_REASONS = [
     "env_workspace_branch_mismatch",
     "env_workspace_unpreserved_commits",
     "env_workspace_limit",
+    "env_workspace_prior_unverified",
+    "env_workspace_prior_unavailable",
 ]
 
 
@@ -376,9 +378,14 @@ def test_list_columns_skip_task_bodies() -> None:
 
 
 def test_list_columns_cover_summary_fields() -> None:
-    computed = {"version", "models", "age_s", "truncated", "matches"} | set(
-        Refs.model_fields
-    )
+    computed = {
+        "version",
+        "models",
+        "age_s",
+        "truncated",
+        "matches",
+        "review_badge",
+    } | set(Refs.model_fields)
     assert set(TaskSummary.model_fields) - computed <= set(LIST_COLUMNS)
 
 

@@ -24,7 +24,9 @@ from argus_core.decisions import (
     REVIEW_FAILED_OPTIONS,
     REVIEW_OPTIONS,
     REVIEWER_FAILED_GATE,
+    ROUNDS_EXHAUSTED_GATE,
     Audience,
+    Decision,
     DecisionKind,
 )
 from argus_core.delivery import FailedReviewer
@@ -1960,6 +1962,11 @@ async def on_review_child_complete(
                 options=list(REVIEW_OPTIONS),
                 audience=Audience.HUMAN,
                 requested_by=actor,
+                payload={
+                    "gate": ROUNDS_EXHAUSTED_GATE,
+                    "child_id": child["id"],
+                    "rounds": rounds,
+                },
             )
             await record(
                 tx,
@@ -2297,6 +2304,59 @@ async def approve_without_review(
         waive_independent_review=True,
     )
     await clear_gate_block(tx, parent_id)
+
+
+async def exhausted_child_of(
+    conn: aiosqlite.Connection, decision: Decision
+) -> str | None:
+    """The unresolved review child when `decision` was opened because independent
+    review exhausted its rounds, else None. Decisions opened before the payload
+    existed are matched to the `review.independent_escalated` event recorded in
+    the same transaction."""
+    if decision.kind is not DecisionKind.REVIEW or decision.subject_type != "task":
+        return None
+    payload = decision.payload or {}
+    if payload.get("gate") == ROUNDS_EXHAUSTED_GATE:
+        child_id = payload.get("child_id")
+        return child_id if isinstance(child_id, str) else ""
+    if payload:
+        return None
+    async with conn.execute(
+        "SELECT data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = 'review.independent_escalated' AND at = ? ORDER BY id DESC",
+        (decision.subject_id, ts(decision.created_at)),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    child_id = json.loads(row["data"]).get("child_id")
+    return child_id if isinstance(child_id, str) else ""
+
+
+async def waive_exhausted(
+    tx: Tx,
+    parent_id: str,
+    actor: str,
+    *,
+    decision_id: str,
+    notes: str,
+    child_id: str,
+) -> None:
+    """`accept_with_deviation` on an exhausted-rounds decision: the independent
+    review requirement is waived and the waiver is audited."""
+    await record(
+        tx,
+        actor,
+        "task",
+        parent_id,
+        "review.independent_waived",
+        {
+            "decision_id": decision_id,
+            "notes": notes,
+            "child_id": child_id,
+            "reason": "rounds_exhausted",
+        },
+    )
 
 
 async def on_gate_changed(tx: Tx, actor: str) -> None:

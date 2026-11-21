@@ -781,6 +781,43 @@ describe("legacy HTTP+SSE", () => {
   });
 });
 
+describe("transport limits (Codex takes Streamable HTTP only)", () => {
+  const httpOnly = { transports: ["http"] as McpRoute["transports"] };
+
+  it("grants a Streamable HTTP server and refuses a legacy HTTP+SSE one without a grant", async () => {
+    const b = broker();
+    const ok = await granted(b, route(httpOnly));
+    expect(ok.type).toBe("http");
+    const got = await open(b, route({ ...httpOnly, port: ports.legacy, path: "/sse" }));
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_unsupported" });
+    // The refusal revoked the task's earlier grant too: nothing stays reachable.
+    expect((await request(ok.url, "POST", rpc(1, "tools/list"))).status).not.toBe(200);
+    // And the SSE server never saw a tool call or a session beyond detection.
+    expect(seen.some((x) => x.body?.method === "tools/call")).toBe(false);
+  });
+
+  it("is atomic across a mixed selection: one legacy server leaves no grant", async () => {
+    const b = broker();
+    const modern = route({ ...httpOnly, integration_id: "mcp-0" });
+    const legacy = route({
+      ...httpOnly,
+      integration_id: "mcp-1",
+      name: "old",
+      port: ports.legacy,
+      path: "/sse",
+    });
+    const got = await b.open({ taskId: TASK, attempt: 1 }, [modern, legacy]);
+    exposed.push(JSON.stringify(got));
+    expect(got).toMatchObject({ ok: false, reason: "env_integration_unsupported" });
+    expect(JSON.stringify(got)).not.toContain("/mcp/");
+  });
+
+  it("leaves other harnesses unrestricted: no limit still grants legacy HTTP+SSE", async () => {
+    const s = await granted(broker(), route({ port: ports.legacy, path: "/sse" }));
+    expect(s.type).toBe("sse");
+  });
+});
+
 describe("oauthChallenge", () => {
   it.each([
     [undefined, false],
