@@ -114,6 +114,7 @@ def test_tools_are_listed_by_scope(client: TestClient) -> None:
         "set_project_repository",
         "rebuild_project_runtime",
         "archive_agents",
+        "attest_checkpoint_nothing_to_save",
         "update_local_account",
         "test_local_account",
         "mark_account_available",
@@ -1133,3 +1134,60 @@ def test_retry_task_overrides_match_rest(client: TestClient) -> None:
     assert (
         tool(client, orchestrator, "get_task", task_id=ids[0])["priority"] == 5
     )  # nothing changed
+
+
+def test_mcp_attest_checkpoint_nothing_to_save_is_admin_only_and_audited(
+    client: TestClient,
+) -> None:
+    worker = register(client)
+    orchestrator = register(client, "orchestrator")
+    assert "attest_checkpoint_nothing_to_save" in listed(client, ADMIN_TOKEN)
+    assert "attest_checkpoint_nothing_to_save" not in listed(client, worker)
+    assert "attest_checkpoint_nothing_to_save" not in listed(client, orchestrator)
+
+    created = tool(client, ADMIN_TOKEN, "create_task", title="legacy", project="demo")
+    claimed = tool(client, worker, "claim_task", wait_s=0)["task"]
+    assert claimed["id"] == created["id"]
+    tool(client, ADMIN_TOKEN, "release_task", task_id=claimed["id"], reason="requeue")
+
+    # Worker and non-admin orchestrator tokens cannot invoke the admin-only tool.
+    for token in (worker, orchestrator):
+        denied = tool(
+            client,
+            token,
+            "attest_checkpoint_nothing_to_save",
+            task_id=claimed["id"],
+            attempt=1,
+            reason="unauthorized",
+        )
+        assert "requires scope" in denied["error"]
+    tool(client, worker, "leave")
+
+    # Admin token succeeds and writes the audit event.
+    reason = "instance terminated after clean PR push"
+    res = tool(
+        client,
+        ADMIN_TOKEN,
+        "attest_checkpoint_nothing_to_save",
+        task_id=claimed["id"],
+        attempt=1,
+        reason=reason,
+    )
+    assert res["task_id"] == claimed["id"]
+    assert res["attempt"] == 1
+    assert res["checkpoint_state"] == "nothing_to_save"
+    assert res["actor"] == "admin:preset"
+    assert res["reason"] == reason
+
+    ev = [
+        e
+        for e in client.get(
+            "/api/events",
+            params={"subject_id": claimed["id"]},
+            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+        ).json()
+        if e["kind"] == "task.checkpoint_attested"
+    ]
+    assert len(ev) == 1
+    assert ev[0]["actor"] == "admin:preset"
+    assert ev[0]["data"]["reason"] == reason

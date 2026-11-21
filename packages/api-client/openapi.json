@@ -4156,6 +4156,96 @@
         "title": "ChecklistReport",
         "type": "object"
       },
+      "CheckpointAttestation": {
+        "description": "Admin attestation that one ended attempt left no unpublished work.",
+        "properties": {
+          "owner_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Agent Id"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "CheckpointAttestation",
+        "type": "object"
+      },
+      "CheckpointAttestationResult": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "attempt_id": {
+            "title": "Attempt Id",
+            "type": "integer"
+          },
+          "attested_at": {
+            "format": "date-time",
+            "title": "Attested At",
+            "type": "string"
+          },
+          "checkpoint_state": {
+            "const": "nothing_to_save",
+            "title": "Checkpoint State",
+            "type": "string"
+          },
+          "owner_agent_id": {
+            "title": "Owner Agent Id",
+            "type": "string"
+          },
+          "owner_status": {
+            "enum": [
+              "live",
+              "stale",
+              "ended",
+              "unknown"
+            ],
+            "title": "Owner Status",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt",
+          "attempt_id",
+          "owner_agent_id",
+          "owner_status",
+          "checkpoint_state",
+          "attested_at",
+          "actor",
+          "reason"
+        ],
+        "title": "CheckpointAttestationResult",
+        "type": "object"
+      },
       "CheckpointFacts": {
         "properties": {
           "detail": {
@@ -39453,6 +39543,73 @@
           }
         ],
         "summary": "Report Checkpoint",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/attempts/{attempt}/checkpoint/attest": {
+      "post": {
+        "description": "Admin attestation that one ended attempt left no unpublished work when its\ncheckpoint step was never reported. Audited with actor and reason; refuses open\nclaims (409 `claim_open`), live owners (409 `owner_live`), and attempts that\nalready have a recorded checkpoint state (409 `checkpoint_already_recorded`).",
+        "operationId": "attest_checkpoint_nothing_to_save_api_tasks__task_id__attempts__attempt__checkpoint_attest_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attempt",
+            "required": true,
+            "schema": {
+              "title": "Attempt",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointAttestation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointAttestationResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Attest Checkpoint Nothing To Save",
         "tags": [
           "tasks"
         ]

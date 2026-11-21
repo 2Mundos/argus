@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-21
 ---
 
 # Task finalization
@@ -21,7 +21,8 @@ proof of preservation or delivery.
 In scope: the per-attempt record of when the claim ended and of the checkpoint
 step; the derived `finalization` on the single-task read (`GET /api/tasks/{id}`,
 MCP `get_task`, the dashboard task detail); the fenced worker report of the
-checkpoint step.
+checkpoint step; and the audited admin attestation of `nothing_to_save` for one
+ended attempt whose worker never reported one.
 
 # 2. Non-Goals
 
@@ -31,8 +32,10 @@ checkpoint step.
 - No new task state and no waiting for the follow-up: it is not a gate.
 - No delivery step and no workspace step (3.1).
 - No duration that the timestamps cannot support (3.4).
-- No operator command: a follow-up cannot be retried or cancelled from here.
-- No new service; two writes per follow-up, no event stream entry.
+- No retry or cancel of a follow-up from here (the admin attestation in 3.3.1
+  only recovers an ended attempt that never recorded a checkpoint state).
+- No new service; two writes per follow-up; an admin attestation writes one
+  audit event (`task.checkpoint_attested`).
 
 # 3. Decisions Made
 
@@ -47,10 +50,23 @@ channel's claim loop (`integrations/nanoclaw/argus.ts`):
   cancel). Argus changes the task state in that same call.
 - **Checkpoint** is the only follow-up step after the agent. The claim loop runs
   `runTask`, then in `finally` closes the session, relays input receipts and calls
-  `checkpointAfterAttempt`. It runs only when `ARGUS_CHECKPOINT_DIR` is set, the
-  task has `repository:write`, and Argus did not accept a completion. It is best
-  effort and never changes the outcome (checkpoint 3.3). Every other task, engine
-  or runtime has no checkpoint step; the channel is the only code that has one.
+  `checkpointAfterAttempt`. It runs after every prepared `repository:write`
+  attempt, including completed attempts and hosts without `ARGUS_CHECKPOINT_DIR`.
+  When `ARGUS_CHECKPOINT_DIR` is set and Argus did not accept a completion, it
+  saves a checkpoint (and supersedes covered checkpoints when clean with a forge
+  proof). When the attempt completed or no checkpoint store is configured, it
+  writes no checkpoint bundle and instead inspects the workspace read-only to
+  prove whether unpublished work exists: it reports `nothing_to_save` only when
+  the workspace passes identity and inert git config checks, holds no commits on
+  the task branch, detached HEAD or any other local ref missing from
+  remote-tracking refs, and has no staged, unstaged or untracked changes.
+  Otherwise it reports `failed` (`env_checkpoint_store_missing` when no store is
+  configured, `env_checkpoint_unpublished_work` when a completed attempt left
+  unpublished work, or `env_checkpoint_invalid` when the workspace cannot be
+  verified). Unprepared or workspace-less attempts report nothing, so a blocked
+  claim never emits a false `nothing_to_save`. The step is best effort and never
+  changes the outcome (checkpoint 3.3). Every other task, engine or runtime has
+  no checkpoint step; the channel is the only code that has one.
 - **Delivery** is not a step after exit. The agent pushes and opens the PR during
   execution; Argus only reads the forge on request, and merged is not accepted
   (delivery 2, 3.4). It has no start or end that Argus could time, so it is not
@@ -82,7 +98,7 @@ Columns on `task_attempts` (migration `0067`), all nullable:
 | `claim_ended_at`, `claim_end_action` | `tx.now` and the action (`complete`, `fail`, `block`, `expire`, `release`, `cancel`, ...) that took the task out of `claimed`, written where the claim ends |
 | `checkpoint_state` | `running`, `saved`, `nothing_to_save` or `failed`; null: nothing reported |
 | `checkpoint_started_at`, `checkpoint_ended_at` | `tx.now` of the report that set `running`, and of the terminal report |
-| `checkpoint_detail` | for `saved` the `checkpoint:` reference, for `failed` the `env_checkpoint_*` reason; at most 200 characters, never a path or credential |
+| `checkpoint_detail` | for `saved` the `checkpoint:` reference, for `failed` the `env_checkpoint_*` reason, for an admin attestation the actor and reason; at most 200 characters, never a path or credential |
 
 Rows from before the migration have none of these and read as no finalization.
 
@@ -102,6 +118,27 @@ The channel sends `running` before it saves and the outcome after.
   different one is 409 `checkpoint_closed`. Reports never move backwards.
 - A report for attempt N never reads or writes attempt N+1; a worker that lost the
   attempt to someone else gets 409.
+
+## 3.3.1 Admin attestation for legacy unreported attempts
+
+`POST /api/tasks/{id}/attempts/{attempt}/checkpoint/attest`, admin credentials
+only, body `{reason, owner_agent_id?}` (required non-blank `reason`, optional
+`owner_agent_id` to disambiguate across retry generations). Recovers a single
+ended attempt whose worker exited without recording a checkpoint state (for
+example, attempts completed before the channel proved `nothing_to_save` whose
+instance has since been replaced):
+
+- Refuses non-admin callers (403), blank reasons (422) and unknown tasks or
+  attempts (404).
+- Refuses while the claim is still open (409 `claim_open`), while the owner
+  agent is `live` (409 `owner_live`), or when any `checkpoint_state` is already
+  recorded (409 `checkpoint_already_recorded`).
+- Sets `checkpoint_state` to `nothing_to_save` on that single `task_attempts`
+  row (`checkpoint_started_at = checkpoint_ended_at = tx.now`,
+  `checkpoint_detail` recording actor and reason, truncated to 200 characters),
+  writes no `tasks` column, and appends a `task.checkpoint_attested` audit event
+  with actor, attempt, attempt id, owner agent id, owner status and reason in
+  the same transaction.
 
 ## 3.4 What the task read shows
 
@@ -143,20 +180,22 @@ sentence is shown for a null `finalization`, and none claims delivery.
 
 ## 3.6 Entry points and engines
 
-- REST: the report above (workers) and the read. MCP: `get_task` returns the
-  read unchanged; there is no write tool because a worker reports over REST. The
-  dashboard reads only.
+- REST: the worker report (`POST /api/tasks/{id}/attempts/{attempt}/checkpoint`),
+  the admin attestation (`POST /api/tasks/{id}/attempts/{attempt}/checkpoint/attest`),
+  and the single-task read. MCP: `get_task` returns the read unchanged;
+  `attest_checkpoint_nothing_to_save` (admin-only scope, hidden from workers and
+  non-admin agent tokens) forwards to the admin attestation route. The dashboard
+  reads only.
 - Engines: the step belongs to the NanoClaw channel, so Claude, Codex, Cursor,
   Copilot, custom and local tasks run through it get it equally; a runtime that
   does not use the channel reports nothing and shows `checkpoint: null`.
-- Way back: a report cannot be undone; a later attempt carries its own record.
+- Way back: a report or attestation cannot be undone; a later attempt carries its
+  own record.
 
 # 4. Open Questions
 
 - Should a failed or unknown checkpoint raise an inbox row, or is the task detail
   enough? Today it only informs.
-- Should the channel report the skipped reason (not configured, clean workspace)
-  so a null checkpoint can be told from a worker that died before starting?
 - Workspace cleanup and archive could join the record once they run per attempt.
 
 # 5. Constraints
@@ -170,20 +209,30 @@ sentence is shown for a null `finalization`, and none claims delivery.
 # 6. Implementation Consequences
 
 - `apps/api/src/argus_api/db/migrations/0067_task_finalization.sql`.
-- `apps/api/src/argus_api/tasks/finalization.py`: record, report and derive;
-  `_apply` records the claim end; `views.read_task` adds `finalization`; the route
-  in `tasks/routes.py`; models in `packages/core`; `make openapi`.
-- `integrations/nanoclaw/argus.ts`: `checkpointAfterAttempt` reports `running` and
-  the outcome (best effort; a failed report is logged and changes nothing).
+- `apps/api/src/argus_api/tasks/finalization.py`: record, report, admin
+  attestation and derive; `_apply` records the claim end; `views.read_task` adds
+  `finalization`; routes in `tasks/routes.py`; MCP tool
+  `attest_checkpoint_nothing_to_save` in `mcp_server.py`; models in
+  `packages/core`; `make openapi`.
+- `integrations/nanoclaw/argus-workspace.ts` and `argus.ts`:
+  `checkWorkspaceClean` proves a prepared workspace holds no unpublished commits
+  or uncommitted changes; `checkpointAfterAttempt` reports `running` and the
+  outcome after every prepared `repository:write` attempt, including completed
+  attempts and hosts without a checkpoint store (best effort; a failed report is
+  logged and changes nothing).
 - Dashboard Activity panel and its test.
 - Tests: `apps/api/tests/test_task_finalization.py` (fencing, ordering,
-  idempotence, derivation, durations, migration); the channel test; the dashboard
-  test.
+  idempotence, admin attestation and audit, derivation, durations, migration);
+  `apps/api/tests/test_mcp.py` (admin MCP attestation and scope); channel tests
+  in `argus-workspace.test.ts` and `argus-accounts.test.ts`; the dashboard test.
 
 ## Verification boundary
 
-- Verified by tests: transitions and fencing of the report, stale `running`
-  derived `unknown`, durations only where both timestamps exist, claim end
-  recorded for every ending action, REST read, channel reports, dashboard copy.
+- Verified by tests: transitions and fencing of the report, admin attestation
+  and its audit event and refusals (open claim, live owner, recorded state,
+  non-admin caller), MCP admin tool scoping, stale `running` derived `unknown`,
+  durations only where both timestamps exist, claim end recorded for every
+  ending action, REST read, channel reports with and without a checkpoint store
+  and on completed attempts, dashboard copy.
 - Not verified: a real worker dying mid-checkpoint on a live node; a retry racing
   a running checkpoint across two live workers.

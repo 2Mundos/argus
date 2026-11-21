@@ -1699,6 +1699,25 @@ async def cancel_task(ctx: Context, task_id: str) -> dict:
     return await _call(ctx, "POST", f"/tasks/{task_id}/cancel")
 
 
+@tool(ADMINS)
+async def attest_checkpoint_nothing_to_save(
+    ctx: Context,
+    task_id: str,
+    attempt: int,
+    reason: str,
+    owner_agent_id: str | None = None,
+) -> dict:
+    """Attest `nothing_to_save` for one ended attempt whose checkpoint step was never
+    reported (admin only). Audited with actor and reason; refuses open claims, live
+    owners, and attempts with a recorded checkpoint state."""
+    body: dict[str, Any] = {"reason": reason}
+    if owner_agent_id is not None:
+        body["owner_agent_id"] = owner_agent_id
+    return await _call(
+        ctx, "POST", f"/tasks/{task_id}/attempts/{attempt}/checkpoint/attest", json=body
+    )
+
+
 @tool(MANAGERS)
 async def list_agents(ctx: Context, state: str | None = None) -> list[dict]:
     """List agents (active, draining, gone, lost) and how many tasks each holds."""
