@@ -1554,6 +1554,121 @@ describe("deliver", () => {
     assert.match(error.action, /git rebase --abort/);
   });
 
+  describe("a reviewer's fix (input.fix)", () => {
+    /** origin holds the PR branch `feature` at `prHead`; the clone adds one fix commit on top. */
+    function fixSetup() {
+      const s = setup();
+      writeFileSync(join(s.work, "impl.txt"), "impl\n");
+      git(["add", "."], s.work);
+      git(["commit", "-qm", "impl"], s.work);
+      git(["push", "-q", "origin", "feature"], s.work);
+      const prHead = git(["rev-parse", "HEAD"], s.work);
+      writeFileSync(join(s.work, "fix.txt"), "fix\n");
+      git(["add", "."], s.work);
+      git(["commit", "-qm", "fix"], s.work);
+      return { ...s, prHead };
+    }
+    const scope = (prHead, over = {}) => ({
+      ARGUS_FIX_PR: "7",
+      ARGUS_FIX_BASE_SHA: prHead,
+      ...over,
+    });
+    const forge7 = (live, ref = "feature", created = []) => ({
+      ...forgeRoutes(created),
+      "GET /pulls/7": {
+        number: 7,
+        state: "open",
+        head: { ref, sha: live },
+        html_url: `${REPO}/pulls/7`,
+      },
+    });
+    const refused = async (s, code, routes, env) => {
+      const before = git(["for-each-ref"], s.origin);
+      const g = gateFixture();
+      const r = await run(["deliver"], {
+        routes,
+        cwd: s.work,
+        ...g.options,
+        env: { ...g.options.env, ...env },
+      });
+      assert.equal(r.code, EXIT.error);
+      assert.equal(JSON.parse(r.err).error.code, code);
+      assert.equal(git(["for-each-ref"], s.origin), before);
+      assert.equal(g.lines().filter((l) => l.startsWith("push")).length, 0);
+    };
+
+    it("fast-forwards the PR branch without rebase, force or PR edits", async () => {
+      const s = fixSetup();
+      advance(s.seed, s.origin, "a.txt", "base moved\n"); // a rebase would be needed in normal deliver
+      const head = git(["rev-parse", "HEAD"], s.work);
+      const created = [];
+      const g = gateFixture();
+      const r = await run(["deliver"], {
+        routes: forge7(s.prHead, "feature", created),
+        cwd: s.work,
+        ...g.options,
+        env: { ...g.options.env, ...scope(s.prHead) },
+      });
+      assert.equal(r.code, EXIT.ok, r.err);
+      assert.equal(r.out.fix, true);
+      assert.equal(r.out.rebased, false);
+      assert.equal(r.out.head_sha, head);
+      assert.equal(r.out.base_head_sha, s.prHead);
+      assert.equal(git(["rev-parse", "refs/heads/feature"], s.origin), head);
+      assert.equal(git(["rev-parse", "HEAD"], s.work), head);
+      assert.deepEqual(created, []);
+      assert.deepEqual(
+        g.lines().filter((l) => l.startsWith("push")),
+        ["push --quiet origin HEAD:refs/heads/feature"],
+      );
+    });
+
+    it("refuses another branch than the PR's own", async () => {
+      const s = fixSetup();
+      await refused(s, "fix_branch_mismatch", forge7(s.prHead, "other"), scope(s.prHead));
+    });
+
+    it("refuses when HEAD does not contain the live PR head (never rebases or forces)", async () => {
+      const s = fixSetup();
+      const other = join(scratch, `x${repoCount++}`);
+      git(["clone", "-q", s.origin, other]);
+      identity(other);
+      git(["checkout", "-q", "feature"], other);
+      writeFileSync(join(other, "late.txt"), "late\n");
+      git(["add", "."], other);
+      git(["commit", "-qm", "late"], other);
+      git(["push", "-q", "origin", "feature"], other);
+      const live = git(["rev-parse", "HEAD"], other);
+      await refused(s, "fix_not_fast_forward", forge7(live), scope(s.prHead));
+    });
+
+    it("refuses when the PR moved off the reviewed head", async () => {
+      const s = fixSetup();
+      const other = join(scratch, `x${repoCount++}`);
+      git(["clone", "-q", s.origin, other]);
+      identity(other);
+      git(["checkout", "-q", "-B", "feature", "origin/main"], other);
+      writeFileSync(join(other, "z.txt"), "z\n");
+      git(["add", "."], other);
+      git(["commit", "-qm", "rewrite"], other);
+      git(["push", "-q", "--force", "origin", "feature"], other);
+      const live = git(["rev-parse", "HEAD"], other);
+      await refused(s, "fix_base_moved", forge7(live), scope(s.prHead));
+    });
+
+    it("refuses with no new commit, and a malformed or partial scope", async () => {
+      const s = fixSetup();
+      git(["reset", "-q", "--hard", s.prHead], s.work);
+      await refused(s, "fix_no_commit", forge7(s.prHead), scope(s.prHead));
+      const t = fixSetup();
+      await refused(t, "fix_scope_invalid", forge7(t.prHead), {
+        ARGUS_FIX_PR: "invalid",
+        ARGUS_FIX_BASE_SHA: "invalid",
+      });
+      await refused(t, "fix_scope_invalid", forge7(t.prHead), { ARGUS_FIX_PR: "7" });
+    });
+  });
+
   it("a rebase conflict result carries an action", async () => {
     const { origin, seed, work } = setup();
     writeFileSync(join(work, "a.txt"), "mine\n");

@@ -27,9 +27,9 @@ across head changes or replacement PRs.
 
 # 2. Non-Goals
 
-- No new external service, database table, or schema migration; all state stays in
-  existing SQLite tables (`tasks`, `events`, `decisions`, `settings`,
-  `model_executions`).
+- No new external service or database table; all state stays in existing SQLite
+  tables (`tasks`, `events`, `decisions`, `settings`, `model_executions`). The only
+  migration updates the `code_review` kind's input and result schemas (3.7).
 - No change to tasks when `review.independent.mode` is `off` or for non-code
   tasks.
 - No bypass or weakening of existing merge grants (`delivery.auto_merge`,
@@ -181,6 +181,52 @@ still open it opens one orchestrator review decision (merge it and accept, or re
 try again). A rejected review, failed CI or a new approval cycle starts from the start.
 Review-disabled and non-code tasks never take this path.
 
+## 3.7 Reviewer fixes its findings
+
+An independent reviewer that finds actionable problems may fix them itself instead of
+sending the parent back for a full attempt.
+
+- The `code_review` child is created with `repository:write` and input
+  `fix: {pr, base_head_sha, force_push: false}`. Its deliverable is a response with no
+  merge grant, so it can push to the PR's own branch and nothing else: one normal
+  fast-forward commit with tests, never a force-push, history rewrite, other branch or
+  merge (the kind schema rejects `force_push: true`; `force_push` stays `no`).
+- The runtime enforces that scope: the channel exports `ARGUS_FIX_PR` and
+  `ARGUS_FIX_BASE_SHA` from `input.fix` (a malformed `fix` exports a marker that fails
+  closed), and `argus-task deliver` then takes the fix path only. It requires the PR open
+  on the current branch, `HEAD` strictly ahead of the live PR head, which must be the
+  reviewed head or a descendant of it, runs the pre-push checks and pushes without
+  `--force-with-lease`. It never rebases, never pushes another branch and never creates or
+  edits the PR; a moved or diverged head is refused with `request_changes` as the action.
+- Fixer model exclusion applies to account-sourced selectors in every review mode,
+  including `different_provider`, so a respawn cannot pick the fixer's model through an
+  account whose configured model it is.
+- Verdicts: `approve` (no findings, nothing changed), `request_changes` (cannot fix
+  safely, nothing changed; the existing handoff to the implementer), `fixed` with
+  `head_sha` (reviewed), `fixed_head_sha` (full 40-character new head), `findings` and
+  `tests`.
+- On `fixed`, in one write transaction and after the usual model-proof check of the
+  reviewer: the live forge read (always taken for a fixing child) must show the same PR
+  at exactly `fixed_head_sha`, which differs from the reviewed head, and the reviewer's
+  recorded executions must name exactly one model. Otherwise the verdict is void
+  (`fix_head_invalid`, `fix_unverified`, `fix_pr_mismatch`, `fix_head_mismatch`,
+  `fix_provenance_unclear`) and a manual review decides; nothing is approved and no
+  reviewer is respawned automatically.
+- A verified fix records `review.independent_fix_pushed {child_id, pr, old_head_sha,
+  new_head_sha, fix_models, fix_providers, findings, tests}`. As the newest lifecycle
+  event it invalidates every older approval.
+- The fix author is an author of the code: `fixers()` adds its models to the exclusion
+  set of the next review (in every mode, by model name), and `child_models_clean`
+  rejects any approval by the fixing child or by a child running a fix author's model.
+  Chain precedence (3.4) is unchanged, so the fresh review runs on a different model in a
+  separate session on the exact new head; with no eligible model the parent stays blocked
+  (`no_independent_reviewer`, one actionable decision) and no merge is allowed.
+- A fix spends one review round like `request_changes`; at `max_rounds` the parent opens
+  one escalation decision and starts no reviewer. Replays of the same child are ignored
+  (`_child_already_processed`) and the spawn is idempotent per `(pr, head)`.
+- A head change during review or merge is handled as before: the approval is void
+  (`head_mismatch`) and the merge fence (3.3) refuses any other head.
+
 # 4. Open Questions
 
 None.
@@ -194,6 +240,7 @@ None.
 
 # 6. Implementation Consequences
 
+- `apps/api/src/argus_api/db/migrations/0088_code_review_fix.sql`: `code_review` schemas.
 - `packages/core/src/argus_core/tasks.py`, `delivery.py`: additive fields on
   `ClaimedTask` and `IndependentReviewSummary`.
 - `apps/api/src/argus_api/tasks/merge_resume.py`, `independent_review.py`, `deliverable.py`,
@@ -209,7 +256,7 @@ None.
 ## Verification boundary
 
 - Commands:
-  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_pre_merge_independent_review.py apps/api/tests/test_review_settle.py apps/api/tests/test_execution_routes.py apps/api/tests/test_settings.py apps/api/tests/test_task_deliverable.py apps/api/tests/test_task_readiness.py`
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_review_fix.py apps/api/tests/test_pre_merge_independent_review.py apps/api/tests/test_review_settle.py apps/api/tests/test_execution_routes.py apps/api/tests/test_settings.py apps/api/tests/test_task_deliverable.py apps/api/tests/test_task_readiness.py`
   - `node --test integrations/nanoclaw/argus-task-merge.test.mjs integrations/nanoclaw/argus-merge-auth-env.test.mjs`
   - `uv run ruff check` / `ruff format --check` / `uv run ty check`
   - `python3 scripts/check_specs.py && python3 scripts/validate_docs.py && python3 scripts/validate_language.py && python3 scripts/check_paths.py`
