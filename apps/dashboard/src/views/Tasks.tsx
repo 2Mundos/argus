@@ -38,6 +38,7 @@ import { ModelPin } from "./ModelPin";
 import { ProjectRepositoryDialog } from "./ProjectRepositoryDialog";
 import { TaskDetail } from "./TaskDetail";
 import { NewTaskIntegrations } from "./TaskIntegrations";
+import { verdictText } from "./TaskReviews";
 
 const COLUMNS: { title: string; states: TaskState[] }[] = [
   { title: "Waiting", states: ["awaiting_approval", "pending", "blocked"] },
@@ -386,6 +387,12 @@ const TaskCard = memo(
           <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
           {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
           {task.priority !== 0 && <span className="badge">p{task.priority}</span>}
+          {task.review_badge && (
+            <span className={`badge review-${task.review_badge.verdict ?? "none"}`}>
+              review {task.review_badge.round} ·{" "}
+              {verdictText(task.review_badge.verdict, task.review_badge.state)}
+            </span>
+          )}
           {task.attempt > 0 && <span className="muted">attempt {task.attempt}</span>}
         </span>
         {task.models?.used?.length ? (
@@ -445,6 +452,7 @@ function cardFields(task: TaskSummary) {
     task.progress_data,
     task.output_at,
     task.matches,
+    task.review_badge,
   ];
 }
 

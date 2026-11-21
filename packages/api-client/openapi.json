@@ -20047,6 +20047,41 @@
         "title": "Review",
         "type": "string"
       },
+      "ReviewBadge": {
+        "description": "What a board card shows for a parent: the newest round and its verdict.",
+        "properties": {
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "approve",
+                  "request_changes",
+                  "void"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "round",
+          "verdict",
+          "state"
+        ],
+        "title": "ReviewBadge",
+        "type": "object"
+      },
       "ReviewDisposition": {
         "description": "How a task reached `succeeded` (task deliverable spec 3.10). `unmet` names the\nacceptance items that were not `done`; they stay `verification_missing`.",
         "properties": {
@@ -20099,6 +20134,191 @@
           "attempt"
         ],
         "title": "ReviewDisposition",
+        "type": "object"
+      },
+      "ReviewFinding": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "lines": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lines"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "ReviewFinding",
+        "type": "object"
+      },
+      "ReviewRound": {
+        "properties": {
+          "artifact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Artifact Ids",
+            "type": "array"
+          },
+          "child_id": {
+            "title": "Child Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewFinding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "findings_by_priority": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Findings By Priority",
+            "type": "object"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "reviewer_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Model"
+          },
+          "reviewer_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Provider"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "approve",
+                  "request_changes",
+                  "void"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "child_id",
+          "round",
+          "state",
+          "verdict",
+          "head_sha",
+          "findings",
+          "findings_by_priority",
+          "reviewer_provider",
+          "reviewer_model",
+          "artifact_ids",
+          "created_at",
+          "finished_at"
+        ],
+        "title": "ReviewRound",
+        "type": "object"
+      },
+      "ReviewRounds": {
+        "properties": {
+          "rounds": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRound"
+            },
+            "title": "Rounds",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "rounds"
+        ],
+        "title": "ReviewRounds",
         "type": "object"
       },
       "ReviewRoute": {
@@ -24627,6 +24847,16 @@
           "review": {
             "$ref": "#/components/schemas/Review"
           },
+          "review_badge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewBadge"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "review_disposition": {
             "anyOf": [
               {
@@ -26735,6 +26965,16 @@
           },
           "review": {
             "$ref": "#/components/schemas/Review"
+          },
+          "review_badge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewBadge"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "state": {
             "$ref": "#/components/schemas/TaskState"
@@ -38035,7 +38275,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased. Optional `q` is literal substring search over title\nand spec (task discovery). `view=compact` returns only id, title, state, attempt,\nmax_attempts, block_reason, progress_message, created_at and updated_at (no refs,\nmodels or `matches`): the cheapest way to scan many tasks.",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased. Optional `q` is literal substring search over title\nand spec (task discovery). `view=compact` returns only id, title, state, attempt,\nmax_attempts, block_reason, progress_message, created_at and updated_at (no refs,\nmodels or `matches`): the cheapest way to scan many tasks. `hide_review_children=true`\nleaves out `code_review` tasks that have a parent (their rounds are read with\n`GET /tasks/{id}/reviews`) and adds `review_badge` to parents with rounds; it is\noff by default.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {
@@ -38186,6 +38426,16 @@
                 }
               ],
               "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hide_review_children",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Hide Review Children",
+              "type": "boolean"
             }
           }
         ],
@@ -40763,6 +41013,54 @@
           }
         ],
         "summary": "Retry Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/reviews": {
+      "get": {
+        "description": "The task's independent review rounds, oldest first (round 1): verdict, reviewed\nhead, findings, reviewer model and report artifacts of each `code_review` child.\nRead-only; empty when the task was never reviewed.",
+        "operationId": "get_review_rounds_api_tasks__task_id__reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRounds"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Review Rounds",
         "tags": [
           "tasks"
         ]

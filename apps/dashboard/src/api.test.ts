@@ -149,6 +149,21 @@ describe("boardTasks", () => {
     expect(board).toEqual({ items: [{ id: "b" }], total: 7, loading: false });
   });
 
+  it("asks the server to hide review children, except in a text search", async () => {
+    const queries: Record<string, unknown>[] = [];
+    vi.spyOn(api, "GET").mockImplementation((async (...args: unknown[]) => {
+      queries.push((args[1] as { params: { query: Record<string, unknown> } }).params.query);
+      return {
+        data: { items: [], total: 0, has_more: false, next_cursor: null, omitted: [] },
+        response: new Response(null, { status: 200 }),
+      };
+    }) as typeof api.GET);
+    await boardTasks(false);
+    await boardTasks(false, { states: ["blocked"] });
+    await boardTasks(false, { q: "review" });
+    expect(queries.map((q) => q.hide_review_children)).toEqual([true, true, true, undefined]);
+  });
+
   it("reports the active tasks alone while the ended ones are loading", async () => {
     const { release } = serve("ended");
     let painted: (ids: string[]) => void = () => {};

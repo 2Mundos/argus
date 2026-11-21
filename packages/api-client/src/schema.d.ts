@@ -2833,7 +2833,10 @@ export interface paths {
          *     tasks they have leased. Optional `q` is literal substring search over title
          *     and spec (task discovery). `view=compact` returns only id, title, state, attempt,
          *     max_attempts, block_reason, progress_message, created_at and updated_at (no refs,
-         *     models or `matches`): the cheapest way to scan many tasks.
+         *     models or `matches`): the cheapest way to scan many tasks. `hide_review_children=true`
+         *     leaves out `code_review` tasks that have a parent (their rounds are read with
+         *     `GET /tasks/{id}/reviews`) and adds `review_badge` to parents with rounds; it is
+         *     off by default.
          */
         get: operations["list_tasks_api_tasks_get"];
         put?: never;
@@ -3649,6 +3652,28 @@ export interface paths {
          *     `immutable_field`, an invalid value 422, and a refused retry writes nothing.
          */
         post: operations["retry_task_api_tasks__task_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Review Rounds
+         * @description The task's independent review rounds, oldest first (round 1): verdict, reviewed
+         *     head, findings, reviewer model and report artifacts of each `code_review` child.
+         *     Read-only; empty when the task was never reviewed.
+         */
+        get: operations["get_review_rounds_api_tasks__task_id__reviews_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -10916,6 +10941,17 @@ export interface components {
          */
         Review: "none" | "human" | "orchestrator";
         /**
+         * ReviewBadge
+         * @description What a board card shows for a parent: the newest round and its verdict.
+         */
+        ReviewBadge: {
+            /** Round */
+            round: number;
+            state: components["schemas"]["TaskState"];
+            /** Verdict */
+            verdict: ("approve" | "request_changes" | "void") | null;
+        };
+        /**
          * ReviewDisposition
          * @description How a task reached `succeeded` (task deliverable spec 3.10). `unmet` names the
          *     acceptance items that were not `done`; they stay `verification_missing`.
@@ -10942,6 +10978,55 @@ export interface components {
              * @default []
              */
             unmet?: string[];
+        };
+        /** ReviewFinding */
+        ReviewFinding: {
+            /** Description */
+            description: string;
+            /** File */
+            file?: string | null;
+            /** Lines */
+            lines?: string | null;
+            /** Priority */
+            priority?: string | null;
+        };
+        /** ReviewRound */
+        ReviewRound: {
+            /** Artifact Ids */
+            artifact_ids: string[];
+            /** Child Id */
+            child_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Findings */
+            findings: components["schemas"]["ReviewFinding"][];
+            /** Findings By Priority */
+            findings_by_priority: {
+                [key: string]: number;
+            };
+            /** Finished At */
+            finished_at: string | null;
+            /** Head Sha */
+            head_sha: string | null;
+            /** Reviewer Model */
+            reviewer_model: string | null;
+            /** Reviewer Provider */
+            reviewer_provider: string | null;
+            /** Round */
+            round: number;
+            state: components["schemas"]["TaskState"];
+            /** Verdict */
+            verdict: ("approve" | "request_changes" | "void") | null;
+        };
+        /** ReviewRounds */
+        ReviewRounds: {
+            /** Rounds */
+            rounds: components["schemas"]["ReviewRound"][];
+            /** Task Id */
+            task_id: string;
         };
         /**
          * ReviewRoute
@@ -12444,6 +12529,7 @@ export interface components {
             requires_approval: boolean;
             result: components["schemas"]["TaskResult-Output"] | null;
             review: components["schemas"]["Review"];
+            review_badge?: components["schemas"]["ReviewBadge"] | null;
             review_disposition?: components["schemas"]["ReviewDisposition"] | null;
             serving_account?: components["schemas"]["ServingAccount"] | null;
             /** Spec */
@@ -13058,6 +13144,7 @@ export interface components {
             /** Project */
             project: string;
             review: components["schemas"]["Review"];
+            review_badge?: components["schemas"]["ReviewBadge"] | null;
             state: components["schemas"]["TaskState"];
             /** Title */
             title: string;
@@ -19078,6 +19165,7 @@ export interface operations {
                 limit?: number;
                 cursor?: string | null;
                 q?: string | null;
+                hide_review_children?: boolean;
             };
             header?: never;
             path?: never;
@@ -20531,6 +20619,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_review_rounds_api_tasks__task_id__reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewRounds"];
                 };
             };
             /** @description Validation Error */

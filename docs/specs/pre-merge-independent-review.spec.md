@@ -181,6 +181,28 @@ still open it opens one orchestrator review decision (merge it and accept, or re
 try again). A rejected review, failed CI or a new approval cycle starts from the start.
 Review-disabled and non-code tasks never take this path.
 
+## 3.7 Review rounds on the dashboard
+
+Each review round stays a `code_review` child task; the board does not show them. The
+dashboard board asks `GET /api/tasks` with `hide_review_children=true`, which the server
+applies before paging (so totals and cursors stay correct) by leaving out `code_review`
+tasks that have a `parent_id`. A parent with rounds then carries `review_badge
+{round, verdict, state}` for its newest round, shown on its card (for example `review 3 ·
+changes requested`). The flag is off by default, so the MCP `list_tasks` and other callers
+still see review children; a review child without a parent stays on the board, and the
+inbox and `q` search never hide review children.
+
+`GET /api/tasks/{id}/reviews` lists a task's rounds, oldest first (round 1), read-only and
+scoped like the task: child id, state, verdict (`approve`, `request_changes`, `void`, or
+null when the child ended without one), reviewed `head_sha`, findings (priority, file,
+lines, description) with counts by priority, reviewer provider and model, report artifact
+ids, `created_at` and `finished_at` (the child's last update once it has ended). It does
+not change how reviewers are spawned, picked, counted or completed.
+
+Task detail shows a Reviews section with one tab per round, the newest selected, each
+with its verdict, reviewed head, findings, a link to the child task and its report
+artifacts. A `code_review` task's own page still opens by URL and links back to its parent.
+
 # 4. Open Questions
 
 None.
