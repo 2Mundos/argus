@@ -785,3 +785,85 @@ def test_midlease_refresh_is_fenced_by_claim_and_lease(
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "not_leased"
     assert FAKE_REFRESH not in res.text
+
+
+def test_midlease_failed_forced_refresh_is_not_bypassed_by_plain_call(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a forced refresh fails, a non-forced call must not hand back the
+    credential the executor just saw rejected, even though it looks fresh."""
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return 400, {"error": "invalid_grant"}
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    assert _refresh(client, worker, claim, acc_id, force=True).status_code == 409
+    again = _refresh(client, worker, claim, acc_id)
+    assert again.status_code == 409
+    assert again.json()["detail"]["code"] == "credential_refresh_rejected"
+    assert FAKE_ACCESS not in again.text
+    assert len(calls) == 1
+
+
+def test_midlease_transient_forced_failure_is_not_bypassed_by_plain_call(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return 503, {"error": "temporarily_unavailable"}
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    assert _refresh(client, worker, claim, acc_id, force=True).status_code == 503
+    again = _refresh(client, worker, claim, acc_id)
+    assert again.status_code == 503
+    assert FAKE_ACCESS not in again.text
+    assert len(calls) == 1
+
+
+def test_midlease_expired_access_only_credential_is_rejected(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An imported access-only token (no refresh_token) that expires mid-lease
+    cannot be renewed: fail closed rather than return the expired token."""
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        raise AssertionError("no refresh_token: provider must not be contacted")
+
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", "client-id-test")
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-test")
+    app.state.google_refresher = GoogleTokenRefresher(post_form=fake_post)
+    created = _create(
+        client,
+        {
+            "token": {
+                "access_token": FAKE_ACCESS,
+                "token_type": "Bearer",
+                "expiry": _future_expiry(),
+                "expires_in": 3600,
+            },
+            "auth_method": "consumer",
+        },
+        name="google-access-only",
+    )
+    assert created.status_code == 201, created.text
+    acc_id = created.json()["id"]
+    worker, claim = _seed_claim(client)
+    leased = client.post(
+        "/api/accounts/lease",
+        headers=worker,
+        json={"role": "executor", "runtime_providers": ["google"], **claim},
+    )
+    assert leased.status_code == 200, leased.text
+    assert _refresh(client, worker, claim, acc_id).status_code == 200
+
+    import asyncio
+
+    asyncio.run(_async_expire(acc_id))
+    res = _refresh(client, worker, claim, acc_id)
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "credential_refresh_rejected"
+    assert FAKE_ACCESS not in res.text

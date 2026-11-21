@@ -372,6 +372,14 @@ async def refresh_oauth_credential(
     )
 
 
+def _expired_without_refresh_token(doc: dict[str, Any], now: datetime) -> bool:
+    """An access-only OAuth credential past its expiry cannot be renewed."""
+    if not google_auth.is_oauth(doc) or google_auth.refresh_token(doc) is not None:
+        return False
+    exp = google_auth.access_expiry(doc)
+    return exp is not None and exp <= now
+
+
 class GoogleTokenRefresher:
     """Serialized per-account OAuth refresher attached to `app.state`."""
 
@@ -415,7 +423,18 @@ class GoogleTokenRefresher:
         doc = secrets.get(secret_name)
         if not isinstance(doc, dict):
             return "current"
+        last = self._last_attempt.get(account_id)
+        if (
+            last is not None
+            and now - last[0] < ATTEMPT_COOLDOWN
+            and last[1] in {"transient", "permanent"}
+        ):
+            # A failed attempt stands for the window even when the stored token
+            # still looks fresh (e.g. after a failed forced refresh).
+            return last[1]
         if not force and not google_auth.needs_refresh(doc, now=now):
+            if _expired_without_refresh_token(doc, now):
+                return "permanent"
             return "current"
         async with self._lock_for(account_id):
             latest = secrets.get(secret_name)
@@ -432,7 +451,9 @@ class GoogleTokenRefresher:
             if not force and not google_auth.needs_refresh(latest, now=now):
                 return "current"
             if google_auth.refresh_token(latest) is None:
-                return "permanent" if force else "current"
+                if force or _expired_without_refresh_token(latest, now):
+                    return "permanent"
+                return "current"
             try:
                 refreshed = await refresh_oauth_credential(
                     latest,

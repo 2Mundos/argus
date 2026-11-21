@@ -140,6 +140,9 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   renew the account) or `503 credential_refresh_unavailable` (transient). Provider
   traffic is bounded to one attempt per account per 60 s (`ATTEMPT_COOLDOWN`): a
   failure or a forced refresh inside the window is answered from the last outcome.
+  A failed attempt also stands for the window against a non-forced call on a
+  token that still looks fresh, and an access-only credential (no
+  `refresh_token`) past its expiry is `409 credential_refresh_rejected`.
   `force` refreshes a token whose expiry is not near, for a provider 401 on it.
   Tested deterministically with fake tokens and an injected token endpoint
   (`apps/api/tests/test_google_accounts.py`). The historical 401 of task 62c4b502
