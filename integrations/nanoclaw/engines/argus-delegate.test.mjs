@@ -2520,6 +2520,17 @@ test("dsh failures: an error final or an error event fails the run even with exi
   assert.equal(dshOutcome("").failure.kind, "no_final");
 });
 
+test("dshOutcome over the recorded missing-credential run: auth failure with the code", () => {
+  const dir = new URL("./fixtures/", import.meta.url);
+  const out = dshOutcome(
+    fs.readFileSync(new URL("dsh-missing-credential.jsonl", dir), "utf8"),
+    fs.readFileSync(new URL("dsh-missing-credential.stderr.txt", dir), "utf8"),
+  );
+  assert.equal(out.auth, true);
+  assert.equal(out.code, "MISSING_CREDENTIAL");
+  assert.equal(out.failure.kind, "dsh_error");
+});
+
 test("dsh: a stderr auth code is blocked with the code preserved", async (t) => {
   const s = dshSandbox(t, {
     emit: [

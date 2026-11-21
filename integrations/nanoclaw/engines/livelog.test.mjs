@@ -771,6 +771,12 @@ const dshFixture = fs.readFileSync(
   "utf8",
 );
 
+// Recorded from real dsh 0.2.2-alpha.3 with no provider key (fixtures/dsh-headless.README.md).
+const dshMissingCredential = fs.readFileSync(
+  new URL("./fixtures/dsh-missing-credential.jsonl", import.meta.url),
+  "utf8",
+);
+
 test("dsh stream over the recorded fixture: text by line, no duplicate from the final, unknown events skipped", () => {
   const got = [];
   const p = createStreamParser({ executor: "dsh", onLines: (l) => got.push(...l) });
@@ -784,6 +790,16 @@ test("dsh stream over the recorded fixture: text by line, no duplicate from the 
     "The setting is enabled by default.",
     "dsh finished",
   ]);
+});
+
+test("dsh stream over the recorded missing-credential run: status events skipped, error final reported", () => {
+  const got = [];
+  const p = createStreamParser({ executor: "dsh", onLines: (l) => got.push(...l) });
+  p.push(dshMissingCredential);
+  p.end();
+  assert.equal(got[0], "dsh started");
+  assert.equal(got.length, 2);
+  assert.match(got[1], /^dsh finished with an error: llm-deepseek: no API key/);
 });
 
 test("dsh stream: failed final, error event, unfinished tail, noise and secrets", () => {

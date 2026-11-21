@@ -112,6 +112,14 @@ test("opencode (synthetic): step-finish tokens and cost are summed", () => {
 // SYNTHETIC recording (fixtures/dsh-headless.README.md): usage on the final event is a guess.
 const dshReal = fs.readFileSync(new URL("./fixtures/dsh-headless.jsonl", import.meta.url), "utf8");
 
+test("dsh recorded missing-credential run: final without usage is not_reported", () => {
+  const rec = fs.readFileSync(
+    new URL("./fixtures/dsh-missing-credential.jsonl", import.meta.url),
+    "utf8",
+  );
+  assert.equal(parseUsage("dsh", rec).measurement, "not_reported");
+});
+
 test("dsh (synthetic fixture): final usage, cache writes counted as input", () => {
   assert.deepEqual(parseUsage("dsh", dshReal), {
     measurement: "measured",
