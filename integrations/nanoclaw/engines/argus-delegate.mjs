@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 //                  [--out DIR] [--model M] [--read-only]
 //                  [--model-attempt N --fallback-reason REASON]
 //   argus-delegate EXECUTOR --auth-probe [--result-file F]
+//   argus-delegate --probe-matrix   (static proven/mocked-only/unprobed table; no request)
 //
 // EXECUTOR is claude | codex | opencode | agent | copilot | agy | dsh. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
@@ -1342,6 +1343,34 @@ export function providerRequest(executor, e, settings) {
   }
 }
 
+/**
+ * What is known about each probe route (docs/specs/failure-classes.spec.md 3.3.1). `proven`
+ * means a 401/403/2xx was observed from the real gateway; `mocked-only` means the request and
+ * its classification are tested against mocks and local sockets only; `unprobed` means no
+ * request is made, so a pass says nothing about the credential. Nothing is `proven` yet: the
+ * real gateway has not been measured from a worker. Edit an entry only with such evidence.
+ */
+export const PROBE_EVIDENCE = Object.freeze({
+  claude: { status: "mocked-only", route: "GET api.anthropic.com/v1/models (env credential)" },
+  "claude-login-file": { status: "unprobed", route: "credential in .credentials.json, never read" },
+  codex: { status: "mocked-only", route: "GET api.openai.com/v1/models (OPENAI_API_KEY)" },
+  "codex-chatgpt-login": { status: "unprobed", route: "credential in auth.json, never read" },
+  copilot: { status: "mocked-only", route: "GET api.individual.githubcopilot.com/models" },
+  agent: { status: "unprobed", route: "no read-only endpoint" },
+  agy: { status: "mocked-only", route: "GET generativelanguage.googleapis.com or oauth2 userinfo" },
+  opencode: { status: "mocked-only", route: "GET <base_url>/models (custom/OpenRouter account only)" },
+  "opencode-native": { status: "unprobed", route: "auth.json or attached server, never read" },
+  custom: { status: "mocked-only", route: "GET <base_url>/models (account settings)" },
+  local: { status: "unprobed", route: "server ignores the token; worker-only settings" },
+});
+
+/** Evidence behind one probe answer: an unproven answer is always `unprobed`, never a pass. */
+export function probeEvidence(executor, state, settings) {
+  if (state === "unproven") return "unprobed";
+  const key = settings ? "custom" : executor;
+  return (PROBE_EVIDENCE[key] ?? { status: "unprobed" }).status;
+}
+
 const noProxy = (u, e) =>
   (e.NO_PROXY ?? e.no_proxy ?? "")
     .split(",")
@@ -1488,6 +1517,7 @@ export async function authProbeWithProvider(executor, e = process.env, opts = {}
     provider: answer.state,
     ...(answer.status ? { provider_status: answer.status } : {}),
     ...(answer.reason ? { provider_reason: answer.reason } : {}),
+    evidence: probeEvidence(executor, answer.state, gates.settings),
   };
   if (answer.state === "rejected")
     return { code: 79, report: { ...gates.identity, blocked: "auth_rejected", ...provider } };
@@ -1503,6 +1533,8 @@ export async function authProbeWithProvider(executor, e = process.env, opts = {}
 }
 
 export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_STUB } = {}) {
+  // Read-only: prints the static evidence matrix; reads no credential, makes no request.
+  if (argv.includes("--probe-matrix")) finish(0, { probe_matrix: PROBE_EVIDENCE });
   let parsed;
   try {
     parsed = parseArgs(argv);
