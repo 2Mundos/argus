@@ -32,11 +32,12 @@ from argus_api.tasks import service as tasks
 # Providers whose harness Argus can confine to the attempt's kubeconfig:
 # anthropic, local and custom run the same Claude harness session, and the
 # Codex harness reads the installed file the same CLI-level way (spec 3.6
-# engine matrix). MCP servers additionally need NanoClaw's Claude provider to
-# consume the session config, which is only verified for the Claude harness.
-# A delegated executor is confined only for Claude.
+# engine matrix). MCP servers reach Claude sessions and the Codex harness; for
+# Codex the channel's broker refuses a legacy HTTP+SSE server before any grant,
+# since Codex's config has only Streamable HTTP entries. A delegated executor is
+# confined only for Claude.
 KUBERNETES_ENGINES = frozenset({"anthropic", "local", "custom", "openai"})
-MCP_ENGINES = frozenset({"anthropic", "local", "custom"})
+MCP_ENGINES = frozenset({"anthropic", "local", "custom", "openai"})
 EXECUTOR_PROVIDERS = frozenset({"anthropic"})
 
 Readiness = Literal[
@@ -230,8 +231,8 @@ async def _held(
 async def _engine_supported(tx: Tx, agent_id: str, kind: str) -> None:
     """The worker's harness and any delegated executor must run a session Argus
     can confine to the attempt's credential: a Kubernetes kubeconfig is
-    CLI-level and reads the same on every harness, while MCP servers need the
-    Claude harness session; a delegated executor is confined only for Claude."""
+    CLI-level and reads the same on every harness, while MCP servers need a
+    Claude or Codex harness session; a delegated executor is confined only for Claude."""
     async with tx.conn.execute(
         "SELECT l.role, a.provider FROM account_leases l"
         " JOIN accounts a ON a.id = l.account_id"
@@ -246,7 +247,7 @@ async def _engine_supported(tx: Tx, agent_id: str, kind: str) -> None:
         want = (
             "a Kubernetes-capable harness engine (anthropic, local, custom or openai)"
             if kind == "kubernetes"
-            else "a Claude-harness engine (anthropic, local or custom)"
+            else "a Claude or Codex harness engine (anthropic, local, custom or openai)"
         )
         raise EngineUnsupportedError(
             f"Task integrations need {want}; this worker runs"

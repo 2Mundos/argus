@@ -101,9 +101,10 @@ export function Integrations() {
           ephemeral kubeconfig pinned to the target namespace, on Claude-harness (anthropic, local,
           custom) and Codex (openai) engines. An MCP connection becomes a per-attempt server URL on
           the worker's Argus broker, which adds the token and passes only the allowed tools, on
-          Claude-harness engines only; the session never sees the token. Either ends when the
-          attempt ends or the connection is revoked, edited, rotated or expires. That does not
-          revoke the token; revoke it at the cluster or MCP server too.
+          Claude-harness and Codex engines (Codex: Streamable HTTP servers only); the session never
+          sees the token. Either ends when the attempt ends or the connection is revoked, edited,
+          rotated or expires. That does not revoke the token; revoke it at the cluster or MCP server
+          too.
         </p>
         <p className="muted small">
           Encrypted secret store:{" "}

@@ -35,13 +35,15 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_CHANGED = 3; // re-reads after a rotation raced the fetch
 /** Providers whose sessions the attempt's kubeconfig can be confined to (spec 3.6). */
-// Harness providers the channel installs for without fetching first. The API
-// enforces the per-kind rule at credential fetch (spec 3.6 delivery binding):
-// MCP servers additionally need the Claude harness session, so the API refuses
-// them for Codex while the kubeconfig is CLI-level and goes to every harness.
-// A delegated executor is confined only for Claude.
+// Harness providers the channel installs for without fetching first. The kubeconfig is
+// CLI-level and goes to every harness; MCP servers reach the Codex harness only as
+// Streamable HTTP (`http`) entries, so for `openai` the broker refuses a legacy
+// HTTP+SSE server before it grants anything. A delegated executor is confined only for Claude.
 const ENGINE_PROVIDERS = new Set(["anthropic", "local", "custom", "openai"]);
 const EXECUTOR_PROVIDERS = new Set(["anthropic"]);
+const CODEX_PROVIDER = "openai";
+/** Codex's `config.toml` has no representation for a legacy HTTP+SSE server. */
+const CODEX_MCP_TRANSPORTS: readonly McpServerEntry["type"][] = ["http"];
 /** The prefix of the session MCP servers this module owns; nothing else is touched. */
 export const MCP_SERVER_PREFIX = "argus-integration-";
 const TOOL = /^[A-Za-z0-9_.\/-]{1,128}$/;
@@ -147,6 +149,8 @@ export interface McpRoute {
   tool_policy: "allowlist" | "all";
   token: string;
   expires_at: string | null;
+  /** The session transports the harness can consume; the broker refuses a server that speaks another. Absent: any. */
+  transports?: readonly McpServerEntry["type"][];
   /** Asked by every request: does Argus still deliver this to the attempt, at this version? */
   authorize: () => Promise<boolean>;
 }
@@ -202,6 +206,8 @@ export interface InstalledIntegrations {
   /** Host path of the attempt directory, and the kubeconfig path the session sees (null: no Kubernetes). */
   dir: string;
   kubeconfig: string | null;
+  /** The harness engine's provider, so a re-grant keeps its transport limits. */
+  engineProvider?: string | null;
   integrations: Array<
     Omit<IntegrationState, "readiness"> & {
       access: string;
@@ -477,6 +483,7 @@ async function openMcp(
   source: IntegrationsSource,
   creds: readonly McpCredential[],
   who: { taskId: string; attempt: number },
+  engineProvider: string | null | undefined,
 ): Promise<void> {
   if (!broker || !session)
     throw new IntegrationError("env_integration_route_unavailable", "no MCP broker is configured");
@@ -491,6 +498,7 @@ async function openMcp(
       tool_policy: c.tool_policy,
       token: c.token,
       expires_at: c.expires_at,
+      ...(engineProvider === CODEX_PROVIDER ? { transports: CODEX_MCP_TRANSPORTS } : {}),
       authorize: holds(c),
     })),
   );
@@ -575,10 +583,12 @@ function describe(
   dir: string,
   leaf: string,
   creds: readonly IntegrationCredential[],
+  engineProvider: string | null | undefined,
 ): InstalledIntegrations {
   return {
     taskId,
     attempt,
+    engineProvider,
     dir,
     kubeconfig: creds.some((c) => c.kind === "kubernetes")
       ? path.posix.join(CONTAINER_GROUP_DIR, TASK_INTEGRATIONS_DIR, taskId, leaf, KUBECONFIG_FILE)
@@ -686,10 +696,20 @@ export async function installTaskIntegrations(
     });
     const servers = mcp(creds);
     if (servers.length)
-      await openMcp(opts.mcp, opts.sessionMcp, source, servers, { taskId, attempt });
+      await openMcp(
+        opts.mcp,
+        opts.sessionMcp,
+        source,
+        servers,
+        { taskId, attempt },
+        opts.engineProvider,
+      );
     else await opts.sessionMcp?.set({});
     const dir = path.join(taskIntegrationsPath(groupDir, taskId), leaf);
-    return { ok: true, installed: describe(taskId, attempt, dir, leaf, creds) };
+    return {
+      ok: true,
+      installed: describe(taskId, attempt, dir, leaf, creds, opts.engineProvider),
+    };
   } catch (err) {
     const e = failure(err);
     await revokeAll(taskId, opts.transport, opts.mcp, opts.sessionMcp).catch(() => undefined);
@@ -766,8 +786,18 @@ export async function recheckTaskIntegrations(
     if (!wrote) throw new IntegrationError("env_integration_invalid", "attempt directory gone");
     const servers = mcp(creds);
     if (servers.length)
-      await openMcp(transports.mcp, transports.sessionMcp, source, servers, { taskId, attempt });
-    return { state: "refreshed", installed: describe(taskId, attempt, installed.dir, leaf, creds) };
+      await openMcp(
+        transports.mcp,
+        transports.sessionMcp,
+        source,
+        servers,
+        { taskId, attempt },
+        installed.engineProvider,
+      );
+    return {
+      state: "refreshed",
+      installed: describe(taskId, attempt, installed.dir, leaf, creds, installed.engineProvider),
+    };
   } catch (err) {
     await revokeAll(taskId, transport, transports.mcp, transports.sessionMcp).catch(
       () => undefined,
