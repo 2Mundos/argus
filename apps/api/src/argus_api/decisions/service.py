@@ -7,9 +7,12 @@ from argus_core.auth import Scope
 from argus_core.decisions import (
     ACCEPT_WITH_DEVIATION,
     APPROVE_WITHOUT_REVIEW,
+    GATE_DISABLED_GATE,
+    NO_REVIEWER_GATE,
     RETRY_REVIEWER,
     REVIEW_FAILED_GATE,
     REVIEW_OPTIONS,
+    REVIEWER_FAILED_GATE,
     Ask,
     Audience,
     Decision,
@@ -109,10 +112,14 @@ async def forge_evidence(
             return deliverable.ForgeRead(
                 await delivery.delivery_of(conn, checker, task)
             )
-        if (
-            task.deliverable not in FORGE_DELIVERABLES
-            or task.state is not TaskState.IN_REVIEW
-        ):
+        if task.state is not TaskState.IN_REVIEW:
+            return None
+        from argus_api.settings import service as settings_svc
+
+        review_setting = await settings_svc.get_review(
+            conn, independent_review.model_policy_path, task.project
+        )
+        if task.deliverable not in FORGE_DELIVERABLES and review_setting.mode == "off":
             return None
         return deliverable.ForgeRead(await delivery.delivery_of(conn, checker, task))
 
@@ -382,6 +389,11 @@ async def _apply_answer(
         case (
             Effect.REVIEW_ACCEPT | Effect.REVIEW_ACCEPT_DEVIATION | Effect.REVIEW_REJECT
         ) as effect:
+            manual_fallback = (decision.payload or {}).get("gate") in (
+                NO_REVIEWER_GATE,
+                REVIEWER_FAILED_GATE,
+                GATE_DISABLED_GATE,
+            )
             await tasks.review(
                 tx,
                 task_id,
@@ -391,6 +403,7 @@ async def _apply_answer(
                 notes=body.text,
                 forge=forge,
                 deviation=effect is Effect.REVIEW_ACCEPT_DEVIATION,
+                waive_independent_review=manual_fallback,
             )
             await independent_review.clear_gate_block(tx, task_id)
 

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-18
+updated: 2026-11-21
 ---
 
 # Task deliverable
@@ -156,17 +156,23 @@ first and the forge is not read.
 
 **Auto-merge.** When the effective `delivery.auto_merge`
 ([settings](settings.spec.md) 3.10) is on for the task's project, a `pr_merged`
-task is authorized to merge itself and is not left to a reviewer. Its completion
-needs the PR merged: `complete_task` reads the task's PR (the reported one, or the
-one the binding above found) with `PrChecker` before the write, never inside it, and
-`complete` accepts only when the forge shows it `merged`. An open, closed or
-unreadable PR is `422 deliverable_missing` naming the state and telling the worker
-to merge it, so the worker keeps its claim and can merge and complete again;
-unconfirmed is never success. A merged PR completes straight to the task's normal
-outcome (`succeeded`, or `in_review` for its own `review`, an open checklist item,
-a task with no structured acceptance that already holds a PR, or independent
-review), with no `deliverable_pending`. A PR that merged before the worker reported
-it counts. The setting is read at completion, so turning it off lets the next
+task is authorized to merge itself and is not left to a reviewer. When
+`review.independent` is `off`, its completion needs the PR merged: `complete_task`
+reads the task's PR (the reported one, or the one the binding above found) with
+`PrChecker` before the write, never inside it, and `complete` accepts only when
+the forge shows it `merged`. An open, closed or unreadable PR is `422
+deliverable_missing` naming the state and telling the worker to merge it, so the
+worker keeps its claim and can merge and complete again; unconfirmed is never
+success. When `review.independent` is enabled, completion does not require a merge
+before review ([pre-merge independent review](pre-merge-independent-review.spec.md)):
+an open PR whose exact-head checks are `success` (or an already merged PR) passes
+completion and enters `in_review` for independent review before any merge is
+authorized; closure still requires the forge to confirm `merged` at the exact
+reviewed PR and head. A merged PR completes straight to the task's normal outcome
+(`succeeded`, or `in_review` for its own `review`, an open checklist item, a task
+with no structured acceptance that already holds a PR, or independent review),
+with no `deliverable_pending`. A PR that merged before the worker reported it
+counts. The setting is read at completion, so turning it off lets the next
 completion take the pending path below.
 
 The task read states whether this task's merge is authorized (`merge`, with the

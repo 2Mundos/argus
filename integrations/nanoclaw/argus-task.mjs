@@ -759,7 +759,8 @@ async function mergePr(api, o, ctx) {
   const number = positiveNumber(o.number);
   const method = token(o["merge-method"] ?? "merge", "merge-method", /^(merge|squash|rebase)$/);
   const pinned = o.sha === undefined ? null : commitSha(o.sha).toLowerCase();
-  requireMergeAuthorization(ctx.env);
+  requireMergeAuthorization(ctx.env, { number });
+  const approvedSha = (ctx.env.ARGUS_MERGE_APPROVED_SHA ?? "").trim().toLowerCase() || null;
   // An unset or unknown forge review policy counts as required: it never drops a gate.
   const needsReview = reviewPolicy(ctx.env) !== "off";
   const intervalMs =
@@ -843,6 +844,13 @@ async function mergePr(api, o, ctx) {
             pr_head_sha: head,
             action: `the PR head is no longer ${short(pinned)}; re-run the gates on the new head and call merge without --sha`,
           });
+        if (approvedSha && head.toLowerCase() !== approvedSha)
+          return stop(EXIT.not_ready, {
+            blocked: ["independent_review_head_mismatch"],
+            pr_head_sha: head,
+            approved_head_sha: approvedSha,
+            action: `independent review approved ${short(approvedSha)}, not ${short(head)}; run independent review on the live head before merging`,
+          });
         gatedHead = head;
         const gates = await mergeGates(api, pr, head, { needsReview });
         let diagnostics;
@@ -878,6 +886,7 @@ async function mergePr(api, o, ctx) {
             observation = { waiting: ["budget_spent"], pr_head_sha: head };
           } else {
             api.deadline = { at: ctx.now() + 30_000, now: ctx.now };
+            requireMergeAuthorization(ctx.env, { number, sha: head });
             merging = true;
             const readback = await api.mergePullRequest(number, {
               sha: head,

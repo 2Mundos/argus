@@ -134,14 +134,37 @@ async def read_task(
     checker: PrChecker | None = None,
 ) -> TaskRead:
     """`checker` reads the bound PR for `pr_gate`; without one the gate is null."""
+    from argus_api.tasks import independent_review as indep
+
     task = await service.get_task(conn, task_id)
+    seen = await delivery.delivery_of(conn, checker, task) if checker else None
+    review_setting = await settings_svc.get_review(
+        conn, indep.model_policy_path, task.project
+    )
+    indep_required = (
+        review_setting.mode != "off" and task.kind != indep.CODE_REVIEW_KIND
+    )
+    indep_approved = False
+    if indep_required:
+        if seen is not None:
+            row = await service.task_row(conn, task_id)
+            indep_approved, _ = await indep.merge_gate_status(
+                conn,
+                row,
+                pr=seen.pr,
+                head_sha=seen.head.sha if seen.head else None,
+            )
+        else:
+            indep_approved = await indep.is_waived(conn, task_id)
     merge = readiness.decide_merge(
-        task, await settings_svc.auto_merge_setting(conn, task.project)
+        task,
+        await settings_svc.auto_merge_setting(conn, task.project),
+        independent_review_required=indep_required,
+        independent_review_approved=indep_approved,
     )
     review = readiness.forge_review_policy(
         await settings_svc.forge_agentic_review_required(conn, task.project)
     )
-    seen = await delivery.delivery_of(conn, checker, task) if checker else None
     facts = await service.quiet_facts(conn, task_id, now)
     finalization, workspace = await newest(conn, task_id, task.state, now)
     return TaskRead(

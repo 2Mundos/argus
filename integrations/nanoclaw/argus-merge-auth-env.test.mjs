@@ -181,4 +181,50 @@ describe("merge authorization reaches the session env", () => {
     const forged = { ...noKey, ARGUS_MERGE_AUTH_KEY: "w".repeat(64) };
     assert.deepEqual(await cliMerge(forged), { code: 13, puts: 0 });
   });
+
+  it("denies merge before independent review approval and binds approved PR + SHA across boundaries", async () => {
+    // Before independent review approval: no merge variables forwarded, CLI refuses.
+    const pre = {};
+    scope(pre, task({ auto_merge: true, independent_review_required: true }));
+    const preSession = codexForwardedBy(forwardedBy(pre, staleAuthorization()));
+    assert.deepEqual(preSession, {});
+    assert.deepEqual(await cliMerge(preSession), { code: 13, puts: 0 });
+
+    // After independent review approval for PR #4 at exact SHA: forwarded and accepted for (#4, SHA).
+    const approved = {};
+    scope(
+      approved,
+      task({
+        auto_merge: true,
+        independent_review_required: true,
+        independent_review_approved_pr: `${REPO}/pull/4`,
+        independent_review_approved_head: SHA,
+      }),
+    );
+    const session = codexForwardedBy(forwardedBy(approved));
+    assert.equal(session.ARGUS_MERGE_APPROVED_PR, "4");
+    assert.equal(session.ARGUS_MERGE_APPROVED_SHA, SHA);
+    assert.deepEqual(await cliMerge(session), { code: 0, puts: 1 });
+
+    // Replacement PR #5 or different SHA is refused by the CLI before any PUT.
+    const sink = { write: () => true };
+    let puts = 0;
+    const fetch = async (_url, init = {}) => {
+      if (init.method === "PUT") puts++;
+      return Response.json(open);
+    };
+    const wrongPr = await main(
+      ["merge", "--number", "5", "--sha", SHA, "--repository", REPO],
+      { ARGUS_REPOSITORIES_JSON: JSON.stringify({ widget: REPO }), ...session },
+      { fetch, sleep: async () => {}, stdout: sink, stderr: sink },
+    );
+    const wrongSha = await main(
+      ["merge", "--number", "4", "--sha", "b".repeat(40), "--repository", REPO],
+      { ARGUS_REPOSITORIES_JSON: JSON.stringify({ widget: REPO }), ...session },
+      { fetch, sleep: async () => {}, stdout: sink, stderr: sink },
+    );
+    assert.equal(wrongPr, 13);
+    assert.equal(wrongSha, 13);
+    assert.equal(puts, 0);
+  });
 });

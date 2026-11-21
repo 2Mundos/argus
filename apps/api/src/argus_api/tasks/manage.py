@@ -287,13 +287,18 @@ async def review(
     notes: str = "",
     forge: deliverable.ForgeRead | None = None,
     deviation: bool = False,
+    waive_independent_review: bool = False,
 ) -> Task:
     """Accept or reject a result in review. `deviation` accepts over unmet acceptance
     items with `notes` as the recorded deviation (deliverable spec 3.10)."""
+    from argus_api.tasks import independent_review
+
     row = await _row(tx.conn, task_id)
     check_reviewer(row, reviewer)
     if accept:
         deliverable.check_accept(row, forge)
+        if not waive_independent_review:
+            await independent_review.check_accept_reviewed(tx.conn, row, forge)
         if not deviation:
             check_acceptance_met(row)
         elif not notes.strip():

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-19
+updated: 2026-11-21
 ---
 
 # Settings
@@ -137,20 +137,28 @@ different model**, with `different_provider` shown as "…from a different provi
 - **Review models.** Key `review.chains`, scopes `global` and `project`, has the
   shape, validation, inheritance and legacy env lock of `execution.chains`
   ([execution chains](execution-chains.spec.md) 3.1, 3.3), keyed by the reviewed
-  task's difficulty. Argus walks that level's alternatives in order and skips
-  every alternative that may be an author: an explicit model that is an author
-  (for `different_provider`, any alternative of an author provider), or an
-  account-source model whose account's configured model is an author, or, when
-  that model is unknown until lease (local), whose account served the reviewed
-  task. Alternatives with no usable account or no worker that can run them go
-  last. The rest, in order, become the child's explicit route (execution chains
-  3.7): the first runs it and the others are its fallbacks. Argus records
-  `review.independent_selected {child_id, selected, fallbacks, skipped,
-  chain_source, difficulty}` on the reviewed task, and the child's route view
-  shows the same. If every alternative is an author, the gate blocks with
-  `no_independent_reviewer` and the skipped list; an author is never used.
-  Dashboard: the **Review models** card in Settings, which reuses the execution
-  chains editor and links to and from this section.
+  task's difficulty. When `review.chains` configures the parent's difficulty, Argus
+  walks that level's alternatives in order and skips every alternative that may be
+  an author: an explicit model that is an author (for `different_provider`, any
+  alternative of an author provider), or an account-source model whose account's
+  configured model is an author, or, when that model is unknown until lease
+  (local), whose account served the reviewed task. Alternatives with no usable
+  account or no worker that can run them go last. When `review.chains` leaves the
+  parent's difficulty unconfigured, Argus searches other difficulties in
+  `review.chains` (sorted difficulty names, then chain order) followed by
+  `execution.chains` (sorted difficulty names, then chain order) for alternatives
+  that differ from both the author model and author provider and have a usable
+  account (falling back to the legacy model policy only when neither chain setting
+  configures any difficulty). The rest, in order, become the child's explicit route
+  (execution chains 3.7): the first runs it and the others are its fallbacks. Argus
+  records `review.independent_selected {child_id, selected, fallbacks, skipped,
+  chain_source, difficulty}` on the reviewed task, and the child's route view shows
+  the same. If no eligible alternative remains, the gate blocks with
+  `no_independent_reviewer`, the skipped list, and one actionable `review` decision
+  (`retry_reviewer`, `approve_without_review`, `cancel`); an author is never used
+  and model IDs are never invented. Dashboard: the **Review models** card in
+  Settings, which reuses the execution chains editor and links to and from this
+  section.
 - **Verdict.** The review task's result data is `{verdict: approve |
   request_changes, findings: [...]}` with `head_sha`. `approve` for the current
   head passes the gate; the task then goes through its own `review` gate if it has
@@ -161,47 +169,53 @@ different model**, with `different_provider` shown as "…from a different provi
   show no author model (or provider). Otherwise the verdict is void, recorded as
   `review.independent_void {reason: same_model}`, and a new reviewer is chosen.
 - **No silent skip.** If no eligible reviewer model has a usable account, the task
-  stays `in_review` with `block_reason: no_independent_reviewer` and appears in the
-  inbox.
+  stays `in_review` with `block_reason: no_independent_reviewer` and one actionable
+  `review` decision (`payload: {gate: review_failed, reason: no_independent_reviewer}`)
+  offering `retry_reviewer`, `approve_without_review` and `cancel`.
 - **Reviewed head.** The head is the commit the reviewer reads (`code_review` input
-  requires `head_sha`). It comes from the task's own record (a PR artifact's or
-  commit's `head_sha`, a reported `head_sha`/`sha`/`commit`), or, when the worker
-  named a PR without a head, from the forge: the head the forge reports for that PR,
-  read before the completion write (like the deliverable search) and matched to the
-  same PR, whatever case the worker spelled its owner or host in. Failing that, the
-  newest commit the task reported in its own milestones (`ci_passed`, `branch`, ...,
-  from its progress history) is the head. A PR's bound artifact is read back after the completion's own write, so
-  the gate sees it. **A merged PR is reviewed too**, at the head that merged: a
-  merge never skips the gate, so the parent always gets a reviewer, a decision or a
-  verdict. If no head can be read, the task stays `in_review` with `block_reason:
-  no_review_head`, `review.independent_blocked {reason: no_review_head}`, and one
-  open `review` decision (payload `{gate: review_failed, reason: no_review_head,
-  failed: []}`) with the choices `retry_reviewer`, `approve_without_review` and
-  `cancel`; a second block adds no decision. `retry_reviewer` reads the forge head
-  again, before its write. No child is created while the head is unknown. The block
-  is reached only when neither the record, the forge nor the milestone history names
+  requires `head_sha`). When the forge reports the live head for the task's PR
+  (read before the completion write and matched case-insensitively to the same PR),
+  that live full head SHA takes precedence over older attempt artifacts; otherwise
+  it comes from the current attempt's result/progress, the newest PR artifact's own
+  `head_sha`, or the newest commit milestone in progress history. An older PR's
+  `head_sha` is never carried onto a replacement PR. A PR's bound artifact is read
+  back after the completion's own write, so the gate sees it. **A merged PR is
+  reviewed too**, at the head that merged: a merge never skips the gate, so the
+  parent always gets a reviewer, a decision or a verdict. If no head can be read,
+  the task stays `in_review` with `block_reason: no_review_head`,
+  `review.independent_blocked {reason: no_review_head}`, and one open `review`
+  decision (payload `{gate: review_failed, reason: no_review_head, failed: []}`)
+  with the choices `retry_reviewer`, `approve_without_review` and `cancel`; a
+  second block adds no decision. `retry_reviewer` reads the forge head again,
+  before its write. No child is created while the head is unknown. The block is
+  reached only when neither the record, the forge nor the milestone history names
   a head.
-- **Approval of a forge-gated parent.** An `approve` verdict on the exact head
-  (`review.independent_passed {child_id, verdict, head_sha}`) is not proof of forge
-  state. For a `pr_green` or `pr_merged` parent with `review=none` and acceptance
-  off, with no open `review` decision, the approval alone is the review it needs:
-  the completion route reads the parent's PR from the forge before the write
+- **Approval of a forge-gated parent.** An `approve` verdict on the exact PR and
+  exact head (`review.independent_passed {child_id, verdict, pr, head_sha}`) is not
+  proof of forge state and never approves a different SHA or replacement PR
+  ([pre-merge independent review](pre-merge-independent-review.spec.md)). For a
+  `pr_green` or `pr_merged` parent with `review=none` and acceptance off, with no
+  open `review` decision, the approval alone is the review it needs: the completion
+  route reads the parent's PR from the forge before the write
   (`completion_forge_read`), and the write accepts the parent (`succeeded`, no
   `review` decision) only when `check_accept` holds for that read (merged, or open
   with green checks for `pr_green`), the read is at most 120 s old, its checks
-  belong to its head, and the head equals the reviewed head. Otherwise the parent
-  stays `in_review` with `block_reason: awaiting_forge` and one
-  `review.independent_awaiting_forge {why, head_sha}` event per distinct reason, and
-  no decision. A head that moved after the review voids the approval
-  (`review.independent_void {reason: head_moved}`) and spawns a reviewer for the new
-  head. A loop (`review_settle`, every `merge_supersede_interval_s`, backing off per
-  task) reads the forge outside any write for each `awaiting_forge` parent and the
-  write re-checks it before accepting; if manual review or acceptance was switched on
-  meanwhile it opens the regular `review` decision instead. With `review` other than
-  `none`, acceptance on, or open acceptance evidence, the approval opens the `review`
-  decision as before. `request_changes`, reviewer failure and the callbacks are
-  unchanged and idempotent (a parent no longer `in_review` ignores the callback).
-  Startup repair skips `awaiting_forge` parents.
+  belong to its head, and both the PR identity and head equal the reviewed PR and
+  head. Otherwise the parent stays `in_review` with `block_reason: awaiting_forge`
+  and one `review.independent_awaiting_forge {why, head_sha}` event per distinct
+  reason, and no decision. A head or PR that changed after the review voids the
+  approval (`review.independent_void {reason: head_moved | pr_moved}`) and spawns a
+  reviewer for the new PR and head. A loop (`review_settle`, every
+  `merge_supersede_interval_s`, backing off per task) reads the forge outside any
+  write for each `awaiting_forge` parent and the write re-checks it before
+  accepting; if manual review or acceptance was switched on meanwhile it opens the
+  regular `review` decision instead. With `review` other than `none`, acceptance
+  on, or open acceptance evidence, the approval opens the `review` decision as
+  before, and accepting it still verifies that the forge's PR and head match the
+  independent review approval (unless waived). `request_changes`, reviewer failure
+  and the callbacks are unchanged and idempotent (a parent no longer `in_review` or
+  already processed for that child ignores the callback). Startup repair skips
+  `awaiting_forge` parents.
 - **Reviewer failure.** A `code_review` child that ends `failed` or `cancelled`
   without a verdict does not strand the parent. Argus records
   `review.independent_child_failed {child_id, state, error_class, account, model,

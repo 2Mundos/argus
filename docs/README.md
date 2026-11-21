@@ -263,6 +263,9 @@ why you are here.
 - [Settings](specs/settings.spec.md) — typed global settings with per-project
   overrides; model preferences move there; optional review by a different model
   before a code task succeeds
+- [Pre-merge independent review workflow](specs/pre-merge-independent-review.spec.md) —
+  non-circular pre-merge independent review gate bound to exact PR identity and full
+  head SHA, cross-difficulty chain fallback, and idempotent settlement
 - [Integrations](specs/integrations.spec.md) — the Setup tab for MCP connections and
   Kubernetes clusters, project-scoped and kept out of Settings and Accounts; the
   dashboard and API manage credentials securely; an admin opts a task into Kubernetes

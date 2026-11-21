@@ -947,8 +947,9 @@ async def test_review_chain_different_provider_skips_by_provider(
     assert route.review.selected == chosen
 
 
-async def test_unconfigured_review_level_uses_policy_picker(db, fleet):
-    await review_policy(db, [CODEX_ALT], difficulty="simple")
+async def test_unconfigured_review_level_uses_policy_picker_when_no_chains_exist(
+    db, fleet
+):
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     policy = {"harness": {"claude": ["claude-opus-5-5", "claude-sonnet-5-5"]}}
     child_id = await spawn(db, parent.id, policy=policy)
@@ -959,6 +960,19 @@ async def test_unconfigured_review_level_uses_policy_picker(db, fleet):
         "model": "claude-sonnet-5-5",
     }
     assert await parent_events(db, parent.id, "review.independent_selected") == []
+
+
+async def test_unconfigured_review_level_falls_back_to_other_difficulty_chain(
+    db, fleet
+):
+    await review_policy(db, [CODEX_ALT], difficulty="simple")
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    policy = {"harness": {"claude": ["claude-opus-5-5", "claude-sonnet-5-5"]}}
+    child_id = await spawn(db, parent.id, policy=policy)
+    row, route = await state(db, child_id)
+    assert row["execution_route"] is not None
+    assert route.review.selected == "codex"
+    assert route.review.difficulty == "simple"
 
 
 async def test_review_chain_falls_back_past_unusable_account(db, fleet):
@@ -1431,13 +1445,15 @@ async def manual_gate(db, parent_id):
     return decision.payload["gate"], decision
 
 
-async def test_no_eligible_reviewer_opens_one_manual_review(db, fleet):
+async def test_no_eligible_reviewer_opens_one_actionable_decision(db, fleet):
     await review_policy(db, [OPUS_ALT])
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     assert await spawn(db, parent.id) is None
     assert await spawn(db, parent.id) is None  # a repeated attempt adds nothing
-    gate, _ = await manual_gate(db, parent.id)
-    assert gate == "no_reviewer"
+    [decision] = await open_decisions(db, parent.id)
+    assert decision.options == ["retry_reviewer", "approve_without_review", "cancel"]
+    assert decision.payload["gate"] == "review_failed"
+    assert decision.payload["reason"] == "no_independent_reviewer"
 
 
 async def test_missing_review_head_opens_one_manual_review(db, fleet):
@@ -1511,12 +1527,12 @@ async def test_gate_off_opens_manual_review_for_waiting_parents(db, fleet):
     assert len(await open_decisions(db, parent.id)) == 1
 
 
-async def test_accepting_the_manual_review_succeeds_the_parent(db, fleet):
+async def test_waiving_the_no_reviewer_decision_succeeds_the_parent(db, fleet):
     await review_policy(db, [OPUS_ALT])
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     await spawn(db, parent.id)
-    _, decision = await manual_gate(db, parent.id)
-    await answer(db, decision.id, "accept")
+    [decision] = await open_decisions(db, parent.id)
+    await answer(db, decision.id, "approve_without_review", "no alternate model")
     row, _ = await state(db, parent.id)
     assert row["state"] == "succeeded" and row["block_reason"] is None
 

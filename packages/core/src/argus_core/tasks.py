@@ -730,3 +730,9 @@ class ClaimedTask(Task):
     # agentic review for the exact head before a PR is ready or merged. Distinct from
     # `review.independent`, the backend `code_review` child. Null: not delivered.
     forge_agentic_review_required: bool | None = None
+    # Effective `review.independent` requires a pre-merge independent review for this
+    # task (pre-merge independent review spec 3.3). When true, merging is denied until
+    # `independent_review_approved_head` matches the live PR and exact full head SHA.
+    independent_review_required: bool = False
+    independent_review_approved_pr: str | None = None
+    independent_review_approved_head: str | None = None

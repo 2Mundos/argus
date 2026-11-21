@@ -1573,10 +1573,11 @@ function prOutput(pr) {
 
 /**
  * The channel issues ARGUS_MERGE_AUTH_KEY/TASK/ATTEMPT and ARGUS_MERGE_AUTHORIZED per attempt
- * (argus-merge-auth.ts); the token is HMAC-SHA256(key, `merge:${task}:${attempt}`) in hex.
+ * (argus-merge-auth.ts); the token is HMAC-SHA256(key, `merge:${task}:${attempt}`) in hex, or
+ * with `:review:${approvedPr}:${approvedSha}` when bound to an independent review approval.
  * Keep the formula in step with `mergeAuthorizationToken` there.
  */
-function requireMergeAuthorization(env) {
+function requireMergeAuthorization(env, target = {}) {
   const given = env.ARGUS_MERGE_AUTHORIZED;
   if (!given)
     throw policy(
@@ -1589,12 +1590,29 @@ function requireMergeAuthorization(env) {
     throw policy(
       "merge authorization was not issued by the Argus channel for this attempt (a worker-set ARGUS_MERGE_AUTHORIZED is not an authorization)",
     );
+  const approvedSha = (env.ARGUS_MERGE_APPROVED_SHA ?? "").trim().toLowerCase();
+  const approvedPr = (env.ARGUS_MERGE_APPROVED_PR ?? "").trim().replace(/^#/, "");
+  if (approvedPr && !approvedSha)
+    throw policy("merge authorization carries an approved PR without an approved head SHA");
+  if (approvedSha && !/^[0-9a-f]{40}$/.test(approvedSha))
+    throw policy("merge authorization approved head SHA must be a full 40-character commit SHA");
+  const suffix = approvedSha ? `:review:${approvedPr}:${approvedSha}` : "";
   const expected = Buffer.from(
-    createHmac("sha256", key).update(`merge:${task}:${attempt}`).digest("hex"),
+    createHmac("sha256", key).update(`merge:${task}:${attempt}${suffix}`).digest("hex"),
   );
   const actual = Buffer.from(given);
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
     throw policy("merge authorization is stale or was not issued for this attempt");
+  if (approvedSha) {
+    if (approvedPr && target.number !== undefined && String(target.number) !== approvedPr)
+      throw policy(
+        `independent review approved PR #${approvedPr}, not PR #${target.number}; merge refused`,
+      );
+    if (target.sha !== undefined && String(target.sha).toLowerCase() !== approvedSha)
+      throw policy(
+        `independent review approved head ${approvedSha.slice(0, 12)}, not ${String(target.sha).slice(0, 12)}; merge refused`,
+      );
+  }
 }
 
 const COMMANDS = {
@@ -1628,7 +1646,7 @@ const COMMANDS = {
         /^(merge|squash|rebase)$/,
       );
       const sha = commitSha(o.sha);
-      requireMergeAuthorization(ctx.env);
+      requireMergeAuthorization(ctx.env, { number: o.number, sha });
       return api.mergePullRequest(o.number, { sha, merge_method });
     },
   },

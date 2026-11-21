@@ -36,7 +36,13 @@ class MergeDecision(BaseModel):
     granted_by: Literal["auto_merge", "allow_merge"] | None
 
 
-def decide_merge(task: Task, auto_merge: SettingValue) -> MergeDecision:
+def decide_merge(
+    task: Task,
+    auto_merge: SettingValue,
+    *,
+    independent_review_required: bool = False,
+    independent_review_approved: bool = False,
+) -> MergeDecision:
     enabled = bool(auto_merge.value)
     by_setting = enabled and task.deliverable is Deliverable.PR_MERGED
     delivery = task.input.get("delivery") if isinstance(task.input, dict) else None
@@ -46,9 +52,12 @@ def decide_merge(task: Task, auto_merge: SettingValue) -> MergeDecision:
         and delivery.get("allow_merge") is True
     )
     authorized = by_setting or allow
+    review_ok = not independent_review_required or independent_review_approved
     return MergeDecision(
         authorized=authorized,
-        may_merge=authorized and "repository:write" in task.required_capabilities,
+        may_merge=authorized
+        and review_ok
+        and "repository:write" in task.required_capabilities,
         deliverable=task.deliverable,
         auto_merge=enabled,
         auto_merge_source="project"

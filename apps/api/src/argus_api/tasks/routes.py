@@ -372,6 +372,19 @@ async def claim_task(
                     forge_review = await settings_svc.forge_agentic_review_required(
                         conn, task.project
                     )
+                    indep_setting = await settings_svc.get_review(
+                        conn, settings.model_policy_path, task.project
+                    )
+                    indep_required = (
+                        indep_setting.mode != "off"
+                        and task.kind != independent_review.CODE_REVIEW_KIND
+                        and not await independent_review.is_waived(conn, task.id)
+                    )
+                    approved_pr, approved_head = (
+                        await independent_review.reviewed_approval_of(conn, task.id)
+                        if indep_required
+                        else (None, None)
+                    )
                     switch = await service.attempt_model_switch(
                         conn, task.id, task.attempt
                     )
@@ -420,6 +433,9 @@ async def claim_task(
                     command_guard_enabled=command_guard_enabled,
                     auto_merge=auto_merge,
                     forge_agentic_review_required=forge_review,
+                    independent_review_required=indep_required,
+                    independent_review_approved_pr=approved_pr,
+                    independent_review_approved_head=approved_head,
                 )
             remaining = deadline - loop.time()
             try:

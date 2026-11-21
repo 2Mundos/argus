@@ -84,8 +84,21 @@ async def complete(
     # fix the gap in this attempt (task deliverable spec 3.4).
     have = await deliverable.bind_found(tx, row, have, pr_search, f"agent:{agent_id}")
     acceptance = await settings_svc.acceptance_enabled(tx.conn, row["project"])
+    path = model_policy_path or Path("data/model-policy.json")
+    review_setting = await settings_svc.get_review(tx.conn, path, row["project"])
+    pre_merge_review = (
+        review_setting.mode != "off" and row["kind"] != indep.CODE_REVIEW_KIND
+    )
     awaits_forge = await deliverable.check_complete(
-        tx.conn, row, agent_id, result, have, pr_search, pr_gate, acceptance
+        tx.conn,
+        row,
+        agent_id,
+        result,
+        have,
+        pr_search,
+        pr_gate,
+        acceptance,
+        pre_merge_review=pre_merge_review,
     )
     held = merge_acceptance(have.checklist, json.loads(row["acceptance"]))
     # A report naming an item this task does not hold came from another task's work
@@ -127,8 +140,6 @@ async def complete(
     # The stored artifacts (a PR bound at completion) are read back for the gate.
     row = await _row(tx.conn, task_id)
     actor = f"agent:{agent_id}"
-    path = model_policy_path or Path("data/model-policy.json")
-    review_setting = await settings_svc.get_review(tx.conn, path, row["project"])
     policy, _ = await settings_svc.effective_model_policy(tx.conn, path, row["project"])
 
     # Child code_review completion drives the parent's independent-review gate.

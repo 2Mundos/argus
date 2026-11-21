@@ -5280,6 +5280,15 @@ export interface components {
             harness_model?: components["schemas"]["HarnessModel"] | null;
             /** Id */
             id: string;
+            /** Independent Review Approved Head */
+            independent_review_approved_head?: string | null;
+            /** Independent Review Approved Pr */
+            independent_review_approved_pr?: string | null;
+            /**
+             * Independent Review Required
+             * @default false
+             */
+            independent_review_required?: boolean;
             /** Input */
             input: {
                 [key: string]: unknown;
@@ -7986,6 +7995,8 @@ export interface components {
             failed_reviewers?: components["schemas"]["FailedReviewer"][];
             /** Head Sha */
             head_sha?: string | null;
+            /** Pr */
+            pr?: string | null;
             /**
              * Source
              * @default task

@@ -45,7 +45,7 @@ async def settle_task(db: Database, checker: delivery.PrChecker, task_id: str) -
         row = await tasks.task_row(conn, task_id)
         if row["block_reason"] != indep.AWAITING_FORGE:
             return False
-        reviewed = await indep.reviewed_head_of(conn, task_id)
+        reviewed_pr, reviewed = await indep.reviewed_approval_of(conn, task_id)
         forge = None
         if await indep.awaits_settlement(conn, row):
             task = await tasks.get_task(conn, task_id)
@@ -79,9 +79,15 @@ async def settle_task(db: Database, checker: delivery.PrChecker, task_id: str) -
                 requested_by=ACTOR,
             )
             return False
-        if await indep.reviewed_head_of(tx.conn, task_id) != reviewed or forge is None:
+        if (
+            await indep.reviewed_approval_of(tx.conn, task_id)
+            != (reviewed_pr, reviewed)
+            or forge is None
+        ):
             return False  # a newer approval arrived; the next pass reads again
-        return await indep.settle_or_wait(tx, row, forge, reviewed, ACTOR)
+        return await indep.settle_or_wait(
+            tx, row, forge, reviewed, ACTOR, reviewed_pr=reviewed_pr
+        )
 
 
 async def sweep(

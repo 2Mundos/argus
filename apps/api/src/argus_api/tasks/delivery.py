@@ -329,16 +329,24 @@ async def reference(conn: aiosqlite.Connection, task: Task) -> PrRef | None:
 
 
 def task_reported_head(task: Task) -> str | None:
-    """Best Argus-known head SHA for staleness comparison; never from forge."""
+    """Best Argus-known head SHA for staleness comparison; never from forge.
+
+    Follows the newest PR artifact (by observed_at, matching `extract`) so a
+    replacement PR never inherits an older PR's head SHA."""
     if task.continuation:
-        for a in task.continuation.artifacts:
-            if a.kind is ArtifactKind.PR and a.head_sha and _SHA.fullmatch(a.head_sha):
-                return a.head_sha.lower()
-        for a in task.continuation.artifacts:
-            if a.kind is ArtifactKind.COMMIT:
-                sha = a.head_sha or (a.ref if _SHA.fullmatch(a.ref) else None)
-                if sha and _SHA.fullmatch(sha):
-                    return sha.lower()
+        prs = [a for a in task.continuation.artifacts if a.kind is ArtifactKind.PR]
+        if prs:
+            newest = max(enumerate(prs), key=lambda p: (p[1].observed_at, p[0]))[1]
+            if newest.head_sha and _SHA.fullmatch(newest.head_sha):
+                return newest.head_sha.lower()
+            return None
+        commits = [
+            a for a in task.continuation.artifacts if a.kind is ArtifactKind.COMMIT
+        ]
+        for a in sorted(commits, key=lambda c: c.observed_at, reverse=True):
+            sha = a.head_sha or (a.ref if _SHA.fullmatch(a.ref) else None)
+            if sha and _SHA.fullmatch(sha):
+                return sha.lower()
     data = (task.result.data if task.result else None) or {}
     for key in ("head_sha", "sha", "commit"):
         val = data.get(key)
@@ -1087,16 +1095,24 @@ async def _independent_review(
 ) -> IndependentReviewSummary | None:
     """Summary of a code_review child, if any. Source is always task (Argus)."""
     async with conn.execute(
-        "SELECT id, state, result FROM tasks WHERE parent_id = ? AND kind = 'code_review'"
-        " ORDER BY created_at DESC LIMIT 1",
+        "SELECT id, state, result, input FROM tasks WHERE parent_id = ? AND kind = 'code_review'"
+        " ORDER BY rowid DESC LIMIT 1",
         (task.id,),
     ) as cur:
         row = await cur.fetchone()
     if row is None:
         return None
-    child_id, state, raw = row[0], row[1], row[2]
+    child_id, state, raw, raw_input = row[0], row[1], row[2], row[3]
     verdict = "pending"
     head_sha = None
+    pr = None
+    if raw_input:
+        try:
+            inp = json.loads(raw_input)
+            if isinstance(inp, dict) and isinstance(inp.get("pr"), str):
+                pr = inp["pr"]
+        except (TypeError, json.JSONDecodeError):
+            pass
     if state in ("succeeded", "failed", "cancelled"):
         verdict = "unknown"
     if raw:
@@ -1126,6 +1142,7 @@ async def _independent_review(
     return IndependentReviewSummary(
         child_task_id=child_id,
         verdict=verdict,
+        pr=pr,
         head_sha=head_sha,
         failed_reviewers=await independent_review.failed_reviewer_summaries(
             conn, task.id
