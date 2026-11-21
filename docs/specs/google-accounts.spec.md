@@ -144,7 +144,10 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   token that still looks fresh. The token whose refresh failed stays invalid
   (remembered in process memory, independent of the cooldown) until a refresh
   or a credential replacement changes it: after the window the provider is
-  retried once, never answered with the rejected token. A forced call inside the
+  retried once, never answered with the rejected token. The token is marked
+  before the provider is awaited, so a plain call that overlaps an in-flight
+  refresh waits for its outcome instead of answering from the token being
+  refreshed. A forced call inside the
   window after a successful refresh (a 401 on the new token) marks that token
   rejected without contacting the provider; a plain call then answers
   `503 credential_refresh_unavailable` until the window ends or the token is replaced. An access-only credential (no

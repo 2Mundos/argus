@@ -484,6 +484,10 @@ class GoogleTokenRefresher:
                     self._invalid[account_id] = _access_token(latest)
                     return "permanent"
                 return "current"
+            # Mark the token before awaiting the provider: a plain call that
+            # overlaps this refresh skips the lock-free fast path and waits for
+            # the outcome instead of returning the token being refreshed.
+            self._invalid[account_id] = _access_token(latest)
             try:
                 refreshed = await refresh_oauth_credential(
                     latest,

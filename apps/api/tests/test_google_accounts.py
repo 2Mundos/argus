@@ -911,6 +911,68 @@ def test_midlease_forced_401_on_refreshed_token_is_not_delivered(
     assert len(calls) == 2
 
 
+def test_midlease_plain_call_overlapping_forced_refresh_never_returns_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain call that overlaps a forced refresh still awaiting the provider
+    must not take the fresh-token fast path and return the token just rejected."""
+    import asyncio
+
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", "client-id-test")
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-test")
+
+    async def run() -> tuple[str, str]:
+        reached = asyncio.Event()
+        release = asyncio.Event()
+        calls: list[int] = []
+
+        async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+            calls.append(1)
+            reached.set()
+            await release.wait()
+            return 503, {"error": "unavailable"}
+
+        secrets = MemorySecretStore(
+            {
+                "account-overlap": {
+                    "token": {
+                        "access_token": FAKE_ACCESS,
+                        "token_type": "Bearer",
+                        "refresh_token": FAKE_REFRESH,
+                        "expiry": _future_expiry(),
+                        "expires_in": 3600,
+                    },
+                    "auth_method": "consumer",
+                }
+            }
+        )
+        refresher = GoogleTokenRefresher(post_form=fake_post)
+        now = datetime.now(UTC)
+
+        def refresh(force: bool) -> asyncio.Future:
+            return refresher._refresh_row(
+                None,  # type: ignore[arg-type]  # transient failures never touch the db
+                secrets,
+                "overlap",
+                "google-overlap",
+                "sops:account-overlap",
+                now=now,
+                force=force,
+            )
+
+        forced = asyncio.ensure_future(refresh(force=True))
+        await reached.wait()
+        plain = asyncio.ensure_future(refresh(force=False))
+        release.set()
+        forced_outcome, plain_outcome = await asyncio.gather(forced, plain)
+        assert len(calls) == 1
+        return forced_outcome, plain_outcome
+
+    forced_outcome, plain_outcome = asyncio.run(run())
+    assert forced_outcome == "transient"
+    assert plain_outcome != "current"
+
+
 def test_midlease_expired_access_only_credential_is_rejected(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
