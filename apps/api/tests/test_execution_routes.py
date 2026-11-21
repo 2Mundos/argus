@@ -885,7 +885,7 @@ async def test_review_chain_skips_author_and_child_runs_on_fallback(db, fleet):
     assert route.source == "review" and route.bypass is None
     assert [a.id for a in route.alternatives] == ["codex"]
     assert route.review.selected == "codex" and route.review.parent_id == parent.id
-    claimed, engine = await claim(db, fleet)
+    claimed, engine = await claim(db, fleet, [*CAPS, "repository:write"])
     assert claimed.id == child_id and engine.account_id == "codex"
     _, route = await state(db, child_id)
     assert route.selection.source == "review"
@@ -902,7 +902,7 @@ async def test_review_chain_effort_is_kept_and_does_not_hide_the_author(db, flee
     child_id = await spawn(db, parent.id)
     [selected] = await parent_events(db, parent.id, "review.independent_selected")
     assert selected["skipped"] == [{"id": "opus", "reason": "author"}]
-    await claim(db, fleet)
+    await claim(db, fleet, [*CAPS, "repository:write"])
     _, route = await state(db, child_id)
     assert route.selection.alternative.harness.effort == "xhigh"
     assert route.selection.harness.selector.effort == "xhigh"
