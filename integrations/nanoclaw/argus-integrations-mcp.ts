@@ -893,6 +893,11 @@ export function createMcpBroker(opts: McpBrokerOptions): McpBroker {
         `${route.name}: the server resolves to a loopback or link-local address`,
       );
     const transport = await detect({ url, addresses, route });
+    if (route.transports && !route.transports.includes(transport))
+      throw new McpRefusal(
+        "env_integration_unsupported",
+        `${route.name}: this harness cannot use a ${transport === "sse" ? "legacy HTTP+SSE" : transport} MCP server`,
+      );
     // A running session keeps the URL and transport it started with (a rotation or an
     // edit re-grants under the same secret); a server that changed transport fails closed.
     if (was && was.transport !== transport)

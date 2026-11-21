@@ -321,11 +321,8 @@ describe("installTaskIntegrations", () => {
     expect(got.installed.kubeconfig).toContain(TASK_INTEGRATIONS_DIR);
   });
 
-  it("installs Kubernetes for a Codex engine; MCP there is refused by the API, not the channel", async () => {
-    // The kubeconfig is CLI-level and reads the same on every harness. MCP
-    // servers need the Claude harness session, so delivery refuses them for
-    // openai at credential fetch (delivery tests); the channel never grants
-    // what the API does not deliver.
+  it("installs Kubernetes for a Codex engine", async () => {
+    // The kubeconfig is CLI-level and reads the same on every harness.
     const g = group();
     const argus = fakeArgus();
     const got = await install(g, argus.source, { engineProvider: "openai" });
@@ -798,28 +795,72 @@ describe("MCP integrations", () => {
     expect(b.sets).toEqual([{}]);
   });
 
-  it("a mixed Codex selection installs nothing: the refused MCP blocks the kubeconfig too", async () => {
-    // A task's selections are all-or-nothing (spec 3.6 engine matrix): one
-    // undeliverable selection must not leave the other half installed.
+  it("asks the broker for Streamable HTTP only under Codex, and nothing else restricts", async () => {
+    const argus = fakeArgus([MCP]);
+    const codex = fakeBroker();
+    const got = await install(group(), argus.source, {
+      selected: ["mcp-0"],
+      engineProvider: "openai",
+      mcp: codex.broker,
+      sessionMcp: codex.sessionMcp,
+    });
+    expect(got.ok).toBe(true);
+    if (!got.ok || !got.installed) throw new Error("not installed");
+    expect(codex.opened[0]!.routes.map((r) => r.transports)).toEqual([["http"]]);
+    expect(got.installed.engineProvider).toBe("openai");
+    expect(JSON.stringify(got.installed)).not.toContain(SECRET);
+    const claude = fakeBroker();
+    await install(group(), argus.source, {
+      selected: ["mcp-0"],
+      engineProvider: "anthropic",
+      mcp: claude.broker,
+      sessionMcp: claude.sessionMcp,
+    });
+    expect(claude.opened[0]!.routes.map((r) => "transports" in r)).toEqual([false]);
+  });
+
+  it("a legacy HTTP+SSE server under Codex installs nothing, kubeconfig included", async () => {
+    // All-or-nothing (spec 3.6): the broker's refusal (before any grant) must not
+    // leave the kubeconfig or a session server behind.
     const g = group();
     const argus = fakeArgus([{}, MCP]);
-    const b = fakeBroker();
-    const source: IntegrationsSource = {
-      ...argus.source,
-      credential: async (taskId, id, attempt, version) => {
-        if (id === MCP.integration_id) throw new ApiError(409, "integration_engine_unsupported");
-        return argus.source.credential(taskId, id, attempt, version);
-      },
-    };
-    const got = await install(g, source, {
+    const b = fakeBroker(() => ({
+      ok: false,
+      reason: "env_integration_unsupported",
+      error: "radar: this harness cannot use a legacy HTTP+SSE MCP server",
+    }));
+    const got = await install(g, argus.source, {
       selected: ["int-0", MCP.integration_id],
       engineProvider: "openai",
       mcp: b.broker,
       sessionMcp: b.sessionMcp,
     });
     expect(got).toMatchObject({ ok: false, reason: "env_integration_unsupported" });
-    expect(b.opened).toEqual([]);
+    expect(JSON.stringify(got)).not.toContain(SECRET);
+    expect(b.sets).toEqual([{}]);
+    expect(b.revoked).toEqual([[TASK, undefined]]);
     expect(existsSync(taskIntegrationsPath(g, TASK))).toBe(false);
+  });
+
+  it("keeps the Codex transport limit when a rotation re-grants", async () => {
+    const g = group();
+    const argus = fakeArgus([MCP]);
+    const b = fakeBroker();
+    const first = await install(g, argus.source, {
+      selected: ["mcp-0"],
+      engineProvider: "openai",
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    if (!first.ok || !first.installed) throw new Error("not installed");
+    argus.rows[0]!.secret_version = 2;
+    argus.rows[0]!.token = `${SECRET}-v2`;
+    const got = await recheckTaskIntegrations(g, first.installed, argus.source, {
+      mcp: b.broker,
+      sessionMcp: b.sessionMcp,
+    });
+    expect(got.state).toBe("refreshed");
+    expect(b.opened.at(-1)!.routes.map((r) => r.transports)).toEqual([["http"]]);
   });
 
   it("refuses an allowlist removed after selection (tools_unknown)", async () => {
