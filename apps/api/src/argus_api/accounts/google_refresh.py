@@ -380,6 +380,14 @@ def _expired_without_refresh_token(doc: dict[str, Any], now: datetime) -> bool:
     return exp is not None and exp <= now
 
 
+def _access_expired(doc: dict[str, Any], now: datetime) -> bool:
+    """The stored OAuth access token is at or past its expiry."""
+    if not google_auth.is_oauth(doc):
+        return False
+    exp = google_auth.access_expiry(doc)
+    return exp is not None and exp <= now
+
+
 def _access_token(doc: dict[str, Any]) -> str | None:
     """The stored access token, kept only in process memory to recognise a
     rejected one; never logged or returned."""
@@ -471,7 +479,9 @@ class GoogleTokenRefresher:
                 if force:
                     self._invalid[account_id] = _access_token(latest)
                     return "throttled"
-                if self._is_invalid(account_id, latest):
+                if self._is_invalid(account_id, latest) or _access_expired(latest, now):
+                    # Never hand back a token past its expiry (e.g. an
+                    # `expires_in` shorter than the cooldown).
                     return "throttled"
                 return "current"
             invalid = self._is_invalid(account_id, latest)

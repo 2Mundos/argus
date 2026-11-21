@@ -152,6 +152,9 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   rejected without contacting the provider; a plain call then answers
   `503 credential_refresh_unavailable` until the window ends or the token is replaced. An access-only credential (no
   `refresh_token`) past its expiry is `409 credential_refresh_rejected`.
+  A plain call inside the window never returns a token whose stored expiry has
+  passed (e.g. a short `expires_in`): it answers `503 credential_refresh_unavailable`
+  until the window ends, then refreshes normally.
   `force` refreshes a token whose expiry is not near, for a provider 401 on it.
   Tested deterministically with fake tokens and an injected token endpoint
   (`apps/api/tests/test_google_accounts.py`). The historical 401 of task 62c4b502
