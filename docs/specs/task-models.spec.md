@@ -198,8 +198,10 @@ name and status; error text is redacted and bounded). It returns:
   `error_at`; while the task is waiting (`awaiting_approval`, `pending`, `ready`)
   or `claimed`, `Task.error_scope` is `previous`, `error` and `failure_class` are
   null here and the error is `previous_failure` (attempt, time, redacted error,
-  class). A `blocked`, `in_review` or terminal task's error is `current`. A
-  failure from before `error_attempt` existed is attributed to the attempt whose
+  class). A `blocked`, `in_review` or terminal task's error is `current` only
+  when `error_attempt` is its current `attempt` (or unknown); a later attempt
+  that completed or blocked without a new error leaves the earlier one
+  `previous`. A failure from before `error_attempt` existed is attributed to the attempt whose
   claim ended last. Earlier errors stay in the task's events;
 - `providers`: every engine, executor-only and registered provider, with
   whether a harness can run on it, the `executor_model` executor that names it

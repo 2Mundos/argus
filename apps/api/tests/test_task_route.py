@@ -266,6 +266,61 @@ async def test_a_later_attempt_that_completes_keeps_the_old_error_previous(
     assert got.previous_failure is not None and got.previous_failure.attempt == 1
 
 
+async def second_attempt(db: Database, error: str):
+    """A task whose attempt 1 failed with `error` and whose attempt 2 is claimed."""
+    task = await failed_attempt(
+        db, error, "channel_error", "session_lost", max_attempts=5
+    )
+    async with db.write() as tx:
+        claimed = await tasks.claim(tx, A, [])
+    assert claimed is not None and claimed.attempt == 2
+    return task
+
+
+async def test_an_unrelated_block_keeps_the_earlier_error_previous(
+    db: Database,
+) -> None:
+    task = await second_attempt(db, f"connection reset, key {KEY}")
+    async with db.write() as tx:
+        blocked = await tasks.block(tx, A, task.id, 2, "needs_input")
+    assert (blocked.state, blocked.error_attempt) == ("blocked", 1)
+    assert blocked.error_scope == "previous"
+    got = await diagnose(db, task.id)
+    assert got.error is None and got.failure_class is None
+    assert got.previous_failure is not None and got.previous_failure.attempt == 1
+    assert KEY not in got.previous_failure.error  # redaction survives
+
+
+async def test_a_block_that_reports_its_own_error_is_current(db: Database) -> None:
+    task = await second_attempt(db, "connection reset by peer")
+    async with db.write() as tx:
+        blocked = await tasks.block(tx, A, task.id, 2, "needs_input", "need creds")
+    assert (blocked.error_attempt, blocked.error_scope) == (2, "current")
+    got = await diagnose(db, task.id)
+    assert got.error == "need creds" and got.previous_failure is None
+
+
+async def test_an_error_without_provenance_is_current_unless_waiting(
+    db: Database,
+) -> None:
+    task = await second_attempt(db, "connection reset by peer")
+    async with db.write() as tx:
+        await tasks.complete(tx, A, task.id, 2, DONE)
+        await tx.conn.execute(
+            "UPDATE tasks SET error_attempt = NULL WHERE id = ?", (task.id,)
+        )
+    async with db.snapshot() as snap:
+        got = await tasks.get_task(snap.conn, task.id)
+    assert got.error_attempt is None and got.error_scope == "current"
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE tasks SET state = 'ready' WHERE id = ?", (task.id,)
+        )
+    async with db.snapshot() as snap:
+        got = await tasks.get_task(snap.conn, task.id)
+    assert got.error_scope == "previous"
+
+
 async def test_a_task_without_errors_has_no_failure_to_distinguish(
     db: Database,
 ) -> None:
