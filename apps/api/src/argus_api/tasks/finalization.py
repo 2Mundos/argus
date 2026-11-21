@@ -115,17 +115,19 @@ def workspace_facts(row: aiosqlite.Row | None, now: datetime) -> WorkspaceFacts 
 async def prior_workspaces(
     conn: aiosqlite.Connection, task_id: str, attempt: int, now: datetime
 ) -> list[PriorWorkspace]:
-    """The workspace owner and checkpoint step of every attempt before `attempt`,
-    oldest first (the newest row of each attempt number). The claim hands it to the
-    channel, so a worker on another instance knows where earlier work may live."""
+    """The workspace owner and checkpoint step of every earlier claim row of
+    `task_id` across all retry generations, oldest first (ordered by
+    `task_attempts.id`, excluding the current claim's row). The claim hands it
+    to the channel, so a worker on another instance knows where earlier work
+    may live."""
     async with conn.execute(
         "SELECT t.*, a.state AS owner_state,"
         " a.last_heartbeat_at AS owner_last_heartbeat_at, a.runtime AS owner_runtime"
         " FROM task_attempts t LEFT JOIN agents a ON a.id = t.agent_id"
-        " WHERE t.task_id = ? AND t.attempt < ? AND t.id = ("
-        "  SELECT max(id) FROM task_attempts WHERE task_id = t.task_id"
-        "  AND attempt = t.attempt) ORDER BY t.attempt",
-        (task_id, attempt),
+        " WHERE t.task_id = ? AND t.id < ("
+        "  SELECT max(id) FROM task_attempts WHERE task_id = ? AND attempt = ?)"
+        " ORDER BY t.id",
+        (task_id, task_id, attempt),
     ) as cur:
         rows = await cur.fetchall()
     return [
