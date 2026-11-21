@@ -1322,6 +1322,93 @@ function prePushChecks(git, cwd, ctx, notApplicable = []) {
   return null;
 }
 
+/**
+ * A reviewer's fix (input.fix, spec pre-merge-independent-review 3.7): the only delivery is
+ * a fast-forward of the PR's own branch from the head the reviewer saw. No rebase, no force,
+ * no other branch, no PR edit; the push is plain so the forge refuses anything else too.
+ */
+async function deliverFix(api, ctx, branch) {
+  const { git, cwd, env } = ctx;
+  const number = (env.ARGUS_FIX_PR ?? "").trim();
+  const baseSha = (env.ARGUS_FIX_BASE_SHA ?? "").trim().toLowerCase();
+  const refuse = (code, message, action) => failure(code, message, action);
+  if (!/^\d{1,9}$/.test(number) || !/^[0-9a-f]{40}$/.test(baseSha))
+    throw refuse(
+      "fix_scope_invalid",
+      "this task's fix scope is malformed; nothing was pushed",
+      "report request_changes in your reply: Argus cannot verify where this fix may go",
+    );
+  const pr = await api.getPullRequest(Number(number));
+  const live = (pr?.head?.sha ?? "").toLowerCase();
+  if (pr?.state !== "open" || pr?.head?.ref !== branch || !/^[0-9a-f]{40}$/.test(live))
+    throw refuse(
+      "fix_branch_mismatch",
+      `PR #${number} is not open on branch ${branch}; a fix may only be pushed to the PR's own branch`,
+      `switch to the PR's head branch ${pr?.head?.ref ?? "(unknown)"} and run deliver again; do not push elsewhere`,
+    );
+  gitStep(git, ["fetch", "--quiet", "origin", branch], cwd);
+  const ancestor = (a, b) => {
+    try {
+      git(["merge-base", "--is-ancestor", a, b], cwd);
+      return true;
+    } catch (error) {
+      if (error?.status === 1) return false;
+      throw gitError(["merge-base"], error);
+    }
+  };
+  const head = gitStep(git, ["rev-parse", "HEAD"], cwd);
+  if (
+    live !== baseSha &&
+    !ancestor(baseSha, live) // the PR moved on only by descendants of the reviewed head
+  )
+    throw refuse(
+      "fix_base_moved",
+      `PR #${number} head ${live} is not a descendant of the reviewed head ${baseSha}; nothing was pushed`,
+      "do not push: report request_changes in your reply so Argus reviews the new head afresh",
+    );
+  if (head === live)
+    throw refuse(
+      "fix_no_commit",
+      "HEAD equals the PR head; there is no fix commit to publish",
+      "commit the fix on this branch, then run deliver again",
+    );
+  if (!ancestor(live, head))
+    throw refuse(
+      "fix_not_fast_forward",
+      `HEAD does not contain the PR head ${live}; a fix is fast-forward only and is never rebased or force-pushed`,
+      `run \`git merge --ff-only origin/${branch}\` or recreate the fix commit on top of ${live}, then run deliver again`,
+    );
+  const notApplicable = [];
+  const failed = prePushChecks(git, cwd, ctx, notApplicable);
+  if (failed)
+    return {
+      code: EXIT.not_ready,
+      result: {
+        branch,
+        reasons: ["pre_push_failed"],
+        action: "fix the failing check, commit the fix, then run deliver again",
+        ...(notApplicable.length ? { checks_not_applicable: notApplicable } : {}),
+        ...failed,
+      },
+    };
+  gitStep(git, ["push", "--quiet", "origin", `HEAD:refs/heads/${branch}`], cwd);
+  return {
+    code: EXIT.ok,
+    result: {
+      url: pr.html_url ?? pr.url ?? null,
+      number: pr.number,
+      head_sha: head,
+      base_head_sha: baseSha,
+      branch,
+      fix: true,
+      rebased: false,
+      created: false,
+      ...(notApplicable.length ? { checks_not_applicable: notApplicable } : {}),
+      sync: "fast-forward of the PR branch; no rebase, no force",
+    },
+  };
+}
+
 async function deliver(api, o, ctx) {
   const { git, cwd } = ctx;
   // Before the branch check: a rebase in progress detaches HEAD, and we must not touch it.
@@ -1362,6 +1449,8 @@ async function deliver(api, o, ctx) {
       `the worktree has uncommitted or untracked changes; ${COMMIT_ACTION}`,
       COMMIT_ACTION,
     );
+  if (ctx.env.ARGUS_FIX_PR !== undefined || ctx.env.ARGUS_FIX_BASE_SHA !== undefined)
+    return deliverFix(api, ctx, branch);
   const base =
     o.base === undefined
       ? (await api.getRepository()).default_branch

@@ -562,3 +562,66 @@ def test_post_fix_approval_reads_the_live_head_when_the_parent_gate_is_on(
     )
     assert _approval(api_client, parent_id) == (PR_450_URL, HEAD_2)
     assert not _events(api_client, parent_id, "review.independent_void")
+
+
+class _Rows:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+
+    async def __aenter__(self) -> _Rows:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def fetchall(self) -> list[dict[str, Any]]:
+        return self.rows
+
+
+class _Conn:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+
+    def execute(self, *_: object) -> _Rows:
+        return _Rows(self.rows)
+
+
+@pytest.mark.parametrize("mode", ["different_model", "different_provider"])
+def test_fixer_model_is_excluded_through_account_sourced_selectors(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    from argus_api.accounts import service as accounts_svc
+    from argus_core.execution_chains import Selector
+
+    row = {"id": "acct-x", "provider": "openai"}
+    monkeypatch.setattr(accounts_svc, "_serves", lambda *_: True)
+    monkeypatch.setattr(
+        accounts_svc,
+        "_settings",
+        lambda *_: type("S", (), {"model": "fixer-model"})(),
+    )
+    selector = Selector.model_validate(
+        {
+            "account_id": "acct-x",
+            "provider": "openai",
+            "adapter": "codex",
+            "model": {"source": "account"},
+        }
+    )
+
+    def may(models: set[str]) -> bool:
+        return asyncio.run(
+            indep._may_author(
+                _Conn([row]),  # ty: ignore[invalid-argument-type]
+                selector,
+                None,
+                "engine",
+                mode=mode,  # ty: ignore[invalid-argument-type]
+                models=models,
+                providers={"anthropic"},
+                accounts=set(),
+            )
+        )
+
+    assert may({"fixer-model"}) is True
+    assert may({"someone-else"}) is False

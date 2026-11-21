@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ArgusTask } from "./argus.js";
 import {
   mergeAuthorizationToken,
+  scopeFixDelivery,
   scopeMergeAuthorization,
   taskAuthorizesMerge,
   taskMayMerge,
@@ -119,4 +120,33 @@ describe("merge decision cases shared with the API", () => {
       expect(taskMayMerge(t)).toBe(c.may_merge);
     });
   }
+});
+
+describe("scopeFixDelivery", () => {
+  const sha = "a".repeat(40);
+  const fix = (f: unknown) => ({ input: { fix: f } });
+
+  it("exports the PR and reviewed head for a valid fix scope, and clears them otherwise", () => {
+    const env: NodeJS.ProcessEnv = {};
+    scopeFixDelivery(env, fix({ pr: "https://github.com/o/r/pull/461", base_head_sha: sha.toUpperCase(), force_push: false }));
+    expect(env.ARGUS_FIX_PR).toBe("461");
+    expect(env.ARGUS_FIX_BASE_SHA).toBe(sha);
+    scopeFixDelivery(env, { input: {} });
+    expect(env.ARGUS_FIX_PR).toBeUndefined();
+    expect(env.ARGUS_FIX_BASE_SHA).toBeUndefined();
+    scopeFixDelivery(env, undefined);
+    expect("ARGUS_FIX_PR" in env).toBe(false);
+  });
+
+  it.each([
+    fix({ pr: 5, base_head_sha: sha, force_push: true }),
+    fix({ pr: 5, base_head_sha: "abc", force_push: false }),
+    fix({ pr: "x", base_head_sha: sha, force_push: false }),
+    fix("nope"),
+  ])("fails closed on a malformed scope", (task) => {
+    const env: NodeJS.ProcessEnv = {};
+    scopeFixDelivery(env, task);
+    expect(env.ARGUS_FIX_PR).toBe("invalid");
+    expect(env.ARGUS_FIX_BASE_SHA).toBe("invalid");
+  });
 });

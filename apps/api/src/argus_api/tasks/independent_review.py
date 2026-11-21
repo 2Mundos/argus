@@ -683,11 +683,14 @@ async def _may_author(
     from argus_api.accounts import service as accounts_svc
 
     if mode == "different_provider":
-        # A fix author's model is excluded by name even under another provider.
-        return selector.provider in providers or (
-            selector.model.source == "explicit" and selector.model.id in models
-        )
-    if selector.model.source == "explicit":
+        if selector.provider in providers:
+            return True
+        # A fix author's model is excluded by name even under another provider, whether
+        # the selector names it or an account supplies it.
+        if selector.model.source == "explicit":
+            return selector.model.id in models
+        accounts = set()
+    elif selector.model.source == "explicit":
         return selector.model.id in models
     async with conn.execute(
         "SELECT * FROM accounts WHERE provider = ? AND (? IS NULL OR id = ?)",

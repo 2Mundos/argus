@@ -191,6 +191,16 @@ sending the parent back for a full attempt.
   merge grant, so it can push to the PR's own branch and nothing else: one normal
   fast-forward commit with tests, never a force-push, history rewrite, other branch or
   merge (the kind schema rejects `force_push: true`; `force_push` stays `no`).
+- The runtime enforces that scope: the channel exports `ARGUS_FIX_PR` and
+  `ARGUS_FIX_BASE_SHA` from `input.fix` (a malformed `fix` exports a marker that fails
+  closed), and `argus-task deliver` then takes the fix path only. It requires the PR open
+  on the current branch, `HEAD` strictly ahead of the live PR head, which must be the
+  reviewed head or a descendant of it, runs the pre-push checks and pushes without
+  `--force-with-lease`. It never rebases, never pushes another branch and never creates or
+  edits the PR; a moved or diverged head is refused with `request_changes` as the action.
+- Fixer model exclusion applies to account-sourced selectors in every review mode,
+  including `different_provider`, so a respawn cannot pick the fixer's model through an
+  account whose configured model it is.
 - Verdicts: `approve` (no findings, nothing changed), `request_changes` (cannot fix
   safely, nothing changed; the existing handoff to the implementer), `fixed` with
   `head_sha` (reviewed), `fixed_head_sha` (full 40-character new head), `findings` and

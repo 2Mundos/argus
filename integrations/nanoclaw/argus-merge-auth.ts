@@ -104,3 +104,35 @@ export function scopeMergeAuthorization(
     approvedSha ? { pr: approvedPr, sha: approvedSha } : undefined,
   );
 }
+
+const FIX_VARS = ["ARGUS_FIX_PR", "ARGUS_FIX_BASE_SHA"] as const;
+
+/**
+ * The fix fence of a reviewer attempt (pre-merge independent review spec): a task whose
+ * `input.fix` names a PR and the head it reviewed may only publish a fast-forward commit
+ * to that PR's own branch. `argus-task deliver` reads these variables and then refuses to
+ * rebase, force-push, touch another branch or edit the PR. Anything else removes both; a
+ * malformed `fix` sets a PR-less marker so deliver fails closed instead of running open.
+ */
+export function scopeFixDelivery(
+  env: NodeJS.ProcessEnv,
+  task: { input?: Record<string, unknown> } | undefined,
+): void {
+  for (const name of FIX_VARS) delete env[name];
+  const fix = task?.input?.fix;
+  if (fix === undefined || fix === null) return;
+  const valid =
+    typeof fix === "object" &&
+    !Array.isArray(fix) &&
+    (fix as Record<string, unknown>).force_push === false &&
+    /^[0-9a-f]{40}$/i.test(String((fix as Record<string, unknown>).base_head_sha ?? "")) &&
+    normalizePrNumber(String((fix as Record<string, unknown>).pr ?? "")) !== "";
+  if (!valid) {
+    env.ARGUS_FIX_PR = "invalid";
+    env.ARGUS_FIX_BASE_SHA = "invalid";
+    return;
+  }
+  const f = fix as Record<string, unknown>;
+  env.ARGUS_FIX_PR = normalizePrNumber(String(f.pr));
+  env.ARGUS_FIX_BASE_SHA = String(f.base_head_sha).toLowerCase();
+}

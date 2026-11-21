@@ -143,7 +143,12 @@ import {
   removeLocalHarnessFile,
   writeLocalHarnessFile,
 } from "./argus-local-harness.js";
-import { scopeMergeAuthorization, taskAuthorizesMerge, taskMayMerge } from "./argus-merge-auth.js";
+import {
+  scopeFixDelivery,
+  scopeMergeAuthorization,
+  taskAuthorizesMerge,
+  taskMayMerge,
+} from "./argus-merge-auth.js";
 import { createMilestoneRelay, MILESTONE_RELAY_FILE } from "./argus-milestone-relay.js";
 import {
   createProvisionalUsageRelay,
@@ -2270,6 +2275,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   /** The channel-issued merge authorization of this attempt in the host env; none between tasks. */
   function scopeTaskMerge(task: ArgusTask | undefined) {
     scopeMergeAuthorization(process.env, task, task ? taskMayMerge(task) : false);
+    scopeFixDelivery(process.env, task);
   }
   let repositoryAssignmentReconciled = false;
   let abortClaim: AbortController | null = null;
