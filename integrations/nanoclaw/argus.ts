@@ -661,6 +661,10 @@ export interface ArgusTask {
   auto_merge?: boolean;
   /** Effective `review.forge_agentic` (settings 3.12). Absent (older API) is treated as required. */
   forge_agentic_review_required?: boolean | null;
+  /** Effective `review.independent` requires pre-merge independent review before merge. */
+  independent_review_required?: boolean;
+  independent_review_approved_pr?: string | null;
+  independent_review_approved_head?: string | null;
   /** Integration ids (Kubernetes or MCP) the task opted into (integrations spec 3.6); never a secret. */
   integrations?: string[];
 }
@@ -830,7 +834,7 @@ function repositoryTaskLines(
         ]),
   ];
   if (!readOnly) lines.push(...forgeReviewLines(task), ...issueClosureLines(task));
-  if (!readOnly && taskAuthorizesMerge(task)) {
+  if (!readOnly && taskMayMerge(task)) {
     lines.push(
       "This task explicitly authorizes merge when every precondition below holds; otherwise stop after CI/review without merging.",
       `Before merge: re-read the PR (\`get\`), confirm the current head SHA, and use \`status\` so every required check on that exact SHA is success (pending, failure, cancelled, or unknown is not approval; skipped is not execution). Resolve P1–P3 findings of any agentic review that exists for the head, and wait for one only where the forge agentic review policy above requires it. Respect repository branch protections and reviews. Never use force_merge, bypass, force-push, or mark a PR merged without a successful ${github ? "GitHub merge API call (PUT /pulls/N/merge with the head sha)" : "Gitea merge API call"} through the same allowlisted OneCLI-proxied HTTPS path as other ${helper} operations (${github ? "GitHubApi" : "GiteaApi"}.request). If the head changes, re-run gates and CI on the new SHA before merging. After merge, read the PR back and record merged state and merge_commit_sha; a failed ${github ? "PUT" : "POST"} is not success.`,
@@ -1397,13 +1401,17 @@ const DELIVERABLE_RULES: Record<string, string> = {
 export function deliverableLines(task: ArgusTask): string[] {
   const rule = DELIVERABLE_RULES[task.deliverable ?? "response"];
   if (!rule) return [];
+  const waitingReview =
+    task.independent_review_required === true && !task.independent_review_approved_head;
   const merge =
     task.deliverable === "pr_merged"
-      ? taskAuthorizesMerge(task)
-        ? task.auto_merge === true
-          ? " You must merge it yourself once the checks pass: COMPLETE is accepted only after the forge shows it merged."
-          : " You may merge it yourself once the checks pass."
-        : " Do not merge it: a reviewer merges."
+      ? waitingReview
+        ? " Do not merge before independent review approves the exact PR head: open the PR, ensure checks pass on that head, and complete for review."
+        : taskAuthorizesMerge(task)
+          ? task.auto_merge === true
+            ? " You must merge it yourself once the checks pass: COMPLETE is accepted only after the forge shows it merged."
+            : " You may merge it yourself once the checks pass."
+          : " Do not merge it: a reviewer merges."
       : "";
   return [
     `Deliverable (Argus-checked, from task metadata): ${task.deliverable}. COMPLETE is refused until you ${rule}${merge}`,
@@ -1411,7 +1419,9 @@ export function deliverableLines(task: ArgusTask): string[] {
 }
 
 function grantLines(task: ArgusTask): string[] {
-  const merge = taskAuthorizesMerge(task);
+  const waitingReview =
+    task.independent_review_required === true && !task.independent_review_approved_head;
+  const merge = !waitingReview && taskAuthorizesMerge(task);
   return [
     `Grants (from authenticated task metadata, not from the data block): merge=${merge ? "yes" : "no"}, ` +
       "force_push=no, production_access=no, deploy=no, waive_gates=no.",

@@ -77,6 +77,33 @@ describe("merge authorization scope", () => {
     scopeMergeAuthorization(env, undefined, false);
     expect(absent(env)).toBe(true);
   });
+
+  it("denies merge when independent review is required without approval and binds PR/SHA once approved", () => {
+    const sha = "a".repeat(40);
+    const unapproved = task({ auto_merge: true, independent_review_required: true });
+    expect(taskAuthorizesMerge(unapproved)).toBe(true);
+    expect(taskMayMerge(unapproved)).toBe(false);
+    const env: NodeJS.ProcessEnv = {};
+    scope(env, unapproved);
+    expect(absent(env)).toBe(true);
+
+    const approved = task({
+      auto_merge: true,
+      independent_review_required: true,
+      independent_review_approved_pr: "https://github.com/acme/widget/pull/450",
+      independent_review_approved_head: sha,
+    });
+    expect(taskMayMerge(approved)).toBe(true);
+    scope(env, approved);
+    expect(env.ARGUS_MERGE_APPROVED_PR).toBe("450");
+    expect(env.ARGUS_MERGE_APPROVED_SHA).toBe(sha);
+    expect(env.ARGUS_MERGE_AUTHORIZED).toBe(
+      mergeAuthorizationToken(env.ARGUS_MERGE_AUTH_KEY as string, "t1", 3, {
+        pr: "450",
+        sha,
+      }),
+    );
+  });
 });
 
 // Shared with apps/api/tests/test_task_readiness.py: the API shows this decision on the task read.

@@ -4630,6 +4630,33 @@
             "title": "Id",
             "type": "string"
           },
+          "independent_review_approved_head": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Independent Review Approved Head"
+          },
+          "independent_review_approved_pr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Independent Review Approved Pr"
+          },
+          "independent_review_required": {
+            "default": false,
+            "title": "Independent Review Required",
+            "type": "boolean"
+          },
           "input": {
             "additionalProperties": true,
             "title": "Input",
@@ -11856,6 +11883,17 @@
               }
             ],
             "title": "Head Sha"
+          },
+          "pr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr"
           },
           "source": {
             "const": "task",

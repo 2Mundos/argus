@@ -115,6 +115,7 @@ class FailedReviewer(BaseModel):
 class IndependentReviewSummary(BaseModel):
     child_task_id: str | None = None
     verdict: str | None = None  # approve | request_changes | pending | unknown
+    pr: str | None = None
     head_sha: str | None = None
     failed_reviewers: list[FailedReviewer] = []  # since the last operator retry
     source: Literal["task"] = "task"

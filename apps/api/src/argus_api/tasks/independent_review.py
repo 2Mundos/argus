@@ -104,6 +104,32 @@ def normalise_result(kind: str, result: TaskResult) -> tuple[TaskResult, bool]:
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
+
+def _same_pr(a: str | None, b: str | None) -> bool:
+    """True when both name the same PR (case-insensitive URL, or bare number matching
+    the URL's trailing PR number). Different PR numbers never match."""
+    if not a or not b:
+        return False
+    left = a.strip().lower().rstrip("/")
+    right = b.strip().lower().rstrip("/")
+    if left == right:
+        return True
+    lnum = left.lstrip("#")
+    rnum = right.lstrip("#")
+    if lnum.isdigit() and "/" in right:
+        return right.rsplit("/", 1)[-1] == lnum
+    if rnum.isdigit() and "/" in left:
+        return left.rsplit("/", 1)[-1] == rnum
+    return False
+
+
+def _same_sha(a: str | None, b: str | None) -> bool:
+    """Exact lowercase SHA equality; never approves a different or truncated SHA."""
+    if not a or not b:
+        return False
+    return a.strip().lower() == b.strip().lower()
+
+
 # Engine name → account provider for harness / executor selection.
 _ENGINE_PROVIDER = {
     **HARNESS_PROVIDERS,
@@ -115,26 +141,40 @@ _ENGINE_PROVIDER = {
 def _delivery_refs(
     row: aiosqlite.Row, result: TaskResult
 ) -> tuple[str | None, str | None]:
-    """(pr_url_or_number, head_sha) when the task delivers code, else (None, None)."""
+    """(pr_url_or_number, head_sha) when the task delivers code, else (None, None).
+
+    Prefers the current completion's `result.data` and current attempt's progress
+    over older continuation artifacts, picks the newest PR artifact by `observed_at`,
+    and never carries an older PR's `head_sha` onto a replacement PR."""
     have = cont.load(row)
-    pr_url: str | None = None
-    head_sha: str | None = None
-    for a in have.artifacts:
-        if a.kind is ArtifactKind.PR:
-            pr_url = a.url or a.ref
-            head_sha = a.head_sha or head_sha
-        elif a.kind is ArtifactKind.COMMIT and a.head_sha:
-            head_sha = head_sha or a.head_sha
-        elif a.kind is ArtifactKind.COMMIT and _SHA.fullmatch(a.ref):
-            head_sha = head_sha or a.ref
-    # Result / progress may name a head without a structured artifact yet.
+    art_pr: str | None = None
+    art_sha: str | None = None
+    prs = [a for a in have.artifacts if a.kind is ArtifactKind.PR]
+    if prs:
+        newest_pr = max(enumerate(prs), key=lambda p: (p[1].observed_at, p[0]))[1]
+        art_pr = newest_pr.url or newest_pr.ref
+        art_sha = newest_pr.head_sha
+    commit_sha: str | None = None
+    commits = [a for a in have.artifacts if a.kind is ArtifactKind.COMMIT]
+    for a in sorted(commits, key=lambda c: c.observed_at, reverse=True):
+        if a.head_sha:
+            commit_sha = a.head_sha
+            break
+        if _SHA.fullmatch(a.ref):
+            commit_sha = a.ref
+            break
+
     data = result.data or {}
+    data_pr = data["pr"] if isinstance(data.get("pr"), str) else None
+    data_sha: str | None = None
     for key in ("head_sha", "sha", "commit"):
         val = data.get(key)
         if isinstance(val, str) and _SHA.fullmatch(val):
-            head_sha = head_sha or val
-    if isinstance(data.get("pr"), str):
-        pr_url = pr_url or data["pr"]
+            data_sha = val
+            break
+
+    prog_pr: str | None = None
+    prog_sha: str | None = None
     progress = row["progress_data"]
     if progress:
         try:
@@ -145,14 +185,24 @@ def _delivery_refs(
             for key in ("sha", "head_sha"):
                 val = pdata.get(key)
                 if isinstance(val, str) and _SHA.fullmatch(val):
-                    head_sha = head_sha or val
+                    prog_sha = val
+                    break
             if (
                 isinstance(pdata.get("url"), str)
                 and row["progress_kind"] == "pr_opened"
             ):
-                pr_url = pr_url or pdata["url"]
+                prog_pr = pdata["url"]
+
+    pr_url = data_pr or prog_pr or art_pr
+    same_as_art_pr = pr_url is None or art_pr is None or _same_pr(pr_url, art_pr)
+    head_sha = (
+        data_sha
+        or prog_sha
+        or (art_sha if same_as_art_pr else None)
+        or (commit_sha if same_as_art_pr else None)
+    )
     if pr_url or head_sha:
-        return pr_url, head_sha
+        return pr_url, head_sha.lower() if head_sha else None
     # Fallback: the delivery extractor's PR reference (text/artifacts).
     return None, None
 
@@ -165,10 +215,8 @@ def _forge_head(pr: str | None, forge: deliverable.ForgeRead | None) -> str | No
     known = forge.delivery if forge is not None else None
     if known is None or known.head is None or not known.head.sha:
         return None
-    if pr is not None:
-        url = known.pr.lower()
-        if pr.lower() not in (url, url.rsplit("/", 1)[-1]):
-            return None
+    if pr is not None and not _same_pr(pr, known.pr):
+        return None
     return known.head.sha.lower()
 
 
@@ -201,9 +249,9 @@ async def has_code_delivery(
 ) -> tuple[str | None, str | None] | None:
     """None when the task delivers no code; else (pr, head_sha).
 
-    A PR the worker named without a head takes the head the forge reports for it
-    (`forge`, read before the write); without one the reviewer has no commit to read
-    and the gate blocks for an operator decision (`no_review_head`)."""
+    Prefers the live head the forge reports for the task's PR (`forge`, read before
+    the write) over older stored heads so review rounds always inspect the live head;
+    without one the reviewer has no commit to read and the gate blocks (`no_review_head`)."""
     pr, sha = _delivery_refs(row, result)
     if pr is None and sha is None:
         # Try the full delivery extractor (needs a Task-shaped read).
@@ -216,11 +264,11 @@ async def has_code_delivery(
         if ref is None:
             return None
         pr = ref.url
-    if sha is None:
-        sha = _forge_head(pr, forge)
+    if (live_sha := _forge_head(pr, forge)) is not None:
+        sha = live_sha
     if sha is None and pr is not None:
         sha = await _history_head(conn, row["id"])
-    return pr, sha
+    return pr, sha.lower() if sha else None
 
 
 async def settles_alone(conn: aiosqlite.Connection, parent: aiosqlite.Row) -> bool:
@@ -254,11 +302,14 @@ def forge_verdict(
     forge: deliverable.ForgeRead | None,
     reviewed_head: str | None,
     now: datetime,
+    *,
+    reviewed_pr: str | None = None,
 ) -> tuple[str, str] | None:
     """None when the forge, read for this settlement, shows the deliverable met on
-    the head the reviewer approved; else (code, why). The code is `head_moved` for a
-    head that changed after the review, `forge_not_ready` otherwise. Never reads the
-    reviewer's word as proof of forge state."""
+    the exact PR and head the reviewer approved; else (code, why). The code is
+    `pr_moved` for a replacement PR, `head_moved` for a head that changed after the
+    review, `forge_not_ready` otherwise. Never reads the reviewer's word as proof of
+    forge state."""
     try:
         deliverable.check_accept(parent, forge)
     except ConflictError as exc:
@@ -272,23 +323,173 @@ def forge_verdict(
         return "forge_not_ready", "the checks do not belong to the pull request head"
     if not reviewed_head:
         return "forge_not_ready", "the reviewed head is unknown"
-    forge_head, reviewed = seen.head.sha.lower(), reviewed_head.lower()
-    if not (forge_head.startswith(reviewed) or reviewed.startswith(forge_head)):
-        return "head_moved", f"the pull request head moved to {forge_head[:12]}"
+    if reviewed_pr and not _same_pr(reviewed_pr, seen.pr):
+        return "pr_moved", f"the pull request changed to {seen.pr}"
+    if not _same_sha(seen.head.sha, reviewed_head):
+        return "head_moved", f"the pull request head moved to {seen.head.sha[:12]}"
     return None
 
 
-async def reviewed_head_of(conn: aiosqlite.Connection, parent_id: str) -> str | None:
-    """The head of the newest approved independent review of the parent."""
+_APPROVAL_LIFECYCLE_EVENTS = (
+    PASSED_EVENT,
+    "review.independent_void",
+    "review.independent_changes_requested",
+    "review.independent_requested",
+    "review.independent_waived",
+    CHILD_FAILED_EVENT,
+)
+
+
+async def _latest_approval_event(
+    conn: aiosqlite.Connection, parent_id: str
+) -> tuple[str | None, dict[str, Any]]:
+    marks = ",".join("?" * len(_APPROVAL_LIFECYCLE_EVENTS))
     async with conn.execute(
-        "SELECT data FROM events WHERE subject_type = 'task' AND subject_id = ?"
-        " AND kind = ? ORDER BY id DESC LIMIT 1",
-        (parent_id, PASSED_EVENT),
+        f"SELECT kind, data FROM events WHERE subject_type = 'task'"  # noqa: S608
+        f" AND subject_id = ? AND kind IN ({marks}) ORDER BY id DESC LIMIT 1",
+        (parent_id, *_APPROVAL_LIFECYCLE_EVENTS),
     ) as cur:
         row = await cur.fetchone()
-    data = json.loads(row[0]) if row and row[0] else {}
-    head = data.get("head_sha") if isinstance(data, dict) else None
-    return head if isinstance(head, str) and head else None
+    if row is None:
+        return None, {}
+    data = json.loads(row[1]) if row[1] else {}
+    return row[0], data if isinstance(data, dict) else {}
+
+
+async def reviewed_approval_of(
+    conn: aiosqlite.Connection, parent_id: str
+) -> tuple[str | None, str | None]:
+    """(pr, head_sha) of the active independent approval, else (None, None).
+
+    A newer void, change request, retry/request, waiver, or child failure supersedes
+    earlier approvals."""
+    kind, data = await _latest_approval_event(conn, parent_id)
+    if kind != PASSED_EVENT:
+        return None, None
+    pr = data.get("pr")
+    head = data.get("head_sha")
+    return (
+        pr if isinstance(pr, str) and pr else None,
+        head.lower() if isinstance(head, str) and head else None,
+    )
+
+
+async def reviewed_head_of(conn: aiosqlite.Connection, parent_id: str) -> str | None:
+    """The head of the newest active approved independent review of the parent."""
+    return (await reviewed_approval_of(conn, parent_id))[1]
+
+
+async def is_waived(conn: aiosqlite.Connection, parent_id: str) -> bool:
+    """True when an operator explicitly waived independent review for this task."""
+    kind, _ = await _latest_approval_event(conn, parent_id)
+    return kind == "review.independent_waived"
+
+
+async def merge_gate_status(
+    conn: aiosqlite.Connection,
+    parent: aiosqlite.Row,
+    *,
+    pr: str | None,
+    head_sha: str | None,
+    policy_path: Path | None = None,
+) -> tuple[bool, str | None]:
+    """(allowed, block_reason) for merging `parent`'s PR at `head_sha`.
+
+    Allows merge when `review.independent` is off, the task is a `code_review`, or an
+    operator explicitly waived review. Otherwise requires an active independent
+    approval matching the exact PR and exact full 40-character head SHA with proof
+    that the approving child used no author model/provider."""
+    from argus_api.settings import service as settings_svc
+
+    if parent["kind"] == CODE_REVIEW_KIND:
+        return True, None
+    setting = await settings_svc.get_review(
+        conn, policy_path or model_policy_path, parent["project"]
+    )
+    if setting.mode == "off":
+        return True, None
+    kind, data = await _latest_approval_event(conn, parent["id"])
+    if kind == "review.independent_waived":
+        return True, None
+    if parent["block_reason"] in (
+        NO_INDEPENDENT_REVIEWER,
+        REVIEW_FAILED,
+        NO_REVIEW_HEAD,
+    ):
+        return False, str(parent["block_reason"])
+    if await has_active_reviewer(conn, parent["id"]):
+        return False, "independent_review_pending"
+    if not pr or not head_sha or not _FULL_SHA.fullmatch(head_sha.strip().lower()):
+        return False, NO_REVIEW_HEAD
+    if kind != PASSED_EVENT:
+        return False, "independent_review_required"
+    approved_pr = data.get("pr") if isinstance(data.get("pr"), str) else None
+    approved_sha = (
+        data.get("head_sha") if isinstance(data.get("head_sha"), str) else None
+    )
+    if not approved_pr or not _same_pr(approved_pr, pr):
+        return False, "independent_review_pr_mismatch"
+    if not _same_sha(approved_sha, head_sha):
+        return False, "independent_review_head_mismatch"
+    child_id = data.get("child_id") if isinstance(data.get("child_id"), str) else None
+    if not child_id:
+        return False, "independent_review_same_model"
+    author_models, author_providers = await authors(conn, parent["id"])
+    if not await child_models_clean(
+        conn,
+        child_id,
+        mode=setting.mode,
+        author_models=author_models,
+        author_providers=author_providers,
+    ):
+        return False, "independent_review_same_model"
+    return True, None
+
+
+async def check_accept_reviewed(
+    conn: aiosqlite.Connection,
+    parent: aiosqlite.Row,
+    forge: deliverable.ForgeRead | None,
+    *,
+    policy_path: Path | None = None,
+) -> None:
+    """Refuse accepting a code-delivering task when `review.independent` is on and
+    the live PR/head on the forge does not match an independent approval."""
+    from argus_api.settings import service as settings_svc
+
+    if parent["kind"] == CODE_REVIEW_KIND:
+        return
+    setting = await settings_svc.get_review(
+        conn, policy_path or model_policy_path, parent["project"]
+    )
+    if setting.mode == "off" or await is_waived(conn, parent["id"]):
+        return
+    seen = forge.delivery if forge is not None else None
+    if seen is None:
+        if Deliverable(parent["deliverable"]) not in FORGE_DELIVERABLES:
+            return
+        raise ConflictError(
+            "independent review cannot be verified without a forge read",
+            code="independent_review_required",
+        )
+    allowed, reason = await merge_gate_status(
+        conn,
+        parent,
+        pr=seen.pr,
+        head_sha=seen.head.sha if seen.head else None,
+        policy_path=policy_path,
+    )
+    if not allowed:
+        raise ConflictError(
+            f"independent review does not cover {seen.pr}"
+            f" at {seen.head.sha if seen.head else 'unknown'}: {reason}",
+            code=reason or "independent_review_required",
+            details=[
+                f"pr: {seen.pr}",
+                f"head_sha: {seen.head.sha if seen.head else None}",
+                f"reason: {reason}",
+            ],
+        )
 
 
 async def settle_or_wait(
@@ -297,13 +498,17 @@ async def settle_or_wait(
     forge: deliverable.ForgeRead | None,
     reviewed_head: str | None,
     actor: str,
+    *,
+    reviewed_pr: str | None = None,
 ) -> bool:
     """Accept an approved parent the forge shows delivered, else leave it `in_review`
     with the visible `awaiting_forge` block (re-checked by `review_settle`). A moved
-    head is reviewed again. True when the parent succeeded."""
+    head or replacement PR is reviewed again. True when the parent succeeded."""
     from argus_api.tasks import service as tasks_svc
 
-    verdict = forge_verdict(parent, forge, reviewed_head, tx.now)
+    verdict = forge_verdict(
+        parent, forge, reviewed_head, tx.now, reviewed_pr=reviewed_pr
+    )
     if verdict is None:
         await tx.conn.execute(
             "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent["id"],)
@@ -313,7 +518,7 @@ async def settle_or_wait(
         )
         return True
     code, why = verdict
-    if code == "head_moved":
+    if code in ("head_moved", "pr_moved"):
         seen = forge.delivery if forge is not None else None
         setting, policy = await _load_settings(tx.conn, parent["project"])
         await record(
@@ -322,7 +527,13 @@ async def settle_or_wait(
             "task",
             parent["id"],
             "review.independent_void",
-            {"reason": code, "reviewed": reviewed_head, "current": why},
+            {
+                "reason": code,
+                "reviewed": reviewed_head,
+                "reviewed_pr": reviewed_pr,
+                "current": why,
+                "current_pr": seen.pr if seen else None,
+            },
         )
         await tx.conn.execute(
             "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent["id"],)
@@ -369,10 +580,10 @@ async def completion_forge_read(
     policy_path: Path | None = None,
 ) -> deliverable.ForgeRead | None:
     """The forge's word on the PR a completion names, read before and outside the
-    write (like find_pr). Only for a task whose parent gate may apply and whose head
-    no report or bound PR already gives. For an approving `code_review` child, the
-    parent's PR when the parent settles on that approval alone (`settles_alone`), so
-    the approval is checked against the forge, not taken as its proof. None otherwise."""
+    write (like find_pr). For a parent task whose gate is on, reads the live PR so
+    the gate sees the live head SHA rather than an older attempt's stored SHA. For
+    an approving `code_review` child, reads the parent's PR when the parent settles
+    on that approval alone (`settles_alone`). None otherwise."""
     from argus_api.settings import service as settings_svc
     from argus_api.tasks import service as tasks_svc
 
@@ -390,8 +601,6 @@ async def completion_forge_read(
             return deliverable.ForgeRead(
                 await delivery.delivery_of(conn, checker, task)
             )
-        if _delivery_refs(row, result)[1] is not None:
-            return None
         setting = await settings_svc.get_review(
             conn, policy_path or model_policy_path, row["project"]
         )
@@ -490,6 +699,52 @@ async def _authored(
     )
 
 
+async def _selector_usable(
+    conn: aiosqlite.Connection,
+    now_iso: str,
+    selector: Selector,
+    pin: str | None,
+    role: LeaseRole,
+) -> bool:
+    """True when at least one account serving `role` for `selector` is usable now."""
+    from argus_api.accounts import service as accounts_svc
+
+    async with conn.execute(
+        "SELECT * FROM accounts WHERE provider = ? AND (? IS NULL OR id = ?)"
+        " AND state IN ('available', 'exhausted')",
+        (selector.provider, pin, pin),
+    ) as cur:
+        rows = await cur.fetchall()
+    for row in rows:
+        if row["state"] == "exhausted" and (
+            not row["exhausted_until"] or row["exhausted_until"] > now_iso
+        ):
+            continue
+        if accounts_svc._serves(row, role):
+            return True
+    return False
+
+
+async def _alternative_usable(
+    conn: aiosqlite.Connection, now_iso: str, alternative: Alternative
+) -> bool:
+    harness_pin, executor_pin = routes.pins(alternative)
+    if not await _selector_usable(
+        conn, now_iso, alternative.harness, harness_pin, "engine"
+    ):
+        return False
+    return not isinstance(alternative, PairedAlternative) or await _selector_usable(
+        conn, now_iso, alternative.executor, executor_pin, "executor"
+    )
+
+
+def _selector_signature(alternative: Alternative) -> str:
+    payload: dict[str, Any] = {"harness": alternative.harness.model_dump(mode="json")}
+    if isinstance(alternative, PairedAlternative):
+        payload["executor"] = alternative.executor.model_dump(mode="json")
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
 async def review_route(
     conn: aiosqlite.Connection,
     now: datetime,
@@ -502,81 +757,199 @@ async def review_route(
     exclude_alternatives: AbstractSet[str] = frozenset(),
     exclude_accounts: AbstractSet[str] = frozenset(),
 ) -> tuple[list[Alternative], routes.ReviewRoute] | None:
-    """The reviewer's route from `review.chains` for the parent's difficulty.
+    """The reviewer's route from `review.chains` (or cross-difficulty fallback).
 
-    None when that level is not configured (the policy-chain picker applies). Author
-    alternatives are dropped; of the rest, those no active worker can admit now
-    follow as fallbacks only when none can. An empty list means only authors remain.
-    `exclude_alternatives` and `exclude_accounts` drop routes whose reviewer already
-    ended without a verdict.
+    Precedence 1: a configured `review.chains` entry for the parent's difficulty is
+    used first, unchanged.
+    Precedence 2: when `review.chains` leaves that difficulty unconfigured, search
+    other difficulties in `review.chains` (sorted difficulty names, then chain order)
+    followed by `execution.chains` (sorted difficulty names, then chain order) for
+    alternatives that differ from both the author model and provider and have a
+    usable account.
+    Precedence 3: None when neither `review.chains` nor `execution.chains` configures
+    any difficulty (the legacy policy-chain picker applies).
     """
     from pydantic import TypeAdapter
 
     setting = await routes.policy_setting(conn, parent["project"], routes.REVIEW_KEY)
     difficulty = parent["difficulty"]
     raw = setting.value["difficulties"].get(difficulty)
-    if raw is None:
+    if raw is not None:
+        chain = TypeAdapter(Chain).validate_python(raw)
+        skipped: list[routes.SkippedAlternative] = []
+        independent = []
+        for alternative in chain:
+            if alternative.id in exclude_alternatives or (
+                exclude_accounts & {p for p in routes.pins(alternative) if p}
+            ):
+                # A reviewer on this route (or pinned account) already ended without a
+                # verdict; the next alternative is tried instead.
+                skipped.append(
+                    routes.SkippedAlternative(id=alternative.id, reason="failed")
+                )
+            elif await _authored(
+                conn,
+                alternative,
+                mode=mode,
+                models=models,
+                providers=providers,
+                accounts=accounts,
+            ):
+                skipped.append(
+                    routes.SkippedAlternative(id=alternative.id, reason="author")
+                )
+            else:
+                independent.append(alternative)
+        async with conn.execute(
+            "SELECT capabilities, runtime_providers FROM agents WHERE state = 'active'"
+        ) as cur:
+            workers = await cur.fetchall()
+        ready = [
+            a
+            for a in independent
+            if any(
+                [
+                    await routes.alternative_eligible(
+                        conn,
+                        now,
+                        a,
+                        None,
+                        json.loads(w["capabilities"]),
+                        json.loads(w["runtime_providers"] or "[]"),
+                    )
+                    for w in workers
+                ]
+            )
+        ]
+        if ready:
+            skipped += [
+                routes.SkippedAlternative(id=a.id, reason="unavailable")
+                for a in independent
+                if a not in ready
+            ]
+            independent = ready
+        return independent, routes.ReviewRoute(
+            parent_id=parent["id"],
+            difficulty=difficulty,
+            chain_source="project"
+            if (setting.difficulty_sources or {})[difficulty] == "project"
+            else "global",
+            selected=independent[0].id if independent else "",
+            skipped=skipped,
+        )
+
+    exec_setting = await routes.policy_setting(conn, parent["project"], routes.KEY)
+    candidates: list[tuple[str, str, Alternative]] = []
+    for d in sorted(d for d in setting.value["difficulties"] if d != difficulty):
+        src = (
+            "project"
+            if (setting.difficulty_sources or {}).get(d) == "project"
+            else "global"
+        )
+        candidates.extend(
+            (d, src, alt)
+            for alt in TypeAdapter(Chain).validate_python(
+                setting.value["difficulties"][d]
+            )
+        )
+    for d in sorted(exec_setting.value["difficulties"]):
+        src = (
+            "project"
+            if (exec_setting.difficulty_sources or {}).get(d) == "project"
+            else "global"
+        )
+        candidates.extend(
+            (d, src, alt)
+            for alt in TypeAdapter(Chain).validate_python(
+                exec_setting.value["difficulties"][d]
+            )
+        )
+    if not candidates:
         return None
-    chain = TypeAdapter(Chain).validate_python(raw)
-    skipped: list[routes.SkippedAlternative] = []
-    independent = []
-    for alternative in chain:
-        if alternative.id in exclude_alternatives or (
-            exclude_accounts & {p for p in routes.pins(alternative) if p}
-        ):
-            # A reviewer on this route (or pinned account) already ended without a
-            # verdict; the next alternative is tried instead.
-            skipped.append(
-                routes.SkippedAlternative(id=alternative.id, reason="failed")
-            )
-        elif await _authored(
-            conn,
-            alternative,
-            mode=mode,
-            models=models,
-            providers=providers,
-            accounts=accounts,
-        ):
-            skipped.append(
-                routes.SkippedAlternative(id=alternative.id, reason="author")
-            )
-        else:
-            independent.append(alternative)
+
     async with conn.execute(
         "SELECT capabilities, runtime_providers FROM agents WHERE state = 'active'"
     ) as cur:
-        workers = await cur.fetchall()
-    ready = [
-        a
-        for a in independent
-        if any(
-            [
-                await routes.alternative_eligible(
-                    conn,
-                    now,
-                    a,
-                    None,
-                    json.loads(w["capabilities"]),
-                    json.loads(w["runtime_providers"] or "[]"),
-                )
-                for w in workers
-            ]
+        workers = list(await cur.fetchall())
+    now_iso = ts(now)
+    skipped = []
+    eligible: list[Alternative] = []
+    seen_sigs: set[str] = set()
+    used_ids: set[str] = set()
+    chosen_diff = difficulty
+    chosen_source: Any = "global"
+    for cand_diff, cand_src, alternative in candidates:
+        sig = _selector_signature(alternative)
+        if sig in seen_sigs:
+            continue
+        seen_sigs.add(sig)
+        if alternative.id in exclude_alternatives or (
+            exclude_accounts & {p for p in routes.pins(alternative) if p}
+        ):
+            skipped.append(
+                routes.SkippedAlternative(id=alternative.id, reason="failed")
+            )
+            continue
+        # Cross-difficulty fallback requires both a different model AND a different
+        # provider from the parent's authors, and a usable account.
+        same_model = await _authored(
+            conn,
+            alternative,
+            mode="different_model",
+            models=models,
+            providers=providers,
+            accounts=accounts,
         )
-    ]
-    if ready:
-        skipped += [
-            routes.SkippedAlternative(id=a.id, reason="unavailable")
-            for a in independent
-            if a not in ready
-        ]
-        independent = ready
-    return independent, routes.ReviewRoute(
+        same_provider = await _authored(
+            conn,
+            alternative,
+            mode="different_provider",
+            models=models,
+            providers=providers,
+            accounts=accounts,
+        )
+        if same_model or same_provider:
+            skipped.append(
+                routes.SkippedAlternative(id=alternative.id, reason="author")
+            )
+            continue
+        usable = await _alternative_usable(conn, now_iso, alternative)
+        worker_ready = (
+            any(
+                [
+                    await routes.alternative_eligible(
+                        conn,
+                        now,
+                        alternative,
+                        None,
+                        json.loads(w["capabilities"]),
+                        json.loads(w["runtime_providers"] or "[]"),
+                    )
+                    for w in workers
+                ]
+            )
+            if workers
+            else True
+        )
+        if not (usable and worker_ready):
+            skipped.append(
+                routes.SkippedAlternative(id=alternative.id, reason="unavailable")
+            )
+            continue
+        alt_out = alternative
+        if alt_out.id in used_ids:
+            alt_out = alt_out.model_copy(update={"id": f"{alt_out.id}-{cand_diff}"})
+        used_ids.add(alt_out.id)
+        if not eligible:
+            chosen_diff = cand_diff
+            chosen_source = "project" if cand_src == "project" else "global"
+        eligible.append(alt_out)
+
+    return eligible, routes.ReviewRoute(
         parent_id=parent["id"],
-        difficulty=difficulty,
-        chain_source="project"
-        if (setting.difficulty_sources or {})[difficulty] == "project"
-        else "global",
-        selected=independent[0].id if independent else "",
+        difficulty=chosen_diff,
+        chain_source=chosen_source,
+        selected=eligible[0].id if eligible else "",
         skipped=skipped,
     )
 
@@ -693,26 +1066,48 @@ async def _block(
     )
 
 
-async def _no_head(tx: Tx, parent: aiosqlite.Row, pr: str | None, actor: str) -> None:
-    """No commit to review: block `no_review_head` and leave exactly one operator
-    decision with the review-failed choices (retry, approve without review, cancel)."""
-    await _block(tx, parent, NO_REVIEW_HEAD, actor, pr=pr)
+async def _open_blocked_decision(
+    tx: Tx, parent: aiosqlite.Row, reason: str, question: str, actor: str
+) -> None:
+    """Open at most one actionable `review` decision (retry_reviewer,
+    approve_without_review, cancel) when the independent review gate blocks."""
+    if parent["state"] != TaskState.IN_REVIEW:
+        return
     if await decisions.open_ids(tx.conn, "task", parent["id"], (DecisionKind.REVIEW,)):
         return
+    if await has_active_reviewer(tx.conn, parent["id"]):
+        return
+    failed = [
+        {k: a.get(k) for k in ("child_id", "state", "error_class", "alternative")}
+        for a in await failed_reviewers(tx.conn, parent["id"])
+    ]
     await decisions.open_decision(
         tx,
         subject_type="task",
         subject_id=parent["id"],
         kind=DecisionKind.REVIEW,
-        question=(
+        question=question,
+        options=list(REVIEW_FAILED_OPTIONS),
+        audience=Audience.HUMAN,
+        requested_by=actor,
+        payload={"gate": REVIEW_FAILED_GATE, "reason": reason, "failed": failed},
+    )
+
+
+async def _no_head(tx: Tx, parent: aiosqlite.Row, pr: str | None, actor: str) -> None:
+    """No commit to review: block `no_review_head` and leave exactly one operator
+    decision with the review-failed choices (retry, approve without review, cancel)."""
+    await _block(tx, parent, NO_REVIEW_HEAD, actor, pr=pr)
+    await _open_blocked_decision(
+        tx,
+        parent,
+        NO_REVIEW_HEAD,
+        (
             f"Argus cannot name the commit to review for {parent['title']!r}"
             f" (pull request {pr or 'unknown'}: the forge reported no head)."
             " Retry the review, approve without independent review, or cancel?"
         ),
-        options=list(REVIEW_FAILED_OPTIONS),
-        audience=Audience.HUMAN,
-        requested_by=actor,
-        payload={"gate": REVIEW_FAILED_GATE, "reason": NO_REVIEW_HEAD, "failed": []},
+        actor,
     )
 
 
@@ -776,11 +1171,21 @@ async def clear_gate_block(tx: Tx, task_id: str) -> None:
 async def _manual_unless_escalating(
     tx: Tx, parent: aiosqlite.Row, none_eligible: str, actor: str
 ) -> None:
-    """A blocked spawn leaves the parent with the manual review decision, except where
-    the caller escalates itself (`none_eligible` is REVIEW_FAILED): that decision
-    carries the retry choices."""
+    """A blocked spawn leaves the parent with one actionable review decision
+    (retry_reviewer, approve_without_review, cancel), except where the caller
+    escalates itself (`none_eligible` is REVIEW_FAILED)."""
     if none_eligible != REVIEW_FAILED:
-        await open_manual_review(tx, parent, NO_REVIEWER_GATE, actor)
+        await _open_blocked_decision(
+            tx,
+            parent,
+            NO_INDEPENDENT_REVIEWER,
+            (
+                f"No eligible independent reviewer is available for {parent['title']!r}"
+                f" (attempt {parent['attempt']}). Retry the reviewer, approve without"
+                " independent review, or cancel?"
+            ),
+            actor,
+        )
 
 
 async def spawn_reviewer(
@@ -796,12 +1201,16 @@ async def spawn_reviewer(
     exclude_accounts: set[str] | None = None,
     exclude_alternatives: set[str] | None = None,
     none_eligible: str = NO_INDEPENDENT_REVIEWER,
+    replace_child_id: str | None = None,
 ) -> str | None:
     """Create a code_review child, or set block_reason when none is eligible
     (`none_eligible`: the reason when no alternative remains).
 
+    Idempotent for an already-active reviewer targeting the same (pr, head_sha).
+    Supersedes and cancels any older active reviewer targeting a stale PR or head.
     Returns the child task id, or None when blocked for want of a reviewer.
     """
+    from argus_api.tasks import manage
     from argus_api.tasks import service as tasks_svc
 
     if head_sha is None:
@@ -809,6 +1218,29 @@ async def spawn_reviewer(
         # parent waits on one operator decision rather than inventing a head.
         await _no_head(tx, parent, pr, actor)
         return None
+    sha = head_sha.lower()
+    async with tx.conn.execute(
+        "SELECT id, input FROM tasks WHERE parent_id = ? AND kind = ?"
+        " AND state NOT IN (?, ?, ?) ORDER BY rowid DESC",
+        (
+            parent["id"],
+            CODE_REVIEW_KIND,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+        ),
+    ) as cur:
+        active_children = [
+            r for r in await cur.fetchall() if r["id"] != replace_child_id
+        ]
+    for active in active_children:
+        ainp = json.loads(active["input"] or "{}")
+        same_head = _same_sha(ainp.get("head_sha"), sha)
+        same_pr = (
+            True if (not pr and not ainp.get("pr")) else _same_pr(ainp.get("pr"), pr)
+        )
+        if same_head and same_pr:
+            return str(active["id"])
     author_models, author_providers = await authors(tx.conn, parent["id"])
     route = await review_route(
         tx.conn,
@@ -856,7 +1288,6 @@ async def spawn_reviewer(
             "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent["id"],)
         )
     title = f"Independent review of {parent['title']!r}"
-    sha = head_sha
     body = TaskCreate(
         title=title[:200],
         spec=(
@@ -910,11 +1341,17 @@ async def spawn_reviewer(
         "review.independent_requested",
         {
             "child_id": child.id,
+            "pr": pr,
+            "head_sha": sha,
             "harness_model": harness.model_dump() if harness else None,
             "executor_model": executor.model_dump() if executor else None,
             "mode": setting.mode,
         },
     )
+    # Cancel any stale active reviewers for older PRs/heads after the new child exists
+    # so `on_review_child_ended` recognizes them as superseded and ignores them.
+    for stale in active_children:
+        await manage.cancel(tx, stale["id"], actor)
     return child.id
 
 
@@ -995,6 +1432,29 @@ async def child_models_clean(
     return child_models.isdisjoint(author_models)
 
 
+_CHILD_OUTCOME_EVENTS = (
+    PASSED_EVENT,
+    "review.independent_changes_requested",
+    "review.independent_escalated",
+    "review.independent_void",
+)
+
+
+async def _child_already_processed(
+    conn: aiosqlite.Connection, parent_id: str, child_id: str
+) -> bool:
+    marks = ",".join("?" * len(_CHILD_OUTCOME_EVENTS))
+    async with conn.execute(
+        f"SELECT data FROM events WHERE subject_type = 'task'"  # noqa: S608
+        f" AND subject_id = ? AND kind IN ({marks})",
+        (parent_id, *_CHILD_OUTCOME_EVENTS),
+    ) as cur:
+        for (raw,) in await cur.fetchall():
+            if raw and json.loads(raw).get("child_id") == child_id:
+                return True
+    return False
+
+
 async def on_review_child_complete(
     tx: Tx,
     child: aiosqlite.Row,
@@ -1005,8 +1465,8 @@ async def on_review_child_complete(
     actor: str,
     forge: deliverable.ForgeRead | None = None,
 ) -> None:
-    """Apply the child's verdict to the parent (proof-checked). `forge` is the read of
-    the parent's PR made before the write (`completion_forge_read`)."""
+    """Apply the child's verdict to the parent (proof-checked, idempotent per child).
+    `forge` is the read of the parent's PR made before the write (`completion_forge_read`)."""
     from argus_api.tasks import service as tasks_svc
 
     parent_id = child["parent_id"]
@@ -1015,10 +1475,22 @@ async def on_review_child_complete(
     parent = await tasks_svc._row(tx.conn, parent_id)
     if parent["state"] != TaskState.IN_REVIEW:
         return
+    # Ignore stale (superseded) children when a newer code_review child exists.
+    async with tx.conn.execute(
+        "SELECT id FROM tasks WHERE parent_id = ? AND kind = ?"
+        " ORDER BY rowid DESC LIMIT 1",
+        (parent_id, CODE_REVIEW_KIND),
+    ) as cur:
+        latest = await cur.fetchone()
+    if latest is not None and latest["id"] != child["id"]:
+        return
+    if await _child_already_processed(tx.conn, parent_id, child["id"]):
+        return
     data = result.data or {}
     verdict = data.get("verdict")
     findings = data.get("findings") or []
     head_sha = data.get("head_sha")
+    child_input = json.loads(child["input"] or "{}")
     author_models, author_providers = await authors(tx.conn, parent_id)
     if not await child_models_clean(
         tx.conn,
@@ -1036,7 +1508,6 @@ async def on_review_child_complete(
             {"reason": "same_model", "child_id": child["id"]},
         )
         # Prefer a different model next time.
-        child_input = json.loads(child["input"] or "{}")
         child_models, _ = await authors(tx.conn, child["id"])
         # The void reviewer's accounts may serve an author model under another
         # name; do not pick them again.
@@ -1050,19 +1521,111 @@ async def on_review_child_complete(
             actor=actor,
             exclude_models=author_models | child_models,
             exclude_accounts=await _accounts(tx.conn, child["id"]),
+            replace_child_id=child["id"],
         )
         return
 
     if verdict == "approve":
-        # head_sha must match what the parent currently delivers, when known.
+        # PR identity and head_sha must exactly match both what this reviewer was
+        # assigned and what the parent / forge currently delivers.
         parent_result = (
             TaskResult.model_validate_json(parent["result"])
             if parent["result"]
             else TaskResult(summary=".")
         )
-        parent_refs = _delivery_refs(parent, parent_result)
-        current_sha = parent_refs[1]
-        if current_sha and head_sha and current_sha != head_sha:
+        parent_pr, parent_sha = _delivery_refs(parent, parent_result)
+        expected_pr = child_input.get("pr")
+        expected_sha = child_input.get("head_sha")
+        seen = forge.delivery if forge is not None else None
+        forge_pr = seen.pr if seen is not None else None
+        forge_sha = (
+            seen.head.sha.lower()
+            if seen is not None and seen.head is not None and seen.head.sha
+            else None
+        )
+        current_pr = forge_pr or parent_pr or expected_pr
+        current_sha = (
+            forge_sha
+            if (forge_sha and (not current_pr or _same_pr(forge_pr, current_pr)))
+            else parent_sha
+        )
+        if expected_pr and parent_pr and not _same_pr(expected_pr, parent_pr):
+            await record(
+                tx,
+                actor,
+                "task",
+                parent_id,
+                "review.independent_void",
+                {
+                    "reason": "pr_mismatch",
+                    "child_id": child["id"],
+                    "reviewed_pr": expected_pr,
+                    "current_pr": parent_pr,
+                },
+            )
+            await spawn_reviewer(
+                tx,
+                parent,
+                pr=current_pr,
+                head_sha=current_sha,
+                setting=setting,
+                policy=policy,
+                actor=actor,
+                replace_child_id=child["id"],
+            )
+            return
+        if expected_pr and forge_pr and not _same_pr(expected_pr, forge_pr):
+            await record(
+                tx,
+                actor,
+                "task",
+                parent_id,
+                "review.independent_void",
+                {
+                    "reason": "pr_mismatch",
+                    "child_id": child["id"],
+                    "reviewed_pr": expected_pr,
+                    "current_pr": forge_pr,
+                },
+            )
+            await spawn_reviewer(
+                tx,
+                parent,
+                pr=forge_pr,
+                head_sha=forge_sha,
+                setting=setting,
+                policy=policy,
+                actor=actor,
+                replace_child_id=child["id"],
+            )
+            return
+        if expected_sha and (not head_sha or not _same_sha(head_sha, expected_sha)):
+            await record(
+                tx,
+                actor,
+                "task",
+                parent_id,
+                "review.independent_void",
+                {
+                    "reason": "head_mismatch",
+                    "child_id": child["id"],
+                    "reviewed": head_sha,
+                    "expected": expected_sha,
+                    "current": current_sha or expected_sha,
+                },
+            )
+            await spawn_reviewer(
+                tx,
+                parent,
+                pr=current_pr,
+                head_sha=current_sha or expected_sha,
+                setting=setting,
+                policy=policy,
+                actor=actor,
+                replace_child_id=child["id"],
+            )
+            return
+        if current_sha and (not head_sha or not _same_sha(head_sha, current_sha)):
             # Stale review of an older head: spawn again.
             await record(
                 tx,
@@ -1080,11 +1643,12 @@ async def on_review_child_complete(
             await spawn_reviewer(
                 tx,
                 parent,
-                pr=parent_refs[0],
+                pr=current_pr,
                 head_sha=current_sha,
                 setting=setting,
                 policy=policy,
                 actor=actor,
+                replace_child_id=child["id"],
             )
             return
         if parent["block_reason"] in (NO_INDEPENDENT_REVIEWER, REVIEW_FAILED):
@@ -1092,7 +1656,8 @@ async def on_review_child_complete(
                 "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent_id,)
             )
         review = Review(parent["review"])
-        reviewed = head_sha or json.loads(child["input"] or "{}").get("head_sha")
+        reviewed = (head_sha or expected_sha or "").lower() or None
+        reviewed_pr = expected_pr or parent_pr or forge_pr
         have = cont.load(parent)
         open_items = (
             [i.id for i in have.checklist if i.status.value != "done"]
@@ -1104,8 +1669,13 @@ async def on_review_child_complete(
             actor,
             "task",
             parent_id,
-            "review.independent_passed",
-            {"child_id": child["id"], "verdict": "approve", "head_sha": reviewed},
+            PASSED_EVENT,
+            {
+                "child_id": child["id"],
+                "verdict": "approve",
+                "head_sha": reviewed,
+                **({"pr": reviewed_pr} if reviewed_pr else {}),
+            },
         )
         # A PR that must still turn green or merge is closed by the forge's word
         # (task deliverable spec 3.5), never by this approval: without a manual review
@@ -1114,7 +1684,9 @@ async def on_review_child_complete(
         if await settles_alone(tx.conn, parent) and not await decisions.open_ids(
             tx.conn, "task", parent_id, (DecisionKind.REVIEW,)
         ):
-            await settle_or_wait(tx, parent, forge, reviewed, actor)
+            await settle_or_wait(
+                tx, parent, forge, reviewed, actor, reviewed_pr=reviewed_pr
+            )
         elif review is not Review.NONE or open_items or forge_gated:
             await decisions.open_decision(
                 tx,
@@ -1399,14 +1971,29 @@ async def retry_reviewer(
     forge: deliverable.ForgeRead | None = None,
 ) -> str | None:
     """The operator's `retry_reviewer`: select again with the failures forgotten
-    (authors stay excluded). A head the last reviewer never got is taken from the
-    forge read made before the write (`forge`). Returns the new child id; None
-    leaves the parent blocked with a fresh decision."""
+    (authors stay excluded). A head the last reviewer never got (or when no prior
+    reviewer existed) is taken from the parent's delivery record or the forge read
+    made before the write (`forge`). Idempotent when an active reviewer exists.
+    Returns the child id; None leaves the parent blocked with a fresh decision."""
     from argus_api.tasks import service as tasks_svc
 
     parent = await tasks_svc._row(tx.conn, parent_id)
     if parent["state"] != TaskState.IN_REVIEW:
         return None
+    async with tx.conn.execute(
+        "SELECT id FROM tasks WHERE parent_id = ? AND kind = ?"
+        " AND state NOT IN (?, ?, ?) ORDER BY rowid DESC LIMIT 1",
+        (
+            parent_id,
+            CODE_REVIEW_KIND,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+        ),
+    ) as cur:
+        active = await cur.fetchone()
+    if active is not None:
+        return str(active["id"])
     async with tx.conn.execute(
         "SELECT input FROM tasks WHERE parent_id = ? AND kind = ?"
         " ORDER BY rowid DESC LIMIT 1",
@@ -1418,6 +2005,16 @@ async def retry_reviewer(
     if head_sha is None and forge is not None and forge.delivery is not None:
         pr = forge.delivery.pr
         head_sha = _forge_head(pr, forge)
+    if head_sha is None:
+        parent_result = (
+            TaskResult.model_validate_json(parent["result"])
+            if parent["result"]
+            else TaskResult(summary=".")
+        )
+        refs = await has_code_delivery(tx.conn, parent, parent_result, forge)
+        if refs is not None:
+            pr = pr or refs[0]
+            head_sha = refs[1]
     await record(tx, actor, "task", parent_id, RETRY_EVENT, {})
     setting, policy = await _load_settings(tx.conn, parent["project"])
     child_id = await spawn_reviewer(
@@ -1475,11 +2072,9 @@ async def approve_without_review(
         accept=True,
         notes=notes or "approved without independent review",
         forge=forge,
+        waive_independent_review=True,
     )
-    await tx.conn.execute(
-        "UPDATE tasks SET block_reason = NULL WHERE id = ? AND block_reason = ?",
-        (parent_id, REVIEW_FAILED),
-    )
+    await clear_gate_block(tx, parent_id)
 
 
 async def on_gate_changed(tx: Tx, actor: str) -> None:

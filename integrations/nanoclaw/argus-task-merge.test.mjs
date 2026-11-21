@@ -591,3 +591,57 @@ describe("merge: states, retries and bounds", () => {
     assert.deepEqual(f.calls, []);
   });
 });
+
+describe("merge: pre-merge independent review binding", () => {
+  const reviewGrant = (pr, sha, task = "t1", attempt = "1") => ({
+    ARGUS_MERGE_AUTH_KEY: KEY,
+    ARGUS_MERGE_AUTH_TASK: task,
+    ARGUS_MERGE_AUTH_ATTEMPT: attempt,
+    ARGUS_MERGE_APPROVED_PR: String(pr),
+    ARGUS_MERGE_APPROVED_SHA: sha,
+    ARGUS_MERGE_AUTHORIZED: createHmac("sha256", KEY)
+      .update(`merge:${task}:${attempt}:review:${pr}:${sha}`)
+      .digest("hex"),
+  });
+
+  it("merges when the live PR number and exact full head SHA match the independent review approval", async () => {
+    const f = forge();
+    const r = await merge(f, [], { env: reviewGrant(7, HEAD) });
+    assert.equal(r.code, EXIT.ok, r.err);
+    assert.equal(r.out.merged, true);
+    assert.equal(f.s.mergeBody.sha, HEAD);
+    assert.deepEqual(f.writes, ["PUT /pulls/7/merge"]);
+  });
+
+  it("blocks a replacement PR number before any forge call (#450/#451)", async () => {
+    const f = forge();
+    const r = await merge(f, [], { env: reviewGrant(450, HEAD) });
+    assert.equal(r.code, EXIT.error);
+    assert.match(r.err, /PR #450, not PR #7/);
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.writes, []);
+  });
+
+  it("blocks when the live PR head moved after independent review approval", async () => {
+    const f = forge({
+      pr: { ...forge().s.pr, head: { sha: MOVED } },
+      movedRuns: [checkRun({ id: 13 })],
+    });
+    const r = await merge(f, [], { env: reviewGrant(7, HEAD) });
+    assert.equal(r.code, EXIT.not_ready, r.err);
+    assert.deepEqual(r.out.blocked, ["independent_review_head_mismatch"]);
+    assert.equal(r.out.pr_head_sha, MOVED);
+    assert.equal(r.out.approved_head_sha, HEAD);
+    assert.deepEqual(f.writes, []);
+  });
+
+  it("refuses a tampered ARGUS_MERGE_APPROVED_SHA before any forge call", async () => {
+    const f = forge();
+    const tampered = { ...reviewGrant(7, HEAD), ARGUS_MERGE_APPROVED_SHA: MOVED };
+    const r = await merge(f, [], { env: tampered });
+    assert.equal(r.code, EXIT.error);
+    assert.match(r.err, /stale|attempt|policy/);
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.writes, []);
+  });
+});
