@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from argus_api.accounts.google_refresh import GoogleTokenRefresher
+from argus_api.accounts.google_refresh import ATTEMPT_COOLDOWN, GoogleTokenRefresher
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
 from fastapi.testclient import TestClient
@@ -822,6 +822,40 @@ def test_midlease_transient_forced_failure_is_not_bypassed_by_plain_call(
     assert again.status_code == 503
     assert FAKE_ACCESS not in again.text
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "http_status"),
+    [(400, {"error": "invalid_grant"}, 409), (503, {"error": "unavailable"}, 503)],
+)
+def test_midlease_rejected_credential_stays_invalid_after_cooldown(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    body: dict,
+    http_status: int,
+) -> None:
+    """A rejected fresh-looking token is never returned after the cooldown
+    expires: the provider is retried once, then the failure stands again."""
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return status, body
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    assert (
+        _refresh(client, worker, claim, acc_id, force=True).status_code == http_status
+    )
+    # Age the recorded attempt past the cooldown.
+    refresher = app.state.google_refresher
+    stamp, outcome = refresher._last_attempt[acc_id]
+    refresher._last_attempt[acc_id] = (stamp - ATTEMPT_COOLDOWN * 2, outcome)
+    for _ in range(3):
+        again = _refresh(client, worker, claim, acc_id)
+        assert again.status_code == http_status
+        assert FAKE_ACCESS not in again.text
+    assert len(calls) == 2  # one forced attempt, one retry after the cooldown
 
 
 def test_midlease_expired_access_only_credential_is_rejected(

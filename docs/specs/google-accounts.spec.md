@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-19
-updated: 2026-11-20
+updated: 2026-11-21
 ---
 
 # Google (Antigravity) accounts: import, executor lease, delegated CLI
@@ -141,7 +141,10 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   traffic is bounded to one attempt per account per 60 s (`ATTEMPT_COOLDOWN`): a
   failure or a forced refresh inside the window is answered from the last outcome.
   A failed attempt also stands for the window against a non-forced call on a
-  token that still looks fresh, and an access-only credential (no
+  token that still looks fresh. The token whose refresh failed stays invalid
+  (remembered by digest in memory, independent of the cooldown) until a refresh
+  or a credential replacement changes it: after the window the provider is
+  retried once, never answered with the rejected token. An access-only credential (no
   `refresh_token`) past its expiry is `409 credential_refresh_rejected`.
   `force` refreshes a token whose expiry is not near, for a provider 401 on it.
   Tested deterministically with fake tokens and an injected token endpoint

@@ -11,6 +11,7 @@ into SOPS. Never runs inside a write transaction and never echoes secret values.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -380,6 +381,18 @@ def _expired_without_refresh_token(doc: dict[str, Any], now: datetime) -> bool:
     return exp is not None and exp <= now
 
 
+def _access_digest(doc: dict[str, Any]) -> str | None:
+    """Fingerprint of the stored access token, so a rejected one is remembered
+    without keeping its value."""
+    try:
+        token = google_auth.extract_oauth_fields(doc).get("access_token")
+    except google_auth.GoogleAuthError:
+        return None
+    if not isinstance(token, str):
+        return None
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 class GoogleTokenRefresher:
     """Serialized per-account OAuth refresher attached to `app.state`."""
 
@@ -395,6 +408,14 @@ class GoogleTokenRefresher:
         self.agy_bin = agy_bin
         self._locks: dict[str, asyncio.Lock] = {}
         self._last_attempt: dict[str, tuple[datetime, RefreshOutcome]] = {}
+        # Digest of the access token whose refresh failed. The token stays
+        # invalid until a refresh or a credential replacement changes it,
+        # independently of the attempt cooldown.
+        self._invalid: dict[str, str | None] = {}
+
+    def _is_invalid(self, account_id: str, doc: dict[str, Any]) -> bool:
+        digest = self._invalid.get(account_id)
+        return digest is not None and digest == _access_digest(doc)
 
     def _lock_for(self, account_id: str) -> asyncio.Lock:
         lock = self._locks.get(account_id)
@@ -432,7 +453,8 @@ class GoogleTokenRefresher:
             # A failed attempt stands for the window even when the stored token
             # still looks fresh (e.g. after a failed forced refresh).
             return last[1]
-        if not force and not google_auth.needs_refresh(doc, now=now):
+        invalid = self._is_invalid(account_id, doc)
+        if not (force or invalid) and not google_auth.needs_refresh(doc, now=now):
             if _expired_without_refresh_token(doc, now):
                 return "permanent"
             return "current"
@@ -448,10 +470,14 @@ class GoogleTokenRefresher:
                 if last[1] in {"transient", "permanent"}:
                     return last[1]
                 return "throttled" if force else "current"
-            if not force and not google_auth.needs_refresh(latest, now=now):
+            invalid = self._is_invalid(account_id, latest)
+            if not (force or invalid) and not google_auth.needs_refresh(
+                latest, now=now
+            ):
                 return "current"
             if google_auth.refresh_token(latest) is None:
-                if force or _expired_without_refresh_token(latest, now):
+                if force or invalid or _expired_without_refresh_token(latest, now):
+                    self._invalid[account_id] = _access_digest(latest)
                     return "permanent"
                 return "current"
             try:
@@ -471,6 +497,7 @@ class GoogleTokenRefresher:
                 )
                 outcome: RefreshOutcome = "permanent" if exc.permanent else "transient"
                 self._last_attempt[account_id] = (now, outcome)
+                self._invalid[account_id] = _access_digest(latest)
                 if exc.permanent:
                     async with db.write() as tx:
                         await record(
@@ -488,6 +515,7 @@ class GoogleTokenRefresher:
                 return outcome
             await secrets.put(secret_name, refreshed)
             self._last_attempt[account_id] = (now, "refreshed")
+            self._invalid.pop(account_id, None)
             log.info(
                 "Refreshed Google OAuth access_token for account %s (%s)",
                 account_name,
