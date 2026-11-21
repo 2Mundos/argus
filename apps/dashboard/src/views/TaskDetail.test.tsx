@@ -13,6 +13,7 @@ const mock = vi.hoisted(() => ({
   paths: [] as string[],
   prereq: {} as Record<string, unknown>,
   prereqFail: [] as Error[],
+  reviews: { rounds: [] } as Record<string, unknown>,
 }));
 vi.mock("../api", () => ({
   api: { GET: (path: string) => path },
@@ -23,6 +24,7 @@ vi.mock("../api", () => ({
       if (failure) throw failure;
       return mock.prereq;
     }
+    if (path.endsWith("/reviews")) return mock.reviews;
     if (path.includes("delivery") && mock.deliveryGate) await mock.deliveryGate;
     return path.includes("projects/stats")
       ? []
@@ -114,6 +116,7 @@ afterEach(() => {
   mock.paths = [];
   mock.prereq = {};
   mock.prereqFail = [];
+  mock.reviews = { rounds: [] };
 });
 describe("TaskDetail loading", () => {
   it("paints the task before the forge delivery read settles", async () => {
@@ -648,5 +651,61 @@ describe("TaskDetail merge and review decisions", () => {
     const line = await text();
     expect(line).toContain("Review: required by forge review policy");
     expect(line).toContain("PR gate at aaaaaaa: review required, 0 approvals");
+  });
+});
+
+describe("TaskDetail review rounds", () => {
+  const round = (n: number, verdict: string, head: string, findings: unknown[]) => ({
+    child_id: `child-${n}`,
+    round: n,
+    state: "succeeded",
+    verdict,
+    head_sha: head,
+    findings,
+    findings_by_priority: {},
+    reviewer_provider: "openai",
+    reviewer_model: `gpt-${n}`,
+    artifact_ids: [`art-${n}`],
+    created_at: "2026-10-20T12:00:00Z",
+    finished_at: "2026-10-20T12:05:00Z",
+  });
+
+  it("shows one tab per round, newest selected, and switches on click", async () => {
+    mock.task = base;
+    mock.reviews = {
+      rounds: [
+        round(1, "request_changes", "a".repeat(40), [
+          { priority: "P1", file: "a.py", lines: "7", description: "leak" },
+        ]),
+        round(2, "approve", "b".repeat(40), []),
+      ],
+    };
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    const tabs = await screen.findAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      "Round 1 · changes requested",
+      "Round 2 · approved",
+    ]);
+    expect(tabs[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("bbbbbbbbbbbb")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Review task/ }).getAttribute("href")).toBe(
+      "#tasks/child-2",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /report/ }));
+    expect(download).toHaveBeenCalledWith("/api/artifacts/art-2/content", "art-2");
+    fireEvent.click(tabs[0] as HTMLElement);
+    expect(screen.getByText("leak")).toBeTruthy();
+    expect(screen.getByText("a.py:7")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Review task/ }).getAttribute("href")).toBe(
+      "#tasks/child-1",
+    );
+  });
+
+  it("links a review child back to its parent and shows no tabs on it", async () => {
+    mock.task = { ...base, kind: "code_review", parent_id: "parent-1" };
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    const link = await screen.findByRole("link", { name: "parent task" });
+    expect(link.getAttribute("href")).toBe("#tasks/parent-1");
+    expect(screen.queryByRole("tablist")).toBeNull();
   });
 });

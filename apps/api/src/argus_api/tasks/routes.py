@@ -76,6 +76,7 @@ from argus_api.tasks import (
     prerequisites,
     quota_resume,
     resumability,
+    review_rounds,
     route,
     service,
     steers,
@@ -263,6 +264,7 @@ async def list_tasks(
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
     q: str | None = None,
+    hide_review_children: bool = False,
 ) -> TaskPage:
     """Tasks newest first, in pages (max 100). `assignee` is the agent holding a
     task now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read
@@ -271,11 +273,23 @@ async def list_tasks(
     tasks they have leased. Optional `q` is literal substring search over title
     and spec (task discovery). `view=compact` returns only id, title, state, attempt,
     max_attempts, block_reason, progress_message, created_at and updated_at (no refs,
-    models or `matches`): the cheapest way to scan many tasks."""
+    models or `matches`): the cheapest way to scan many tasks. `hide_review_children=true`
+    leaves out `code_review` tasks that have a parent (their rounds are read with
+    `GET /tasks/{id}/reviews`) and adds `review_badge` to parents with rounds; it is
+    off by default."""
     scope = worker_task_filter(caller)
     async with db.snapshot() as snap:
         if ids is not None:
-            if state or project or kind or assignee or archived or cursor or q:
+            if (
+                state
+                or project
+                or kind
+                or assignee
+                or archived
+                or cursor
+                or q
+                or hide_review_children
+            ):
                 raise ValidationFailedError(
                     "ids is a batch read; it takes no other filter or cursor",
                     code="ids_exclusive",
@@ -293,6 +307,7 @@ async def list_tasks(
             cursor=cursor,
             task_scope=scope,
             q=q,
+            hide_review_children=hide_review_children,
         )
 
 
@@ -466,6 +481,19 @@ async def get_task(
         return await views.read_task(
             snap.conn, task_id, snap.now, request.app.state.pr_checker
         )
+
+
+@router.get("/{task_id}/reviews")
+async def get_review_rounds(
+    task_id: str, db: DbDep, caller: CallerDep
+) -> review_rounds.ReviewRounds:
+    """The task's independent review rounds, oldest first (round 1): verdict, reviewed
+    head, findings, reviewer model and report artifacts of each `code_review` child.
+    Read-only; empty when the task was never reviewed."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        await service.task_row(conn, task_id)  # 404 for an unknown task
+        return await review_rounds.review_rounds(conn, task_id)
 
 
 @router.get("/{task_id}/delivery")

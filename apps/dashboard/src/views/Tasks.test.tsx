@@ -138,3 +138,33 @@ describe("Tasks state filter", () => {
     expect(screen.queryByTestId("task-filter")).toBeNull();
   });
 });
+
+describe("Tasks review badge", () => {
+  it("shows the newest round and verdict on the parent card", async () => {
+    mock.items = [
+      {
+        id: "p",
+        title: "Parent work",
+        project: "global",
+        state: "in_review",
+        kind: "generic",
+        priority: 0,
+        attempt: 1,
+        review_badge: { round: 3, verdict: "request_changes", state: "succeeded" },
+      },
+      {
+        id: "q",
+        title: "Approved work",
+        project: "global",
+        state: "in_review",
+        kind: "generic",
+        priority: 0,
+        attempt: 1,
+        review_badge: { round: 2, verdict: "approve", state: "succeeded" },
+      },
+    ];
+    render(<Tasks />);
+    expect(await screen.findByText(/review 3 · changes requested/)).toBeTruthy();
+    expect(screen.getByText(/review 2 · approved/)).toBeTruthy();
+  });
+});

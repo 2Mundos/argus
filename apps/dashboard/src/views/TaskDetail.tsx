@@ -24,6 +24,7 @@ import { TaskCostTile } from "./TaskCost";
 import { TaskEditForm } from "./TaskEditForm";
 import { TaskIntegrations } from "./TaskIntegrations";
 import { TaskPrerequisites } from "./TaskPrerequisites";
+import { TaskReviews } from "./TaskReviews";
 import { TaskSteers, useSteersSource } from "./TaskSteers";
 import { TaskTerminal } from "./TaskTerminal";
 
@@ -347,6 +348,15 @@ export function TaskDetail({
           <Activity task={task} events={events ?? []} selected={selected} />
           {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
           <TaskReadiness task={task} />
+          {task.kind === "code_review" ? (
+            task.parent_id && (
+              <p className="small">
+                Review round of <a href={`#tasks/${task.parent_id}`}>parent task</a>
+              </p>
+            )
+          ) : (
+            <TaskReviews taskId={taskId} />
+          )}
           {executionRoute?.execution && (
             <details className="card">
               <summary>

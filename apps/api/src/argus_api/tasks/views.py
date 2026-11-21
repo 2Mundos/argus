@@ -30,7 +30,9 @@ from argus_api.settings import service as settings_svc
 from argus_api.tasks import delivery, readiness, service
 from argus_api.tasks.delivery import PrChecker
 from argus_api.tasks.finalization import Finalization, WorkspaceFacts, newest
+from argus_api.tasks.independent_review import CODE_REVIEW_KIND
 from argus_api.tasks.readiness import ForgeReview, MergeDecision, PrGate
+from argus_api.tasks.review_rounds import ReviewBadge, badges
 
 TaskView = Literal["summary", "detail", "compact"]
 MAX_IDS = 50
@@ -89,6 +91,10 @@ class TaskSummary(Refs):
     age_s: int  # since creation
     truncated: dict[str, int] = {}  # field -> full length in bytes
     matches: list[MatchHit] | None = Field(default=None, exclude_if=lambda v: v is None)
+    # Newest independent review round; only set when the list asks `hide_review_children`.
+    review_badge: "ReviewBadge | None" = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
 
 class TaskDetail(Task, TaskSummary):
@@ -331,11 +337,14 @@ async def list_tasks(
     cursor: str | None = None,
     task_scope: tuple[str, list[str]] | None = None,
     q: str | None = None,
+    hide_review_children: bool = False,
 ) -> TaskPage:
     """Newest first, keyset-paged on (created_at, id). Archived tasks are left out
     unless `archived` asks for exactly those. `task_scope` is an optional SQL
     fragment (worker lease grants) that further restricts which tasks appear.
-    `q` is optional literal substring search over title and spec."""
+    `q` is optional literal substring search over title and spec.
+    `hide_review_children` leaves out `code_review` tasks that have a parent and puts
+    a `review_badge` on the parents that have review rounds."""
     limit = clamp(limit)
     terms = parse_query(q)
     filters: dict[str, Any] = {"states": sorted(states or []), "project": project}
@@ -344,8 +353,14 @@ async def list_tasks(
     # q stay valid when the client still omits q.
     if terms is not None:
         filters["q"] = q
+    # Fingerprint it only when on, so cursors from builds without it stay valid.
+    if hide_review_children:
+        filters["hide_review_children"] = True
     where = ["archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
     params: list[Any] = []
+    if hide_review_children:
+        where.append("NOT (kind = ? AND parent_id IS NOT NULL)")
+        params.append(CODE_REVIEW_KIND)
     if task_scope is not None:
         clause, scope_params = task_scope
         where.append(clause)
@@ -409,7 +424,9 @@ async def list_tasks(
         rows = list(await cur.fetchall())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    page = await _page(snap, rows, view, terms=terms)
+    page = await _page(
+        snap, rows, view, terms=terms, review_badges=hide_review_children
+    )
     if has_more:
         last = rows[-1]
         page.has_more = True
@@ -481,12 +498,14 @@ async def _page(
     view: TaskView,
     *,
     terms: list[str] | None = None,
+    review_badges: bool = False,
 ) -> TaskPage:
     if view == "compact":
         return _compact_page(rows)
     ids = [r["id"] for r in rows]
     by_id = await refs(snap.conn, ids) if rows else {}
     models = await modeltrace.summaries(snap.conn, ids) if rows else {}
+    reviews = await badges(snap.conn, ids) if review_badges else {}
     items: list[TaskSummary | TaskDetail] = []
     omitted: set[str] = set()
     for row in rows:
@@ -506,6 +525,8 @@ async def _page(
         }
         if terms is not None:
             common["matches"] = _match_hits_from_row(row, terms)
+        if row["id"] in reviews:
+            common["review_badge"] = reviews[row["id"]]
         if view == "summary":
             item: TaskSummary | TaskDetail = TaskSummary.model_validate(
                 {**dict(row), **common, "truncated": truncated}
