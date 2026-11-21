@@ -141,6 +141,11 @@ export function Tasks({
   const [selected, setSelected] = useState<string | null>(
     () => window.location.hash.match(/^#tasks\/(.+)$/)?.[1] ?? null,
   );
+  useEffect(() => {
+    const sync = () => setSelected(window.location.hash.match(/^#tasks\/(.+)$/)?.[1] ?? null);
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
   const [creating, setCreating] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archived, setArchived] = useState(false);
