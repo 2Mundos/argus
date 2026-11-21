@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-12
-updated: 2026-11-18
+updated: 2026-11-21
 ---
 
 # Integrations: MCP connections and Kubernetes clusters
@@ -279,7 +279,8 @@ checks in order:
    integration_not_selected` otherwise).
 2. The worker's leased engine account runs a supported harness for the
    integration's kind — Kubernetes: the Claude harness (`anthropic`, `local`,
-   `custom`) or Codex (`openai`); MCP: the Claude harness only — and its leased
+   `custom`) or Codex (`openai`); MCP: the same engines (Codex takes Streamable
+   HTTP servers only, enforced by the channel, 3.6) — and its leased
    executor, if any, is Claude (`anthropic`);
    otherwise `409 integration_engine_unsupported`.
 3. Readiness: `revoked` (`409 integration_revoked`), `expired` (`409
@@ -352,7 +353,7 @@ service-account token there too.
 | Engine | Kubernetes integration | MCP integration |
 | --- | --- | --- |
 | Claude harness (`anthropic`, `local` or `custom` provider: the same session) | supported | supported: the session's MCP config |
-| Codex harness (`openai` provider) | supported: the kubeconfig is CLI-level and reads the same on every harness; a paired Codex executor still blocks at delegation (`integration_engine_unsupported`), since only a Claude executor receives `KUBECONFIG` | not supported: MCP servers need the Claude harness session to consume the session config, which is unverified for Codex, so delivery refuses and the task blocks with `env_integration_unsupported` |
+| Codex harness (`openai` provider) | supported: the kubeconfig is CLI-level and reads the same on every harness; a paired Codex executor still blocks at delegation (`integration_engine_unsupported`), since only a Claude executor receives `KUBECONFIG` | supported for Streamable HTTP servers only: the broker (3.6) refuses a legacy HTTP+SSE server for Codex before any grant, so the session config never holds an entry Codex cannot map; a paired Codex executor still blocks at delegation |
 | Claude executor via `argus-delegate` | supported: gets the attempt's kubeconfig as `KUBECONFIG` | harness-session-only: the session's MCP config is applied, but a delegated run does not inherit it (the delegate spawn carries no MCP configuration and reads no grant), so MCP tools must be called from the session, not delegated |
 | Cursor, Copilot engines; any non-Claude executor | not supported: delivery refuses and the task blocks with `env_integration_unsupported`; `argus-delegate` refuses a non-Claude executor when a kubeconfig is installed and strips any inherited `KUBECONFIG` | not supported: the same refusal and block |
 | Built-in orchestrator | none | none |
@@ -591,11 +592,14 @@ project's active integrations, none chosen by default, and sends the choice as
 
 ## Open items
 
-- MCP delivery for the Codex (`openai`) harness: NanoClaw's Codex provider
-  (upstream `providers` branch) writes the session's MCP servers into Codex's
-  `config.toml`, but only `http` (Streamable HTTP) entries map; `sse` entries
-  have no Codex representation. Enabling it needs a per-transport refusal for
-  `sse` under Codex plus a live Codex-harness receipt, neither of which exists.
+- Live Codex-harness proof of MCP delivery. NanoClaw's Codex provider (upstream
+  `providers` branch) writes the session's MCP servers into Codex's `config.toml`;
+  only `http` (Streamable HTTP) entries map, and Argus delivers only those under
+  `openai` (the broker refuses `sse` with `env_integration_unsupported` before any
+  grant, and a mixed selection installs nothing). Proven with mocks only: the
+  channel's grant and session-config path and the broker against a disposable
+  MCP server. Not proven: that a real Codex session consumes the entry and
+  completes an authenticated tool call; that needs an authorized real receipt.
   Cursor and Copilot providers are executor-only (never harnesses) and non-Claude
   executors are deliberately refused (the delegate carries no MCP configuration
   and only a Claude executor receives `KUBECONFIG`); those are decided boundaries,
@@ -674,8 +678,8 @@ project's active integrations, none chosen by default, and sends the choice as
 - Delivery: `uv run pytest apps/api/tests/test_integration_delivery.py` covers
   selection validation (MCP included; unknown, foreign, revoked and `unknown`-policy
   ids refused) and versioning, the lease binding, the engine matrix (Kubernetes
-  delivered to `openai` as well as Claude-harness engines, MCP refused for
-  `openai`, non-Claude executors refused for both kinds), every readiness
+  delivered to `openai` as well as Claude-harness engines, MCP delivered to
+  `openai` with revoked, stale-attempt and secret-free checks, non-Claude executors refused for both kinds), every readiness
   refusal (`tools_unknown` included), the MCP credential shape, the version race,
   config-edit fencing and the secret-free audit event.
 - MCP broker: vitest `argus-integrations-mcp.test.ts` runs the broker against fake
@@ -695,8 +699,9 @@ project's active integrations, none chosen by default, and sends the choice as
   writes, rendering with a `proxy-url` per cluster, the engine allowlist
   (`local`/`custom`/`openai` install; missing, Cursor and non-Claude executors
   refused before fetching; an MCP credential the API refuses for the engine
-  blocks before any grant, and a mixed Codex selection leaves neither half
-  installed), recheck, cleanup, grant
+  blocks before any grant, and under `openai` the broker is asked for Streamable HTTP only, a legacy
+  HTTP+SSE refusal blocks before the model with no grant, and a mixed Codex
+  selection leaves neither half installed), recheck, cleanup, grant
   authorization per attempt, secret and config version, re-granting after a
   config edit, and the broker over real TLS: splice with
   ciphertext only, `407`/`405`/`403`, refused authorization, DNS pinning, internal
