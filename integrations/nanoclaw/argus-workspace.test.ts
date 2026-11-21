@@ -740,4 +740,77 @@ describe("fencePriorWorkspaces: an empty workspace on another instance needs pro
       fence([prior({ owner_agent_id: "agent-b", checkpoint_state: null })], null)?.reason,
     ).toBe("env_workspace_prior_unverified");
   });
+
+  it("fences attempt 1 of a retry generation and orders cutoff by claim sequence, not attempt number", () => {
+    // Regression: operator retry resets attempt to 1, but earlier foreign WIP is still fenced.
+    const failedPrior = fence(
+      [prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "failed" })],
+      "agent-b",
+      1,
+    );
+    expect(failedPrior?.reason).toBe("env_workspace_prior_unverified");
+    expect(failedPrior?.error).toContain("agent agent-a");
+    expect(failedPrior?.error).toContain("attempt 1");
+
+    expect(
+      fence(
+        [prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "saved" })],
+        "agent-b",
+        1,
+      )?.reason,
+    ).toBe("env_workspace_prior_unavailable");
+    expect(
+      fence(
+        [prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "nothing_to_save" })],
+        "agent-b",
+        1,
+      ),
+    ).toBeNull();
+    expect(fence([], "agent-b", 1)).toBeNull();
+
+    // Gen 1 had attempt 2 on self; Gen 2 reset to attempt 1 on foreign agent-a.
+    // Foreign Gen 2 attempt 1 is newer in claim order and must still fence self's Gen 2 attempt 2.
+    const foreignAfterRetry = [
+      prior({ attempt: 1, owner_agent_id: "agent-b", checkpoint_state: "nothing_to_save" }),
+      prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: "nothing_to_save" }),
+      prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "failed" }),
+    ];
+    expect(
+      fencePriorWorkspaces({
+        attempt: 2,
+        selfAgentId: "agent-b",
+        prior: foreignAfterRetry,
+        hasLocalWork: true,
+      })?.reason,
+    ).toBe("env_workspace_prior_unverified");
+
+    // Reconciled self attempt 1 in Gen 2 advances cutoff past higher-numbered Gen 1 foreign attempts.
+    const reconciledAfterRetry = [
+      prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "failed" }),
+      prior({ attempt: 2, owner_agent_id: "agent-a", checkpoint_state: "failed" }),
+      prior({ attempt: 1, owner_agent_id: "agent-b", checkpoint_state: "nothing_to_save" }),
+    ];
+    expect(
+      fencePriorWorkspaces({
+        attempt: 2,
+        selfAgentId: "agent-b",
+        prior: reconciledAfterRetry,
+        hasLocalWork: true,
+      }),
+    ).toBeNull();
+
+    // Unreconciled self attempt 1 in Gen 2 does not clear Gen 1 foreign work.
+    const unreconciledAfterRetry = [
+      prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "saved" }),
+      prior({ attempt: 1, owner_agent_id: "agent-b", checkpoint_state: "failed" }),
+    ];
+    expect(
+      fencePriorWorkspaces({
+        attempt: 2,
+        selfAgentId: "agent-b",
+        prior: unreconciledAfterRetry,
+        hasLocalWork: true,
+      })?.reason,
+    ).toBe("env_workspace_prior_unavailable");
+  });
 });

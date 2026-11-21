@@ -32,8 +32,8 @@ def register(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {res.json()['token']}"}
 
 
-def claim(client: TestClient, worker: dict[str, str]) -> dict:
-    client.post("/api/tasks", json={"project": "demo", "title": "t"})
+def claim(client: TestClient, worker: dict[str, str], **fields: object) -> dict:
+    client.post("/api/tasks", json={"project": "demo", "title": "t", **fields})
     res = client.post("/api/tasks/claim", json={}, headers=worker)
     assert res.status_code == 200, res.text
     return res.json()
@@ -297,3 +297,56 @@ def test_claim_offers_every_earlier_attempts_workspace_owner(
     assert [
         (p["attempt"], p["checkpoint_state"]) for p in third["prior_workspaces"]
     ] == [(1, "nothing_to_save"), (2, None)]
+
+    # Operator retry resets attempt to 1, but earlier generations stay in prior_workspaces.
+    gen1 = claim(client, first, max_attempts=1)
+    assert gen1["attempt"] == 1
+    assert gen1["prior_workspaces"] == []
+    failed = client.post(
+        f"/api/tasks/{gen1['id']}/fail",
+        json={"attempt": 1, "error": "boom"},
+        headers=first,
+    )
+    assert failed.status_code == 200 and failed.json()["state"] == "failed"
+    assert report(client, first, gen1, 1, "running").status_code == 204
+    assert (
+        report(client, first, gen1, 1, "failed", "env_checkpoint_limit").status_code
+        == 204
+    )
+    retried = client.post(f"/api/tasks/{gen1['id']}/retry")
+    assert retried.status_code == 200 and retried.json()["attempt"] == 0
+
+    gen2 = client.post("/api/tasks/claim", json={}, headers=second).json()
+    assert gen2["id"] == gen1["id"]
+    assert gen2["attempt"] == 1
+    assert gen2["prior_workspaces"] == [
+        {
+            "attempt": 1,
+            "owner_agent_id": first_id,
+            "owner_node_id": None,
+            "owner_status": "live",
+            "checkpoint_state": "failed",
+        }
+    ]
+
+    # A second retry generation keeps every earlier attempt-1 row in claim order.
+    second_id = client.get(f"/api/tasks/{gen1['id']}").json()["workspace"][
+        "owner_agent_id"
+    ]
+    assert (
+        client.post(
+            f"/api/tasks/{gen1['id']}/fail",
+            json={"attempt": 1, "error": "boom2"},
+            headers=second,
+        ).status_code
+        == 200
+    )
+    assert report(client, second, gen2, 1, "running").status_code == 204
+    assert report(client, second, gen2, 1, "nothing_to_save").status_code == 204
+    assert client.post(f"/api/tasks/{gen1['id']}/retry").status_code == 200
+    gen3 = client.post("/api/tasks/claim", json={}, headers=first).json()
+    assert gen3["attempt"] == 1
+    assert [
+        (p["attempt"], p["owner_agent_id"], p["checkpoint_state"])
+        for p in gen3["prior_workspaces"]
+    ] == [(1, first_id, "failed"), (1, second_id, "nothing_to_save")]

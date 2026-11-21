@@ -189,13 +189,18 @@ const describePrior = (p: PriorWorkspace): string =>
   ` checkpoint step ${p.checkpoint_state ?? "not reported"}`;
 
 /**
- * A retry is about to proceed from this instance's workspace (empty, an old checkout or a
- * restored checkpoint). Attempts on other instances after this instance's newest attempt that
- * durably finished its checkpoint may hold unpublished work this one cannot see, so "no work" must be proven, never assumed: only a worker's own `nothing_to_save` report proves it. `null`
- * means nothing is at risk (a first attempt, or every earlier attempt ran here, where the
- * workspace's own state is checked by `prepareTaskWorkspace`). Otherwise a typed refusal
- * that names each attempt, owner, node and checkpoint step. `prior` undefined is an older
- * server that cannot say where work lives: unknown, not absent. Read-only.
+ * A claim is about to proceed from this instance's workspace (empty, an old checkout or a
+ * restored checkpoint). Prior claim rows on other instances after this instance's newest
+ * claim row that durably finished its checkpoint may hold unpublished work this one cannot
+ * see, so "no work" must be proven, never assumed: only a worker's own `nothing_to_save`
+ * report proves it. `prior` is ordered oldest-first by claim row across all retry
+ * generations (because operator retries reset `attempt` to 1), so evaluation and the
+ * reconciliation cutoff follow list order rather than `attempt` numbers. `null` means
+ * nothing is at risk (a genuinely first claim with an empty list, an older server's silence
+ * at attempt 1, or every earlier claim ran here, where the workspace's own state is checked
+ * by `prepareTaskWorkspace`). Otherwise a typed refusal that names each attempt, owner, node
+ * and checkpoint step. `prior` undefined on attempt > 1 is an older server that cannot say
+ * where work lives: unknown, not absent. Read-only.
  */
 export function fencePriorWorkspaces(opts: {
   attempt: number;
@@ -204,10 +209,9 @@ export function fencePriorWorkspaces(opts: {
   /** A workspace already exists or was restored: an older server's silence then keeps the legacy reuse. */
   hasLocalWork?: boolean;
 }): { reason: WorkspaceFailureReason; error: string } | null {
-  if (opts.attempt <= 1) return null;
   const refuse = (reason: WorkspaceFailureReason, error: string) => ({ reason, error });
   if (!opts.prior)
-    return opts.hasLocalWork
+    return opts.attempt <= 1 || opts.hasLocalWork
       ? null
       : refuse(
           "env_workspace_prior_unverified",
@@ -216,19 +220,19 @@ export function fencePriorWorkspaces(opts: {
             "Nothing was created; run the retry on the instance that holds the earlier work",
         );
   const mine = (p: PriorWorkspace) => !!opts.selfAgentId && p.owner_agent_id === opts.selfAgentId;
-  // Work after this instance's newest *reconciled* attempt is what its checkout cannot contain
-  // (A, B, A). A claim alone proves nothing: an attempt that died or was released before its
-  // checkpoint ended (null, running, failed) never showed the earlier foreign work was absorbed,
-  // so only a recorded `saved`/`nothing_to_save` step advances the cutoff.
+  // Work after this instance's newest *reconciled* claim row is what its checkout cannot contain
+  // (A, B, A). Ordering follows the server's claim-row sequence (`opts.prior`), not `attempt`
+  // numbers, because an operator retry resets `attempt` to 1. A claim alone proves nothing: an
+  // attempt that died or was released before its checkpoint ended (null, running, failed) never
+  // showed the earlier foreign work was absorbed, so only a recorded `saved`/`nothing_to_save`
+  // step advances the cutoff.
   const reconciled = (p: PriorWorkspace) =>
     p.checkpoint_state === "saved" || p.checkpoint_state === "nothing_to_save";
-  const newestHere = Math.max(
-    0,
-    ...opts.prior.filter((p) => mine(p) && reconciled(p)).map((p) => p.attempt),
-  );
-  const elsewhere = opts.prior.filter(
-    (p) => p.attempt < opts.attempt && p.attempt > newestHere && !mine(p),
-  );
+  let cutoff = -1;
+  for (const [i, p] of opts.prior.entries()) {
+    if (mine(p) && reconciled(p)) cutoff = i;
+  }
+  const elsewhere = opts.prior.slice(cutoff + 1).filter((p) => !mine(p));
   const unavailable = elsewhere.filter((p) => p.checkpoint_state === "saved");
   if (unavailable.length)
     return refuse(

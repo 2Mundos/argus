@@ -202,30 +202,36 @@ required-input reference is not a branch claim and is left alone
 
 Workspaces are per instance directory, so a retry claimed by another instance finds none.
 The claim (`ClaimedTask.prior_workspaces`, from the same attempt rows as 3.5) lists every
-earlier attempt: `attempt`, `owner_agent_id`, `owner_node_id`, `owner_status` and
-`checkpoint_state` (what the worker reported: `running`, `saved`, `nothing_to_save`,
-`failed`, or null for nothing reported). No path, no checkpoint reference.
+earlier claim row of the task across all retry generations, oldest first, ordered by claim
+row (`task_attempts.id`) and excluding the current claim — not by the `attempt` number,
+which restarts at 1 after an operator retry (`retry_task`). Each entry carries `attempt`,
+`owner_agent_id`, `owner_node_id`, `owner_status` and `checkpoint_state` (what the worker
+reported: `running`, `saved`, `nothing_to_save`, `failed`, or null for nothing reported).
+No path, no checkpoint reference.
 
-For a task with `repository:write` and attempt > 1, `runTask` checks this list after the
-checkpoint restore and before `prepareTaskWorkspace`, whether the workspace is missing,
-restored or already present (`fencePriorWorkspaces`, read-only): an older local checkout
-cannot contain work a later attempt on another instance left (A, B, A). Attempts owned by
-this agent only advance the cutoff when their checkpoint step ended (`saved` or
-`nothing_to_save`): the checkpoint step only runs once the fence passes and
-`prepareTaskWorkspace` succeeds, so a blocked claim reports nothing and never
-advances the cutoff, while attempts older than a reconciled one are ignored
-(same-instance behaviour is unchanged). A claim that died, was blocked or was
-released before its checkpoint ended (no step, `running`, `failed`) proves nothing
-and fences nothing off. Each attempt
-by another agent must be proven empty, and the only proof is that worker's own
-`nothing_to_save` report (a clean or fully published workspace). Otherwise nothing is
-created and the task is blocked, spending no attempt, with the attempt, owner, node,
-status and checkpoint step named:
+For a task with `repository:write`, `runTask` checks this list after the checkpoint restore
+and before `prepareTaskWorkspace`, whether the workspace is missing, restored or already
+present (`fencePriorWorkspaces`, read-only): an older local checkout cannot contain work a
+later claim on another instance left (A, B, A), and the fence applies to attempt 1 of a
+retry generation whenever earlier generations exist. A genuinely first claim (empty
+`prior_workspaces`) passes, and an older server that omits `prior_workspaces` still passes
+on attempt 1. Ordering and the reconciliation cutoff follow claim-row sequence (the order of
+`prior_workspaces`), not `attempt` numbers. Attempts owned by this agent only advance the
+cutoff when their checkpoint step ended (`saved` or `nothing_to_save`): the checkpoint step
+only runs once the fence passes and `prepareTaskWorkspace` succeeds, so a blocked claim
+reports nothing and never advances the cutoff, while claim rows older than a reconciled one
+are ignored (same-instance behaviour is unchanged). A claim that died, was blocked or was
+released before its checkpoint ended (no step, `running`, `failed`) proves nothing and
+fences nothing off. Each claim row after the cutoff by another agent must be proven empty,
+and the only proof is that worker's own `nothing_to_save` report (a clean or fully
+published workspace). Otherwise nothing is created and the task is blocked, spending no
+attempt, with the attempt, owner, node, status and checkpoint step named:
 
 - `saved`: `env_workspace_prior_unavailable`. Its checkpoint is not in this node's store
   ([task checkpoint](task-checkpoint.spec.md) refuses foreign-node checkpoints).
 - `failed`, `running` (never finished, so stale), not reported, or a server that sends no
-  list (passes only when a workspace already exists or was restored, the legacy reuse): `env_workspace_prior_unverified`. Unknown is never reported as absent.
+  list on attempt > 1 (passes only when a workspace already exists or was restored, the
+  legacy reuse): `env_workspace_prior_unverified`. Unknown is never reported as absent.
 
 Recovery is only through supported inputs: a verified checkpoint in this node's store
 (restored before the fence, byte-checked by its manifest), or the work published from the
