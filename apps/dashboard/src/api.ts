@@ -222,7 +222,7 @@ export async function boardTasks(
   // An empty query is no query: the board stays hidden-review and the full split applies.
   const q = opts?.q || undefined;
   // A state or text filter is one chain; the active/ended split is for the full board.
-  if (opts?.states?.length || q !== undefined) {
+  if (opts && (opts.states?.length || q !== undefined)) {
     const found = await newestTasks(5, archived, {
       signal: opts.signal,
       states: opts.states?.length ? opts.states : undefined,
