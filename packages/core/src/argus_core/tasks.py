@@ -340,6 +340,8 @@ ENV_BLOCK_REASONS = frozenset(
         "env_workspace_branch_mismatch",
         "env_workspace_unpreserved_commits",
         "env_workspace_limit",
+        "env_workspace_prior_unverified",
+        "env_workspace_prior_unavailable",
         "env_executor_auth",
         "env_workspace_missing",
         "env_input_unavailable",
@@ -682,6 +684,21 @@ class QuotaResume(NativeSessionReport):
     cause: Literal["quota", "session_lost"] = "quota"
 
 
+class PriorWorkspace(BaseModel):
+    """Where an earlier attempt's workspace lived and what is known of its work, offered
+    to the next claim (task workspace spec 3.7). `checkpoint_state` is what the attempt's
+    worker reported (`running`, `saved`, `nothing_to_save`, `failed`); null when it
+    reported nothing. Never a path or a checkpoint reference."""
+
+    attempt: int
+    owner_agent_id: str
+    owner_node_id: str | None = None
+    owner_status: Literal["live", "stale", "ended", "unknown"] = "unknown"
+    checkpoint_state: (
+        Literal["running", "saved", "nothing_to_save", "failed"] | None
+    ) = None
+
+
 class ClaimedTask(Task):
     """A claimed task plus knowledge worth reading first: pinned pages, then the
     best matches for the task in its project (references only)."""
@@ -713,6 +730,10 @@ class ClaimedTask(Task):
     # The previous attempt's quota-paused native session, not yet taken (quota
     # resume spec 3.3). The channel resumes it or reports why it did not.
     quota_resume: QuotaResume | None = None
+    # Every earlier attempt's workspace owner and checkpoint step, oldest first (task
+    # workspace spec 3.7); empty on a first attempt. A server that predates it omits it:
+    # the channel then cannot tell where earlier work lives.
+    prior_workspaces: list[PriorWorkspace] = []
     # Effective difficulty → executor chain for this task's level (task difficulty /
     # settings 3.7). Empty list: no delegated executor; the harness does the work.
     difficulty_executors: list[str] | None = None

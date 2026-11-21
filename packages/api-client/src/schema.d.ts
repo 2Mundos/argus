@@ -5372,6 +5372,11 @@ export interface components {
             output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
+            /**
+             * Prior Workspaces
+             * @default []
+             */
+            prior_workspaces?: components["schemas"]["PriorWorkspace"][];
             /** Priority */
             priority: number;
             /** Progress At */
@@ -10236,6 +10241,29 @@ export interface components {
             unpriced_models: string[];
             /** Version */
             version: string;
+        };
+        /**
+         * PriorWorkspace
+         * @description Where an earlier attempt's workspace lived and what is known of its work, offered
+         *     to the next claim (task workspace spec 3.7). `checkpoint_state` is what the attempt's
+         *     worker reported (`running`, `saved`, `nothing_to_save`, `failed`); null when it
+         *     reported nothing. Never a path or a checkpoint reference.
+         */
+        PriorWorkspace: {
+            /** Attempt */
+            attempt: number;
+            /** Checkpoint State */
+            checkpoint_state?: ("running" | "saved" | "nothing_to_save" | "failed") | null;
+            /** Owner Agent Id */
+            owner_agent_id: string;
+            /** Owner Node Id */
+            owner_node_id?: string | null;
+            /**
+             * Owner Status
+             * @default unknown
+             * @enum {string}
+             */
+            owner_status?: "live" | "stale" | "ended" | "unknown";
         };
         /**
          * ProgressKind

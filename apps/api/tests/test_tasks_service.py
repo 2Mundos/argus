@@ -517,6 +517,8 @@ async def test_other_failures_still_count_toward_max_attempts(
         "env_workspace_branch_mismatch",
         "env_workspace_unpreserved_commits",
         "env_workspace_limit",
+        "env_workspace_prior_unverified",
+        "env_workspace_prior_unavailable",
     ],
 )
 async def test_a_task_workspace_block_is_environment_and_spends_nothing(
