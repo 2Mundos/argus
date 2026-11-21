@@ -152,7 +152,8 @@ async def test_code_review_envelope_names_missing_and_extra_keys(db: Database) -
     assert "<root>: 'head_sha' is a required property" in err.value.details
     assert err.value.details[-1] == (
         "expected result.data to be an object with required keys findings, head_sha,"
-        " verdict; allowed keys findings, head_sha, verdict and no other keys"
+        " verdict; allowed keys findings, fixed_head_sha, head_sha, tests, verdict and no"
+        " other keys"
     )
     with pytest.raises(ValidationFailedError) as extra:
         await complete_review(
@@ -160,7 +161,7 @@ async def test_code_review_envelope_names_missing_and_extra_keys(db: Database) -
         )
     assert extra.value.details == [
         "top level: unexpected key notes; the review envelope takes only verdict,"
-        " findings and head_sha"
+        " findings, head_sha, fixed_head_sha and tests"
     ]
 
 

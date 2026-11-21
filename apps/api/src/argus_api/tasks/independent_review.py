@@ -73,7 +73,11 @@ RETRY_EVENT = "review.independent_retry"
 # child's end can happen in a path that carries no settings (reaper, cancel).
 model_policy_path = Path("data/model-policy.json")
 CODE_REVIEW_KIND = "code_review"
-REVIEW_KEYS = ("verdict", "findings", "head_sha")
+REVIEW_KEYS = ("verdict", "findings", "head_sha", "fixed_head_sha", "tests")
+FIX_PUSHED_EVENT = "review.independent_fix_pushed"
+FIX_VERDICT = "fixed"
+# Verdicts that spend one review round (`review.independent.max_rounds`).
+_ROUND_VERDICTS = ("request_changes", FIX_VERDICT)
 
 
 def normalise_result(kind: str, result: TaskResult) -> tuple[TaskResult, bool]:
@@ -92,7 +96,7 @@ def normalise_result(kind: str, result: TaskResult) -> tuple[TaskResult, bool]:
             "result does not match its kind's schema",
             details=[
                 f"top level: unexpected key {k}; the review envelope takes only"
-                " verdict, findings and head_sha"
+                " verdict, findings, head_sha, fixed_head_sha and tests"
                 for k in extra
             ],
         )
@@ -332,6 +336,7 @@ def forge_verdict(
 
 _APPROVAL_LIFECYCLE_EVENTS = (
     PASSED_EVENT,
+    FIX_PUSHED_EVENT,
     "review.independent_void",
     "review.independent_changes_requested",
     "review.independent_requested",
@@ -441,6 +446,7 @@ async def merge_gate_status(
         mode=setting.mode,
         author_models=author_models,
         author_providers=author_providers,
+        parent_id=parent["id"],
     ):
         return False, "independent_review_same_model"
     return True, None
@@ -583,7 +589,7 @@ async def completion_forge_read(
     write (like find_pr). For a parent task whose gate is on, reads the live PR so
     the gate sees the live head SHA rather than an older attempt's stored SHA. For
     an approving `code_review` child, reads the parent's PR when the parent settles
-    on that approval alone (`settles_alone`). None otherwise."""
+    on that approval alone (`settles_alone`); for a fixing one, always. None otherwise."""
     from argus_api.settings import service as settings_svc
     from argus_api.tasks import service as tasks_svc
 
@@ -592,10 +598,12 @@ async def completion_forge_read(
     async with db.read() as conn:
         row = await tasks_svc.task_row(conn, task_id)
         if row["kind"] == CODE_REVIEW_KIND:
-            if not row["parent_id"] or (result.data or {}).get("verdict") != "approve":
+            verdict = (result.data or {}).get("verdict")
+            if not row["parent_id"] or verdict not in ("approve", FIX_VERDICT):
                 return None
             parent = await tasks_svc.task_row(conn, row["parent_id"])
-            if not await settles_alone(conn, parent):
+            # A fix is verified against the live PR whatever the parent's mode.
+            if verdict == "approve" and not await settles_alone(conn, parent):
                 return None
             task = await tasks_svc.get_task(conn, parent["id"])
             return deliverable.ForgeRead(
@@ -670,7 +678,10 @@ async def _may_author(
     from argus_api.accounts import service as accounts_svc
 
     if mode == "different_provider":
-        return selector.provider in providers
+        # A fix author's model is excluded by name even under another provider.
+        return selector.provider in providers or (
+            selector.model.source == "explicit" and selector.model.id in models
+        )
     if selector.model.source == "explicit":
         return selector.model.id in models
     async with conn.execute(
@@ -1017,7 +1028,7 @@ def pick_reviewer(
 
 
 async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> int:
-    """How many completed `code_review` children ended with request_changes."""
+    """How many completed `code_review` children ended with request_changes or a fix."""
     async with conn.execute(
         "SELECT result FROM tasks WHERE parent_id = ? AND kind = ? AND state = ?",
         (parent_id, CODE_REVIEW_KIND, TaskState.SUCCEEDED),
@@ -1031,7 +1042,7 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> int:
             data = json.loads(raw).get("data") or {}
         except json.JSONDecodeError:
             continue
-        if data.get("verdict") == "request_changes":
+        if data.get("verdict") in _ROUND_VERDICTS:
             n += 1
     return n
 
@@ -1242,6 +1253,8 @@ async def spawn_reviewer(
         if same_head and same_pr:
             return str(active["id"])
     author_models, author_providers = await authors(tx.conn, parent["id"])
+    fix_models, _ = await fixers(tx.conn, parent["id"])
+    author_models |= fix_models
     route = await review_route(
         tx.conn,
         tx.now,
@@ -1297,19 +1310,35 @@ async def spawn_reviewer(
             ' tool to `to: "argus"`, in exactly this shape:\n'
             '`COMPLETE: {"summary":"<one line>","data":{"verdict":"approve",'
             '"findings":[<strings or objects>],"head_sha":"<the full sha you reviewed>"}}`\n'
-            "`verdict` is `approve` or `request_changes`. `data` takes exactly those"
-            " three keys and nothing else; do not put verdict, findings or head_sha at"
-            " the top level. Do not modify the repository."
+            "`verdict` is `approve`, `request_changes` or `fixed`. `data` takes only"
+            " verdict, findings, head_sha, fixed_head_sha and tests; do not put them at"
+            " the top level.\n\n"
+            "If you find actionable problems you can safely fix, fix them on the PR's"
+            " own branch: add tests, run the gates, and push one normal new commit"
+            " (fast-forward only; never force-push, never rewrite history, never"
+            " touch another branch or merge). Then finish with verdict `fixed`,"
+            " `head_sha` the head you reviewed, `fixed_head_sha` the full new head,"
+            " `findings` what you fixed and `tests` what you ran. You cannot approve"
+            " your own fix: Argus schedules a fresh review of the new head with"
+            " another model. If you cannot fix safely, return `request_changes` and"
+            " change nothing. With no findings, return `approve` and change nothing."
         ),
         kind=CODE_REVIEW_KIND,
         project=parent["project"],
         parent_id=parent["id"],
-        input={"task_id": parent["id"], "pr": pr, "head_sha": sha},
+        input={
+            "task_id": parent["id"],
+            "pr": pr,
+            "head_sha": sha,
+            # Scoped write: push to this PR's branch, fast-forward only, no merge.
+            "fix": {"pr": pr, "base_head_sha": sha, "force_push": False},
+        },
         review=Review.NONE,
         harness_model=harness,
         executor_model=executor,
-        # Fixed shape: task defaults must not make a reviewer write (task defaults 3.4).
-        required_capabilities=[],
+        # Fixed shape: the reviewer may push a fix to the PR branch and nothing else
+        # (no merge grant: the deliverable is a response, `allow_merge` is not set).
+        required_capabilities=["repository:write"],
         deliverable=Deliverable.RESPONSE,
     )
     child = await tasks_svc.create_task(tx, body, actor)
@@ -1440,6 +1469,28 @@ async def on_parent_complete(
     return True
 
 
+async def fixers(
+    conn: aiosqlite.Connection, parent_id: str
+) -> tuple[set[str], set[str]]:
+    """(models, reviewer child ids) that pushed a fix to the parent's PR branch.
+
+    A reviewer that changed the code is an author of it: its model (and session)
+    may never approve, and the next reviewer must run another model."""
+    models: set[str] = set()
+    children: set[str] = set()
+    async with conn.execute(
+        "SELECT data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = ?",
+        (parent_id, FIX_PUSHED_EVENT),
+    ) as cur:
+        for (raw,) in await cur.fetchall():
+            data = json.loads(raw) if raw else {}
+            if isinstance(data.get("child_id"), str):
+                children.add(data["child_id"])
+            models.update(m for m in data.get("fix_models") or [] if isinstance(m, str))
+    return models, children
+
+
 async def child_models_clean(
     conn: aiosqlite.Connection,
     child_id: str,
@@ -1447,9 +1498,17 @@ async def child_models_clean(
     mode: ReviewMode,
     author_models: set[str],
     author_providers: set[str],
+    parent_id: str | None = None,
 ) -> bool:
-    """True when the child's executions prove it used no author model/provider."""
+    """True when the child's executions prove it used no author model/provider.
+
+    With `parent_id`, the models and sessions of the reviewers that fixed the
+    parent's code count as authors too, in every mode."""
     child_models, child_providers = await authors(conn, child_id)
+    if parent_id is not None:
+        fix_models, fix_children = await fixers(conn, parent_id)
+        if child_id in fix_children or not child_models.isdisjoint(fix_models):
+            return False
     if not child_models and not child_providers:
         # No execution recorded: cannot prove independence when authors exist.
         return not author_models and not author_providers
@@ -1460,6 +1519,7 @@ async def child_models_clean(
 
 _CHILD_OUTCOME_EVENTS = (
     PASSED_EVENT,
+    FIX_PUSHED_EVENT,
     "review.independent_changes_requested",
     "review.independent_escalated",
     "review.independent_void",
@@ -1479,6 +1539,127 @@ async def _child_already_processed(
             if raw and json.loads(raw).get("child_id") == child_id:
                 return True
     return False
+
+
+async def _fix_refused(
+    tx: Tx, parent: aiosqlite.Row, child: aiosqlite.Row, reason: str, actor: str
+) -> None:
+    """A fix Argus cannot attribute or verify never counts as reviewed: the reviewer's
+    verdict is void and a manual review decides (no automatic respawn, no loop)."""
+    await record(
+        tx,
+        actor,
+        "task",
+        parent["id"],
+        "review.independent_void",
+        {"reason": reason, "child_id": child["id"]},
+    )
+    await open_manual_review(tx, parent, REVIEWER_FAILED_GATE, actor)
+
+
+async def _on_fix_pushed(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    child: aiosqlite.Row,
+    child_input: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    forge: deliverable.ForgeRead | None,
+    setting: IndependentReviewSetting,
+    policy: model_policy.Policy,
+    actor: str,
+) -> None:
+    """The reviewer pushed a correction: record who fixed what, invalidate any older
+    approval, and schedule a fresh review of the exact new head by another model.
+    The fixer never approves its own change."""
+    expected_pr = child_input.get("pr")
+    old_head = child_input.get("head_sha")
+    new_head = data.get("fixed_head_sha")
+    new_head = new_head.strip().lower() if isinstance(new_head, str) else None
+    if (
+        not new_head
+        or not _FULL_SHA.fullmatch(new_head)
+        or not old_head
+        or not _same_sha(data.get("head_sha"), old_head)
+        or _same_sha(new_head, old_head)
+    ):
+        await _fix_refused(tx, parent, child, "fix_head_invalid", actor)
+        return
+    seen = forge.delivery if forge is not None else None
+    forge_pr = seen.pr if seen is not None else None
+    forge_sha = (
+        seen.head.sha.lower()
+        if seen is not None and seen.head is not None and seen.head.sha
+        else None
+    )
+    if not forge_pr or not forge_sha:
+        await _fix_refused(tx, parent, child, "fix_unverified", actor)
+        return
+    if expected_pr and not _same_pr(expected_pr, forge_pr):
+        await _fix_refused(tx, parent, child, "fix_pr_mismatch", actor)
+        return
+    if forge_sha != new_head:
+        await _fix_refused(tx, parent, child, "fix_head_mismatch", actor)
+        return
+    child_models, child_providers = await authors(tx.conn, child["id"])
+    if len(child_models) != 1:
+        # Which model wrote the fix must be exact: none or several is ambiguous.
+        await _fix_refused(tx, parent, child, "fix_provenance_unclear", actor)
+        return
+    findings = data.get("findings")
+    tests = data.get("tests")
+    await record(
+        tx,
+        actor,
+        "task",
+        parent["id"],
+        FIX_PUSHED_EVENT,
+        {
+            "child_id": child["id"],
+            "pr": forge_pr,
+            "old_head_sha": old_head,
+            "new_head_sha": new_head,
+            "fix_models": sorted(child_models),
+            "fix_providers": sorted(child_providers),
+            "findings": findings if isinstance(findings, list) else [],
+            "tests": tests if isinstance(tests, list) else [],
+        },
+    )
+    rounds = await review_rounds(tx.conn, parent["id"])
+    if rounds >= setting.max_rounds:
+        await decisions.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=parent["id"],
+            kind=DecisionKind.REVIEW,
+            question=(
+                f"Independent review exhausted {setting.max_rounds} rounds for"
+                f" {parent['title']!r}; the last fix ({new_head}) is unreviewed."
+                " Accept or reject?"
+            ),
+            options=list(REVIEW_OPTIONS),
+            audience=Audience.HUMAN,
+            requested_by=actor,
+        )
+        await record(
+            tx,
+            actor,
+            "task",
+            parent["id"],
+            "review.independent_escalated",
+            {"child_id": child["id"], "rounds": rounds},
+        )
+        return
+    await spawn_reviewer(
+        tx,
+        parent,
+        pr=forge_pr,
+        head_sha=new_head,
+        setting=setting,
+        policy=policy,
+        actor=actor,
+        replace_child_id=child["id"],
+    )
 
 
 async def on_review_child_complete(
@@ -1524,6 +1705,7 @@ async def on_review_child_complete(
         mode=setting.mode,
         author_models=author_models,
         author_providers=author_providers,
+        parent_id=parent_id,
     ):
         await record(
             tx,
@@ -1548,6 +1730,20 @@ async def on_review_child_complete(
             exclude_models=author_models | child_models,
             exclude_accounts=await _accounts(tx.conn, child["id"]),
             replace_child_id=child["id"],
+        )
+        return
+
+    if verdict == FIX_VERDICT:
+        await _on_fix_pushed(
+            tx,
+            parent,
+            child,
+            child_input,
+            data,
+            forge=forge,
+            setting=setting,
+            policy=policy,
+            actor=actor,
         )
         return
 
