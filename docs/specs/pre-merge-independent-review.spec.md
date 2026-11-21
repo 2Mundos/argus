@@ -144,12 +144,46 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   transaction so concurrent settlements produce at most one accept or one
   re-review.
 
+## 3.6 Worker merge continuation
+
+Argus never merges. After an approval, `review_settle` (the existing sweep, one write
+transaction, forge read just before it) requeues an approved `pr_merged` parent
+(`in_review`, `awaiting_forge`) for one worker attempt through the `reject` transition
+and records `review.merge_resumed {pr, head_sha}`. All of these must hold, re-read
+inside the transaction:
+
+- the newest review gate event is `review.independent_passed` for exactly the live PR
+  and head, and `merge_gate_status` allows it; no active reviewer, no open review
+  decision;
+- the forge shows the PR `open`, fresh, on the approved head, with exact-head checks
+  green, mergeable and the forge review policy met (`readiness.pr_gate`);
+- the task's own grant allows merge (`decide_merge`: `delivery.auto_merge` or
+  `input.delivery.allow_merge`, and `repository:write`), read live, so a revoked grant
+  resumes nothing.
+
+When only the grant is missing, the parent keeps waiting and records
+`review.merge_resume_blocked {reason}` once (`merge_not_authorized` or
+`repository_write_missing`); it never bypasses a gate. A moved head or replaced PR is
+voided and reviewed again by `settle_or_wait`, not resumed.
+
+Worker contract: the continuation claim carries `independent_review_approved_pr` and
+`independent_review_approved_head`, so the per-attempt authorization is scoped to them,
+and the task spec gains a "Merge continuation" section telling the worker to change no
+code and run `argus-task merge --pr N --sha <head>`, which fences the live PR and head
+immediately before the one forge write and reads the merge back. A worker without that
+helper cannot merge, ends the attempt unmerged and gets the decision below.
+
+Idempotency: one resume per approval (a resume event newer than the approval for the
+same PR and head), so duplicate, concurrent or restarted sweeps find nothing to do.
+When the continuation attempt completes, `on_parent_complete` does not review the
+approved head again: the parent settles on the forge's merged state, and when the PR is
+still open it opens one orchestrator review decision (merge it and accept, or reject to
+try again). A rejected review, failed CI or a new approval cycle starts from the start.
+Review-disabled and non-code tasks never take this path.
+
 # 4. Open Questions
 
-- Should an approved `pr_merged` task in `in_review` (`awaiting_forge`) trigger an
-  automated merge worker attempt when `delivery.auto_merge` is enabled, or rely on
-  the orchestrator / authorized merge runner? Kept manual/caller-driven for now to
-  avoid adding a background forge writer to the single-node API.
+None.
 
 # 5. Constraints
 
@@ -162,7 +196,7 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
 
 - `packages/core/src/argus_core/tasks.py`, `delivery.py`: additive fields on
   `ClaimedTask` and `IndependentReviewSummary`.
-- `apps/api/src/argus_api/tasks/independent_review.py`, `deliverable.py`,
+- `apps/api/src/argus_api/tasks/merge_resume.py`, `independent_review.py`, `deliverable.py`,
   `delivery.py`, `worker.py`, `pr_binding.py`, `review_settle.py`, `manage.py`,
   `readiness.py`, `views.py`, `routes.py`, `decisions/service.py`.
 - `integrations/nanoclaw/argus-merge-auth.ts`, `gitea-api.mjs`, `argus-task.mjs`,

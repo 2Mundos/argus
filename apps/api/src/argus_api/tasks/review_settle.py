@@ -18,7 +18,7 @@ from argus_core.tasks import Review
 
 from argus_api.db import Database
 from argus_api.decisions import store as decisions
-from argus_api.tasks import delivery
+from argus_api.tasks import delivery, merge_resume
 from argus_api.tasks import independent_review as indep
 from argus_api.tasks import service as tasks
 from argus_api.tasks.deliverable import ForgeRead
@@ -85,9 +85,21 @@ async def settle_task(db: Database, checker: delivery.PrChecker, task_id: str) -
             or forge is None
         ):
             return False  # a newer approval arrived; the next pass reads again
-        return await indep.settle_or_wait(
+        settled = await indep.settle_or_wait(
             tx, row, forge, reviewed, ACTOR, reviewed_pr=reviewed_pr
         )
+        if not settled:
+            # Still waiting on the exact approved head: hand the merge to the worker
+            # path once (pre-merge independent review spec 3.6).
+            await merge_resume.resume_merge(
+                tx,
+                await tasks.task_row(tx.conn, task_id),
+                forge,
+                reviewed_pr,
+                reviewed,
+                ACTOR,
+            )
+        return settled
 
 
 async def sweep(
