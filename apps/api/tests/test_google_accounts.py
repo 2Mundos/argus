@@ -970,7 +970,7 @@ def test_midlease_plain_call_overlapping_forced_refresh_never_returns_rejected(
 
     forced_outcome, plain_outcome = asyncio.run(run())
     assert forced_outcome == "transient"
-    assert plain_outcome != "current"
+    assert plain_outcome == "transient"
 
 
 def test_midlease_expired_access_only_credential_is_rejected(
