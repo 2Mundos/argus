@@ -4799,6 +4799,14 @@
             ],
             "title": "Parent Id"
           },
+          "prior_workspaces": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PriorWorkspace"
+            },
+            "title": "Prior Workspaces",
+            "type": "array"
+          },
           "priority": {
             "title": "Priority",
             "type": "integer"
@@ -17933,6 +17941,64 @@
           "unpriced_models"
         ],
         "title": "PricingInfo",
+        "type": "object"
+      },
+      "PriorWorkspace": {
+        "description": "Where an earlier attempt's workspace lived and what is known of its work, offered\nto the next claim (task workspace spec 3.7). `checkpoint_state` is what the attempt's\nworker reported (`running`, `saved`, `nothing_to_save`, `failed`); null when it\nreported nothing. Never a path or a checkpoint reference.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "checkpoint_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "running",
+                  "saved",
+                  "nothing_to_save",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint State"
+          },
+          "owner_agent_id": {
+            "title": "Owner Agent Id",
+            "type": "string"
+          },
+          "owner_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Node Id"
+          },
+          "owner_status": {
+            "default": "unknown",
+            "enum": [
+              "live",
+              "stale",
+              "ended",
+              "unknown"
+            ],
+            "title": "Owner Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "owner_agent_id"
+        ],
+        "title": "PriorWorkspace",
         "type": "object"
       },
       "ProgressKind": {

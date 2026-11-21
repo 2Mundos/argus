@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-20
+updated: 2026-11-21
 ---
 
 # Failure classes
@@ -284,6 +284,7 @@ task. No model session starts and no attempt is spent.
 | Its HEAD is the task branch | `env_workspace_branch_mismatch` |
 | Its HEAD is the task branch, or no commit of the task branch or a detached HEAD is missing from every remote-tracking ref | `env_workspace_unpreserved_commits` |
 | A new workspace stays within `ARGUS_TASK_WORKSPACE_MAX` | `env_workspace_limit` |
+| A retry that starts an empty workspace has every earlier attempt on another instance proven to hold nothing, or restorable ([task workspace](task-workspace.spec.md) 3.7) | `env_workspace_prior_unverified`, `env_workspace_prior_unavailable` |
 | A required task input is listed, shared and downloadable ([task inputs](task-inputs.spec.md) 3.6) | `env_input_unavailable` |
 | A required task input has a safe name and destination, and its size and SHA-256 match after the retry | `env_input_invalid` |
 | The task inputs stay within the per-input, per-task and file-count limits | `env_input_limit` |

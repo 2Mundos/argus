@@ -2773,6 +2773,76 @@ describe("task-scoped repository auth", () => {
     expect(readFileSync(path.join(ws, "notes.txt"), "utf8")).toBe("work in progress");
   });
 
+  // Task workspace spec 3.7: a retry on another instance must not start empty unproven.
+  describe("a retry whose earlier attempt ran on another instance", () => {
+    const prior = (checkpoint_state: string | null) => [
+      {
+        attempt: 1,
+        owner_agent_id: "other-instance-agent",
+        owner_node_id: "node-x",
+        owner_status: "ended",
+        checkpoint_state,
+      },
+    ];
+    const retryWorld = (checkpoint_state: string | null) =>
+      repoWorld({ ...repoTask(), attempt: 2, prior_workspaces: prior(checkpoint_state) });
+    const start = async (w: ReturnType<typeof world>) => {
+      const h = harness(
+        w,
+        true,
+        { repositories: { global: "https://git.example.test/org/repo" } },
+        {},
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      return h;
+    };
+
+    it.each([
+      ["saved", "env_workspace_prior_unavailable"],
+      ["failed", "env_workspace_prior_unverified"],
+      [null, "env_workspace_prior_unverified"],
+    ])("blocks with the provenance and creates nothing (checkpoint %s)", async (state, reason) => {
+      const w = retryWorld(state);
+      const h = await start(w);
+      await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+      const body = w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body;
+      expect(body).toMatchObject({ reason, attempt: 2 });
+      expect(String(body.error)).toContain("other-instance-agent");
+      expect(existsSync(path.join(h.groupDir, "task-workspaces", REPO_ID))).toBe(false);
+      expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
+      expect(h.inbound).toHaveLength(0);
+    });
+
+    it("starts empty once the other worker reported nothing_to_save", async () => {
+      const w = retryWorld("nothing_to_save");
+      const h = await start(w);
+      await until(() => h.inbound.length > 0);
+      expect(existsSync(path.join(h.groupDir, "task-workspaces", REPO_ID))).toBe(true);
+      expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`)).toBe(false);
+    });
+
+    it("reuses an existing workspace without asking: it is this instance's own", async () => {
+      const w = retryWorld(null);
+      const h = harness(
+        w,
+        true,
+        { repositories: { global: "https://git.example.test/org/repo" } },
+        {},
+      );
+      const ws = path.join(h.groupDir, "task-workspaces", REPO_ID);
+      mkdirSync(ws, { recursive: true });
+      spawnSync("git", ["init", "-q", "-b", `argus/task-${REPO_ID.slice(0, 8)}`, ws]);
+      spawnSync("git", ["remote", "add", "origin", "https://git.example.test/org/repo"], {
+        cwd: ws,
+      });
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`)).toBe(false);
+    });
+  });
+
   it("blocks as unconfigured when the agent group directory is unknown", async () => {
     const w = repoWorld();
     const h = harness(

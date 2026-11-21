@@ -212,9 +212,12 @@ import {
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import {
   branchWipClaim,
+  fencePriorWorkspaces,
+  type PriorWorkspace,
   prepareTaskWorkspace,
   probeTaskBranch,
   taskBranch,
+  taskWorkspacePath,
   type WorkspaceResult,
 } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
@@ -652,6 +655,8 @@ export interface ArgusTask {
   steer_unknown?: number;
   /** The previous attempt's quota-paused native session, offered once (quota resume spec 3.3). */
   quota_resume?: QuotaResumeOffer | null;
+  /** Where earlier attempts worked and their checkpoint step (task workspace spec 3.7); missing on older servers. */
+  prior_workspaces?: PriorWorkspace[];
   /** Effective executor chain for this task's difficulty (settings 3.7). Empty: harness does the work. */
   difficulty_executors?: string[] | null;
   /** Effective git author for the task's project (settings 3.8); null/missing: use the pool's. */
@@ -3948,6 +3953,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       };
     }
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
+    // Read-only, before a restore can create it: an existing workspace is this instance's own.
+    const existed = groupDir
+      ? await lstat(taskWorkspacePath(groupDir, task.id)).then(
+          () => true,
+          () => false,
+        )
+      : false;
+    let restoredWork = false;
     if (needsWrite && storeRoot && task.attempt > 1) {
       // A retry resumes the previous attempt's unpublished work before anything else
       // touches the workspace; an untrusted checkpoint blocks instead of being ignored.
@@ -3961,8 +3974,19 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         attempt: task.attempt,
       });
       if (!restored.ok) return restored;
-      if (restored.restored)
+      if (restored.restored) {
+        restoredWork = true;
         log.info("Restored checkpointed work", { task: task.id, checkpoint: restored.id });
+      }
+    }
+    if (needsWrite && !existed && !restoredWork) {
+      // About to start empty: earlier work on another instance must be proven absent.
+      const fenced = fencePriorWorkspaces({
+        attempt: task.attempt,
+        selfAgentId: agentId,
+        prior: task.prior_workspaces,
+      });
+      if (fenced) return { ok: false, ...fenced };
     }
     return prepareTaskWorkspace({ groupDir, taskId: task.id, repositoryUrl: task.repository_url });
   }

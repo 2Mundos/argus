@@ -390,6 +390,9 @@ async def claim_task(
                     )
                     unknown = await steers.previous_unknown(conn, task.id, task.attempt)
                     resume = await quota_resume.offered(conn, task.id, task.attempt)
+                    prior = await finalization.prior_workspaces(
+                        conn, task.id, task.attempt, utcnow()
+                    )
                     execution = await execution_routes.current(
                         conn, task.id, task.attempt
                     )
@@ -427,6 +430,7 @@ async def claim_task(
                     model_switch=switch,
                     steer_unknown=unknown,
                     quota_resume=resume,
+                    prior_workspaces=prior,
                     project_repository=project_repository,
                     difficulty_executors=None if execution else difficulty_executors,
                     git_identity=git_identity,
