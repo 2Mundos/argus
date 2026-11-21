@@ -154,6 +154,8 @@ export class RepositoryPreflightError extends Error {
     readonly outcome: Exclude<PreflightOutcome, "ok">,
     message: string,
     readonly evidence: ProbeEvidence | null = null,
+    /** A closed, more specific diagnosis than the outcome's default (never text from the child). */
+    readonly diagnosis?: PreflightDiagnosis,
   ) {
     super(safeText(message, 500));
     this.name = "RepositoryPreflightError";
@@ -307,7 +309,14 @@ export function assertPreflightPositive(
   const v = result.verdict;
   const evidence = verdictEvidence(v);
   const fail = (message: string, outcome = failedOutcome(evidence)): never => {
-    throw new RepositoryPreflightError(outcome, message, evidence);
+    // No verdict at all: the session ran (or died) without a probe answer, which says nothing
+    // about the forge, the credential or the repository.
+    throw new RepositoryPreflightError(
+      outcome,
+      message,
+      evidence,
+      !evidence && outcome === "session_failure" ? "session_no_verdict" : undefined,
+    );
   };
   if (result.exitCode !== 0)
     fail(
@@ -491,6 +500,9 @@ export type PreflightDiagnosis =
   | "unknown_evidence"
   | "network"
   | "session"
+  | "session_setup"
+  | "session_start_denied"
+  | "session_no_verdict"
   | "rearm_failed"
   | "rearm_exhausted"
   | "rearm_unproven";
@@ -577,6 +589,12 @@ export const REARM_BACKOFF_CAP_MS = 4_000;
 export const REARM_WINDOW_MS = 20_000;
 const FAULT_WINDOW_MAX_MS = 3_600_000;
 const DIAGNOSIS_HINTS: Readonly<Partial<Record<PreflightDiagnosis, string>>> = {
+  session_setup:
+    "the preflight session could not be set up (gateway lease, composition or result directory) before any probe ran; this is not a repository permission, network or credential-injection result; check the NanoClaw host and OneCLI gateway logs",
+  session_start_denied:
+    "the preflight session failed or was refused at startup (the driver or the environment policy of the composed session) before any probe ran; this is not a repository permission, network or credential-injection result; the secret and environment admission policy was not changed: check the host driver's startup policy and the contributed environment against it",
+  session_no_verdict:
+    "the preflight session ended without a verdict, so no probe answer exists: forge permission, network and credential injection are all unknown; check the session's exit and the host driver logs",
   injection_unverifiable:
     "a 404 with no proof of authentication may be a private repository the OneCLI gateway attached no credential to; no supported OneCLI evidence source can tell (independent injection evidence is unavailable), so the preflight stays fail-closed",
   injection_evidence_mismatch:
@@ -795,7 +813,7 @@ export async function runRepositoryPreflight(
       return { rearm: true };
     }
     if (!injectionUnprovenNotFound(failure.evidence))
-      return { rearm: false, diagnosis: diagnosisOf(failure.outcome) };
+      return { rearm: false, diagnosis: failure.diagnosis ?? diagnosisOf(failure.outcome) };
     const agent = input.agentIdentifier;
     if (!agent || !input.injectionEvidence) {
       event.independent_evidence = "unavailable";
@@ -879,6 +897,9 @@ export async function runRepositoryPreflight(
   } catch (error) {
     if (!(error instanceof RepositoryPreflightError))
       return finish("session_failure", message(error));
+    // A session failure never enters the re-arm loop: no probe answer, no credential claim.
+    if (error.outcome === "session_failure")
+      return finish(error.outcome, error.message, error.diagnosis);
     if (error.evidence) event.probe = { source: "preflight_session_verdict", ...error.evidence };
     // OneCLI can confirm the admin-visible assignment before it publishes the policy rule
     // the gateway injects by; its rematerialize may also fail (a P2028 transaction timeout)
@@ -899,7 +920,7 @@ export async function runRepositoryPreflight(
       );
     };
     for (let round = 1; round <= REARM_MAX_ATTEMPTS; round++) {
-      if (!input.rearm) return finish(failure.outcome, failure.message);
+      if (!input.rearm) return finish(failure.outcome, failure.message, failure.diagnosis);
       const decision = await rearmAuthorized(failure);
       if (!decision.rearm) return finish(failure.outcome, failure.message, decision.diagnosis);
       const wait = rearmBackoffMs(round, random);
@@ -1212,6 +1233,8 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
     let control: GatewayControl | undefined;
     let handle: HandleLike | undefined;
     let unavailable: string | undefined;
+    // Where the session was when it failed: only used to pick a closed diagnosis.
+    let stage: "setup" | "start" | "running" = "setup";
     let outcome: { result?: PreflightChildResult; error?: unknown } = {};
     const release = (c: GatewayControl) =>
       deps.releaseGateway(c, { kind: "session-ended", reason: "repository-preflight-done" });
@@ -1328,6 +1351,7 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
           groupScope: group.id,
         },
       ];
+      stage = "start";
       deps.assertSpecAllowed?.(capabilities, spec);
       handle = await guard(
         "the session prepare",
@@ -1337,6 +1361,7 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
         (late) => late.stop("repository-preflight-late-prepare"),
       );
       await guard("the session start", handle.start(), remaining(), sink);
+      stage = "running";
       let status: StatusLike = await guard(
         "the session status",
         handle.status(),
@@ -1383,7 +1408,17 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
       if (unavailable) throw new Error(`the gateway became unavailable: ${unavailable}`);
       outcome = { result: { exitCode, verdict } };
     } catch (error) {
-      outcome = { error };
+      outcome = {
+        error:
+          stage !== "running" && !(error instanceof RepositoryPreflightError)
+            ? new RepositoryPreflightError(
+                "session_failure",
+                message(error),
+                null,
+                stage === "start" ? "session_start_denied" : "session_setup",
+              )
+            : error,
+      };
     }
     // Teardown is part of the preflight, and every step is bounded on its own so a hung
     // operation cannot keep the container, the lease or this call alive.
@@ -1456,6 +1491,8 @@ export function ephemeralSessionRunner(deps: EphemeralSessionDeps): PreflightRun
           ? outcome.error.outcome
           : "session_failure",
         message(outcome.error),
+        null,
+        outcome.error instanceof RepositoryPreflightError ? outcome.error.diagnosis : undefined,
       );
     return outcome.result as PreflightChildResult;
   };

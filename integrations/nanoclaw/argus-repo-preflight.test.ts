@@ -980,6 +980,39 @@ describe("outcome classification: denial, network, unproven and session failures
     gatewayEnv = { SSL_CERT_FILE: "/tmp/onecli-combined-ca.pem" };
     await expect(run()).rejects.toMatchObject({ outcome: "session_failure" });
   });
+
+  it("a session that cannot be set up is session_setup, before any probe", async () => {
+    gatewayEnv = { SSL_CERT_FILE: "/tmp/onecli-combined-ca.pem" };
+    await expect(run()).rejects.toMatchObject({
+      outcome: "session_failure",
+      diagnosis: "session_setup",
+      evidence: null,
+    });
+  });
+
+  it("a startup denied by the driver or environment policy is session_start_denied, scrubbed", async () => {
+    const SECRET = "ghp_" + "Qw7".repeat(12);
+    await expect(
+      run(
+        probe({
+          assertSpecAllowed: () => {
+            throw new Error(`environment policy denied GH_TOKEN=${SECRET} for the session`);
+          },
+        }),
+      ),
+    ).rejects.toSatisfy((error: unknown) => {
+      const e = error as RepositoryPreflightError;
+      return (
+        e.outcome === "session_failure" &&
+        e.diagnosis === "session_start_denied" &&
+        e.evidence === null &&
+        !e.message.includes(SECRET)
+      );
+    });
+    expect(cli.callMatching(/^create /)).toBeUndefined();
+    expect(prepared).toHaveLength(0);
+    expect(released).toBe(1);
+  });
 });
 
 describe("runRepositoryPreflight: lease and assignment first, then the probe, one event", () => {
@@ -1580,6 +1613,116 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
     expect(result.error).toMatch(/^repository preflight unknown: first \[/);
     expect(probeCalls).toHaveBeenCalledTimes(1);
     expect(events[0]).toMatchObject({ rearmed: false, diagnosis: "rearm_failed" });
+  });
+
+  describe("session failure, forge denial and unknown injection are distinct, actionable states", () => {
+    const evidence = (over: Partial<ProbeEvidence>): ProbeEvidence => ({
+      helper_error: null,
+      http_status: null,
+      permissions: "unknown",
+      push: null,
+      visibility: "unknown",
+      authentication: "unknown",
+      ...over,
+    });
+    const failing = (error: RepositoryPreflightError) =>
+      preflight({
+        probe: async () => {
+          throw error;
+        },
+        // A re-arm would be the only retry path: none may run for these.
+        rearm: vi.fn(async () => {}),
+      });
+
+    it.each([
+      ["session_start_denied", "refused at startup"],
+      ["session_setup", "could not be set up"],
+    ] as const)(
+      "%s names the session layer and never a repository permission",
+      async (diagnosis, hint) => {
+        const { done, events, probeCalls } = failing(
+          new RepositoryPreflightError("session_failure", "startup refused", null, diagnosis),
+        );
+        const result = await done;
+        expect(result.outcome).toBe("session_failure");
+        expect(result.error).toContain(hint);
+        expect(result.error).toMatch(
+          /not a repository permission, network or credential-injection/,
+        );
+        expect(result.error).not.toMatch(/forbidden|denied by (the )?forge|lacks push/i);
+        expect(events[0]).toMatchObject({
+          diagnosis,
+          injection: "unknown",
+          probe: null,
+          rearmed: false,
+          rearm_attempts: 0,
+          fault: "none",
+        });
+        expect(probeCalls).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("an absent verdict is session_no_verdict: forge, network and injection all unknown", async () => {
+      const { done, events } = failing(
+        new RepositoryPreflightError("session_failure", "no verdict", null, "session_no_verdict"),
+      );
+      const result = await done;
+      expect(result.outcome).toBe("session_failure");
+      expect(result.reason).toBe("env_repository_unreachable");
+      expect(result.error).toContain("without a verdict");
+      expect(events[0]).toMatchObject({ diagnosis: "session_no_verdict", fault: "none" });
+    });
+
+    it("a session failure is final: the re-arm retry is never taken and the gate stays closed", async () => {
+      const rearm = vi.fn(async () => {});
+      const { done } = preflight({
+        rearm,
+        probe: async () => {
+          throw new RepositoryPreflightError("session_failure", "x", null, "session_start_denied");
+        },
+      });
+      expect((await done).outcome).toBe("session_failure");
+      expect(rearm).not.toHaveBeenCalled();
+    });
+
+    it("a forge denial is forge_denied with its own diagnosis", async () => {
+      const { done, events } = failing(
+        new RepositoryPreflightError(
+          "forge_denied",
+          "403",
+          evidence({ helper_error: "forbidden", http_status: 403 }),
+        ),
+      );
+      expect((await done).outcome).toBe("forge_denied");
+      expect(events[0]).toMatchObject({ diagnosis: "forge_denied", probe: { http_status: 403 } });
+    });
+
+    it("an unprovable injection stays unknown, not a session or permission failure", async () => {
+      const { done, events } = failing(
+        new RepositoryPreflightError(
+          "unknown",
+          "404",
+          evidence({ helper_error: "not_found", http_status: 404 }),
+        ),
+      );
+      const result = await done;
+      expect(result.outcome).toBe("unknown");
+      expect(events[0]).toMatchObject({
+        diagnosis: "injection_unverifiable",
+        injection: "unknown",
+      });
+    });
+
+    it("a missing verdict from the session is session_failure with session_no_verdict via the gate", () => {
+      expect(() =>
+        assertPreflightPositive(
+          { exitCode: 137, verdict: null },
+          { provider: "github", repository: GITHUB },
+        ),
+      ).toThrow(
+        expect.objectContaining({ outcome: "session_failure", diagnosis: "session_no_verdict" }),
+      );
+    });
   });
 
   it("an untyped probe error is session_failure and a failing emit changes nothing", async () => {
