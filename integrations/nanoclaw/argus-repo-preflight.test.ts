@@ -990,21 +990,6 @@ describe("outcome classification: denial, network, unproven and session failures
     });
   });
 
-  it("a long scrubbed driver error keeps the session hint within the returned error", async () => {
-    await expect(
-      run(
-        probe({
-          assertSpecAllowed: () => {
-            throw new Error("environment policy denied startup " + "x".repeat(900));
-          },
-        }),
-      ),
-    ).rejects.toSatisfy((error: unknown) => {
-      const e = error as RepositoryPreflightError;
-      return e.diagnosis === "session_start_denied" && /\[[^\]]+\]$/.test(e.message);
-    });
-  });
-
   it("a startup denied by the driver or environment policy is session_start_denied, scrubbed", async () => {
     const SECRET = "ghp_" + "Qw7".repeat(12);
     await expect(
@@ -1685,6 +1670,20 @@ describe("runRepositoryPreflight: lease and assignment first, then the probe, on
       expect(result.reason).toBe("env_repository_unreachable");
       expect(result.error).toContain("without a verdict");
       expect(events[0]).toMatchObject({ diagnosis: "session_no_verdict", fault: "none" });
+    });
+
+    it("a long scrubbed driver error keeps the session hint in the returned error", async () => {
+      const { done } = failing(
+        new RepositoryPreflightError(
+          "session_failure",
+          "environment policy denied startup " + "x".repeat(900),
+          null,
+          "session_start_denied",
+        ),
+      );
+      const result = await done;
+      expect(result.error).toContain("refused at startup");
+      expect(result.error).toMatch(/not a repository permission, network or credential-injection/);
     });
 
     it("a session failure is final: the re-arm retry is never taken and the gate stays closed", async () => {
