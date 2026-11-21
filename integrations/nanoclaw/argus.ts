@@ -2238,6 +2238,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     failedRole: "harness" | "executor";
   } | null = null;
   let completedAttempt: string | null = null; // "<task>:<attempt>" once Argus accepted the result
+  let workspacePreparedAttempt: string | null = null; // "<task>:<attempt>" once workspacePreflight prepared it
   let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
   let runtimeSelection: RuntimeSelection | null = null; // the project image selected for the task in flight
@@ -4243,13 +4244,16 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   /** Save the task's unpublished work after an attempt that did not complete. Best effort. */
   async function checkpointAfterAttempt(task: ArgusTask): Promise<void> {
+    const attemptKey = `${task.id}:${task.attempt}`;
+    const prepared = workspacePreparedAttempt === attemptKey;
+    workspacePreparedAttempt = null;
     const proof =
       publishedHead?.taskId === task.id && publishedHead.attempt === task.attempt
         ? publishedHead.sha
         : null;
     publishedHead = null;
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
-    if (!storeRoot || completedAttempt === `${task.id}:${task.attempt}`) return;
+    if (!storeRoot || !prepared || completedAttempt === attemptKey) return;
     if (!task.required_capabilities?.includes("repository:write")) return;
     let started = false;
     try {
@@ -4363,6 +4367,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     claimedAt = cfg.now?.() ?? Date.now();
     waitingRelay.reset();
     switchFailure = null;
+    workspacePreparedAttempt = null;
     try {
       if (!(await ensureRuntime(task))) return;
       if (!(await ensureAccount(task))) {
@@ -4510,8 +4515,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!envBlock) {
         step = "task workspace";
         const prepared = await workspacePreflight(task);
-        if (prepared?.ok) workspace = prepared;
-        else if (prepared) envBlock = prepared;
+        if (prepared?.ok) {
+          workspace = prepared;
+          workspacePreparedAttempt = `${task.id}:${task.attempt}`;
+        } else if (prepared) envBlock = prepared;
       }
       if (envBlock) {
         // The environment is broken, not the task: a retry would hit the same wall,

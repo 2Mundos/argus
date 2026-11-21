@@ -707,10 +707,12 @@ describe("fencePriorWorkspaces: an empty workspace on another instance needs pro
 
   it.each([
     ["crashed before its checkpoint", null],
+    ["was blocked by the fence (no checkpoint reported)", null],
     ["released mid-checkpoint", "running"],
     ["checkpoint failed", "failed"],
   ] as const)("a prior self claim that %s is not proof of reconciliation", (_l, state) => {
-    // A1 saved foreign WIP; B2 claimed then died; B3 must still see A1 as unreconciled.
+    // A1 saved foreign WIP; B2 claimed then died or was blocked before preparing its workspace;
+    // B3 must still see A1 as unreconciled.
     const list = [
       prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "saved" }),
       prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: state }),
