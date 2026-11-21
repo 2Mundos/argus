@@ -219,15 +219,17 @@ export async function boardTasks(
     onPage?: (board: TaskBoard) => void;
   },
 ): Promise<TaskBoard> {
+  // An empty query is no query: the board stays hidden-review and the full split applies.
+  const q = opts?.q || undefined;
   // A state or text filter is one chain; the active/ended split is for the full board.
-  if (opts?.states?.length || opts?.q !== undefined) {
+  if (opts?.states?.length || q !== undefined) {
     const found = await newestTasks(5, archived, {
       signal: opts.signal,
       states: opts.states?.length ? opts.states : undefined,
       project: opts.project,
-      q: opts.q,
+      q,
       // Search stays literal: it still finds review children.
-      hideReviewChildren: opts.q === undefined,
+      hideReviewChildren: q === undefined,
       onPage: (page) => opts.onPage?.({ ...page, loading: false }),
     });
     return { ...found, loading: false };

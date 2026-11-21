@@ -158,3 +158,35 @@ def test_voided_round_is_void_in_rounds_and_board_badge(
     page = client.get("/api/tasks", params={"hide_review_children": True}).json()
     badge = {i["id"]: i.get("review_badge") for i in page["items"]}[parent]
     assert badge == {"round": 1, "verdict": "void", "state": "succeeded"}
+
+
+def test_head_moved_void_without_child_id_voids_the_reviewed_round(
+    env: tuple[TestClient, Path],
+) -> None:
+    client, db = env
+    parent = make(client)
+    old = make(client, kind="code_review", parent_id=parent)
+    new = make(client, kind="code_review", parent_id=parent)
+    finish(db, old, {"verdict": "approve", "head_sha": HEAD_1, "findings": []}, "m")
+    finish(db, new, {"verdict": "approve", "head_sha": HEAD_2, "findings": []}, "m")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO events (at, actor, subject_type, subject_id, kind, data)"
+            " VALUES ('2999-01-01T00:00:00Z', 'system', 'task', ?,"
+            " 'review.independent_void', ?)",
+            (parent, json.dumps({"reason": "head_moved", "reviewed": HEAD_1})),
+        )
+    rounds = client.get(f"/api/tasks/{parent}/reviews").json()["rounds"]
+    assert [r["verdict"] for r in rounds] == ["void", "approve"]
+    page = client.get("/api/tasks", params={"hide_review_children": True}).json()
+    assert {i["id"]: i.get("review_badge") for i in page["items"]}[parent][
+        "verdict"
+    ] == "approve"
+
+
+def test_ids_batch_keeps_review_badge(
+    reviewed: tuple[TestClient, str, list[str]],
+) -> None:
+    client, parent, _ = reviewed
+    page = client.get("/api/tasks", params={"ids": parent}).json()
+    assert page["items"][0]["review_badge"]["round"] == 2

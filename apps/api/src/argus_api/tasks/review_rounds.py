@@ -78,18 +78,52 @@ def _data(raw: str | None) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-async def _voided(conn: aiosqlite.Connection, parent_id: str) -> set[str]:
+def _reviewed_head(child: aiosqlite.Row) -> str | None:
+    """The head a round reviewed: its verdict's `head_sha`, else the one it was asked for."""
+    try:
+        asked = json.loads(child["input"] or "{}").get("head_sha")
+    except (json.JSONDecodeError, AttributeError):
+        asked = None
+    return _data(child["result"]).get("head_sha") or asked
+
+
+async def _voided(
+    conn: aiosqlite.Connection, parent_id: str, children: list[aiosqlite.Row]
+) -> set[str]:
+    """Children whose outcome a `review.independent_void` event invalidated.
+
+    Most events name their `child_id`; `head_moved` / `pr_moved` (from `settle_or_wait`)
+    do not, so they void the rounds that reviewed the `reviewed` head, or else the newest
+    round that existed when they were recorded."""
     async with conn.execute(
-        "SELECT data FROM events WHERE subject_id = ? AND kind = 'review.independent_void'",
+        "SELECT at, data FROM events WHERE subject_id = ? AND kind = 'review.independent_void'"
+        " ORDER BY id",
         (parent_id,),
     ) as cur:
         rows = await cur.fetchall()
     ids: set[str] = set()
-    for (raw,) in rows:
+    for at, raw in rows:
         try:
-            ids.add(json.loads(raw).get("child_id"))
-        except (json.JSONDecodeError, AttributeError):
+            data = json.loads(raw)
+        except json.JSONDecodeError:
             continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("child_id"):
+            ids.add(data["child_id"])
+        elif data.get("reason") in ("head_moved", "pr_moved"):
+            reviewed = data.get("reviewed")
+            hit = [
+                c["id"]
+                for c in children
+                if reviewed
+                and (_reviewed_head(c) or "").strip().lower()
+                == str(reviewed).strip().lower()
+            ]
+            if not hit:
+                before = [c["id"] for c in children if c["created_at"] <= at]
+                hit = before[-1:]
+            ids.update(hit)
     return ids
 
 
@@ -114,7 +148,7 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
     if not children:
         return ReviewRounds(task_id=parent_id, rounds=[])
     ids = [c["id"] for c in children]
-    voided = await _voided(conn, parent_id)
+    voided = await _voided(conn, parent_id, children)
     runs = await _by_child(
         conn,
         "SELECT task_id, provider, observed_model, configured_model"
@@ -188,12 +222,15 @@ async def badges(
         return {}
     marks = ",".join("?" * len(parent_ids))
     async with conn.execute(
-        "SELECT parent_id, id, state, result FROM tasks"  # noqa: S608
+        "SELECT parent_id, id, state, result, created_at, input FROM tasks"  # noqa: S608
         f" WHERE kind = ? AND parent_id IN ({marks}) ORDER BY rowid",
         [CODE_REVIEW_KIND, *parent_ids],
     ) as cur:
         rows = list(await cur.fetchall())
-    voided = {p: await _voided(conn, p) for p in {r["parent_id"] for r in rows}}
+    voided = {
+        p: await _voided(conn, p, [r for r in rows if r["parent_id"] == p])
+        for p in {r["parent_id"] for r in rows}
+    }
     count: dict[str, int] = {}
     newest: dict[str, aiosqlite.Row] = {}
     for row in rows:
