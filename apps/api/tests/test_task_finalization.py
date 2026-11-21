@@ -263,3 +263,37 @@ def test_workspace_facts_maps_owner_node_id() -> None:
     for runtime in (None, "", "not json", json.dumps({}), json.dumps({"node_id": ""})):
         facts = workspace_facts(_attempt_row(owner_runtime=runtime), NOW)
         assert facts is not None and facts.owner_node_id is None
+
+
+def test_claim_offers_every_earlier_attempts_workspace_owner(
+    client: TestClient,
+) -> None:
+    first = register(client)
+    second = register(client)
+    task = claim(client, first)
+    assert task["prior_workspaces"] == []  # a first attempt has no earlier work
+    first_id = client.get(f"/api/tasks/{task['id']}").json()["workspace"][
+        "owner_agent_id"
+    ]
+    assert report(client, first, task, 1, "running").status_code == 409  # still open
+    client.post(f"/api/tasks/{task['id']}/release", json={"reason": "x"})
+    assert report(client, first, task, 1, "running").status_code == 204
+    retry = client.post("/api/tasks/claim", json={}, headers=second).json()
+    assert retry["attempt"] == 2
+    # Attempt 1's follow-up never finished: the claim says so, not "nothing to save".
+    assert retry["prior_workspaces"] == [
+        {
+            "attempt": 1,
+            "owner_agent_id": first_id,
+            "owner_node_id": None,
+            "owner_status": "live",
+            "checkpoint_state": "running",
+        }
+    ]
+    assert report(client, first, task, 1, "nothing_to_save").status_code == 204
+    client.post(f"/api/tasks/{task['id']}/release", json={"reason": "x"})
+    third = client.post("/api/tasks/claim", json={}, headers=first).json()
+    assert third["attempt"] == 3
+    assert [
+        (p["attempt"], p["checkpoint_state"]) for p in third["prior_workspaces"]
+    ] == [(1, "nothing_to_save"), (2, None)]

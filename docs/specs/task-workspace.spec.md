@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-27
-updated: 2026-11-17
+updated: 2026-11-21
 ---
 
 # Task workspace: a stable per-task git workspace, checked before the model
@@ -36,7 +36,8 @@ its call in `runTask`) and the new block reasons in Argus.
 - No executor credential probe. `env_executor_auth` stays reserved (failure
   classes 3.3).
 - No retention, no byte quota and no cleanup of workspaces.
-- No schema change and no Argus API change beyond the new block reasons.
+- No schema change; the API change is the claim's `prior_workspaces` and the new
+  block reasons (3.7).
 
 # 3. Decisions Made
 
@@ -148,6 +149,8 @@ Every reason is in `ENV_BLOCK_REASONS`: the task is **blocked**, never
 | `env_workspace_branch_mismatch` | HEAD is not the task branch (another branch, or detached) |
 | `env_workspace_unpreserved_commits` | HEAD is not the task branch (another branch, or detached) and commits of the task branch or of a detached HEAD are on no remote-tracking ref. The error names the branch and the SHAs |
 | `env_workspace_limit` | A new workspace would exceed `ARGUS_TASK_WORKSPACE_MAX` |
+| `env_workspace_prior_unverified` | A retry would start empty but an earlier attempt on another instance is not proven to have left nothing (3.7) |
+| `env_workspace_prior_unavailable` | Such an attempt checkpointed unpublished work that this node cannot restore (3.7) |
 
 A missing repository lease keeps `env_repository_unavailable`; the workspace
 step does not run then. An existing origin URL with userinfo is reported as
@@ -195,6 +198,37 @@ names the commits. It replaces an earlier agent's prose. A `wip` that is a check
 required-input reference is not a branch claim and is left alone
 ([task continuation](task-continuation.spec.md) 3.3).
 
+## 3.7 Retries claimed by another instance
+
+Workspaces are per instance directory, so a retry claimed by another instance finds none.
+The claim (`ClaimedTask.prior_workspaces`, from the same attempt rows as 3.5) lists every
+earlier attempt: `attempt`, `owner_agent_id`, `owner_node_id`, `owner_status` and
+`checkpoint_state` (what the worker reported: `running`, `saved`, `nothing_to_save`,
+`failed`, or null for nothing reported). No path, no checkpoint reference.
+
+For a task with `repository:write` and attempt > 1, `runTask` checks this list after the
+checkpoint restore and before `prepareTaskWorkspace`, whether the workspace is missing,
+restored or already present (`fencePriorWorkspaces`, read-only): an older local checkout
+cannot contain work a later attempt on another instance left (A, B, A). Attempts owned by
+this agent only advance the cutoff when their checkpoint step ended (`saved` or
+`nothing_to_save`): that attempt passed this check, so attempts older than it are ignored
+(same-instance behaviour is unchanged). A claim that died or was released before its
+checkpoint ended (no step, `running`, `failed`) proves nothing and fences nothing off. Each attempt
+by another agent must be proven empty, and the only proof is that worker's own
+`nothing_to_save` report (a clean or fully published workspace). Otherwise nothing is
+created and the task is blocked, spending no attempt, with the attempt, owner, node,
+status and checkpoint step named:
+
+- `saved`: `env_workspace_prior_unavailable`. Its checkpoint is not in this node's store
+  ([task checkpoint](task-checkpoint.spec.md) refuses foreign-node checkpoints).
+- `failed`, `running` (never finished, so stale), not reported, or a server that sends no
+  list (passes only when a workspace already exists or was restored, the legacy reuse): `env_workspace_prior_unverified`. Unknown is never reported as absent.
+
+Recovery is only through supported inputs: a verified checkpoint in this node's store
+(restored before the fence, byte-checked by its manifest), or the work published from the
+other instance. Nothing is copied, reset or deleted, and the fence never writes, so
+concurrent attempts and stale leases cannot overwrite anything.
+
 # 4. Open Questions
 
 - Retention: when should a finished task's workspace go, given that cleanup
@@ -208,12 +242,9 @@ required-input reference is not a branch claim and is left alone
 
 ## Open items
 
-- **Cross-instance residual risk.** Everything above is per instance directory. A
-  retry claimed by another instance finds no workspace, creates an empty one and
-  starts from nothing; unpublished commits left on the first instance are neither
-  detected nor preserved there (the WIP claim then says the branch does not exist,
-  which is true of the new workspace). Closing this needs the API to record where
-  work lives, a schema change, and is out of scope here.
+- **Cross-instance recovery.** 3.7 refuses to start empty without proof, but bytes
+  stay on the other instance: nothing transfers them, and there is no operator waiver
+  for a block whose earlier worker died before reporting.
 - **No archive or publish fallback.** A refused workspace waits for an operator:
   there is no push (no grant for new refs) and no archive at the recorded path.
 

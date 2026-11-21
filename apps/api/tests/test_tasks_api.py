@@ -215,6 +215,8 @@ WORKSPACE_REASONS = [
     "env_workspace_branch_mismatch",
     "env_workspace_unpreserved_commits",
     "env_workspace_limit",
+    "env_workspace_prior_unverified",
+    "env_workspace_prior_unavailable",
 ]
 
 
