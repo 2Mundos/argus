@@ -153,7 +153,7 @@ async def resume_merge(
         "task",
         task_id,
         RESUMED_EVENT,
-        {"pr": seen.pr, "head_sha": head.sha.lower()},
+        {"pr": seen.pr, "head_sha": reviewed_head.lower()},
     )
     return True
 
