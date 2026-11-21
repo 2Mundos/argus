@@ -190,8 +190,8 @@ const describePrior = (p: PriorWorkspace): string =>
 
 /**
  * A retry is about to proceed from this instance's workspace (empty, an old checkout or a
- * restored checkpoint). Attempts on other instances after this instance's own newest one
- * may hold unpublished work this one cannot see, so "no work" must be proven, never assumed: only a worker's own `nothing_to_save` report proves it. `null`
+ * restored checkpoint). Attempts on other instances after this instance's newest attempt that
+ * durably finished its checkpoint may hold unpublished work this one cannot see, so "no work" must be proven, never assumed: only a worker's own `nothing_to_save` report proves it. `null`
  * means nothing is at risk (a first attempt, or every earlier attempt ran here, where the
  * workspace's own state is checked by `prepareTaskWorkspace`). Otherwise a typed refusal
  * that names each attempt, owner, node and checkpoint step. `prior` undefined is an older
@@ -216,8 +216,13 @@ export function fencePriorWorkspaces(opts: {
             "Nothing was created; run the retry on the instance that holds the earlier work",
         );
   const mine = (p: PriorWorkspace) => !!opts.selfAgentId && p.owner_agent_id === opts.selfAgentId;
-  // Work after this instance's own newest attempt is what its checkout cannot contain (A, B, A).
-  const newestHere = Math.max(0, ...opts.prior.filter(mine).map((p) => p.attempt));
+  // Work after this instance's newest *reconciled* attempt is what its checkout cannot contain
+  // (A, B, A). A claim alone proves nothing: an attempt that died or was released before its
+  // checkpoint ended (null, running, failed) never showed the earlier foreign work was absorbed,
+  // so only a recorded `saved`/`nothing_to_save` step advances the cutoff.
+  const reconciled = (p: PriorWorkspace) =>
+    p.checkpoint_state === "saved" || p.checkpoint_state === "nothing_to_save";
+  const newestHere = Math.max(0, ...opts.prior.filter((p) => mine(p) && reconciled(p)).map((p) => p.attempt));
   const elsewhere = opts.prior.filter(
     (p) => p.attempt < opts.attempt && p.attempt > newestHere && !mine(p),
   );

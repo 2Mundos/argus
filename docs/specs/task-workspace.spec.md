@@ -210,8 +210,10 @@ For a task with `repository:write` and attempt > 1, `runTask` checks this list a
 checkpoint restore and before `prepareTaskWorkspace`, whether the workspace is missing,
 restored or already present (`fencePriorWorkspaces`, read-only): an older local checkout
 cannot contain work a later attempt on another instance left (A, B, A). Attempts owned by
-this agent, and attempts older than this agent's own newest attempt, are ignored (that
-attempt already passed this check; same-instance behaviour is unchanged). Each attempt
+this agent only advance the cutoff when their checkpoint step ended (`saved` or
+`nothing_to_save`): that attempt passed this check, so attempts older than it are ignored
+(same-instance behaviour is unchanged). A claim that died or was released before its
+checkpoint ended (no step, `running`, `failed`) proves nothing and fences nothing off. Each attempt
 by another agent must be proven empty, and the only proof is that worker's own
 `nothing_to_save` report (a clean or fully published workspace). Otherwise nothing is
 created and the task is blocked, spending no attempt, with the attempt, owner, node,

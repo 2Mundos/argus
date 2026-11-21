@@ -695,14 +695,31 @@ describe("fencePriorWorkspaces: an empty workspace on another instance needs pro
     expect(r?.error).toContain("attempt 2");
   });
 
-  it("does not re-fence attempts older than this instance's own newest one", () => {
+  it("does not re-fence attempts older than this instance's newest reconciled one", () => {
     const list = [
       prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: null }),
-      prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: null }),
+      prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: "nothing_to_save" }),
     ];
     expect(
       fencePriorWorkspaces({ attempt: 3, selfAgentId: "agent-b", prior: list, hasLocalWork: true }),
     ).toBeNull();
+  });
+
+  it.each([
+    ["crashed before its checkpoint", null],
+    ["released mid-checkpoint", "running"],
+    ["checkpoint failed", "failed"],
+  ] as const)("a prior self claim that %s is not proof of reconciliation", (_l, state) => {
+    // A1 saved foreign WIP; B2 claimed then died; B3 must still see A1 as unreconciled.
+    const list = [
+      prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "saved" }),
+      prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: state }),
+    ];
+    for (const hasLocalWork of [false, true]) {
+      const r = fencePriorWorkspaces({ attempt: 3, selfAgentId: "agent-b", prior: list, hasLocalWork });
+      expect(r?.reason).toBe("env_workspace_prior_unavailable");
+      expect(r?.error).toContain("attempt 1");
+    }
   });
 
   it("an older server's silence only passes with local work", () => {
