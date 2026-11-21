@@ -744,17 +744,18 @@ export async function runRepositoryPreflight(
     if (diagnosis) event.diagnosis = diagnosis;
     else if (outcome !== "ok") event.diagnosis = diagnosisOf(outcome);
     const hint = DIAGNOSIS_HINTS[event.diagnosis];
-    if (detail !== undefined && hint && outcome !== "ok") detail = `${detail} [${hint}]`;
     if (
       (event.diagnosis === "rearm_exhausted" || event.diagnosis === "rearm_unproven") &&
       event.injection !== "observed"
     )
       event.fault = "gateway_policy_publish";
     // Fixed text and the event's own integers; appended after the bounded detail.
+    const hintSuffix = detail !== undefined && hint && outcome !== "ok" ? ` [${hint}]` : "";
     const suffix =
-      detail !== undefined && event.diagnosis === "rearm_exhausted"
+      hintSuffix +
+      (detail !== undefined && event.diagnosis === "rearm_exhausted"
         ? ` [the gateway attached no credential; the lease was re-applied ${event.rearm_attempts} times within ${Math.ceil(event.rearm_window_ms / 1000)} seconds; this is a OneCLI policy-publish fault, not a permission or network problem]`
-        : "";
+        : "");
     try {
       await input.emit?.(event);
     } catch {

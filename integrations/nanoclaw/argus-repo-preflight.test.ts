@@ -990,6 +990,21 @@ describe("outcome classification: denial, network, unproven and session failures
     });
   });
 
+  it("a long scrubbed driver error keeps the session hint within the returned error", async () => {
+    await expect(
+      run(
+        probe({
+          assertSpecAllowed: () => {
+            throw new Error("environment policy denied startup " + "x".repeat(900));
+          },
+        }),
+      ),
+    ).rejects.toSatisfy((error: unknown) => {
+      const e = error as RepositoryPreflightError;
+      return e.diagnosis === "session_start_denied" && /\[[^\]]+\]$/.test(e.message);
+    });
+  });
+
   it("a startup denied by the driver or environment policy is session_start_denied, scrubbed", async () => {
     const SECRET = "ghp_" + "Qw7".repeat(12);
     await expect(
