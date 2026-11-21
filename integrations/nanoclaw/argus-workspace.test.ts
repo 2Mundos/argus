@@ -716,7 +716,12 @@ describe("fencePriorWorkspaces: an empty workspace on another instance needs pro
       prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: state }),
     ];
     for (const hasLocalWork of [false, true]) {
-      const r = fencePriorWorkspaces({ attempt: 3, selfAgentId: "agent-b", prior: list, hasLocalWork });
+      const r = fencePriorWorkspaces({
+        attempt: 3,
+        selfAgentId: "agent-b",
+        prior: list,
+        hasLocalWork,
+      });
       expect(r?.reason).toBe("env_workspace_prior_unavailable");
       expect(r?.error).toContain("attempt 1");
     }

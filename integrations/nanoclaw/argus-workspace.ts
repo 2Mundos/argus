@@ -222,7 +222,10 @@ export function fencePriorWorkspaces(opts: {
   // so only a recorded `saved`/`nothing_to_save` step advances the cutoff.
   const reconciled = (p: PriorWorkspace) =>
     p.checkpoint_state === "saved" || p.checkpoint_state === "nothing_to_save";
-  const newestHere = Math.max(0, ...opts.prior.filter((p) => mine(p) && reconciled(p)).map((p) => p.attempt));
+  const newestHere = Math.max(
+    0,
+    ...opts.prior.filter((p) => mine(p) && reconciled(p)).map((p) => p.attempt),
+  );
   const elsewhere = opts.prior.filter(
     (p) => p.attempt < opts.attempt && p.attempt > newestHere && !mine(p),
   );
