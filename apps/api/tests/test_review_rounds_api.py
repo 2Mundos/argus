@@ -137,3 +137,24 @@ def test_board_filter_is_opt_in_and_pages_correctly(
     assert badges[other] is None
     default = client.get("/api/tasks").json()
     assert all("review_badge" not in i for i in default["items"])
+
+
+def test_voided_round_is_void_in_rounds_and_board_badge(
+    env: tuple[TestClient, Path],
+) -> None:
+    client, db = env
+    parent = make(client)
+    child = make(client, kind="code_review", parent_id=parent)
+    finish(db, child, {"verdict": "approve", "head_sha": HEAD_1, "findings": []}, "m")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO events (at, actor, subject_type, subject_id, kind, data)"
+            " VALUES ('2026-01-01T00:00:00Z', 'system', 'task', ?,"
+            " 'review.independent_void', ?)",
+            (parent, json.dumps({"child_id": child, "reason": "same_model"})),
+        )
+    rounds = client.get(f"/api/tasks/{parent}/reviews").json()["rounds"]
+    assert rounds[0]["verdict"] == "void"
+    page = client.get("/api/tasks", params={"hide_review_children": True}).json()
+    badge = {i["id"]: i.get("review_badge") for i in page["items"]}[parent]
+    assert badge == {"round": 1, "verdict": "void", "state": "succeeded"}

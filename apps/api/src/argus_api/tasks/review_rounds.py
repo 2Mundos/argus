@@ -193,6 +193,7 @@ async def badges(
         [CODE_REVIEW_KIND, *parent_ids],
     ) as cur:
         rows = list(await cur.fetchall())
+    voided = {p: await _voided(conn, p) for p in {r["parent_id"] for r in rows}}
     count: dict[str, int] = {}
     newest: dict[str, aiosqlite.Row] = {}
     for row in rows:
@@ -201,12 +202,14 @@ async def badges(
     out = {}
     for parent, row in newest.items():
         data = _data(row["result"])
-        verdict = (
-            data.get("verdict")
-            if row["state"] == TaskState.SUCCEEDED
-            and data.get("verdict") in ("approve", "request_changes")
-            else None
-        )
+        verdict: Verdict | None = None
+        if row["id"] in voided[parent]:
+            verdict = "void"
+        elif row["state"] == TaskState.SUCCEEDED and data.get("verdict") in (
+            "approve",
+            "request_changes",
+        ):
+            verdict = data["verdict"]
         out[parent] = ReviewBadge(
             round=count[parent], verdict=verdict, state=row["state"]
         )
