@@ -1014,7 +1014,8 @@ def pick_reviewer(
             if mode == "different_provider" and provider in author_providers:
                 continue
             for model in chain:
-                if mode == "different_model" and model in excluded:
+                # Author and fixer model exclusions apply in every review mode.
+                if model in excluded:
                     continue
                 if engine in ("claude", "codex") and harness_pin is None:
                     harness_pin = HarnessModel(engine=engine, model=model)  # type: ignore[arg-type]

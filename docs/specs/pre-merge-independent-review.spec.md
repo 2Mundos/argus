@@ -198,9 +198,11 @@ sending the parent back for a full attempt.
   reviewed head or a descendant of it, runs the pre-push checks and pushes without
   `--force-with-lease`. It never rebases, never pushes another branch and never creates or
   edits the PR; a moved or diverged head is refused with `request_changes` as the action.
-- Fixer model exclusion applies to account-sourced selectors in every review mode,
-  including `different_provider`, so a respawn cannot pick the fixer's model through an
-  account whose configured model it is.
+- Fixer model exclusion applies to account-sourced selectors and to the legacy picker
+  (used when no execution chain resolves) in every review mode, including
+  `different_provider`, so a respawn cannot pick the fixer's model through an account
+  whose configured model it is, nor select it again from the chain. With no eligible
+  model left the parent blocks with `no_independent_reviewer`.
 - Verdicts: `approve` (no findings, nothing changed), `request_changes` (cannot fix
   safely, nothing changed; the existing handoff to the implementer), `fixed` with
   `head_sha` (reviewed), `fixed_head_sha` (full 40-character new head), `findings` and

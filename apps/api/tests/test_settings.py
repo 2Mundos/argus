@@ -538,6 +538,42 @@ def test_pick_reviewer_excludes_author_models() -> None:
     assert none is None
 
 
+def test_pick_reviewer_excludes_fixer_models_in_different_provider_mode() -> None:
+    policy = model_policy.validate(
+        {
+            "harness": {
+                "claude": ["claude-sonnet-5-5"],
+                "codex": ["gpt-5.5", "gpt-5.4"],
+            },
+            "implementation": {
+                "claude": ["claude-sonnet-5-5"],
+                "codex": ["gpt-5.5", "gpt-5.4"],
+            },
+        }
+    )
+    harness, executor = indep.pick_reviewer(
+        policy,
+        mode="different_provider",
+        author_models={"claude-sonnet-5-5"},
+        author_providers={"anthropic"},
+        usable={"anthropic", "openai"},
+        exclude_models={"gpt-5.5"},
+    )
+    assert harness == HarnessModel(engine="codex", model="gpt-5.4")
+    assert executor is not None and executor.model != "gpt-5.5"
+    assert executor.model == "gpt-5.4"
+
+    harness_none, executor_none = indep.pick_reviewer(
+        policy,
+        mode="different_provider",
+        author_models={"claude-sonnet-5-5"},
+        author_providers={"anthropic"},
+        usable={"anthropic", "openai"},
+        exclude_models={"gpt-5.5", "gpt-5.4"},
+    )
+    assert (harness_none, executor_none) == (None, None)
+
+
 def test_code_review_kind_is_seeded(client: TestClient) -> None:
     kinds = {k["name"]: k for k in client.get("/api/task-kinds", headers=ADMIN).json()}
     assert "code_review" in kinds
