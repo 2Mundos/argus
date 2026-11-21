@@ -27,10 +27,12 @@ import {
   httpStatus,
   localHarnessRefusal,
   materializePrivateCursorConfig,
+  PROBE_EVIDENCE,
   parseAccountSettings,
   pinnedModel,
   prepareExecutorEnv,
   preparePrompt,
+  probeEvidence,
   READ_ONLY_PROMPT_PREFIX,
   waitCapEnv,
   withCliToolsPath,
@@ -3296,4 +3298,57 @@ test("agy: agyAuthRejected and executorJsonFailure classify real agy 1.5.12 erro
     ),
     null,
   );
+});
+
+test("PROBE_EVIDENCE: every route is stated, none is proven, unprobed routes are never a pass", async (t) => {
+  for (const k of ["claude", "codex", "copilot", "agent", "opencode", "custom", "local"])
+    assert.ok(["proven", "mocked-only", "unprobed"].includes(PROBE_EVIDENCE[k]?.status), k);
+  assert.equal(
+    Object.values(PROBE_EVIDENCE).some((v) => v.status === "proven"),
+    false,
+    "no real-gateway measurement exists",
+  );
+  for (const k of ["agent", "claude-login-file", "codex-chatgpt-login", "opencode-native", "local"])
+    assert.equal(PROBE_EVIDENCE[k].status, "unprobed", k);
+  assert.equal(probeEvidence("claude", "unproven"), "unprobed");
+  assert.equal(probeEvidence("agent", "accepted"), "unprobed");
+  assert.equal(probeEvidence("claude", "accepted"), "mocked-only");
+  assert.equal(probeEvidence("opencode", "rejected", { base_url: "x" }), "mocked-only");
+});
+
+test("--auth-probe reports evidence: mocked-only for 200/401/403, unprobed for other statuses and agent", async (t) => {
+  for (const [status, ev] of [
+    [200, "mocked-only"],
+    [401, "mocked-only"],
+    [403, "mocked-only"],
+    [404, "unprobed"],
+    [429, "unprobed"],
+    [500, "unprobed"],
+    ["network", "unprobed"],
+  ]) {
+    const { probed } = await probeWith(t, "claude", status);
+    assert.equal(probed.report.evidence, ev, String(status));
+  }
+  const s = sandbox(t);
+  s.fake("agent", 'echo "1.0.0"');
+  const cursor = path.join(s.home, ".config", "cursor");
+  fs.mkdirSync(cursor, { recursive: true });
+  fs.writeFileSync(path.join(cursor, "auth.json"), '{"accessToken":"sentinel"}');
+  const probed = await authProbeWithProvider(
+    "agent",
+    { ...s.env, XDG_CONFIG_HOME: path.join(s.home, ".config") },
+    { request: async () => assert.fail("no request for agent") },
+  );
+  assert.equal(probed.code, 0);
+  assert.equal(probed.report.evidence, "unprobed");
+  assert.equal(JSON.stringify(probed).includes(SECRET), false);
+});
+
+test("--probe-matrix prints the static table without reading env or making a request", async () => {
+  const r = await run(["--probe-matrix"], {
+    env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: SECRET },
+  });
+  assert.equal(r.code, 0);
+  assert.deepEqual(r.report.probe_matrix, JSON.parse(JSON.stringify(PROBE_EVIDENCE)));
+  assert.equal(JSON.stringify(r.report).includes(SECRET), false);
 });

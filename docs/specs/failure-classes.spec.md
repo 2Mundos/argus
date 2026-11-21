@@ -573,6 +573,24 @@ model or its policy in the probe session. Other OpenCode/local routes stay unpro
 because a probe there would falsely block credentials available only in the worker.
 See [custom accounts](custom-accounts.spec.md) for the authorization boundary.
 
+**Evidence matrix.** Each route has one of three statuses, kept in code as
+`PROBE_EVIDENCE` (`integrations/nanoclaw/engines/argus-delegate.mjs`) and printed,
+without reading any credential or making any request, by `argus-delegate --probe-matrix`:
+`proven` (a 401, 403 or 2xx was observed from the real gateway), `mocked-only` (the
+request and its classification are tested against mocks and local sockets only) and
+`unprobed` (no request is made, so passing says nothing about the credential).
+**No route is `proven`**: the real gateway has not been measured from a worker.
+
+| Route | Status |
+| --- | --- |
+| `claude` (env credential), `codex` (`OPENAI_API_KEY`), `copilot`, `agy`, `opencode` (custom/OpenRouter), custom account | mocked-only |
+| `claude` login file, `codex` ChatGPT login, `agent` (Cursor), native/attached `opencode`, local account | unprobed |
+
+A probe report carries `evidence`: `mocked-only` when the provider answered 2xx, 401 or 403
+(the classification is the same as before), and `unprobed` for every `unproven` answer
+(other status, network error, no safe endpoint), so it is never read as a pass.
+The fail-open default is unchanged.
+
 The probe keeps four states apart, and only the first three can block:
 
 1. **Credential present** in the session (exit 78 when absent). Presence only.
@@ -632,9 +650,9 @@ and whether the model's or the work's own output can forge it.
 
 ## Open items
 
-- Executor probe: the provider request is proven only against mocks and local sockets.
-  Real-gateway injection on the probed hosts and paths is not measured; `agent`, a
-  ChatGPT-login `codex` and a Claude login file stay unproven. OpenCode's explicit
+- Executor probe: every route is `mocked-only` or `unprobed` (3.3.1 evidence matrix); none is
+  `proven`. Real-gateway injection on the probed hosts and paths is not measured; `agent`, a
+  ChatGPT-login `codex` and a Claude login file stay unprobed. OpenCode's explicit
   custom/OpenRouter executor is probed using its gateway contribution; native and
   local OpenCode and the other custom executor routes stay unprobed (3.3.1).
 - Full recovery of a private-repository 404 whose injection is missing is pending a
