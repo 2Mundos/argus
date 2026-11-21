@@ -1016,3 +1016,53 @@ def test_midlease_expired_access_only_credential_is_rejected(
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "credential_refresh_rejected"
     assert FAKE_ACCESS not in res.text
+
+
+def test_midlease_expired_token_is_never_returned_inside_cooldown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refresh whose `expires_in` is shorter than the cooldown: a plain call
+    after the token expired but inside the window answers 503 instead of the
+    expired token; after the window it refreshes normally."""
+    responses = [
+        (200, {"access_token": REFRESHED_1, "expires_in": 30}),
+        (200, {"access_token": REFRESHED_2, "expires_in": 3600}),
+    ]
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return responses.pop(0)
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    import asyncio
+
+    asyncio.run(_async_expire(acc_id))
+    first = _refresh(client, worker, claim, acc_id)
+    assert first.status_code == 200, first.text
+    assert first.json()["credential"]["token"]["access_token"] == REFRESHED_1
+
+    refresher = app.state.google_refresher
+
+    async def travel(seconds: int) -> None:
+        """Fake clock: move the attempt stamp and the token expiry `seconds`
+        into the past relative to the real now."""
+        stamp, outcome = refresher._last_attempt[acc_id]
+        refresher._last_attempt[acc_id] = (stamp - timedelta(seconds=seconds), outcome)
+        doc = app.state.secrets.get(f"account-{acc_id}")
+        expiry = stamp - timedelta(seconds=seconds) + timedelta(seconds=30)
+        doc["token"]["expiry"] = expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+        await app.state.secrets.put(f"account-{acc_id}", doc)
+
+    asyncio.run(travel(31))  # t+31 s: expired, inside the 60 s cooldown
+    inside = _refresh(client, worker, claim, acc_id)
+    assert inside.status_code == 503
+    assert inside.json()["detail"]["code"] == "credential_refresh_unavailable"
+    assert REFRESHED_1 not in inside.text and FAKE_ACCESS not in inside.text
+    assert len(calls) == 1
+
+    asyncio.run(travel(31 + int(ATTEMPT_COOLDOWN.total_seconds())))
+    after = _refresh(client, worker, claim, acc_id)
+    assert after.status_code == 200, after.text
+    assert after.json()["credential"]["token"]["access_token"] == REFRESHED_2
+    assert len(calls) == 2
