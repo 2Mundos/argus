@@ -373,6 +373,9 @@ why you are here.
 
 ### Reports
 
+- [Checkpoint representation comparison (2026-11-21)](reports/2026-11-21.checkpoint-representation-comparison.ref.md) —
+  hidden Git refs vs the current hash-verified checkpoint across the §5 dimensions, restore into a later
+  attempt, workspace cleanup archive/restore and unsafe-revert detection; the current format is kept
 - [P4 interruption measurement (2026-11-15)](reports/2026-11-15.p4-interruption-measurement.ref.md) —
   30-day attempt counts by interruption kind, PR-reaching attempts, and the recommendation to keep the
   account-switch resume path unsupported; from a read-only export, with its limits
