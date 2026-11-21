@@ -19,6 +19,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   branchWipClaim,
+  checkWorkspaceClean,
   fencePriorWorkspaces,
   maxWorkspacesFromEnv,
   type PriorWorkspace,
@@ -812,5 +813,148 @@ describe("fencePriorWorkspaces: an empty workspace on another instance needs pro
         hasLocalWork: true,
       })?.reason,
     ).toBe("env_workspace_prior_unavailable");
+  });
+});
+
+describe("checkWorkspaceClean: prove no unpublished work exists before reporting nothing_to_save", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const mkGroup = () => {
+    const d = mkdtempSync(path.join(os.tmpdir(), "argus-clean-"));
+    dirs.push(d);
+    return d;
+  };
+  const git = (cwd: string, args: string[]) =>
+    execFileSync("git", args, { cwd, env: gitEnv(), encoding: "utf8" }).trim();
+
+  it("proves a clean, fully published workspace (including detached HEAD at a published commit) is clean", async () => {
+    const groupDir = mkGroup();
+    const taskId = randomUUID();
+    const prep = await prepareTaskWorkspace({ groupDir, taskId, repositoryUrl: REPO });
+    expect(prep.ok).toBe(true);
+    if (!prep.ok) return;
+
+    // Fresh unborn workspace has nothing to save.
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: true,
+    });
+
+    // Commit on task branch and record matching remote-tracking ref (fully published).
+    writeFileSync(path.join(prep.path, "README.md"), "hello\n");
+    git(prep.path, ["add", "README.md"]);
+    git(prep.path, ["commit", "-q", "-m", "initial"]);
+    const sha = git(prep.path, ["rev-parse", "HEAD"]);
+    git(prep.path, ["update-ref", `refs/remotes/origin/${prep.branch}`, sha]);
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: true,
+    });
+
+    // Detached HEAD at the same published commit is also clean.
+    git(prep.path, ["checkout", "-q", "--detach", sha]);
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: true,
+    });
+  });
+
+  it("detects unpublished commits on the task branch, detached HEAD, or other local refs", async () => {
+    const groupDir = mkGroup();
+    const taskId = randomUUID();
+    const prep = await prepareTaskWorkspace({ groupDir, taskId, repositoryUrl: REPO });
+    expect(prep.ok).toBe(true);
+    if (!prep.ok) return;
+
+    // Unpublished commit on task branch.
+    writeFileSync(path.join(prep.path, "a.txt"), "one\n");
+    git(prep.path, ["add", "a.txt"]);
+    git(prep.path, ["commit", "-q", "-m", "local"]);
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: false,
+      reason: "unpublished_commits",
+    });
+
+    // Publish it, then create an unpublished commit on detached HEAD.
+    const pub = git(prep.path, ["rev-parse", "HEAD"]);
+    git(prep.path, ["update-ref", `refs/remotes/origin/${prep.branch}`, pub]);
+    git(prep.path, ["checkout", "-q", "--detach", pub]);
+    writeFileSync(path.join(prep.path, "b.txt"), "detached\n");
+    git(prep.path, ["add", "b.txt"]);
+    git(prep.path, ["commit", "-q", "-m", "detached local"]);
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: false,
+      reason: "unpublished_commits",
+    });
+
+    // Return to published task branch, but leave an unpublished commit on another local branch.
+    git(prep.path, ["checkout", "-q", "-b", "side-wip"]);
+    git(prep.path, ["checkout", "-q", prep.branch]);
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: false,
+      reason: "unpublished_commits",
+    });
+  });
+
+  it("detects staged, unstaged, and untracked changes", async () => {
+    const groupDir = mkGroup();
+    const taskId = randomUUID();
+    const prep = await prepareTaskWorkspace({ groupDir, taskId, repositoryUrl: REPO });
+    expect(prep.ok).toBe(true);
+    if (!prep.ok) return;
+    writeFileSync(path.join(prep.path, "file.txt"), "v1\n");
+    git(prep.path, ["add", "file.txt"]);
+    git(prep.path, ["commit", "-q", "-m", "base"]);
+    const pub = git(prep.path, ["rev-parse", "HEAD"]);
+    git(prep.path, ["update-ref", `refs/remotes/origin/${prep.branch}`, pub]);
+
+    // Untracked file.
+    writeFileSync(path.join(prep.path, "scratch.txt"), "untracked\n");
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: false,
+      reason: "uncommitted_changes",
+    });
+    rmSync(path.join(prep.path, "scratch.txt"));
+
+    // Unstaged modification.
+    writeFileSync(path.join(prep.path, "file.txt"), "v2\n");
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: false,
+      reason: "uncommitted_changes",
+    });
+
+    // Staged modification.
+    git(prep.path, ["add", "file.txt"]);
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toEqual({
+      ok: true,
+      clean: false,
+      reason: "uncommitted_changes",
+    });
+  });
+
+  it("fails closed on missing workspace or non-inert git config (never false nothing_to_save)", async () => {
+    const groupDir = mkGroup();
+    const taskId = randomUUID();
+    mkdirSync(path.join(groupDir, TASK_WORKSPACES_DIR), { recursive: true });
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_invalid",
+    });
+
+    const prep = await prepareTaskWorkspace({ groupDir, taskId, repositoryUrl: REPO });
+    expect(prep.ok).toBe(true);
+    if (!prep.ok) return;
+    git(prep.path, ["config", "filter.evil.clean", "touch pwned"]);
+    expect(await checkWorkspaceClean({ groupDir, taskId, repositoryUrl: REPO })).toMatchObject({
+      ok: false,
+      reason: "env_checkpoint_invalid",
+    });
   });
 });

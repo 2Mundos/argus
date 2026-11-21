@@ -223,8 +223,11 @@ reports nothing and never advances the cutoff, while claim rows older than a rec
 are ignored (same-instance behaviour is unchanged). A claim that died, was blocked or was
 released before its checkpoint ended (no step, `running`, `failed`) proves nothing and
 fences nothing off. Each claim row after the cutoff by another agent must be proven empty,
-and the only proof is that worker's own `nothing_to_save` report (a clean or fully
-published workspace). Otherwise nothing is created and the task is blocked, spending no
+and the only proof is a recorded `nothing_to_save` state — reported by that worker
+after checking the workspace is clean and fully published (including completed
+attempts and hosts without a checkpoint store), or attested by an admin for an
+ended, unreported attempt whose owner is no longer live
+([task finalization](task-finalization.spec.md) 3.3.1). Otherwise nothing is created and the task is blocked, spending no
 attempt, with the attempt, owner, node, status and checkpoint step named:
 
 - `saved`: `env_workspace_prior_unavailable`. Its checkpoint is not in this node's store
@@ -251,9 +254,12 @@ concurrent attempts and stale leases cannot overwrite anything.
 
 ## Open items
 
-- **Cross-instance recovery.** 3.7 refuses to start empty without proof, but bytes
-  stay on the other instance: nothing transfers them, and there is no operator waiver
-  for a block whose earlier worker died before reporting.
+- **Cross-instance recovery.** 3.7 refuses to start empty without proof, and
+  bytes stay on the other instance: nothing transfers them. An admin can attest
+  `nothing_to_save` for one ended, unreported attempt whose owner is no longer
+  live ([task finalization](task-finalization.spec.md) 3.3.1), but saved or
+  failed checkpoints still require the work to be published or restored from the
+  owning node.
 - **No archive or publish fallback.** A refused workspace waits for an operator:
   there is no push (no grant for new refs) and no archive at the recorded path.
 

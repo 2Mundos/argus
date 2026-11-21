@@ -36,6 +36,7 @@ import { promisify } from "node:util";
 import { sameRepositoryRemote } from "./argus-accounts.js";
 import {
   defaultGit,
+  findNonInertGitConfig,
   type GitRunner,
   hasCredentials,
   TASK_WORKSPACES_DIR,
@@ -379,41 +380,10 @@ async function openWorkspace(
   return { ws, ceiling };
 }
 
-// The workspace's own git config is written by the worker, yet git runs on the host here:
-// `diff` runs `filter.*.clean`, `log` runs `gpg.program` under `log.showSignature`,
-// `core.worktree` points git at host files. Only inert keys or the fixed worker hook path
-// (always overridden by host git) are accepted.
-const INERT_CONFIG = [
-  /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|quotepath|checkstat|trustctime|untrackedcache)$/,
-  /^remote\..+\.(url|pushurl|fetch|push|tagopt|prune)$/,
-  /^branch\..+\.(remote|merge|rebase|pushremote|description)$/,
-  /^(user|author|committer|init|pull|push|fetch|commit|tag|rebase|color|advice|status|gc|index|pack|feature)\.[^.]+$/,
-  /^extensions\.objectformat$/,
-];
-
 /** Fails closed unless the workspace's git setup can neither run a program nor read elsewhere. */
 async function assertInertGit(ctx: WorkspaceCtx, git: GitRunner): Promise<void> {
-  const dotGit = path.join(ctx.ws, ".git");
-  for (const redirect of ["commondir", "objects/info/alternates", "objects/info/http-alternates"])
-    if (await lstat(path.join(dotGit, redirect)).catch(() => null))
-      throw new Failure("env_checkpoint_invalid", `the workspace git directory has ${redirect}`);
-  // --file reads only this file and follows no include; an unreadable config fails closed.
-  const listed = await git(
-    ["config", "--file", path.join(dotGit, "config"), "--list", "-z"],
-    ctx.ws,
-    ctx.ceiling,
-  ).catch(() => {
-    throw new Failure("env_checkpoint_invalid", "the workspace git config is unreadable");
-  });
-  for (const entry of z(listed)) {
-    const [key, value] = entry.split("\n", 2);
-    if (key === "core.hookspath" && value === WORKER_GIT_HOOKS_PATH) continue;
-    if (!INERT_CONFIG.some((re) => re.test(key)))
-      throw new Failure(
-        "env_checkpoint_invalid",
-        `the workspace git config sets ${key.slice(0, 100)}, which git could act on`,
-      );
-  }
+  const err = await findNonInertGitConfig(ctx.ws, ctx.ceiling, git);
+  if (err) throw new Failure("env_checkpoint_invalid", err);
 }
 
 const z = (s: string) => s.split("\0").filter(Boolean);

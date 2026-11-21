@@ -3112,6 +3112,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/attempts/{attempt}/checkpoint/attest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attest Checkpoint Nothing To Save
+         * @description Admin attestation that one ended attempt left no unpublished work when its
+         *     checkpoint step was never reported. Audited with actor and reason; refuses open
+         *     claims (409 `claim_open`), live owners (409 `owner_live`), and attempts that
+         *     already have a recorded checkpoint state (409 `checkpoint_already_recorded`).
+         */
+        post: operations["attest_checkpoint_nothing_to_save_api_tasks__task_id__attempts__attempt__checkpoint_attest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/block": {
         parameters: {
             query?: never;
@@ -5193,6 +5216,46 @@ export interface components {
             /** Id */
             id: string;
             status: components["schemas"]["ItemStatus"];
+        };
+        /**
+         * CheckpointAttestation
+         * @description Admin attestation that one ended attempt left no unpublished work.
+         */
+        CheckpointAttestation: {
+            /** Owner Agent Id */
+            owner_agent_id?: string | null;
+            /** Reason */
+            reason: string;
+        };
+        /** CheckpointAttestationResult */
+        CheckpointAttestationResult: {
+            /** Actor */
+            actor: string;
+            /** Attempt */
+            attempt: number;
+            /** Attempt Id */
+            attempt_id: number;
+            /**
+             * Attested At
+             * Format: date-time
+             */
+            attested_at: string;
+            /**
+             * Checkpoint State
+             * @constant
+             */
+            checkpoint_state: "nothing_to_save";
+            /** Owner Agent Id */
+            owner_agent_id: string;
+            /**
+             * Owner Status
+             * @enum {string}
+             */
+            owner_status: "live" | "stale" | "ended" | "unknown";
+            /** Reason */
+            reason: string;
+            /** Task Id */
+            task_id: string;
         };
         /** CheckpointFacts */
         CheckpointFacts: {
@@ -19743,6 +19806,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attest_checkpoint_nothing_to_save_api_tasks__task_id__attempts__attempt__checkpoint_attest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+                attempt: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointAttestation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointAttestationResult"];
+                };
             };
             /** @description Validation Error */
             422: {

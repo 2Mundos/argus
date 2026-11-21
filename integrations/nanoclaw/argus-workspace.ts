@@ -38,6 +38,11 @@ export type WorkspaceResult =
   | { ok: true; path: string; containerPath: string; branch: string; created: boolean }
   | { ok: false; reason: WorkspaceFailureReason; error: string };
 
+export type WorkspaceCleanResult =
+  | { ok: true; clean: true }
+  | { ok: true; clean: false; reason: "unpublished_commits" | "uncommitted_changes" }
+  | { ok: false; reason: "env_checkpoint_invalid"; error: string };
+
 /** Runs git with `args` in `cwd` and resolves its stdout; rejects on a non-zero exit. */
 export type GitRunner = (args: string[], cwd: string, ceiling: string) => Promise<string>;
 
@@ -172,6 +177,137 @@ async function strandedCommits(
   )
     for (const sha of await unpublishedCommits(ws, ceiling, "HEAD", git)) found.add(sha);
   return [...found];
+}
+
+const z = (s: string) => s.split("\0").filter(Boolean);
+
+// The workspace's own git config is written by the worker, yet git runs on the host here:
+// `diff` runs `filter.*.clean`, `log` runs `gpg.program` under `log.showSignature`,
+// `core.worktree` points git at host files. Only inert keys or the fixed worker hook path
+// (always overridden by host git) are accepted.
+const INERT_GIT_CONFIG = [
+  /^core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|quotepath|checkstat|trustctime|untrackedcache)$/,
+  /^remote\..+\.(url|pushurl|fetch|push|tagopt|prune)$/,
+  /^branch\..+\.(remote|merge|rebase|pushremote|description)$/,
+  /^(user|author|committer|init|pull|push|fetch|commit|tag|rebase|color|advice|status|gc|index|pack|feature)\.[^.]+$/,
+  /^extensions\.objectformat$/,
+];
+
+/**
+ * Returns an error string when the workspace's `.git` could execute a program or read
+ * outside the repository; `null` when every config key is inert. Read-only; fails closed.
+ */
+export async function findNonInertGitConfig(
+  ws: string,
+  ceiling: string,
+  git: GitRunner = defaultGit,
+): Promise<string | null> {
+  const dotGit = path.join(ws, ".git");
+  for (const redirect of ["commondir", "objects/info/alternates", "objects/info/http-alternates"])
+    if (await lstat(path.join(dotGit, redirect)).catch(() => null))
+      return `the workspace git directory has ${redirect}`;
+  // --file reads only this file and follows no include; an unreadable config fails closed.
+  let listed: string;
+  try {
+    listed = await git(
+      ["config", "--file", path.join(dotGit, "config"), "--list", "-z"],
+      ws,
+      ceiling,
+    );
+  } catch {
+    return "the workspace git config is unreadable";
+  }
+  for (const entry of z(listed)) {
+    const [key, value] = entry.split("\n", 2);
+    if (key === "core.hookspath" && value === WORKER_GIT_HOOKS_PATH) continue;
+    if (!INERT_GIT_CONFIG.some((re) => re.test(key)))
+      return `the workspace git config sets ${key.slice(0, 100)}, which git could act on`;
+  }
+  return null;
+}
+
+/**
+ * Prove whether a prepared task workspace holds no unpublished work: no commits on the
+ * task branch, detached HEAD, or any other local ref missing from remote-tracking refs,
+ * and no staged, unstaged or untracked changes. Read-only; fails closed (`ok: false`)
+ * whenever the workspace cannot be verified so `nothing_to_save` is never reported
+ * without proof.
+ */
+export async function checkWorkspaceClean(opts: {
+  groupDir: string | null;
+  taskId: string;
+  repositoryUrl: string | null | undefined;
+  git?: GitRunner;
+}): Promise<WorkspaceCleanResult> {
+  const { groupDir, taskId, repositoryUrl } = opts;
+  const git = opts.git ?? defaultGit;
+  const invalid = (error: string): WorkspaceCleanResult => ({
+    ok: false,
+    reason: "env_checkpoint_invalid",
+    error,
+  });
+  if (!groupDir || !repositoryUrl)
+    return invalid("the group directory or repository is not configured");
+  if (hasCredentials(repositoryUrl)) return invalid("the repository URL carries credentials");
+  let ws: string;
+  let branch: string;
+  try {
+    ws = taskWorkspacePath(groupDir, taskId);
+    branch = taskBranch(taskId);
+  } catch (err) {
+    return invalid(String(err));
+  }
+  try {
+    const root = path.dirname(ws);
+    const rootStat = await lstat(root).catch(() => null);
+    if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory())
+      return invalid("the workspaces root is not a real directory");
+    const realRoot = await realpath(root);
+    if (realRoot !== path.join(await realpath(groupDir), TASK_WORKSPACES_DIR))
+      return invalid("the workspaces root resolves outside the group");
+    const st = await lstat(ws).catch(() => null);
+    if (!st) return invalid("the task workspace is missing");
+    if (st.isSymbolicLink() || !st.isDirectory())
+      return invalid("the workspace is not a real directory");
+    const real = await realpath(ws);
+    if (path.dirname(real) !== realRoot)
+      return invalid("the workspace resolves outside the workspaces root");
+    const dotGit = await lstat(path.join(real, ".git")).catch(() => null);
+    if (!dotGit?.isDirectory() || dotGit.isSymbolicLink())
+      return invalid("the workspace is not a git repository");
+    const gitDir = await git(["rev-parse", "--absolute-git-dir"], real, realRoot);
+    if (gitDir !== path.join(real, ".git")) return invalid(`the workspace git dir is ${gitDir}`);
+    const origin = (
+      await git(
+        ["config", "--file", path.join(real, ".git", "config"), "--get-all", "remote.origin.url"],
+        real,
+        realRoot,
+      ).catch(() => "")
+    )
+      .split("\n")
+      .filter(Boolean);
+    if (origin.length !== 1 || !sameRepositoryRemote(origin[0]!, repositoryUrl))
+      return invalid("the workspace origin does not match the task repository");
+    const nonInert = await findNonInertGitConfig(real, realRoot, git);
+    if (nonInert) return invalid(nonInert);
+    const head = await git(["symbolic-ref", "-q", "HEAD"], real, realRoot).catch(() => "");
+    const stranded = await strandedCommits(real, realRoot, branch, head, git);
+    if (stranded.length > 0) return { ok: true, clean: false, reason: "unpublished_commits" };
+    const otherUnpublished = await unpublishedCommits(real, realRoot, "--all", git);
+    if (otherUnpublished.length > 0)
+      return { ok: true, clean: false, reason: "unpublished_commits" };
+    const diff = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z"];
+    const staged = z(await git([...diff, "--cached"], real, realRoot));
+    const unstaged = z(await git(diff, real, realRoot));
+    const untracked = z(
+      await git(["ls-files", "--others", "--exclude-standard", "-z"], real, realRoot),
+    );
+    if (staged.length > 0 || unstaged.length > 0 || untracked.length > 0)
+      return { ok: true, clean: false, reason: "uncommitted_changes" };
+    return { ok: true, clean: true };
+  } catch (err) {
+    return invalid(String(err));
+  }
 }
 
 /** An earlier attempt's workspace owner as the claim reports it (`ClaimedTask.prior_workspaces`). */

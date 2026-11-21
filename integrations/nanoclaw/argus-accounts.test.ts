@@ -49,6 +49,7 @@ import {
 import { seedClaudeContinuation } from "./argus-quota-resume.js";
 import { sessionRepositoryProbe } from "./argus-repo-preflight.js";
 import { until } from "./argus-test-until.js";
+import { fencePriorWorkspaces } from "./argus-workspace.js";
 
 // NanoClaw's own modules are replaced, so the real `recycleRuntime` runs against a
 // fake registry of containers, not NanoClaw's database or a real container runtime.
@@ -3110,21 +3111,197 @@ describe("task-scoped repository auth", () => {
         existsSync(path.join(store, REPO_ID))
           ? readdirSync(path.join(store, REPO_ID)).filter((n) => /^[0-9]{14}-/.test(n))
           : [];
-      // Task finalization spec 3.3: the step is reported only when it ran.
-      const steps = () =>
-        w.calls
-          .filter((c) => c.path === `/tasks/${REPO_ID}/attempts/1/checkpoint`)
-          .map((c) => c.body.state);
+      // Task finalization spec 3.1/3.3: every prepared repository:write attempt reports the
+      // checkpoint step; accepted completions write no checkpoint bundle, and unpublished work
+      // still reports failed instead of nothing_to_save.
+      const checkpointCalls = () =>
+        w.calls.filter((c) => c.path === `/tasks/${REPO_ID}/attempts/1/checkpoint`);
+      const steps = () => checkpointCalls().map((c) => c.body.state);
       if (saved) {
         await until(() => checkpoints().length === 1);
         await until(() => steps().length === 2);
         expect(steps()).toEqual(["running", "saved"]);
       } else {
+        await until(() => steps().length === 2);
         expect(checkpoints()).toEqual([]);
-        expect(steps()).toEqual([]);
+        expect(steps()).toEqual(["running", "failed"]);
+        expect(checkpointCalls()[1]!.body.detail).toBe("env_checkpoint_unpublished_work");
       }
     });
   }
+
+  // AC1: completed attempt with a clean, fully published workspace and no checkpoint store
+  // reports nothing_to_save so a cross-instance rework is not fenced.
+  it("reports nothing_to_save after a completed attempt with a clean, fully published workspace and no checkpoint store", async () => {
+    const prevDir = process.env.ARGUS_CHECKPOINT_DIR;
+    delete process.env.ARGUS_CHECKPOINT_DIR;
+    try {
+      const w = repoWorld();
+      const h = harness(
+        w,
+        true,
+        { repositories: { global: "https://git.example.test/org/repo" } },
+        {},
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      const ws = path.join(h.groupDir, "task-workspaces", REPO_ID);
+      const branch = `argus/task-${REPO_ID.slice(0, 8)}`;
+      const gitEnv = {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_AUTHOR_NAME: "Test Worker",
+        GIT_AUTHOR_EMAIL: "worker@example.test",
+        GIT_COMMITTER_NAME: "Test Worker",
+        GIT_COMMITTER_EMAIL: "worker@example.test",
+      };
+      writeFileSync(path.join(ws, "README.md"), "published change\n");
+      expect(spawnSync("git", ["add", "README.md"], { cwd: ws, env: gitEnv }).status).toBe(0);
+      expect(
+        spawnSync("git", ["commit", "-q", "-m", "publish"], { cwd: ws, env: gitEnv }).status,
+      ).toBe(0);
+      const sha = spawnSync("git", ["rev-parse", "HEAD"], {
+        cwd: ws,
+        env: gitEnv,
+        encoding: "utf8",
+      }).stdout.trim();
+      expect(
+        spawnSync("git", ["update-ref", `refs/remotes/origin/${branch}`, sha], {
+          cwd: ws,
+          env: gitEnv,
+        }).status,
+      ).toBe(0);
+
+      await h.adapter.deliver("local", h.thread(), {
+        kind: "chat",
+        content: { text: "COMPLETE: done" },
+      });
+      await until(() => w.calls.filter((c) => c.path === "/tasks/claim").length >= 2);
+      const checkpointCalls = w.calls.filter(
+        (c) => c.path === `/tasks/${REPO_ID}/attempts/1/checkpoint`,
+      );
+      expect(checkpointCalls.map((c) => c.body.state)).toEqual(["running", "nothing_to_save"]);
+      expect(
+        fencePriorWorkspaces({
+          attempt: 2,
+          selfAgentId: "agent-next",
+          prior: [
+            {
+              attempt: 1,
+              owner_agent_id: "agent-prev",
+              owner_node_id: "node-1",
+              owner_status: "ended",
+              checkpoint_state: "nothing_to_save",
+            },
+          ],
+        }),
+      ).toBeNull();
+    } finally {
+      if (prevDir !== undefined) process.env.ARGUS_CHECKPOINT_DIR = prevDir;
+    }
+  });
+
+  // AC2: unpublished commits or uncommitted changes with no store report failed with a
+  // specific reason, and the fence still refuses the next cross-instance claim.
+  it.each(["unpublished_commit", "uncommitted_change"] as const)(
+    "reports failed (env_checkpoint_store_missing) on %s with no checkpoint store and keeps the fence refusing",
+    async (kind) => {
+      const prevDir = process.env.ARGUS_CHECKPOINT_DIR;
+      delete process.env.ARGUS_CHECKPOINT_DIR;
+      try {
+        const w = repoWorld();
+        const h = harness(
+          w,
+          true,
+          { repositories: { global: "https://git.example.test/org/repo" } },
+          {},
+        );
+        live.push(h.adapter);
+        await h.adapter.setup(h.setup);
+        await until(() => h.inbound.length > 0);
+        const ws = path.join(h.groupDir, "task-workspaces", REPO_ID);
+        const gitEnv = {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+          GIT_AUTHOR_NAME: "Test Worker",
+          GIT_AUTHOR_EMAIL: "worker@example.test",
+          GIT_COMMITTER_NAME: "Test Worker",
+          GIT_COMMITTER_EMAIL: "worker@example.test",
+        };
+        writeFileSync(path.join(ws, "work.txt"), "local work\n");
+        if (kind === "unpublished_commit") {
+          expect(spawnSync("git", ["add", "work.txt"], { cwd: ws, env: gitEnv }).status).toBe(0);
+          expect(
+            spawnSync("git", ["commit", "-q", "-m", "local only"], { cwd: ws, env: gitEnv }).status,
+          ).toBe(0);
+        }
+        await h.adapter.deliver("local", h.thread(), {
+          kind: "chat",
+          content: { text: "FAIL: stopped early" },
+        });
+        await until(() => w.calls.filter((c) => c.path === "/tasks/claim").length >= 2);
+        const checkpointCalls = w.calls.filter(
+          (c) => c.path === `/tasks/${REPO_ID}/attempts/1/checkpoint`,
+        );
+        expect(checkpointCalls.map((c) => c.body.state)).toEqual(["running", "failed"]);
+        expect(checkpointCalls[1]!.body.detail).toBe("env_checkpoint_store_missing");
+        const refused = fencePriorWorkspaces({
+          attempt: 2,
+          selfAgentId: "agent-next",
+          prior: [
+            {
+              attempt: 1,
+              owner_agent_id: "agent-prev",
+              owner_node_id: "node-1",
+              owner_status: "ended",
+              checkpoint_state: checkpointCalls[1]!.body.state as "failed",
+            },
+          ],
+        });
+        expect(refused?.reason).toBe("env_workspace_prior_unverified");
+      } finally {
+        if (prevDir !== undefined) process.env.ARGUS_CHECKPOINT_DIR = prevDir;
+      }
+    },
+  );
+
+  it("does not report nothing_to_save for an unprepared (blocked) attempt", async () => {
+    const prevDir = process.env.ARGUS_CHECKPOINT_DIR;
+    delete process.env.ARGUS_CHECKPOINT_DIR;
+    try {
+      const w = repoWorld({
+        ...repoTask(),
+        attempt: 2,
+        prior_workspaces: [
+          {
+            attempt: 1,
+            owner_agent_id: "other-instance-agent",
+            owner_node_id: "node-x",
+            owner_status: "ended",
+            checkpoint_state: null,
+          },
+        ],
+      });
+      const h = harness(
+        w,
+        true,
+        { repositories: { global: "https://git.example.test/org/repo" } },
+        {},
+      );
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => w.calls.filter((c) => c.path === "/tasks/claim").length >= 2);
+      expect(w.calls.some((c) => c.path === `/tasks/${REPO_ID}/block`)).toBe(true);
+      expect(w.calls.filter((c) => c.path === `/tasks/${REPO_ID}/attempts/2/checkpoint`)).toEqual(
+        [],
+      );
+    } finally {
+      if (prevDir !== undefined) process.env.ARGUS_CHECKPOINT_DIR = prevDir;
+    }
+  });
 });
 
 describe("executor credential probe in the channel (failure-classes 3.3.1)", () => {

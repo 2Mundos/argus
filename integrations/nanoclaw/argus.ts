@@ -212,6 +212,7 @@ import {
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import {
   branchWipClaim,
+  checkWorkspaceClean,
   fencePriorWorkspaces,
   type PriorWorkspace,
   prepareTaskWorkspace,
@@ -4242,42 +4243,72 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     }
   }
 
-  /** Save the task's unpublished work after an attempt that did not complete. Best effort. */
+  /**
+   * Save unpublished work when an uncompleted attempt has a checkpoint store, or prove
+   * the workspace has nothing to save after every prepared `repository:write` attempt
+   * (including completed attempts and hosts without a store), reporting the checkpoint
+   * step to Argus. Best effort; never reports `nothing_to_save` without proof.
+   */
   async function checkpointAfterAttempt(task: ArgusTask): Promise<void> {
     const attemptKey = `${task.id}:${task.attempt}`;
     const prepared = workspacePreparedAttempt === attemptKey;
     workspacePreparedAttempt = null;
+    const completed = completedAttempt === attemptKey;
     const proof =
       publishedHead?.taskId === task.id && publishedHead.attempt === task.attempt
         ? publishedHead.sha
         : null;
     publishedHead = null;
-    const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
-    if (!storeRoot || !prepared || completedAttempt === attemptKey) return;
+    if (!prepared) return;
     if (!task.required_capabilities?.includes("repository:write")) return;
+    const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
     let started = false;
     try {
       const groupDir = await (cfg.workspaceRoot ?? argusGroupDir)();
       if (!groupDir) return;
       await reportCheckpoint(task, "running");
       started = true;
-      const saved = await checkpointTaskWorkspace({
+      if (storeRoot && !completed) {
+        const saved = await checkpointTaskWorkspace({
+          groupDir,
+          storeRoot,
+          taskId: task.id,
+          attempt: task.attempt,
+          repositoryUrl: task.repository_url,
+          maxBytes: maxCheckpointBytesFromEnv(),
+        });
+        if (!saved.ok) {
+          log.warn("Could not checkpoint the task's work", { task: task.id, ...saved });
+          await reportCheckpoint(task, "failed", saved.reason);
+        } else if (saved.empty) {
+          await reportCheckpoint(task, "nothing_to_save");
+          if (proof) await supersedeAfterAttempt(task, groupDir, storeRoot, proof);
+        } else {
+          log.info("Checkpointed the task's work", { task: task.id, ref: saved.ref });
+          await reportCheckpoint(task, "saved", saved.ref);
+        }
+        return;
+      }
+      const checked = await checkWorkspaceClean({
         groupDir,
-        storeRoot,
         taskId: task.id,
-        attempt: task.attempt,
         repositoryUrl: task.repository_url,
-        maxBytes: maxCheckpointBytesFromEnv(),
       });
-      if (!saved.ok) {
-        log.warn("Could not checkpoint the task's work", { task: task.id, ...saved });
-        await reportCheckpoint(task, "failed", saved.reason);
-      } else if (saved.empty) {
+      if (!checked.ok) {
+        log.warn("Could not verify the task workspace is clean", { task: task.id, ...checked });
+        await reportCheckpoint(task, "failed", checked.reason);
+      } else if (checked.clean) {
         await reportCheckpoint(task, "nothing_to_save");
-        if (proof) await supersedeAfterAttempt(task, groupDir, storeRoot, proof);
       } else {
-        log.info("Checkpointed the task's work", { task: task.id, ref: saved.ref });
-        await reportCheckpoint(task, "saved", saved.ref);
+        const detail = storeRoot
+          ? "env_checkpoint_unpublished_work"
+          : "env_checkpoint_store_missing";
+        log.warn("Task workspace holds unpublished work that was not checkpointed", {
+          task: task.id,
+          detail,
+          reason: checked.reason,
+        });
+        await reportCheckpoint(task, "failed", detail);
       }
     } catch (err) {
       log.warn("Could not checkpoint the task's work", { task: task.id, err });
@@ -4367,6 +4398,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     claimedAt = cfg.now?.() ?? Date.now();
     waitingRelay.reset();
     switchFailure = null;
+    completedAttempt = null;
     workspacePreparedAttempt = null;
     try {
       if (!(await ensureRuntime(task))) return;

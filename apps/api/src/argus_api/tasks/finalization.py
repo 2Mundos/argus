@@ -8,8 +8,9 @@ from typing import Literal
 import aiosqlite
 from argus_core.agents import LOST_AFTER_S
 from argus_core.tasks import PriorWorkspace
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from argus_api import events
 from argus_api.db import Tx, ts
 from argus_api.errors import ConflictError, NotFoundError
 
@@ -23,6 +24,33 @@ class CheckpointReport(BaseModel):
     state: Literal["running", "saved", "nothing_to_save", "failed"]
     detail: str | None = Field(default=None, max_length=200)
     """The `checkpoint:` reference (saved) or the `env_checkpoint_*` reason (failed)."""
+
+
+class CheckpointAttestation(BaseModel):
+    """Admin attestation that one ended attempt left no unpublished work."""
+
+    reason: str = Field(min_length=1, max_length=500)
+    owner_agent_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("reason")
+    @classmethod
+    def _non_blank_reason(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("reason must not be blank")
+        return cleaned
+
+
+class CheckpointAttestationResult(BaseModel):
+    task_id: str
+    attempt: int
+    attempt_id: int
+    owner_agent_id: str
+    owner_status: Literal["live", "stale", "ended", "unknown"]
+    checkpoint_state: Literal["nothing_to_save"]
+    attested_at: datetime
+    actor: str
+    reason: str
 
 
 class CheckpointFacts(BaseModel):
@@ -200,6 +228,107 @@ async def report_checkpoint(
         "UPDATE task_attempts SET checkpoint_state = ?, checkpoint_ended_at = ?,"
         " checkpoint_detail = ? WHERE id = ?",
         (report.state, ts(tx.now), report.detail, row["id"]),
+    )
+
+
+async def attest_nothing_to_save(
+    tx: Tx,
+    task_id: str,
+    attempt: int,
+    body: CheckpointAttestation,
+    actor: str,
+) -> CheckpointAttestationResult:
+    """Admin recovery for one ended attempt whose checkpoint step was never reported.
+    Refuses open claims, live owners, and attempts with any recorded checkpoint state;
+    never writes `tasks` and records actor and reason in the audit event log."""
+    async with tx.conn.execute(
+        "SELECT id, state FROM tasks WHERE id = ?", (task_id,)
+    ) as cur:
+        task_row = await cur.fetchone()
+    if task_row is None:
+        raise NotFoundError(f"task not found: {task_id}")
+    if body.owner_agent_id is not None:
+        query = (
+            "SELECT t.*, a.state AS owner_state,"
+            " a.last_heartbeat_at AS owner_last_heartbeat_at"
+            " FROM task_attempts t LEFT JOIN agents a ON a.id = t.agent_id"
+            " WHERE t.task_id = ? AND t.attempt = ? AND t.agent_id = ?"
+            " ORDER BY t.id DESC LIMIT 1"
+        )
+        params: tuple[object, ...] = (task_id, attempt, body.owner_agent_id)
+    else:
+        query = (
+            "SELECT t.*, a.state AS owner_state,"
+            " a.last_heartbeat_at AS owner_last_heartbeat_at"
+            " FROM task_attempts t LEFT JOIN agents a ON a.id = t.agent_id"
+            " WHERE t.task_id = ? AND t.attempt = ?"
+            " ORDER BY t.id DESC LIMIT 1"
+        )
+        params = (task_id, attempt)
+    async with tx.conn.execute(query, params) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        raise NotFoundError(f"task {task_id} has no attempt {attempt}")
+    async with tx.conn.execute(
+        "SELECT max(id) FROM task_attempts WHERE task_id = ?", (task_id,)
+    ) as cur:
+        newest_row = await cur.fetchone()
+    newest_id = newest_row[0] if newest_row is not None else None
+    is_open = (
+        row["claim_ended_at"] is None
+        and task_row["state"] == "claimed"
+        and row["id"] == newest_id
+    )
+    if is_open:
+        raise ConflictError(
+            f"attempt {attempt} of task {task_id} is still running", code="claim_open"
+        )
+    owner_status = _owner_status(
+        row["owner_state"], row["owner_last_heartbeat_at"], tx.now
+    )
+    if owner_status == "live":
+        raise ConflictError(
+            f"owner agent {row['agent_id']} is still live", code="owner_live"
+        )
+    if row["checkpoint_state"] is not None:
+        raise ConflictError(
+            f"attempt {attempt} of task {task_id} already has checkpoint state"
+            f" {row['checkpoint_state']}",
+            code="checkpoint_already_recorded",
+        )
+    now_iso = ts(tx.now)
+    detail = f"attested by {actor}: {body.reason}"[:200]
+    await tx.conn.execute(
+        "UPDATE task_attempts SET checkpoint_state = 'nothing_to_save',"
+        " checkpoint_started_at = ?, checkpoint_ended_at = ?,"
+        " checkpoint_detail = ? WHERE id = ?",
+        (now_iso, now_iso, detail, row["id"]),
+    )
+    await events.record(
+        tx,
+        actor,
+        "task",
+        task_id,
+        "task.checkpoint_attested",
+        {
+            "attempt": attempt,
+            "attempt_id": row["id"],
+            "owner_agent_id": row["agent_id"],
+            "owner_status": owner_status,
+            "checkpoint_state": "nothing_to_save",
+            "reason": body.reason,
+        },
+    )
+    return CheckpointAttestationResult(
+        task_id=task_id,
+        attempt=attempt,
+        attempt_id=row["id"],
+        owner_agent_id=row["agent_id"],
+        owner_status=owner_status,
+        checkpoint_state="nothing_to_save",
+        attested_at=tx.now,
+        actor=actor,
+        reason=body.reason,
     )
 
 
