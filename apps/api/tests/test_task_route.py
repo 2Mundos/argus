@@ -2,7 +2,7 @@
 
 import pytest
 import test_mcp
-from api_support import insert_agent
+from api_support import DONE, insert_agent
 from argus_api.accounts import service as accounts
 from argus_api.db import Database
 from argus_api.modeltrace import service as modeltrace
@@ -246,6 +246,24 @@ async def test_a_previous_attempts_error_is_not_presented_as_current(
     got = await diagnose(db, task.id)
     assert got.error == "second attempt: out of memory"
     assert got.previous_failure is None
+
+
+async def test_a_later_attempt_that_completes_keeps_the_old_error_previous(
+    db: Database,
+) -> None:
+    task = await failed_attempt(
+        db, "connection reset by peer", "channel_error", "session_lost", max_attempts=5
+    )
+    async with db.write() as tx:
+        claimed = await tasks.claim(tx, A, [])
+    assert claimed is not None and claimed.attempt == 2
+    async with db.write() as tx:
+        done = await tasks.complete(tx, A, task.id, 2, DONE)
+    assert done.attempt == 2 and done.error_attempt == 1
+    assert done.error_scope == "previous"
+    got = await diagnose(db, task.id)
+    assert got.error is None and got.failure_class is None
+    assert got.previous_failure is not None and got.previous_failure.attempt == 1
 
 
 async def test_a_task_without_errors_has_no_failure_to_distinguish(

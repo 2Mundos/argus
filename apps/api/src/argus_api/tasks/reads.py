@@ -221,7 +221,11 @@ def error_scope(row: aiosqlite.Row) -> Literal["current", "previous"] | None:
     if not row["error"]:
         return None
     waiting = (S.AWAITING_APPROVAL, S.PENDING, S.READY, S.CLAIMED)
-    return "previous" if row["state"] in waiting else "current"
+    if row["state"] in waiting:
+        return "previous"
+    # Later attempts that finished or stalled without a new error keep the old one.
+    stale = row["error_attempt"] is not None and row["error_attempt"] < row["attempt"]
+    return "previous" if stale else "current"
 
 
 def _failure_class(row: aiosqlite.Row, failover: Failover | None) -> str | None:
