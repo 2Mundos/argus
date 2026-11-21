@@ -1390,6 +1390,32 @@ async def on_parent_complete(
         )
         return False
     pr, head_sha = refs
+    from argus_api.tasks import merge_resume
+
+    approved_pr, approved_head = await reviewed_approval_of(tx.conn, row["id"])
+    if (
+        approved_head
+        and _same_pr(approved_pr, pr)
+        and _same_sha(approved_head, head_sha)
+        and await merge_resume.resumed_for_approval(tx.conn, row["id"], pr, head_sha)
+    ):
+        # The merge attempt of an approved head ended: never review the same head
+        # again; the forge's word settles it (pre-merge review spec 3.6).
+        await tasks_svc._apply(
+            tx,
+            row,
+            Action.COMPLETE,
+            actor,
+            set_={"result": result.model_dump_json(exclude_none=True)},
+            review=Review.ORCHESTRATOR,
+            open_review_decision=False,
+        )
+        parent = await tasks_svc._row(tx.conn, row["id"])
+        if not await settle_or_wait(tx, parent, forge, head_sha, actor, reviewed_pr=pr):
+            await merge_resume.open_unmerged_decision(
+                tx, await tasks_svc._row(tx.conn, row["id"]), forge, actor
+            )
+        return True
     # Persist the result, then force in_review without opening a human decision yet.
     await tasks_svc._apply(
         tx,
