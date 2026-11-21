@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-20
+updated: 2026-11-21
 ---
 
 # Failure classes
@@ -367,8 +367,9 @@ therefore runs in a bounded, ephemeral, model-free session:
   `unknown`) and `independent_evidence` (`not_consulted`, `unavailable`, `missing`,
   `observed`, `inconclusive`, `mismatch`, `error`), and a closed `diagnosis` (`none`,
   `assignment`, `missing_injection`, `injection_unverifiable`, `injection_evidence_mismatch`,
-  `forge_denied`, `unknown_evidence`, `network`, `session`, `rearm_failed`,
-  `rearm_exhausted`, `rearm_unproven`). A matching assignment never proves injection.
+  `forge_denied`, `unknown_evidence`, `network`, `session`, `session_setup`,
+  `session_start_denied`, `session_no_verdict`, `rearm_failed`, `rearm_exhausted`,
+  `rearm_unproven`). A matching assignment never proves injection.
 - **Bounded re-arms when no credential was attached.** The gateway injects only through the
   policy rule OneCLI publishes for the assignment, and that publication can lag the admin read
   or fail. The host re-applies the repository lease (the same secrets and assignments, the
@@ -418,6 +419,19 @@ therefore runs in a bounded, ephemeral, model-free session:
   | `network_failure` | The request did not get a forge answer: proxy or network error, timeout | `env_repository_unreachable` |
   | `unknown` | The answer cannot prove authentication or token scope: a public (or unlabelled) repository whose response lacks the permissions object or the required permission, a 404 that proves no authentication (a missing repository, or a private one nothing was injected for), or any other forge answer (5xx, rate limit, another repository) | `env_repository_unreachable` |
   | `session_failure` | The preflight session itself failed: no proxy in the contribution, a driver refusal, a missing verdict, the deadline, an unavailable gateway, an incomplete teardown | `env_repository_unreachable` |
+
+  `session_failure` carries one of four diagnoses naming the layer to fix, all fixed text
+  and none implying a repository permission, network or credential-injection result:
+  `session_setup` (gateway lease, composition or result directory failed before the session
+  existed), `session_start_denied` (the driver or the composed session's environment policy
+  refused or failed the startup, before any probe ran; check the host driver's startup policy
+  and the contributed environment, which the preflight never weakens), `session_no_verdict`
+  (the session ended without a verdict, so forge permission, network and injection are all
+  unknown) and `session` (any later failure: deadline, unavailable gateway, incomplete
+  teardown). A session failure is never retried: it does not enter the bounded re-arm loop,
+  the event has `probe: null`, `rearm_attempts: 0` and `fault: none`, and the gate stays
+  closed. Error text from drivers is scrubbed and bounded (`safeText`); environment values,
+  tokens and proxy URLs never reach the error or the event.
 
   A response that does not prove a credential is never called anonymous: an unproven case is
   `unknown`, and the evidence says what was missing.
