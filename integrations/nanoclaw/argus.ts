@@ -217,9 +217,12 @@ import {
 import { createUsageRelay, USAGE_RELAY_FILE } from "./argus-usage-relay.js";
 import {
   branchWipClaim,
+  fencePriorWorkspaces,
+  type PriorWorkspace,
   prepareTaskWorkspace,
   probeTaskBranch,
   taskBranch,
+  taskWorkspacePath,
   type WorkspaceResult,
 } from "./argus-workspace.js";
 import { registerChannelAdapter } from "./channel-registry.js";
@@ -657,6 +660,8 @@ export interface ArgusTask {
   steer_unknown?: number;
   /** The previous attempt's quota-paused native session, offered once (quota resume spec 3.3). */
   quota_resume?: QuotaResumeOffer | null;
+  /** Where earlier attempts worked and their checkpoint step (task workspace spec 3.7); missing on older servers. */
+  prior_workspaces?: PriorWorkspace[];
   /** Effective executor chain for this task's difficulty (settings 3.7). Empty: harness does the work. */
   difficulty_executors?: string[] | null;
   /** Effective git author for the task's project (settings 3.8); null/missing: use the pool's. */
@@ -2238,6 +2243,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     failedRole: "harness" | "executor";
   } | null = null;
   let completedAttempt: string | null = null; // "<task>:<attempt>" once Argus accepted the result
+  let workspacePreparedAttempt: string | null = null; // "<task>:<attempt>" once workspacePreflight prepared it
   let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
   let runtimeSelection: RuntimeSelection | null = null; // the project image selected for the task in flight
@@ -3954,6 +3960,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       };
     }
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
+    // Read-only, before a restore can create it: an existing workspace is this instance's own.
+    const existed = groupDir
+      ? await lstat(taskWorkspacePath(groupDir, task.id)).then(
+          () => true,
+          () => false,
+        )
+      : false;
+    let restoredWork = false;
     if (needsWrite && storeRoot && task.attempt > 1) {
       // A retry resumes the previous attempt's unpublished work before anything else
       // touches the workspace; an untrusted checkpoint blocks instead of being ignored.
@@ -3967,8 +3981,21 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         attempt: task.attempt,
       });
       if (!restored.ok) return restored;
-      if (restored.restored)
+      if (restored.restored) {
+        restoredWork = true;
         log.info("Restored checkpointed work", { task: task.id, checkpoint: restored.id });
+      }
+    }
+    if (needsWrite) {
+      // Whether the workspace exists, was restored or starts empty, work from a later attempt
+      // on another instance must be proven absent (an older local state is stale, not safe).
+      const fenced = fencePriorWorkspaces({
+        attempt: task.attempt,
+        selfAgentId: agentId,
+        prior: task.prior_workspaces,
+        hasLocalWork: existed || restoredWork,
+      });
+      if (fenced) return { ok: false, ...fenced };
     }
     return prepareTaskWorkspace({ groupDir, taskId: task.id, repositoryUrl: task.repository_url });
   }
@@ -4223,13 +4250,16 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
 
   /** Save the task's unpublished work after an attempt that did not complete. Best effort. */
   async function checkpointAfterAttempt(task: ArgusTask): Promise<void> {
+    const attemptKey = `${task.id}:${task.attempt}`;
+    const prepared = workspacePreparedAttempt === attemptKey;
+    workspacePreparedAttempt = null;
     const proof =
       publishedHead?.taskId === task.id && publishedHead.attempt === task.attempt
         ? publishedHead.sha
         : null;
     publishedHead = null;
     const storeRoot = cfg.checkpointRoot ?? process.env.ARGUS_CHECKPOINT_DIR?.trim();
-    if (!storeRoot || completedAttempt === `${task.id}:${task.attempt}`) return;
+    if (!storeRoot || !prepared || completedAttempt === attemptKey) return;
     if (!task.required_capabilities?.includes("repository:write")) return;
     let started = false;
     try {
@@ -4343,6 +4373,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     claimedAt = cfg.now?.() ?? Date.now();
     waitingRelay.reset();
     switchFailure = null;
+    workspacePreparedAttempt = null;
     try {
       if (!(await ensureRuntime(task))) return;
       if (!(await ensureAccount(task))) {
@@ -4490,8 +4521,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (!envBlock) {
         step = "task workspace";
         const prepared = await workspacePreflight(task);
-        if (prepared?.ok) workspace = prepared;
-        else if (prepared) envBlock = prepared;
+        if (prepared?.ok) {
+          workspace = prepared;
+          workspacePreparedAttempt = `${task.id}:${task.attempt}`;
+        } else if (prepared) envBlock = prepared;
       }
       if (envBlock) {
         // The environment is broken, not the task: a retry would hit the same wall,

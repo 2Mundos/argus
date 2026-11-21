@@ -114,6 +114,7 @@
   "origin_conversation_id": null,
   "output_at": null,
   "parent_id": null,
+  "prior_workspaces": [],
   "priority": 0,
   "progress_at": null,
   "progress_data": null,

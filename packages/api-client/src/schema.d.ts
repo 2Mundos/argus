@@ -359,6 +359,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/credential/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Leased Credential
+         * @description Return a current credential for an account the caller still leases.
+         *
+         *     The delivery at claim/lease time is a snapshot: a task that outlives the
+         *     token's remaining life would otherwise keep presenting an expired one on
+         *     later invocations. Fenced by the live claim and the live lease (released,
+         *     revoked or superseded -> 409). Google OAuth only; a failed refresh fails
+         *     closed with a non-secret code (`credential_refresh_rejected`: renew the
+         *     account; `credential_refresh_unavailable`: retry after the cooldown), never
+         *     with the stale credential.
+         */
+        post: operations["refresh_leased_credential_api_accounts__account_id__credential_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/exhausted": {
         parameters: {
             query?: never;
@@ -5344,6 +5372,11 @@ export interface components {
             output_at?: string | null;
             /** Parent Id */
             parent_id: string | null;
+            /**
+             * Prior Workspaces
+             * @default []
+             */
+            prior_workspaces?: components["schemas"]["PriorWorkspace"][];
             /** Priority */
             priority: number;
             /** Progress At */
@@ -5812,6 +5845,27 @@ export interface components {
             pool: components["schemas"]["Pool"];
             /** Requested */
             requested: number;
+        };
+        /**
+         * CredentialRefreshRequest
+         * @description Ask for the current credential of an account the caller holds, mid-lease.
+         */
+        CredentialRefreshRequest: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Force
+             * @default false
+             */
+            force?: boolean;
+            /**
+             * Role
+             * @default executor
+             * @enum {string}
+             */
+            role?: "engine" | "executor";
+            /** Task Id */
+            task_id: string;
         };
         /**
          * CredentialState
@@ -10187,6 +10241,29 @@ export interface components {
             unpriced_models: string[];
             /** Version */
             version: string;
+        };
+        /**
+         * PriorWorkspace
+         * @description Where an earlier attempt's workspace lived and what is known of its work, offered
+         *     to the next claim (task workspace spec 3.7). `checkpoint_state` is what the attempt's
+         *     worker reported (`running`, `saved`, `nothing_to_save`, `failed`); null when it
+         *     reported nothing. Never a path or a checkpoint reference.
+         */
+        PriorWorkspace: {
+            /** Attempt */
+            attempt: number;
+            /** Checkpoint State */
+            checkpoint_state?: ("running" | "saved" | "nothing_to_save" | "failed") | null;
+            /** Owner Agent Id */
+            owner_agent_id: string;
+            /** Owner Node Id */
+            owner_node_id?: string | null;
+            /**
+             * Owner Status
+             * @default unknown
+             * @enum {string}
+             */
+            owner_status?: "live" | "stale" | "ended" | "unknown";
         };
         /**
          * ProgressKind
@@ -14681,6 +14758,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_leased_credential_api_accounts__account_id__credential_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountLease"];
+                };
             };
             /** @description Validation Error */
             422: {

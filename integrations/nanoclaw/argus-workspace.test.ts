@@ -19,7 +19,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   branchWipClaim,
+  fencePriorWorkspaces,
   maxWorkspacesFromEnv,
+  type PriorWorkspace,
   prepareTaskWorkspace,
   probeTaskBranch,
   TASK_WORKSPACES_DIR,
@@ -611,5 +613,131 @@ describe("task branch probe and the WIP claim derived from it", () => {
     const none = await probeTaskBranch({ path: r.path, branch: r.branch });
     expect(none).toEqual({ exists: true, unpublished: [] });
     expect(branchWipClaim(r.branch, none).summary).toContain("no unpublished commits");
+  });
+});
+
+describe("fencePriorWorkspaces: an empty workspace on another instance needs proof", () => {
+  const prior = (over: Partial<PriorWorkspace> = {}): PriorWorkspace => ({
+    attempt: 1,
+    owner_agent_id: "agent-a",
+    owner_node_id: "node-a",
+    owner_status: "ended",
+    checkpoint_state: "nothing_to_save",
+    ...over,
+  });
+  const fence = (
+    list: PriorWorkspace[] | undefined,
+    self: string | null = "agent-b",
+    attempt = 2,
+  ) => fencePriorWorkspaces({ attempt, selfAgentId: self, prior: list });
+
+  it("lets a first attempt and a same-instance retry through", () => {
+    expect(fence([], "agent-b", 1)).toBeNull();
+    expect(fence(undefined, "agent-b", 1)).toBeNull();
+    expect(fence([prior({ owner_agent_id: "agent-b", checkpoint_state: null })])).toBeNull();
+  });
+
+  it("accepts only the other worker's own nothing_to_save report as absence", () => {
+    expect(fence([prior()])).toBeNull();
+  });
+
+  it("refuses unpublished work whose checkpoint is not restorable here, naming the provenance", () => {
+    const r = fence([prior({ checkpoint_state: "saved", owner_status: "live" })]);
+    expect(r?.reason).toBe("env_workspace_prior_unavailable");
+    expect(r?.error).toContain("agent agent-a");
+    expect(r?.error).toContain("node node-a");
+    expect(r?.error).toContain("checkpoint step saved");
+  });
+
+  it.each([
+    ["failed", "failed"],
+    ["stale (running, never finished)", "running"],
+    ["never reported", null],
+  ] as const)("does not report unknown as absent: checkpoint step %s", (_l, state) => {
+    expect(fence([prior({ checkpoint_state: state })])?.reason).toBe(
+      "env_workspace_prior_unverified",
+    );
+  });
+
+  it("refuses a missing owner (no node, unknown status) and an older server's silence", () => {
+    const r = fence([
+      prior({ owner_node_id: null, owner_status: "unknown", checkpoint_state: null }),
+    ]);
+    expect(r?.reason).toBe("env_workspace_prior_unverified");
+    expect(r?.error).toContain("node not reported");
+    expect(fence(undefined)?.reason).toBe("env_workspace_prior_unverified");
+  });
+
+  it("is not satisfied by a newer proof: every attempt on another instance must be proven", () => {
+    const r = fence(
+      [prior({ checkpoint_state: "failed" }), prior({ attempt: 2, owner_agent_id: "agent-c" })],
+      "agent-b",
+      3,
+    );
+    expect(r?.reason).toBe("env_workspace_prior_unverified");
+    expect(r?.error).toContain("attempt 1");
+    expect(r?.error).not.toContain("attempt 2");
+  });
+
+  it("fences work after this instance's newest attempt even with local work (A, B, A)", () => {
+    const abA = [
+      prior({ owner_agent_id: "agent-b", checkpoint_state: "nothing_to_save" }),
+      prior({ attempt: 2, owner_agent_id: "agent-a", checkpoint_state: "saved" }),
+    ];
+    // attempt 3 on agent-b: attempt 2 on agent-a is newer than anything b ran
+    const r = fencePriorWorkspaces({
+      attempt: 3,
+      selfAgentId: "agent-b",
+      prior: abA,
+      hasLocalWork: true,
+    });
+    expect(r?.reason).toBe("env_workspace_prior_unavailable");
+    expect(r?.error).toContain("attempt 2");
+  });
+
+  it("does not re-fence attempts older than this instance's newest reconciled one", () => {
+    const list = [
+      prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: null }),
+      prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: "nothing_to_save" }),
+    ];
+    expect(
+      fencePriorWorkspaces({ attempt: 3, selfAgentId: "agent-b", prior: list, hasLocalWork: true }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["crashed before its checkpoint", null],
+    ["was blocked by the fence (no checkpoint reported)", null],
+    ["released mid-checkpoint", "running"],
+    ["checkpoint failed", "failed"],
+  ] as const)("a prior self claim that %s is not proof of reconciliation", (_l, state) => {
+    // A1 saved foreign WIP; B2 claimed then died or was blocked before preparing its workspace;
+    // B3 must still see A1 as unreconciled.
+    const list = [
+      prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: "saved" }),
+      prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: state }),
+    ];
+    for (const hasLocalWork of [false, true]) {
+      const r = fencePriorWorkspaces({
+        attempt: 3,
+        selfAgentId: "agent-b",
+        prior: list,
+        hasLocalWork,
+      });
+      expect(r?.reason).toBe("env_workspace_prior_unavailable");
+      expect(r?.error).toContain("attempt 1");
+    }
+  });
+
+  it("an older server's silence only passes with local work", () => {
+    const o = { attempt: 2, selfAgentId: "agent-b", prior: undefined };
+    expect(fencePriorWorkspaces({ ...o, hasLocalWork: true })).toBeNull();
+    expect(fencePriorWorkspaces(o)?.reason).toBe("env_workspace_prior_unverified");
+  });
+
+  it("treats an unknown own identity as another instance", () => {
+    expect(
+      fence([prior({ owner_agent_id: "agent-b", checkpoint_state: null })], null)?.reason,
+    ).toBe("env_workspace_prior_unverified");
   });
 });

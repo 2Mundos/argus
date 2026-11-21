@@ -16,6 +16,10 @@ export const BLOCK_COPY: Record<string, string> = {
   env_workspace_unpreserved_commits:
     "the task workspace is on another branch and holds commits that exist nowhere else",
   env_workspace_limit: "the worker holds too many task workspaces",
+  env_workspace_prior_unverified:
+    "an earlier attempt on another instance may hold unpublished work that is not proven absent",
+  env_workspace_prior_unavailable:
+    "an earlier attempt's unpublished work was checkpointed on another instance and cannot be restored here",
   env_executor_auth: "the executor could not log in",
   env_workspace_missing: "its agent group directory is missing on the worker host",
   env_input_unavailable: "a required task input could not be downloaded",

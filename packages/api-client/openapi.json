@@ -4799,6 +4799,14 @@
             ],
             "title": "Parent Id"
           },
+          "prior_workspaces": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PriorWorkspace"
+            },
+            "title": "Prior Workspaces",
+            "type": "array"
+          },
           "priority": {
             "title": "Priority",
             "type": "integer"
@@ -6194,6 +6202,40 @@
           "desired_replicas"
         ],
         "title": "CreateWorkerResult",
+        "type": "object"
+      },
+      "CredentialRefreshRequest": {
+        "description": "Ask for the current credential of an account the caller holds, mid-lease.",
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "role": {
+            "default": "executor",
+            "enum": [
+              "engine",
+              "executor"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt"
+        ],
+        "title": "CredentialRefreshRequest",
         "type": "object"
       },
       "CredentialState": {
@@ -17933,6 +17975,64 @@
           "unpriced_models"
         ],
         "title": "PricingInfo",
+        "type": "object"
+      },
+      "PriorWorkspace": {
+        "description": "Where an earlier attempt's workspace lived and what is known of its work, offered\nto the next claim (task workspace spec 3.7). `checkpoint_state` is what the attempt's\nworker reported (`running`, `saved`, `nothing_to_save`, `failed`); null when it\nreported nothing. Never a path or a checkpoint reference.",
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "checkpoint_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "running",
+                  "saved",
+                  "nothing_to_save",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint State"
+          },
+          "owner_agent_id": {
+            "title": "Owner Agent Id",
+            "type": "string"
+          },
+          "owner_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Node Id"
+          },
+          "owner_status": {
+            "default": "unknown",
+            "enum": [
+              "live",
+              "stale",
+              "ended",
+              "unknown"
+            ],
+            "title": "Owner Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "owner_agent_id"
+        ],
+        "title": "PriorWorkspace",
         "type": "object"
       },
       "ProgressKind": {
@@ -30641,6 +30741,64 @@
           }
         ],
         "summary": "Update Credential",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/credential/refresh": {
+      "post": {
+        "description": "Return a current credential for an account the caller still leases.\n\nThe delivery at claim/lease time is a snapshot: a task that outlives the\ntoken's remaining life would otherwise keep presenting an expired one on\nlater invocations. Fenced by the live claim and the live lease (released,\nrevoked or superseded -> 409). Google OAuth only; a failed refresh fails\nclosed with a non-secret code (`credential_refresh_rejected`: renew the\naccount; `credential_refresh_unavailable`: retry after the cooldown), never\nwith the stale credential.",
+        "operationId": "refresh_leased_credential_api_accounts__account_id__credential_refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLease"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Leased Credential",
         "tags": [
           "accounts"
         ]
