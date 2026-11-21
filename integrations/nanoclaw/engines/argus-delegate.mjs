@@ -1358,7 +1358,10 @@ export const PROBE_EVIDENCE = Object.freeze({
   copilot: { status: "mocked-only", route: "GET api.individual.githubcopilot.com/models" },
   agent: { status: "unprobed", route: "no read-only endpoint" },
   agy: { status: "mocked-only", route: "GET generativelanguage.googleapis.com or oauth2 userinfo" },
-  opencode: { status: "mocked-only", route: "GET <base_url>/models (custom/OpenRouter account only)" },
+  opencode: {
+    status: "mocked-only",
+    route: "GET <base_url>/models (custom/OpenRouter account only)",
+  },
   "opencode-native": { status: "unprobed", route: "auth.json or attached server, never read" },
   custom: { status: "mocked-only", route: "GET <base_url>/models (account settings)" },
   local: { status: "unprobed", route: "server ignores the token; worker-only settings" },
