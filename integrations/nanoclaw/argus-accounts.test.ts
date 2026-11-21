@@ -2833,7 +2833,7 @@ describe("task-scoped repository auth", () => {
       const ws = path.join(h.groupDir, "task-workspaces", REPO_ID);
       mkdirSync(ws, { recursive: true });
       spawnSync("git", ["init", "-q", "-b", `argus/task-${REPO_ID.slice(0, 8)}`, ws]);
-      spawnSync("git", ["remote", "add", "origin", "https://git.example.test/org/repo"], {
+      spawnSync("git", ["remote", "add", "origin", "https://git.example.test/org/repo.git"], {
         cwd: ws,
       });
       live.push(h.adapter);
