@@ -49,6 +49,7 @@ def _setup(
     review_chains: dict[str, Any] | None = None,
     exec_chains: dict[str, Any] | None = None,
     impl: tuple[str, str, str] = ("claude", "anthropic", "claude-opus-5-5"),
+    review: str = "none",
 ) -> tuple[StatefulForge, Any, str, dict[str, str], dict[str, Any]]:
     forge = StatefulForge()
     checker = forge.install(client)
@@ -77,7 +78,7 @@ def _setup(
             "spec": "implement feature",
             "difficulty": "standard",
             "deliverable": "pr_merged",
-            "review": "none",
+            "review": review,
             "required_capabilities": ["repository:write"],
         },
     ).json()["id"]
@@ -105,7 +106,10 @@ def _setup(
     checker._cache.clear()
     done = client.post(
         f"/api/tasks/{parent_id}/complete",
-        json={"attempt": 1, "result": {"summary": "ready"}},
+        json={
+            "attempt": 1,
+            "result": {"summary": "ready", "data": {"head_sha": HEAD_1}},
+        },
         headers=headers,
     )
     assert done.status_code == 200, done.text
@@ -537,3 +541,24 @@ def test_reviewer_input_cannot_grant_force_push(api_client: TestClient) -> None:
         },
     )
     assert res.status_code == 422, res.text
+
+
+def test_post_fix_approval_reads_the_live_head_when_the_parent_gate_is_on(
+    api_client: TestClient,
+) -> None:
+    # The parent's recorded head stays HEAD_1; the live PR moved to HEAD_2 by the fix.
+    forge, checker, parent_id, headers, _ = _setup(api_client, review="orchestrator")
+    r1 = _claim(api_client, headers)
+    _push_fix(forge, checker, parent_id, HEAD_2)
+    _finish(api_client, headers, r1, _fixed(), model=CODEX)
+    r2 = _claim(api_client, headers)
+    assert r2["input"]["head_sha"] == HEAD_2
+    _finish(
+        api_client,
+        headers,
+        r2,
+        {"verdict": "approve", "findings": [], "head_sha": HEAD_2},
+        model=SONNET,
+    )
+    assert _approval(api_client, parent_id) == (PR_450_URL, HEAD_2)
+    assert not _events(api_client, parent_id, "review.independent_void")

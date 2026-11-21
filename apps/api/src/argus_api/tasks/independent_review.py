@@ -589,7 +589,7 @@ async def completion_forge_read(
     write (like find_pr). For a parent task whose gate is on, reads the live PR so
     the gate sees the live head SHA rather than an older attempt's stored SHA. For
     an approving `code_review` child, reads the parent's PR when the parent settles
-    on that approval alone (`settles_alone`); for a fixing one, always. None otherwise."""
+    on that approval alone (`settles_alone`) or after a fix; for a fixing one, always. None otherwise."""
     from argus_api.settings import service as settings_svc
     from argus_api.tasks import service as tasks_svc
 
@@ -602,8 +602,13 @@ async def completion_forge_read(
             if not row["parent_id"] or verdict not in ("approve", FIX_VERDICT):
                 return None
             parent = await tasks_svc.task_row(conn, row["parent_id"])
-            # A fix is verified against the live PR whatever the parent's mode.
-            if verdict == "approve" and not await settles_alone(conn, parent):
+            # A fix is verified against the live PR whatever the parent's mode, and so
+            # is an approval after a fix: the parent's recorded head predates it.
+            if (
+                verdict == "approve"
+                and not await settles_alone(conn, parent)
+                and not (await fixers(conn, parent["id"]))[1]
+            ):
                 return None
             task = await tasks_svc.get_task(conn, parent["id"])
             return deliverable.ForgeRead(
