@@ -22,7 +22,7 @@ import urllib.request
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from argus_core import google_auth
 
@@ -51,6 +51,15 @@ _SCRUB_ENV = (
     "ARGUS_AGY_OAUTH_STUB",
 )
 _PERMANENT_OAUTH_ERRORS = frozenset({"invalid_grant", "unauthorized_client"})
+# Mid-lease refresh is one provider attempt per account per window: a failed or
+# forced attempt makes later calls inside it answer from the last outcome, so a
+# worker that keeps hitting 401 cannot drive unbounded token-endpoint traffic.
+ATTEMPT_COOLDOWN = timedelta(seconds=60)
+
+RefreshOutcome = Literal["current", "refreshed", "transient", "permanent", "throttled"]
+"""`current`: stored token not near expiry (nothing done). `refreshed`: persisted
+a new one. `transient`/`permanent`: provider refresh failed (permanent also
+records `account.auth_rejected`). `throttled`: a recent attempt's outcome stands."""
 
 PostForm = Callable[[str, dict[str, str]], Awaitable[tuple[int, dict[str, Any]]]]
 
@@ -377,6 +386,7 @@ class GoogleTokenRefresher:
         self.post_form = post_form
         self.agy_bin = agy_bin
         self._locks: dict[str, asyncio.Lock] = {}
+        self._last_attempt: dict[str, tuple[datetime, RefreshOutcome]] = {}
 
     def _lock_for(self, account_id: str) -> asyncio.Lock:
         lock = self._locks.get(account_id)
@@ -394,19 +404,35 @@ class GoogleTokenRefresher:
         secret_ref: str | None,
         *,
         now: datetime,
-    ) -> None:
+        force: bool = False,
+    ) -> RefreshOutcome:
+        """Refresh one account's credential. `force` refreshes even when the stored
+        expiry is not near (the executor saw a 401 on a token Argus thinks is
+        fresh), still at most once per `ATTEMPT_COOLDOWN`."""
         secret_name = ref_name(secret_ref) if secret_ref else None
         if not secret_name:
-            return
+            return "current"
         doc = secrets.get(secret_name)
-        if not isinstance(doc, dict) or not google_auth.needs_refresh(doc, now=now):
-            return
+        if not isinstance(doc, dict):
+            return "current"
+        if not force and not google_auth.needs_refresh(doc, now=now):
+            return "current"
         async with self._lock_for(account_id):
             latest = secrets.get(secret_name)
-            if not isinstance(latest, dict) or not google_auth.needs_refresh(
-                latest, now=now
-            ):
-                return
+            if not isinstance(latest, dict):
+                return "current"
+            last = self._last_attempt.get(account_id)
+            if last is not None and now - last[0] < ATTEMPT_COOLDOWN:
+                # Inside the window the last outcome stands: a failure is not
+                # retried, and a forced call after a success finds the token
+                # just replaced.
+                if last[1] in {"transient", "permanent"}:
+                    return last[1]
+                return "throttled" if force else "current"
+            if not force and not google_auth.needs_refresh(latest, now=now):
+                return "current"
+            if google_auth.refresh_token(latest) is None:
+                return "permanent" if force else "current"
             try:
                 refreshed = await refresh_oauth_credential(
                     latest,
@@ -422,6 +448,8 @@ class GoogleTokenRefresher:
                     account_id,
                     exc,
                 )
+                outcome: RefreshOutcome = "permanent" if exc.permanent else "transient"
+                self._last_attempt[account_id] = (now, outcome)
                 if exc.permanent:
                     async with db.write() as tx:
                         await record(
@@ -436,13 +464,15 @@ class GoogleTokenRefresher:
                                 "reason": "Google OAuth refresh token rejected; renew the account in Argus",
                             },
                         )
-                return
+                return outcome
             await secrets.put(secret_name, refreshed)
+            self._last_attempt[account_id] = (now, "refreshed")
             log.info(
                 "Refreshed Google OAuth access_token for account %s (%s)",
                 account_name,
                 account_id,
             )
+            return "refreshed"
 
     async def refresh_for_lease(
         self,
@@ -487,9 +517,11 @@ class GoogleTokenRefresher:
         account_id: str,
         *,
         now: datetime | None = None,
-    ) -> None:
+        force: bool = False,
+    ) -> RefreshOutcome:
         """Refresh one Google OAuth account if nearing expiry (e.g. after a
-        long-poll claim wait, right before delivering an execution-chain lease)."""
+        long-poll claim wait, right before delivering an execution-chain lease,
+        or mid-lease when the executor asks for a current credential)."""
         current = now or datetime.now(UTC)
         async with (
             db.read() as conn,
@@ -501,14 +533,15 @@ class GoogleTokenRefresher:
         ):
             row = await cur.fetchone()
         if row is None:
-            return
-        await self._refresh_row(
+            return "current"
+        return await self._refresh_row(
             db,
             secrets,
             str(row["id"]),
             str(row["name"]),
             row["secret_ref"],
             now=current,
+            force=force,
         )
 
 

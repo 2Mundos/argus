@@ -359,6 +359,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/credential/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Leased Credential
+         * @description Return a current credential for an account the caller still leases.
+         *
+         *     The delivery at claim/lease time is a snapshot: a task that outlives the
+         *     token's remaining life would otherwise keep presenting an expired one on
+         *     later invocations. Fenced by the live claim and the live lease (released,
+         *     revoked or superseded -> 409). Google OAuth only; a failed refresh fails
+         *     closed with a non-secret code (`credential_refresh_rejected`: renew the
+         *     account; `credential_refresh_unavailable`: retry after the cooldown), never
+         *     with the stale credential.
+         */
+        post: operations["refresh_leased_credential_api_accounts__account_id__credential_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/exhausted": {
         parameters: {
             query?: never;
@@ -5812,6 +5840,27 @@ export interface components {
             pool: components["schemas"]["Pool"];
             /** Requested */
             requested: number;
+        };
+        /**
+         * CredentialRefreshRequest
+         * @description Ask for the current credential of an account the caller holds, mid-lease.
+         */
+        CredentialRefreshRequest: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Force
+             * @default false
+             */
+            force?: boolean;
+            /**
+             * Role
+             * @default executor
+             * @enum {string}
+             */
+            role?: "engine" | "executor";
+            /** Task Id */
+            task_id: string;
         };
         /**
          * CredentialState
@@ -14681,6 +14730,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_leased_credential_api_accounts__account_id__credential_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountLease"];
+                };
             };
             /** @description Validation Error */
             422: {

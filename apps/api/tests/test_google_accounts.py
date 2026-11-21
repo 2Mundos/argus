@@ -600,3 +600,188 @@ def test_execution_chain_claim_refreshes_expired_google_oauth_executor(
         "ya29.CHAIN_REFRESHED_ACCESS_00000"
     )
     assert len(calls) == 1
+
+
+# --- mid-lease credential refresh (POST /accounts/{id}/credential/refresh) ---
+
+REFRESHED_1 = "ya29.MIDLEASE_REFRESHED_ONE_000000000"
+REFRESHED_2 = "ya29.MIDLEASE_REFRESHED_TWO_000000000"
+
+
+def _leased_google(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, post_form
+) -> tuple[dict[str, str], dict, str, str]:
+    """A claimed task whose agent holds an executor lease on a fresh google account."""
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", "client-id-test")
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-test")
+    app.state.google_refresher = GoogleTokenRefresher(post_form=post_form)
+    created = _create(
+        client,
+        {
+            "token": {
+                "access_token": FAKE_ACCESS,
+                "token_type": "Bearer",
+                "refresh_token": FAKE_REFRESH,
+                "expiry": _future_expiry(),
+                "expires_in": 3600,
+            },
+            "auth_method": "consumer",
+        },
+        name="google-midlease",
+    )
+    assert created.status_code == 201, created.text
+    acc_id = created.json()["id"]
+    worker, claim = _seed_claim(client)
+    first = client.post(
+        "/api/accounts/lease",
+        headers=worker,
+        json={"role": "executor", "runtime_providers": ["google"], **claim},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["credential"]["token"]["access_token"] == FAKE_ACCESS
+    return worker, claim, acc_id, first.json()["lease_id"]
+
+
+def _refresh(client, worker, claim, acc_id, **extra):
+    return client.post(
+        f"/api/accounts/{acc_id}/credential/refresh",
+        headers=worker,
+        json={"role": "executor", **claim, **extra},
+    )
+
+
+async def _async_expire(acc_id: str) -> None:
+    doc = app.state.secrets.get(f"account-{acc_id}")
+    doc["token"]["expiry"] = "2020-01-01T00:00:00Z"
+    await app.state.secrets.put(f"account-{acc_id}", doc)
+
+
+def test_midlease_refresh_after_first_invocation_expires_then_is_stable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First invocation succeeds on the delivered token; once it expires the
+    executor gets a refreshed one, repeated calls reuse it (no extra Google call)."""
+    calls: list[dict[str, str]] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(dict(form))
+        return 200, {"access_token": REFRESHED_1, "expires_in": 3600}
+
+    worker, claim, acc_id, lease_id = _leased_google(client, monkeypatch, fake_post)
+
+    # Not near expiry: current credential returned, provider not contacted.
+    ok = _refresh(client, worker, claim, acc_id)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["credential"]["token"]["access_token"] == FAKE_ACCESS
+    assert calls == []
+
+    # Token expires mid-lease.
+    import asyncio
+
+    asyncio.run(_async_expire(acc_id))
+    res = _refresh(client, worker, claim, acc_id)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["lease_id"] == lease_id
+    assert body["role"] == "executor"
+    assert body["credential"]["token"]["access_token"] == REFRESHED_1
+    assert len(calls) == 1
+
+    for _ in range(3):
+        again = _refresh(client, worker, claim, acc_id)
+        assert again.status_code == 200
+        assert again.json()["credential"]["token"]["access_token"] == REFRESHED_1
+    assert len(calls) == 1
+
+
+def test_midlease_forced_refresh_is_bounded_by_cooldown(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 401 on a token that looks fresh may force one refresh; hammering it does
+    not reach the provider again inside the cooldown."""
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return 200, {"access_token": REFRESHED_2, "expires_in": 3600}
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    first = _refresh(client, worker, claim, acc_id, force=True)
+    assert first.status_code == 200, first.text
+    assert first.json()["credential"]["token"]["access_token"] == REFRESHED_2
+    for _ in range(5):
+        again = _refresh(client, worker, claim, acc_id, force=True)
+        assert again.status_code == 503
+        assert again.json()["detail"]["code"] == "credential_refresh_unavailable"
+    assert len(calls) == 1
+
+
+def test_midlease_transient_failure_fails_closed_without_retry_storm(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return 503, {"error": "temporarily_unavailable"}
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    import asyncio
+
+    asyncio.run(_async_expire(acc_id))
+    for _ in range(4):
+        res = _refresh(client, worker, claim, acc_id)
+        assert res.status_code == 503
+        assert res.json()["detail"]["code"] == "credential_refresh_unavailable"
+        assert FAKE_ACCESS not in res.text and FAKE_REFRESH not in res.text
+    assert len(calls) == 1  # the stale token is never returned in its place
+
+
+def test_midlease_permanent_rejection_is_non_retryable_and_blocks_account(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return 400, {"error": "invalid_grant"}
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    import asyncio
+
+    asyncio.run(_async_expire(acc_id))
+    res = _refresh(client, worker, claim, acc_id)
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "credential_refresh_rejected"
+    assert FAKE_ACCESS not in res.text and FAKE_REFRESH not in res.text
+    accounts = {a["id"]: a for a in client.get("/api/accounts", headers=ADMIN).json()}
+    assert accounts[acc_id]["lease_block"] == "auth_rejected"
+    again = _refresh(client, worker, claim, acc_id)
+    assert again.status_code == 409
+    assert len(calls) == 1
+
+
+def test_midlease_refresh_is_fenced_by_claim_and_lease(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        raise AssertionError("fenced calls must not reach the provider")
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    import asyncio
+
+    asyncio.run(_async_expire(acc_id))
+
+    # Another agent, a stale attempt and the wrong role are all refused.
+    other = _register_worker(client)
+    assert _refresh(client, other, claim, acc_id).status_code == 409
+    stale = {**claim, "attempt": claim["attempt"] + 1}
+    assert _refresh(client, worker, stale, acc_id).status_code == 409
+    assert _refresh(client, worker, claim, acc_id, role="engine").status_code == 409
+
+    # Revocation: once the lease is released no credential is returned.
+    assert client.post("/api/accounts/release", headers=worker).status_code == 204
+    res = _refresh(client, worker, claim, acc_id)
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "not_leased"
+    assert FAKE_REFRESH not in res.text

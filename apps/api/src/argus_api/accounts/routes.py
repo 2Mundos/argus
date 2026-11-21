@@ -62,7 +62,12 @@ from argus_api.deps import (
     SecretsDep,
     SettingsDep,
 )
-from argus_api.errors import ForbiddenError, ValidationFailedError
+from argus_api.errors import (
+    ConflictError,
+    DomainError,
+    ForbiddenError,
+    ValidationFailedError,
+)
 from argus_api.orchestrator import SYSTEM_MARKER, agent_system_pool
 from argus_api.secrets import SecretStoreError, ref_name
 from argus_api.settings import service as settings_service
@@ -654,6 +659,84 @@ async def awaiting_quota(
                 tx, "engine", body.runtime_providers
             ),
         )
+
+
+class CredentialRefreshUnavailableError(DomainError):
+    status = 503
+    code = "credential_refresh_unavailable"
+
+
+class CredentialRefreshRequest(BaseModel):
+    """Ask for the current credential of an account the caller holds, mid-lease."""
+
+    task_id: str
+    attempt: int = Field(ge=1)
+    role: Literal["engine", "executor"] = "executor"
+    # The executor saw the provider reject the token although its expiry is not
+    # near: refresh anyway (at most once per cooldown window).
+    force: bool = False
+
+
+@router.post("/{account_id}/credential/refresh")
+async def refresh_leased_credential(
+    account_id: str,
+    body: CredentialRefreshRequest,
+    request: Request,
+    db: DbDep,
+    agent_id: AgentDep,
+    secrets: SecretsDep,
+) -> AccountLease:
+    """Return a current credential for an account the caller still leases.
+
+    The delivery at claim/lease time is a snapshot: a task that outlives the
+    token's remaining life would otherwise keep presenting an expired one on
+    later invocations. Fenced by the live claim and the live lease (released,
+    revoked or superseded -> 409). Google OAuth only; a failed refresh fails
+    closed with a non-secret code (`credential_refresh_rejected`: renew the
+    account; `credential_refresh_unavailable`: retry after the cooldown), never
+    with the stale credential."""
+
+    async def held_now() -> tuple[aiosqlite.Row, aiosqlite.Row]:
+        async with db.snapshot() as snap:
+            await tasks.check_lease(snap, body.task_id, body.attempt, agent_id)
+            held = await service._lease_on(snap.conn, agent_id, account_id, body.role)
+            if held is None:
+                raise ConflictError(
+                    f"agent {agent_id} does not hold a lease on account {account_id}",
+                    code="not_leased",
+                )
+            return held, await service._row(snap.conn, account_id)
+
+    _, row = await held_now()
+    if row["provider"] != google_auth.PROVIDER:
+        raise ValidationFailedError("credential refresh supports google accounts only")
+    outcome = await google_refresh.refresher_for(request.app.state).refresh_account(
+        db, secrets, account_id, force=body.force
+    )
+    if outcome == "permanent":
+        raise ConflictError(
+            "google OAuth refresh token rejected; renew the account in Argus",
+            code="credential_refresh_rejected",
+        )
+    if outcome in {"transient", "throttled"}:
+        raise CredentialRefreshUnavailableError(
+            "google OAuth refresh did not succeed; retry after the cooldown"
+        )
+    # Re-check: the lease or claim may have ended while refreshing.
+    held, row = await held_now()
+    name = ref_name(row["secret_ref"])
+    credential = secrets.get(name) if name else None
+    if credential is None:
+        raise ConflictError("account credential missing", code="credential_missing")
+    return AccountLease(
+        lease_id=held["id"],
+        account_id=account_id,
+        name=row["name"],
+        provider=row["provider"],
+        kind=row["kind"],
+        role=body.role,
+        credential=credential,
+    )
 
 
 @router.post("/{account_id}/mark-available", status_code=status.HTTP_204_NO_CONTENT)

@@ -127,6 +127,25 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
     SOPS. Permanent rejection (`invalid_grant` / `unauthorized_client`) records
     `account.auth_rejected` with a fixed non-secret reason so the account is not
     repeatedly leased; transient errors leave it eligible for retry.
+- **Mid-lease credential refresh**: claim/lease delivery is a snapshot, so a task
+  that outlives the delivered token (refreshed only when within 10 minutes of
+  expiry) would present an expired token on later invocations, and an
+  execution-chain lease cannot be re-leased (`execution_lease_owned`).
+  `POST /api/accounts/{account_id}/credential/refresh`
+  (`{task_id, attempt, role, force}`) returns the lease with a current credential.
+  It requires the live claim and the caller's live lease on the account (released,
+  superseded or stale attempt: `409`, e.g. `not_leased`), refreshes through the
+  same path as above, and fails closed, never returning the stale credential:
+  `409 credential_refresh_rejected` (permanent; records `account.auth_rejected`,
+  renew the account) or `503 credential_refresh_unavailable` (transient). Provider
+  traffic is bounded to one attempt per account per 60 s (`ATTEMPT_COOLDOWN`): a
+  failure or a forced refresh inside the window is answered from the last outcome.
+  `force` refreshes a token whose expiry is not near, for a provider 401 on it.
+  Tested deterministically with fake tokens and an injected token endpoint
+  (`apps/api/tests/test_google_accounts.py`). The historical 401 of task 62c4b502
+  is not proven to be this mechanism. Not covered offline: the worker calling
+  this endpoint on a 401 and re-applying the credential (separate follow-up), and
+  a live Google refresh, which needs separately authorized live verification.
 - **Executor-only provider**: `google` joins `cursor` and `copilot` in
   `EXECUTOR_ONLY`; the `engine` lease role never returns it, the `executor` role
   may. The `agy` executor runs on the `google` provider
