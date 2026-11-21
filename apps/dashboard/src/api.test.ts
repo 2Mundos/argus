@@ -161,7 +161,15 @@ describe("boardTasks", () => {
     await boardTasks(false);
     await boardTasks(false, { states: ["blocked"] });
     await boardTasks(false, { q: "review" });
-    expect(queries.map((q) => q.hide_review_children)).toEqual([true, true, true, undefined]);
+    await boardTasks(false, { q: "", project: "alpha" });
+    expect(queries.map((q) => q.hide_review_children)).toEqual([
+      true,
+      true,
+      true,
+      undefined,
+      true,
+      true,
+    ]);
   });
 
   it("reports the active tasks alone while the ended ones are loading", async () => {

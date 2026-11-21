@@ -456,7 +456,9 @@ async def get_tasks(
         params += scope_params
     async with snap.conn.execute(sql, params) as cur:
         found = {r["id"]: r for r in await cur.fetchall()}
-    page = await _page(snap, [found[i] for i in ids if i in found], view)
+    page = await _page(
+        snap, [found[i] for i in ids if i in found], view, review_badges=True
+    )
     page.missing = [i for i in ids if i not in found]
     return page
 
