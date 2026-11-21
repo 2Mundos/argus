@@ -536,11 +536,11 @@ async def test_a_config_edit_fences_the_delivered_attempt(
     assert '\\"config_version\\": 2' in await events(db)
 
 
-async def test_codex_harness_gets_kubernetes_but_not_mcp(
+async def test_codex_harness_gets_kubernetes_and_mcp(
     db: Database, store: MemorySecretStore, world: str
 ) -> None:
     # The kubeconfig is CLI-level and reads the same on every harness; MCP
-    # servers need the Claude harness session.
+    # servers reach Codex as Streamable HTTP (the channel refuses SSE there).
     await account(db, store, "acc-codex", "openai")
     task_id = await make_task(db, world)
     await start(db, store, runtime=("openai",))
@@ -550,11 +550,35 @@ async def test_codex_harness_gets_kubernetes_but_not_mcp(
     mcp = await integration(db, store, kind="mcp", name="docs")
     other = await make_task(db, mcp)
     await start(db, store, runtime=("openai",))
-    before = await events(db)
-    with pytest.raises(ConflictError) as err:
-        await deliver(db, store, other, mcp)
-    assert err.value.code == "integration_engine_unsupported"
-    assert await events(db) == before
+    cred = await deliver(db, store, other, mcp)
+    assert cred.kind == "mcp"
+
+
+async def test_codex_mcp_delivery_stays_fenced_and_secret_free(
+    db: Database, store: MemorySecretStore, clock: FakeClock, world: str
+) -> None:
+    await account(db, store, "acc-codex", "openai")
+    mcp = await integration(db, store, kind="mcp", name="docs")
+    task_id = await make_task(db, mcp)
+    await start(db, store, runtime=("openai",))
+    # A re-claimed task fences the first attempt and the other worker.
+    async with db.write() as tx:
+        await tasks.release(tx, task_id, "admin:test", "moved")
+    await start(db, store, runtime=("openai",))
+    for attempt, agent, code in ((1, A, "stale_attempt"), (2, B, "not_assignee")):
+        with pytest.raises(LeaseConflictError) as err:
+            await deliver(db, store, task_id, mcp, attempt, agent)
+        assert err.value.code == code
+    assert "task.integration_delivered" not in await events(db)
+    cred = await deliver(db, store, task_id, mcp, 2)
+    assert cred.kind == "mcp"
+    audit = await events(db)
+    assert "task.integration_delivered" in audit and TOKEN not in audit
+    await service.revoke(db, store, "demo", mcp, "admin:test")
+    with pytest.raises(DomainError) as err:
+        await deliver(db, store, task_id, mcp, 2)
+    assert err.value.code == "integration_revoked"
+    assert TOKEN not in str(err.value) and TOKEN not in json.dumps(err.value.details)
 
 
 @pytest.mark.parametrize("kind", ["kubernetes", "mcp"])
