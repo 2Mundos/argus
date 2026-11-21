@@ -679,6 +679,38 @@ describe("fencePriorWorkspaces: an empty workspace on another instance needs pro
     expect(r?.error).not.toContain("attempt 2");
   });
 
+  it("fences work after this instance's newest attempt even with local work (A, B, A)", () => {
+    const abA = [
+      prior({ owner_agent_id: "agent-b", checkpoint_state: "nothing_to_save" }),
+      prior({ attempt: 2, owner_agent_id: "agent-a", checkpoint_state: "saved" }),
+    ];
+    // attempt 3 on agent-b: attempt 2 on agent-a is newer than anything b ran
+    const r = fencePriorWorkspaces({
+      attempt: 3,
+      selfAgentId: "agent-b",
+      prior: abA,
+      hasLocalWork: true,
+    });
+    expect(r?.reason).toBe("env_workspace_prior_unavailable");
+    expect(r?.error).toContain("attempt 2");
+  });
+
+  it("does not re-fence attempts older than this instance's own newest one", () => {
+    const list = [
+      prior({ attempt: 1, owner_agent_id: "agent-a", checkpoint_state: null }),
+      prior({ attempt: 2, owner_agent_id: "agent-b", checkpoint_state: null }),
+    ];
+    expect(
+      fencePriorWorkspaces({ attempt: 3, selfAgentId: "agent-b", prior: list, hasLocalWork: true }),
+    ).toBeNull();
+  });
+
+  it("an older server's silence only passes with local work", () => {
+    const o = { attempt: 2, selfAgentId: "agent-b", prior: undefined };
+    expect(fencePriorWorkspaces({ ...o, hasLocalWork: true })).toBeNull();
+    expect(fencePriorWorkspaces(o)?.reason).toBe("env_workspace_prior_unverified");
+  });
+
   it("treats an unknown own identity as another instance", () => {
     expect(
       fence([prior({ owner_agent_id: "agent-b", checkpoint_state: null })], null)?.reason,

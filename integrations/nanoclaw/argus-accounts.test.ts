@@ -2822,7 +2822,16 @@ describe("task-scoped repository auth", () => {
       expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`)).toBe(false);
     });
 
-    it("reuses an existing workspace without asking: it is this instance's own", async () => {
+    const seedWorkspace = (groupDir: string) => {
+      const ws = path.join(groupDir, "task-workspaces", REPO_ID);
+      mkdirSync(ws, { recursive: true });
+      spawnSync("git", ["init", "-q", "-b", `argus/task-${REPO_ID.slice(0, 8)}`, ws]);
+      spawnSync("git", ["remote", "add", "origin", "https://git.example.test/org/repo.git"], {
+        cwd: ws,
+      });
+    };
+
+    it("does not let a stale local checkout hide unverified work elsewhere (A, B, A)", async () => {
       const w = retryWorld(null);
       const h = harness(
         w,
@@ -2830,12 +2839,40 @@ describe("task-scoped repository auth", () => {
         { repositories: { global: "https://git.example.test/org/repo" } },
         {},
       );
-      const ws = path.join(h.groupDir, "task-workspaces", REPO_ID);
-      mkdirSync(ws, { recursive: true });
-      spawnSync("git", ["init", "-q", "-b", `argus/task-${REPO_ID.slice(0, 8)}`, ws]);
-      spawnSync("git", ["remote", "add", "origin", "https://git.example.test/org/repo.git"], {
-        cwd: ws,
+      seedWorkspace(h.groupDir);
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+      expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
+        reason: "env_workspace_prior_unverified",
       });
+      expect(h.inbound).toHaveLength(0);
+    });
+
+    it("reuses an existing workspace when the other attempt proved nothing_to_save", async () => {
+      const w = retryWorld("nothing_to_save");
+      const h = harness(
+        w,
+        true,
+        { repositories: { global: "https://git.example.test/org/repo" } },
+        {},
+      );
+      seedWorkspace(h.groupDir);
+      live.push(h.adapter);
+      await h.adapter.setup(h.setup);
+      await until(() => h.inbound.length > 0);
+      expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`)).toBe(false);
+    });
+
+    it("keeps same-instance reuse with an older server that sends no provenance", async () => {
+      const w = repoWorld({ ...repoTask(), attempt: 2 });
+      const h = harness(
+        w,
+        true,
+        { repositories: { global: "https://git.example.test/org/repo" } },
+        {},
+      );
+      seedWorkspace(h.groupDir);
       live.push(h.adapter);
       await h.adapter.setup(h.setup);
       await until(() => h.inbound.length > 0);

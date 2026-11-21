@@ -3979,12 +3979,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         log.info("Restored checkpointed work", { task: task.id, checkpoint: restored.id });
       }
     }
-    if (needsWrite && !existed && !restoredWork) {
-      // About to start empty: earlier work on another instance must be proven absent.
+    if (needsWrite) {
+      // Whether the workspace exists, was restored or starts empty, work from a later attempt
+      // on another instance must be proven absent (an older local state is stale, not safe).
       const fenced = fencePriorWorkspaces({
         attempt: task.attempt,
         selfAgentId: agentId,
         prior: task.prior_workspaces,
+        hasLocalWork: existed || restoredWork,
       });
       if (fenced) return { ok: false, ...fenced };
     }

@@ -189,9 +189,9 @@ const describePrior = (p: PriorWorkspace): string =>
   ` checkpoint step ${p.checkpoint_state ?? "not reported"}`;
 
 /**
- * A different instance is about to create an empty workspace for a retry. Earlier attempts
- * on other instances may hold unpublished work this one cannot see, so "no work" must be
- * proven, never assumed: only a worker's own `nothing_to_save` report proves it. `null`
+ * A retry is about to proceed from this instance's workspace (empty, an old checkout or a
+ * restored checkpoint). Attempts on other instances after this instance's own newest one
+ * may hold unpublished work this one cannot see, so "no work" must be proven, never assumed: only a worker's own `nothing_to_save` report proves it. `null`
  * means nothing is at risk (a first attempt, or every earlier attempt ran here, where the
  * workspace's own state is checked by `prepareTaskWorkspace`). Otherwise a typed refusal
  * that names each attempt, owner, node and checkpoint step. `prior` undefined is an older
@@ -201,18 +201,25 @@ export function fencePriorWorkspaces(opts: {
   attempt: number;
   selfAgentId: string | null;
   prior: PriorWorkspace[] | null | undefined;
+  /** A workspace already exists or was restored: an older server's silence then keeps the legacy reuse. */
+  hasLocalWork?: boolean;
 }): { reason: WorkspaceFailureReason; error: string } | null {
   if (opts.attempt <= 1) return null;
   const refuse = (reason: WorkspaceFailureReason, error: string) => ({ reason, error });
   if (!opts.prior)
-    return refuse(
+    return opts.hasLocalWork
+      ? null
+      : refuse(
       "env_workspace_prior_unverified",
       `attempt ${opts.attempt} would start from an empty workspace but the server did not say ` +
         "where earlier attempts worked, so unpublished work elsewhere cannot be ruled out. " +
         "Nothing was created; run the retry on the instance that holds the earlier work",
     );
+  const mine = (p: PriorWorkspace) => !!opts.selfAgentId && p.owner_agent_id === opts.selfAgentId;
+  // Work after this instance's own newest attempt is what its checkout cannot contain (A, B, A).
+  const newestHere = Math.max(0, ...opts.prior.filter(mine).map((p) => p.attempt));
   const elsewhere = opts.prior.filter(
-    (p) => p.attempt < opts.attempt && (!opts.selfAgentId || p.owner_agent_id !== opts.selfAgentId),
+    (p) => p.attempt < opts.attempt && p.attempt > newestHere && !mine(p),
   );
   const unavailable = elsewhere.filter((p) => p.checkpoint_state === "saved");
   if (unavailable.length)

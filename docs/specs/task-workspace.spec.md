@@ -206,11 +206,12 @@ earlier attempt: `attempt`, `owner_agent_id`, `owner_node_id`, `owner_status` an
 `checkpoint_state` (what the worker reported: `running`, `saved`, `nothing_to_save`,
 `failed`, or null for nothing reported). No path, no checkpoint reference.
 
-For a task with `repository:write`, attempt > 1, whose workspace does not exist and which
-the checkpoint restore did not create, `runTask` checks this list before
-`prepareTaskWorkspace` creates an empty workspace (`fencePriorWorkspaces`, read-only).
-An existing workspace is this instance's own and is validated as in 3.4. Attempts owned
-by this agent are ignored (same-instance behaviour is unchanged). Each attempt owned
+For a task with `repository:write` and attempt > 1, `runTask` checks this list after the
+checkpoint restore and before `prepareTaskWorkspace`, whether the workspace is missing,
+restored or already present (`fencePriorWorkspaces`, read-only): an older local checkout
+cannot contain work a later attempt on another instance left (A, B, A). Attempts owned by
+this agent, and attempts older than this agent's own newest attempt, are ignored (that
+attempt already passed this check; same-instance behaviour is unchanged). Each attempt
 by another agent must be proven empty, and the only proof is that worker's own
 `nothing_to_save` report (a clean or fully published workspace). Otherwise nothing is
 created and the task is blocked, spending no attempt, with the attempt, owner, node,
@@ -219,7 +220,7 @@ status and checkpoint step named:
 - `saved`: `env_workspace_prior_unavailable`. Its checkpoint is not in this node's store
   ([task checkpoint](task-checkpoint.spec.md) refuses foreign-node checkpoints).
 - `failed`, `running` (never finished, so stale), not reported, or a server that sends no
-  list: `env_workspace_prior_unverified`. Unknown is never reported as absent.
+  list (passes only when a workspace already exists or was restored, the legacy reuse): `env_workspace_prior_unverified`. Unknown is never reported as absent.
 
 Recovery is only through supported inputs: a verified checkpoint in this node's store
 (restored before the fence, byte-checked by its manifest), or the work published from the
