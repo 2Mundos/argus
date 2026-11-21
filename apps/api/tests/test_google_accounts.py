@@ -858,6 +858,59 @@ def test_midlease_rejected_credential_stays_invalid_after_cooldown(
     assert len(calls) == 2  # one forced attempt, one retry after the cooldown
 
 
+def test_midlease_forced_401_on_refreshed_token_is_not_delivered(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A forced refresh inside cooldown after a successful refresh marks the
+    refreshed token rejected so neither a plain call inside cooldown nor one
+    after cooldown delivers it."""
+    responses = [
+        (200, {"access_token": REFRESHED_1, "expires_in": 3600}),
+        (503, {"error": "unavailable"}),
+    ]
+    calls: list[int] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(1)
+        return responses.pop(0)
+
+    worker, claim, acc_id, _ = _leased_google(client, monkeypatch, fake_post)
+    import asyncio
+
+    asyncio.run(_async_expire(acc_id))
+    first = _refresh(client, worker, claim, acc_id, force=True)
+    assert first.status_code == 200, first.text
+    assert first.json()["credential"]["token"]["access_token"] == REFRESHED_1
+
+    second = _refresh(client, worker, claim, acc_id, force=True)
+    assert second.status_code == 503
+    assert second.json()["detail"]["code"] == "credential_refresh_unavailable"
+    assert REFRESHED_1 not in second.text and FAKE_ACCESS not in second.text
+
+    plain_in_cooldown = _refresh(client, worker, claim, acc_id)
+    assert plain_in_cooldown.status_code == 503
+    assert (
+        plain_in_cooldown.json()["detail"]["code"] == "credential_refresh_unavailable"
+    )
+    assert (
+        REFRESHED_1 not in plain_in_cooldown.text
+        and FAKE_ACCESS not in plain_in_cooldown.text
+    )
+
+    refresher = app.state.google_refresher
+    stamp, outcome = refresher._last_attempt[acc_id]
+    refresher._last_attempt[acc_id] = (stamp - ATTEMPT_COOLDOWN * 2, outcome)
+
+    after_cooldown = _refresh(client, worker, claim, acc_id)
+    assert after_cooldown.status_code == 503
+    assert after_cooldown.json()["detail"]["code"] == "credential_refresh_unavailable"
+    assert (
+        REFRESHED_1 not in after_cooldown.text
+        and FAKE_ACCESS not in after_cooldown.text
+    )
+    assert len(calls) == 2
+
+
 def test_midlease_expired_access_only_credential_is_rejected(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

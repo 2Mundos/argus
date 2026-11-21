@@ -464,11 +464,16 @@ class GoogleTokenRefresher:
             last = self._last_attempt.get(account_id)
             if last is not None and now - last[0] < ATTEMPT_COOLDOWN:
                 # Inside the window the last outcome stands: a failure is not
-                # retried, and a forced call after a success finds the token
-                # just replaced.
+                # retried, and a forced call after a success marks the token
+                # rejected without contacting the provider again.
                 if last[1] in {"transient", "permanent"}:
                     return last[1]
-                return "throttled" if force else "current"
+                if force:
+                    self._invalid[account_id] = _access_token(latest)
+                    return "throttled"
+                if self._is_invalid(account_id, latest):
+                    return "throttled"
+                return "current"
             invalid = self._is_invalid(account_id, latest)
             if not (force or invalid) and not google_auth.needs_refresh(
                 latest, now=now
