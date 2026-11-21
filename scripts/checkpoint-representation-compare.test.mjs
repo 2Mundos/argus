@@ -172,7 +172,9 @@ describe("checkpoint representation comparison", () => {
     // Current excludes untracked/dirty sensitive names and audits committed ones
     const c = await saveCur(f);
     assert.equal(c.ok && !c.empty, true);
-    const manifest = JSON.parse(fs.readFileSync(path.join(f.store, f.taskId, c.id, "manifest.json"), "utf8"));
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(f.store, f.taskId, c.id, "manifest.json"), "utf8"),
+    );
     assert.deepEqual(manifest.skipped_sensitive, [".env", "cert.pem"]);
     assert.deepEqual(manifest.sensitive_in_commits, ["committed.pem"]);
     const r = await restoreCur(f);
@@ -207,7 +209,9 @@ describe("checkpoint representation comparison", () => {
     }
     assert.equal(c.ok, false);
     assert.equal(c.reason, "env_checkpoint_limit");
-    const entries = fs.existsSync(path.join(f.store, f.taskId)) ? fs.readdirSync(path.join(f.store, f.taskId)) : [];
+    const entries = fs.existsSync(path.join(f.store, f.taskId))
+      ? fs.readdirSync(path.join(f.store, f.taskId))
+      : [];
     assert.deepEqual(entries, []);
 
     const hr = saveHiddenRef(f.wsA, f.taskId, 1);
@@ -324,7 +328,10 @@ describe("checkpoint representation comparison", () => {
     git(freshFromGit, ["init", "-q"]);
     git(freshFromGit, ["fetch", "-q", f.wsA, "refs/argus/*:refs/argus/*"]);
     restoreHiddenRef(freshFromGit, hr.ref);
-    assert.equal(fs.readFileSync(path.join(freshFromGit, "attempt1.txt"), "utf8"), "attempt-1-wip\n");
+    assert.equal(
+      fs.readFileSync(path.join(freshFromGit, "attempt1.txt"), "utf8"),
+      "attempt-1-wip\n",
+    );
 
     // (ii) git bundle create --all includes refs/argus/*; plain clone omits them; explicit fetch recovers them
     const bundlePath = path.join(f.base, "work.bundle");
@@ -340,7 +347,10 @@ describe("checkpoint representation comparison", () => {
     git(explicitFetch, ["init", "-q"]);
     git(explicitFetch, ["fetch", "-q", bundlePath, "refs/argus/*:refs/argus/*"]);
     restoreHiddenRef(explicitFetch, hr.ref);
-    assert.equal(fs.readFileSync(path.join(explicitFetch, "attempt1.txt"), "utf8"), "attempt-1-wip\n");
+    assert.equal(
+      fs.readFileSync(path.join(explicitFetch, "attempt1.txt"), "utf8"),
+      "attempt-1-wip\n",
+    );
   });
 
   it("survival through workspace cleanup archive/restore: current checkpoint path", async () => {
@@ -359,7 +369,10 @@ describe("checkpoint representation comparison", () => {
     assert.equal(info.repos.length, 1);
     assert.equal(info.repos[0].has_wip, true);
     const restoredWs = path.join(dest, "groups", "argus", "task-workspaces", f.taskId);
-    assert.equal(fs.readFileSync(path.join(restoredWs, "wip-cur.txt"), "utf8"), "archived-cur-wip\n");
+    assert.equal(
+      fs.readFileSync(path.join(restoredWs, "wip-cur.txt"), "utf8"),
+      "archived-cur-wip\n",
+    );
     // Non-git checkpoint store directories are not archived by workspace_archive
     assert.equal(fs.existsSync(path.join(dest, "groups", "argus", "embedded-store")), false);
     // External node-local checkpoint store survives instance deletion independently
@@ -386,7 +399,10 @@ describe("checkpoint representation comparison", () => {
     const restoredWs = path.join(dest, "groups", "argus", "task-workspaces", f.taskId);
     assert.equal(git(restoredWs, ["for-each-ref", "refs/argus/"]).includes(hr.ref), true);
     restoreHiddenRef(restoredWs, hr.ref);
-    assert.equal(fs.readFileSync(path.join(restoredWs, "wip-ref.txt"), "utf8"), "archived-ref-wip\n");
+    assert.equal(
+      fs.readFileSync(path.join(restoredWs, "wip-ref.txt"), "utf8"),
+      "archived-ref-wip\n",
+    );
   });
 
   it("unsafeRevert detects reverting below conversation state and allows safe reverts for both representations", async () => {
@@ -476,7 +492,9 @@ describe("checkpoint representation comparison", () => {
     const sib1 = saveHiddenRef(f2.wsA, f2.taskId, 3);
     fs.writeFileSync(path.join(f2.wsA, "step.txt"), "v3\n");
     const sib2 = saveHiddenRef(f2.wsA, f2.taskId, 4);
-    const ancestorsOfSib2 = new Set(git(f2.wsA, ["rev-list", sib2.oid]).split("\n").filter(Boolean));
+    const ancestorsOfSib2 = new Set(
+      git(f2.wsA, ["rev-list", sib2.oid]).split("\n").filter(Boolean),
+    );
     assert.equal(ancestorsOfSib2.has(sib1.oid), false);
     const siblingReason = unsafeRevert({
       representation: "hidden_refs",
