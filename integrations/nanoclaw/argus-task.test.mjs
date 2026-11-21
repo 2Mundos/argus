@@ -1575,7 +1575,12 @@ describe("deliver", () => {
     });
     const forge7 = (live, ref = "feature", created = []) => ({
       ...forgeRoutes(created),
-      "GET /pulls/7": { number: 7, state: "open", head: { ref, sha: live }, html_url: `${REPO}/pulls/7` },
+      "GET /pulls/7": {
+        number: 7,
+        state: "open",
+        head: { ref, sha: live },
+        html_url: `${REPO}/pulls/7`,
+      },
     });
     const refused = async (s, code, routes, env) => {
       const before = git(["for-each-ref"], s.origin);
