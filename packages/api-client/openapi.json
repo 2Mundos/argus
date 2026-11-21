@@ -6196,6 +6196,40 @@
         "title": "CreateWorkerResult",
         "type": "object"
       },
+      "CredentialRefreshRequest": {
+        "description": "Ask for the current credential of an account the caller holds, mid-lease.",
+        "properties": {
+          "attempt": {
+            "minimum": 1.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "role": {
+            "default": "executor",
+            "enum": [
+              "engine",
+              "executor"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempt"
+        ],
+        "title": "CredentialRefreshRequest",
+        "type": "object"
+      },
       "CredentialState": {
         "description": "What Argus stores about a credential, never a verdict that it works: `present`\nis not \"healthy\" (account-usage.spec.md 3.5). `expires_at` is the stored Claude\n`expiresAt`; the holder may have refreshed the token since.",
         "properties": {
@@ -30641,6 +30675,64 @@
           }
         ],
         "summary": "Update Credential",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/credential/refresh": {
+      "post": {
+        "description": "Return a current credential for an account the caller still leases.\n\nThe delivery at claim/lease time is a snapshot: a task that outlives the\ntoken's remaining life would otherwise keep presenting an expired one on\nlater invocations. Fenced by the live claim and the live lease (released,\nrevoked or superseded -> 409). Google OAuth only; a failed refresh fails\nclosed with a non-secret code (`credential_refresh_rejected`: renew the\naccount; `credential_refresh_unavailable`: retry after the cooldown), never\nwith the stale credential.",
+        "operationId": "refresh_leased_credential_api_accounts__account_id__credential_refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLease"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Leased Credential",
         "tags": [
           "accounts"
         ]
