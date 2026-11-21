@@ -210,11 +210,11 @@ export function fencePriorWorkspaces(opts: {
     return opts.hasLocalWork
       ? null
       : refuse(
-      "env_workspace_prior_unverified",
-      `attempt ${opts.attempt} would start from an empty workspace but the server did not say ` +
-        "where earlier attempts worked, so unpublished work elsewhere cannot be ruled out. " +
-        "Nothing was created; run the retry on the instance that holds the earlier work",
-    );
+          "env_workspace_prior_unverified",
+          `attempt ${opts.attempt} would start from an empty workspace but the server did not say ` +
+            "where earlier attempts worked, so unpublished work elsewhere cannot be ruled out. " +
+            "Nothing was created; run the retry on the instance that holds the earlier work",
+        );
   const mine = (p: PriorWorkspace) => !!opts.selfAgentId && p.owner_agent_id === opts.selfAgentId;
   // Work after this instance's own newest attempt is what its checkout cannot contain (A, B, A).
   const newestHere = Math.max(0, ...opts.prior.filter(mine).map((p) => p.attempt));
