@@ -85,6 +85,14 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   Current-attempt `result.data`, current-attempt `progress_data`, and live forge
   reads override older attempt artifacts so retry rounds always inspect the new
   head.
+- When independent review exhausts `max_rounds` with the newest review still
+  requesting changes, the human review decision carries payload
+  `{"gate": "rounds_exhausted", "child_id", "rounds"}` (decisions opened before the
+  payload existed are matched by their `review.independent_escalated` event).
+  `accept_with_deviation` on it needs text, waives the independent-review check and
+  records `review.independent_waived` (`decision_id`, `notes`, unresolved `child_id`).
+  Plain `accept` still requires an independent approval at the exact head; `reject`
+  sends the task back for rework. No other decision kind gains this waiver.
 
 ## 3.3 Pre-merge gate and merge authorization
 
