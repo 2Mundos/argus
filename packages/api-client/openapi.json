@@ -22677,6 +22677,18 @@
             ],
             "title": "Reason",
             "type": "string"
+          },
+          "selector": {
+            "anyOf": [
+              {
+                "const": "executor",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selector"
           }
         },
         "required": [

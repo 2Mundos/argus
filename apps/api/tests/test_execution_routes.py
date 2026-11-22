@@ -975,6 +975,38 @@ async def test_two_models_sharing_the_custom_router_are_not_blocked(db, fleet):
     ]
 
 
+def claude_harness(alternative):
+    alternative["harness"] = anyone(
+        "anthropic", "claude", {"source": "explicit", "id": "claude-haiku-5-5"}
+    )
+    return alternative
+
+
+async def test_paired_alternative_is_compared_by_its_executor_only(db, fleet):
+    # Claude harness coordinates; the deepseek executor reviews a claude author.
+    await review_policy(
+        db, [claude_harness(routed("hydrogen", "deepseek/deepseek-v4.1-flash"))]
+    )
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child_id = await spawn(db, parent.id)
+    _, route = await state(db, child_id)
+    assert route.review.selected == "hydrogen" and route.review.skipped == []
+
+
+async def test_paired_alternative_with_author_executor_is_skipped(db, fleet):
+    # The harness differs from the author, the executor is the author's vendor.
+    alternative = claude_harness(routed("hydrogen", "gemini-4-hydrogen"))
+    await review_policy(db, [alternative])
+    parent = await reviewed_parent(db, fleet, ("gemini-4-pro", "google", "cloud"))
+    assert await spawn(db, parent.id) is None
+    [decision] = await open_decisions(db, parent.id)
+    assert decision.payload["reason"] == "no_independent_reviewer"
+    [event] = await parent_events(db, parent.id, "review.independent_blocked")
+    assert event["skipped"] == [
+        {"id": "hydrogen", "reason": "author", "selector": "executor"}
+    ]
+
+
 async def test_unknown_vendor_is_not_excluded_on_provider_alone(db, fleet):
     unknown = routed("mystery", "mystery-model-1")
     await review_policy(db, [unknown])
@@ -1023,7 +1055,7 @@ async def test_review_chain_falls_back_past_unusable_account(db, fleet):
     child_id = await spawn(db, parent.id)
     _, route = await state(db, child_id)
     assert route.review.selected == "codex"
-    assert [s.model_dump() for s in route.review.skipped] == [
+    assert [s.model_dump(exclude_none=True) for s in route.review.skipped] == [
         {"id": "sonnet", "reason": "unavailable"}
     ]
 

@@ -744,11 +744,18 @@ async def _may_author(
 async def _authored(
     conn: aiosqlite.Connection, alternative: Alternative, **authors: Any
 ) -> bool:
+    """Whether the model that actually reviews this alternative may be an author.
+
+    A paired alternative's harness only coordinates; its executor is the reviewer,
+    so only the executor is compared. A single alternative's harness is the reviewer.
+    """
     harness_pin, executor_pin = routes.pins(alternative)
-    if await _may_author(conn, alternative.harness, harness_pin, "engine", **authors):
-        return True
-    return isinstance(alternative, PairedAlternative) and await _may_author(
-        conn, alternative.executor, executor_pin, "executor", **authors
+    if isinstance(alternative, PairedAlternative):
+        return await _may_author(
+            conn, alternative.executor, executor_pin, "executor", **authors
+        )
+    return await _may_author(
+        conn, alternative.harness, harness_pin, "engine", **authors
     )
 
 
@@ -864,7 +871,13 @@ async def review_route(
             accounts=accounts,
         ):
             skipped.append(
-                routes.SkippedAlternative(id=alternative.id, reason="author")
+                routes.SkippedAlternative(
+                    id=alternative.id,
+                    reason="author",
+                    selector="executor"
+                    if isinstance(alternative, PairedAlternative)
+                    else None,
+                )
             )
             continue
         usable = await _alternative_usable(conn, now_iso, alternative)
@@ -1218,7 +1231,7 @@ async def spawn_reviewer(
                 parent,
                 none_eligible,
                 actor,
-                skipped=[s.model_dump() for s in review.skipped],
+                skipped=[s.model_dump(exclude_none=True) for s in review.skipped],
             )
             await _manual_unless_escalating(tx, parent, none_eligible, actor)
             return None
@@ -1298,7 +1311,7 @@ async def spawn_reviewer(
                 "child_id": child.id,
                 "selected": review.selected,
                 "fallbacks": [a.id for a in alternatives[1:]],
-                "skipped": [s.model_dump() for s in review.skipped],
+                "skipped": [s.model_dump(exclude_none=True) for s in review.skipped],
                 "chain_source": review.chain_source,
                 "difficulty": review.difficulty,
             },

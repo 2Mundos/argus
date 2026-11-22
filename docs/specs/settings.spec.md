@@ -140,7 +140,9 @@ different model**, with `different_provider` shown as "…from a different provi
   `execution.chains` ([execution chains](execution-chains.spec.md) 3.1). Argus walks
   the chain of the reviewed task's difficulty in order, then the other difficulties
   (sorted difficulty names, then chain order), and skips every alternative that may be
-  an author: one whose model is an author's, or whose model vendor is an author's
+  an author (for a paired alternative only its executor is compared, since the harness
+  only coordinates; both selectors still need a usable account; a single alternative is
+  compared by its harness): one whose model is an author's, or whose model vendor is an author's
   (derived from the model: OpenRouter `vendor/model` prefix or the `claude-*`, `gpt-*`,
   `gemini-*` family; `custom` and `local` are routers, never vendors, and an unknown
   vendor is not excluded on provider alone), or, when an account-source model is

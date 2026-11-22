@@ -11978,6 +11978,8 @@ export interface components {
              * @enum {string}
              */
             reason: "author" | "unavailable" | "failed";
+            /** Selector */
+            selector?: "executor" | null;
         };
         /**
          * Source
