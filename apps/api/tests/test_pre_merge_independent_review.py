@@ -212,6 +212,32 @@ def api_client(
             },
         )
         assert res.status_code == 201, res.text
+        # A third vendor behind a router: `deepseek/...` through OpenRouter (`custom`),
+        # run by a local-account harness. The router is not a vendor.
+        for body in (
+            {
+                "name": "local",
+                "provider": "local",
+                "credential": {
+                    "base_url": "http://127.0.0.1:9",
+                    "auth_token": "fixture",
+                    "model": "served-model",
+                },
+            },
+            {
+                "name": "custom",
+                "provider": "custom",
+                "credential": {"api_key": "fixture-key"},
+                "config": {
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "label": "openrouter",
+                    "engine": {"model": "vendor/harness"},
+                    "executor": {"model": "vendor/code"},
+                },
+            },
+        ):
+            res = client.post("/api/accounts", json={"priority": 10, **body})
+            assert res.status_code == 201, res.text
         yield client
 
 
@@ -242,7 +268,7 @@ def _claim(client: TestClient, headers: dict[str, str]) -> dict[str, Any]:
         "/api/tasks/claim",
         json={
             "capabilities": caps,
-            "runtime_providers": ["anthropic", "openai"],
+            "runtime_providers": ["anthropic", "openai", "custom", "local"],
             "wait_s": 0,
         },
         headers=headers,
@@ -294,14 +320,6 @@ def _configure_chains(client: TestClient) -> None:
         "difficulties": {
             "standard": [
                 explicit("opus", "anthropic", "claude", "claude-opus-5-5"),
-            ]
-        },
-    }
-    review_chains = {
-        "version": 1,
-        "difficulties": {
-            "standard": [
-                explicit("opus", "anthropic", "claude", "claude-opus-5-5"),
                 explicit("codex", "openai", "codex", "gpt-5.5"),
             ]
         },
@@ -309,12 +327,6 @@ def _configure_chains(client: TestClient) -> None:
     assert (
         client.put(
             "/api/settings/execution.chains", json={"value": exec_chains}
-        ).status_code
-        == 200
-    )
-    assert (
-        client.put(
-            "/api/settings/review.chains", json={"value": review_chains}
         ).status_code
         == 200
     )
@@ -894,7 +906,7 @@ async def test_idempotent_reviewer_spawn_retries_and_concurrent_settlements(
 
 
 # ---------------------------------------------------------------------------
-# Criterion 3: Review chain precedence, cross-difficulty fallback, no author
+# Criterion 3: Reviewer walk over execution.chains, cross-difficulty fallback, no author
 # fallback / no invented models, actionable blocked decision + retry_reviewer
 # ---------------------------------------------------------------------------
 
@@ -902,45 +914,9 @@ async def test_idempotent_reviewer_spawn_retries_and_concurrent_settlements(
 async def test_review_chain_precedence_and_cross_difficulty_fallback(
     db: Database, fleet
 ) -> None:
-    # 1. Parent difficulty's own review.chains entry wins first, unchanged.
+    # 1. The parent difficulty's own execution chain is walked first; the author's
+    #    alternative is skipped and the next one is chosen.
     async with db.write() as tx:
-        await settings_svc.put_setting(
-            tx,
-            Path(),
-            "global",
-            routes.REVIEW_KEY,
-            {
-                "version": 1,
-                "difficulties": {
-                    "hard": [OPUS_ALT, SONNET_ALT],
-                    "simple": [CODEX_ALT],
-                },
-            },
-            "admin:test",
-        )
-    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
-    child_own = await spawn(db, parent.id, mode="different_model")
-    _, own_route = await state(db, child_own)
-    assert own_route.review.selected == "sonnet"
-    assert own_route.review.difficulty == "hard"
-
-    # 2. When parent's difficulty ("standard") has NO review.chains entry:
-    #    searches other difficulties in review.chains in sorted order, then
-    #    execution.chains in sorted order, requiring different model AND provider
-    #    AND usable account.
-    custom_alt = direct("custom-rev", selector("custom", "custom", "claude"))
-    async with db.write() as tx:
-        # Remove hard from review.chains; put standard-authored provider only in
-        # review.chains["simple"] and eligible codex in execution.chains["hard"]
-        # and custom_alt in execution.chains["trivial"].
-        await settings_svc.put_setting(
-            tx,
-            Path(),
-            "global",
-            routes.REVIEW_KEY,
-            {"version": 1, "difficulties": {"simple": [OPUS_ALT, SONNET_ALT]}},
-            "admin:test",
-        )
         await settings_svc.put_setting(
             tx,
             Path(),
@@ -949,6 +925,36 @@ async def test_review_chain_precedence_and_cross_difficulty_fallback(
             {
                 "version": 1,
                 "difficulties": {
+                    "hard": [OPUS_ALT, SONNET_ALT, CODEX_ALT],
+                },
+            },
+            "admin:test",
+        )
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child_own = await spawn(db, parent.id, mode="different_model")
+    _, own_route = await state(db, child_own)
+    # The author's vendor is skipped for its other model too (sonnet), not only its model.
+    assert own_route.review.selected == "codex"
+    assert own_route.review.difficulty == "hard"
+    assert own_route.review.chain_source == "execution.chains"
+    assert own_route.review.skipped == [
+        routes.SkippedAlternative(id="opus", reason="author"),
+        routes.SkippedAlternative(id="sonnet", reason="author"),
+    ]
+
+    # 2. When the parent's own chain has no alternative of another model, the other
+    #    difficulties follow (sorted names, then chain order).
+    custom_alt = direct("custom-rev", selector("custom", "custom", "claude"))
+    async with db.write() as tx:
+        await settings_svc.put_setting(
+            tx,
+            Path(),
+            "global",
+            routes.KEY,
+            {
+                "version": 1,
+                "difficulties": {
+                    "standard": [OPUS_ALT],
                     "trivial": [custom_alt],
                     "hard": [CODEX_ALT],
                 },

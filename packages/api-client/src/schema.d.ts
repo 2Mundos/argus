@@ -11206,9 +11206,10 @@ export interface components {
         ReviewRoute: {
             /**
              * Chain Source
+             * @default execution.chains
              * @enum {string}
              */
-            chain_source: "global" | "project";
+            chain_source?: "execution.chains" | "global" | "project";
             /** Difficulty */
             difficulty: string;
             /** Parent Id */

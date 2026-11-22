@@ -16,7 +16,12 @@ from argus_api import main as _main  # noqa: F401 - loads packages in order
 from argus_api.tasks import independent_review as indep
 from argus_api.tasks import review_settle
 from fastapi.testclient import TestClient
-from test_execution_routes import CODEX_ALT, OPUS_ALT, SONNET_ALT, record_execution
+from test_execution_routes import (
+    CODEX_ALT,
+    DEEPSEEK_ALT,
+    OPUS_ALT,
+    record_execution,
+)
 from test_pre_merge_independent_review import (
     HEAD_1,
     HEAD_2,
@@ -33,11 +38,12 @@ from test_pre_merge_independent_review import (
 
 __all__ = ["api_client", "fleet"]
 
-CHAIN = [OPUS_ALT, CODEX_ALT, SONNET_ALT]
+CHAIN = [OPUS_ALT, CODEX_ALT, DEEPSEEK_ALT]
 
 
 def _put(client: TestClient, key: str, value: Any) -> None:
-    assert client.put(f"/api/settings/{key}", json={"value": value}).status_code == 200
+    res = client.put(f"/api/settings/{key}", json={"value": value})
+    assert res.status_code == 200, res.text
 
 
 def _setup(
@@ -52,19 +58,17 @@ def _setup(
 ) -> tuple[StatefulForge, Any, str, dict[str, str], dict[str, Any]]:
     forge = StatefulForge()
     checker = forge.install(client)
-    _put(
-        client,
-        "execution.chains",
-        {"version": 1, "difficulties": exec_chains or {"standard": [OPUS_ALT]}},
-    )
-    _put(
-        client,
-        "review.chains",
-        {
-            "version": 1,
-            "difficulties": review_chains or {"standard": review_chain or CHAIN},
-        },
-    )
+    # The reviewer walks the same `execution.chains`: the reviewer alternatives follow
+    # the author's in their difficulty's chain.
+    difficulties = {
+        d: list(chain) for d, chain in (exec_chains or {"standard": [OPUS_ALT]}).items()
+    }
+    for d, chain in (review_chains or {"standard": review_chain or CHAIN}).items():
+        have = {a["id"] for a in difficulties.get(d, [])}
+        difficulties[d] = difficulties.get(d, []) + [
+            a for a in chain if a["id"] not in have
+        ]
+    _put(client, "execution.chains", {"version": 1, "difficulties": difficulties})
     _put(client, "review.independent", {"mode": mode, "max_rounds": max_rounds})
     _put(client, "delivery.auto_merge", True)
     _put(client, "review.acceptance", False)
@@ -179,7 +183,11 @@ def _finish(
 
 
 CODEX = ("codex", "openai", "gpt-5.5")
-SONNET = ("claude", "anthropic", "claude-sonnet-5-5")
+DEEPSEEK = (
+    "claude",
+    "local",
+    "served-model",
+)  # harness of the routed deepseek alternative
 OPUS = ("claude", "anthropic", "claude-opus-5-5")
 CODEX_IMPL = ("codex", "openai", "gpt-5.5")
 
@@ -244,7 +252,7 @@ def test_fix_then_fresh_different_model_approval_then_authorized_merge(
     r2 = _claim(api_client, headers)
     assert r2["id"] == r2_id
     assert r2["input"]["head_sha"] == HEAD_2
-    assert r2["execution"]["harness"]["model"] == "claude-sonnet-5-5"
+    assert r2["execution"]["executor"]["model"] == "deepseek/deepseek-v4.1-flash"
     assert r2["engine_lease"]["lease_id"] != r1["engine_lease"]["lease_id"]
     assert _may_merge(api_client, parent_id) is False
 
@@ -253,7 +261,7 @@ def test_fix_then_fresh_different_model_approval_then_authorized_merge(
         headers,
         r2,
         {"verdict": "approve", "findings": [], "head_sha": HEAD_2},
-        model=SONNET,
+        model=DEEPSEEK,
     )
     assert _approval(api_client, parent_id) == (PR_450_URL, HEAD_2)
     awaiting = api_client.get(f"/api/tasks/{parent_id}").json()
@@ -395,7 +403,7 @@ def test_head_moving_after_the_fix_voids_the_fresh_approval(
         headers,
         r2,
         {"verdict": "approve", "findings": [], "head_sha": HEAD_2},
-        model=SONNET,
+        model=DEEPSEEK,
     )
     assert _approval(api_client, parent_id) == (None, None)
     assert _may_merge(api_client, parent_id) is False
@@ -428,7 +436,7 @@ def test_post_fix_review_falls_back_across_difficulty_chains(
     # and the fixer's model is skipped like an author's.
     forge, checker, parent_id, headers, _ = _setup(
         api_client,
-        review_chains={"hard": [OPUS_ALT, SONNET_ALT]},
+        review_chains={"hard": [OPUS_ALT, DEEPSEEK_ALT]},
         exec_chains={"standard": [CODEX_ALT]},
         impl=CODEX_IMPL,
     )
@@ -438,7 +446,7 @@ def test_post_fix_review_falls_back_across_difficulty_chains(
     _finish(api_client, headers, r1, _fixed(), model=OPUS)
     r2 = _claim(api_client, headers)
     assert r2["input"]["head_sha"] == HEAD_2
-    assert r2["execution"]["harness"]["model"] == "claude-sonnet-5-5"
+    assert r2["execution"]["executor"]["model"] == "deepseek/deepseek-v4.1-flash"
 
 
 def test_fix_rounds_are_bounded(api_client: TestClient) -> None:

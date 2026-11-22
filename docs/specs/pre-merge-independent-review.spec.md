@@ -1,7 +1,7 @@
 ---
 status: draft
 created: 2026-11-21
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 # Pre-merge independent review workflow
@@ -117,17 +117,23 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
 
 ## 3.4 Review chain precedence and blocked decision
 
-- Precedence 1: a configured `review.chains` entry for the parent's difficulty is
-  used first, unchanged.
-- Precedence 2: when `review.chains` has no entry for the parent's difficulty,
-  Argus searches other difficulties in `review.chains` (sorted difficulty names,
-  then chain order), followed by `execution.chains` (sorted difficulty names,
-  then chain order), for alternatives that differ from both the author model and
-  the author provider and have a usable account (and an active compatible worker
-  when workers are registered).
-- Precedence 3: only when neither `review.chains` nor `execution.chains` configures
-  any difficulty does Argus fall back to legacy `pick_reviewer` over
-  `model-policy.json`.
+- The reviewer uses the author's own `execution.chains`; there is no separate review
+  chain. Argus starts at the `execution.chains` chain for the parent's difficulty
+  (chain order), then continues through the other difficulties (sorted difficulty
+  names, then chain order), and takes the first alternative that differs from the
+  author in both model and model vendor, is not excluded (an alternative or account
+  that already ended a review without a verdict), has a usable account, and has an
+  active compatible worker when workers are registered.
+- The vendor is derived from the model, never from the account: an OpenRouter
+  `vendor/model` id has that prefix as its vendor, and a native `claude-*`, `gpt-*` or
+  `gemini-*` id is `anthropic`, `openai` or `google`. Routers and endpoints (`custom`
+  accounts such as OpenRouter, `local`) are not vendors, so a `deepseek/...` model
+  through OpenRouter may review an Anthropic author, `claude-sonnet-*` through
+  OpenRouter may not, and two different models that share a `custom` router are not
+  blocked by it. When the vendor cannot be derived it is unknown and is not excluded
+  on provider alone; the model rule still applies.
+- Only when `execution.chains` configures no difficulty at all does Argus fall back
+  to legacy `pick_reviewer` over `model-policy.json`.
 - Argus never invents model IDs and never falls back to an author model. When no
   eligible reviewer exists, the parent stays `in_review` with
   `block_reason: no_independent_reviewer` and one actionable `review` decision

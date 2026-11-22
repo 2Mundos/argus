@@ -312,7 +312,7 @@ export function ExecutionChains({
 }: {
   project: string | null;
   setting?: SettingValue;
-  /** Another key with the same shape, such as `review.chains`. */
+  /** Another key with the same shape as `execution.chains`. */
   settingKey?: string;
   title?: string;
   /** Replaces the execution-chain explanation. */

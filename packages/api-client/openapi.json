@@ -20531,7 +20531,9 @@
         "description": "Why an independent reviewer runs on this route (settings.spec.md 3.5).",
         "properties": {
           "chain_source": {
+            "default": "execution.chains",
             "enum": [
+              "execution.chains",
               "global",
               "project"
             ],
@@ -20562,7 +20564,6 @@
         "required": [
           "parent_id",
           "difficulty",
-          "chain_source",
           "selected"
         ],
         "title": "ReviewRoute",
