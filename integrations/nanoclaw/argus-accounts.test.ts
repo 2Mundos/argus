@@ -506,6 +506,7 @@ function harness(
     claimWaitS: 1,
     probeRepository: async () => {}, // offline: no OneCLI gateway
     workspaceRoot: async () => groupDir,
+    priorRecheckMs: 0,
     ...top,
     accounts: withAccounts
       ? {
@@ -3268,7 +3269,7 @@ describe("task-scoped repository auth", () => {
     },
   );
 
-  it("does not report nothing_to_save for an unprepared (blocked) attempt", async () => {
+  it("reports nothing_to_save for an attempt the fence refused before any workspace existed", async () => {
     const prevDir = process.env.ARGUS_CHECKPOINT_DIR;
     delete process.env.ARGUS_CHECKPOINT_DIR;
     try {
@@ -3281,7 +3282,7 @@ describe("task-scoped repository auth", () => {
             owner_agent_id: "other-instance-agent",
             owner_node_id: "node-x",
             owner_status: "ended",
-            checkpoint_state: null,
+            checkpoint_state: "failed",
           },
         ],
       });
@@ -3293,14 +3294,50 @@ describe("task-scoped repository auth", () => {
       );
       live.push(h.adapter);
       await h.adapter.setup(h.setup);
-      await until(() => w.calls.filter((c) => c.path === "/tasks/claim").length >= 2);
+      const reports = () =>
+        w.calls.filter((c) => c.path === `/tasks/${REPO_ID}/attempts/2/checkpoint`);
+      await until(() => reports().length >= 2);
       expect(w.calls.some((c) => c.path === `/tasks/${REPO_ID}/block`)).toBe(true);
-      expect(w.calls.filter((c) => c.path === `/tasks/${REPO_ID}/attempts/2/checkpoint`)).toEqual(
-        [],
-      );
+      expect(reports().map((c) => c.body.state)).toEqual(["running", "nothing_to_save"]);
+      expect(reports()[1]!.body.detail).toContain("env_workspace_prior_unverified");
     } finally {
       if (prevDir !== undefined) process.env.ARGUS_CHECKPOINT_DIR = prevDir;
     }
+  });
+
+  it("does not block when the earlier attempt's checkpoint report lands after the claim", async () => {
+    const prior = (checkpoint_state: string | null) => [
+      {
+        attempt: 1,
+        owner_agent_id: "other-instance-agent",
+        owner_node_id: "node-x",
+        owner_status: "live",
+        checkpoint_state,
+      },
+    ];
+    const w = repoWorld({ ...repoTask(), attempt: 2, prior_workspaces: prior(null) });
+    const reads: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const p = new URL(url).pathname.replace(/^\/api/, "");
+      if (p === `/tasks/${REPO_ID}/prior-workspaces`) {
+        reads.push(new URL(url).search);
+        // the first read still sees the step running; the next sees it reported
+        const state = reads.length > 1 ? "nothing_to_save" : "running";
+        return new Response(JSON.stringify(prior(state)), { status: 200 });
+      }
+      return w.fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    const h = harness(
+      w,
+      true,
+      { repositories: { global: "https://git.example.test/org/repo" } },
+      { fetch: fetchImpl },
+    );
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length > 0);
+    expect(reads).toEqual(["?attempt=2", "?attempt=2"]);
+    expect(w.calls.some((c) => c.path === `/tasks/${REPO_ID}/block`)).toBe(false);
   });
 });
 

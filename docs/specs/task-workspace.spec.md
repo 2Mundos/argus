@@ -218,8 +218,10 @@ retry generation whenever earlier generations exist. A genuinely first claim (em
 on attempt 1. Ordering and the reconciliation cutoff follow claim-row sequence (the order of
 `prior_workspaces`), not `attempt` numbers. Attempts owned by this agent only advance the
 cutoff when their checkpoint step ended (`saved` or `nothing_to_save`): the checkpoint step
-only runs once the fence passes and `prepareTaskWorkspace` succeeds, so a blocked claim
-reports nothing and never advances the cutoff, while claim rows older than a reconciled one
+only runs once the fence passes and `prepareTaskWorkspace` succeeds. A claim the fence
+refuses with no workspace created or restored here holds no work, so after blocking it
+reports `running` then `nothing_to_save` naming the refusal: the next attempt is not fenced
+by it. A refusal that left a workspace in place reports nothing. Claim rows older than a reconciled one
 are ignored (same-instance behaviour is unchanged). A claim that died, was blocked or was
 released before its checkpoint ended (no step, `running`, `failed`) proves nothing and
 fences nothing off. Each claim row after the cutoff by another agent must be proven empty,
@@ -227,7 +229,12 @@ and the only proof is a recorded `nothing_to_save` state — reported by that wo
 after checking the workspace is clean and fully published (including completed
 attempts and hosts without a checkpoint store), or attested by an admin for an
 ended, unreported attempt whose owner is no longer live
-([task finalization](task-finalization.spec.md) 3.3.1). Otherwise nothing is created and the task is blocked, spending no
+([task finalization](task-finalization.spec.md) 3.3.1). An attempt released early (a quota
+requeue, a timeout) can be claimed again before its worker's checkpoint report lands, because
+the report needs the claim to have ended first. When every unproven row has no step or a
+`running` one, the channel reads the rows again (`GET /tasks/{id}/prior-workspaces?attempt=N`,
+five times, `priorRecheckMs` apart) and fences on the fresh rows; only a step still
+unreported after that blocks. Otherwise nothing is created and the task is blocked, spending no
 attempt, with the attempt, owner, node, status and checkpoint step named:
 
 - `saved`: `env_workspace_prior_unavailable`. Its checkpoint is not in this node's store

@@ -259,6 +259,7 @@ export const SUMMARY_MAX_CHARS = 10_000;
 const PROGRESS_MAX_CHARS = 2000;
 const PROGRESS_MIN_INTERVAL_MS = 10_000; // Argus allows one progress note per 10 s
 const CLAIM_WAIT_S = 20;
+const PRIOR_RECHECKS = 5; // re-reads of an unreported earlier checkpoint step before the fence blocks
 const MAX_PAGE_CHARS = 4000;
 const MAX_PAGES_INLINED = 3;
 const MAX_RESENDS = 3; // account switches for one attempt before giving up
@@ -476,6 +477,8 @@ export interface ArgusConfig {
   managedSettingsPath?: string;
   /** Test seam: the first retry delay of a task input download (default 1 s, doubling). */
   inputsBackoffMs?: number;
+  /** Wait between re-reads of an earlier attempt's checkpoint step that is not reported yet. Default 2000. */
+  priorRecheckMs?: number;
   /**
    * Node-local checkpoint store for unpublished task work (task checkpoint spec).
    * Default: `ARGUS_CHECKPOINT_DIR`; unset disables checkpoints (nothing is saved or restored).
@@ -2239,6 +2242,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     failedRole: "harness" | "executor";
   } | null = null;
   let completedAttempt: string | null = null; // "<task>:<attempt>" once Argus accepted the result
+  let fencedEmpty = false; // the fence refused the claim and no workspace exists here
   let workspacePreparedAttempt: string | null = null; // "<task>:<attempt>" once workspacePreflight prepared it
   let recycleOnLease = false; // the runtime must stop before the next claim/lease writes another account
   let engineInUse: string | null = null; // the harness the leased account selected
@@ -3944,6 +3948,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
   async function workspacePreflight(
     task: ArgusTask,
   ): Promise<WorkspaceResult | CheckpointFailure | null> {
+    fencedEmpty = false;
     if (!task.repository_url) return null;
     const needsWrite = task.required_capabilities?.includes("repository:write") ?? false;
     let groupDir: string | null;
@@ -3986,13 +3991,33 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (needsWrite) {
       // Whether the workspace exists, was restored or starts empty, work from a later attempt
       // on another instance must be proven absent (an older local state is stale, not safe).
-      const fenced = fencePriorWorkspaces({
-        attempt: task.attempt,
-        selfAgentId: agentId,
-        prior: task.prior_workspaces,
-        hasLocalWork: existed || restoredWork,
-      });
-      if (fenced) return { ok: false, ...fenced };
+      const fence = (prior: ArgusTask["prior_workspaces"]) =>
+        fencePriorWorkspaces({
+          attempt: task.attempt,
+          selfAgentId: agentId,
+          prior,
+          hasLocalWork: existed || restoredWork,
+        });
+      let fenced = fence(task.prior_workspaces);
+      // An attempt that ended a moment ago (a quota requeue) may not have reported its
+      // checkpoint step when this claim arrived: read the rows again before refusing.
+      for (let i = 0; fenced?.pending && i < PRIOR_RECHECKS; i++) {
+        await sleep(cfg.priorRecheckMs ?? 2000);
+        try {
+          const { data } = await client.call(
+            "GET",
+            `/tasks/${task.id}/prior-workspaces?attempt=${task.attempt}`,
+          );
+          if (Array.isArray(data)) fenced = fence(data as ArgusTask["prior_workspaces"]);
+        } catch (err) {
+          log.debug("Could not re-read the prior workspaces", { task: task.id, err });
+        }
+      }
+      if (fenced) {
+        // Refused before anything was created or restored: this attempt holds no work.
+        fencedEmpty = !existed && !restoredWork;
+        return { ok: false, reason: fenced.reason, error: fenced.error };
+      }
     }
     return prepareTaskWorkspace({ groupDir, taskId: task.id, repositoryUrl: task.repository_url });
   }
@@ -4576,6 +4601,15 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
               err: redactSessionTail(String(err)),
             });
           });
+        // The refused attempt holds no work, so say so: the next claim's fence needs it.
+        if (fencedEmpty && envBlock.reason.startsWith("env_workspace_prior_")) {
+          await reportCheckpoint(task, "running");
+          await reportCheckpoint(
+            task,
+            "nothing_to_save",
+            `${envBlock.reason}: refused before a workspace was created`,
+          );
+        }
         finishTask();
         return;
       }
