@@ -3947,7 +3947,7 @@ describe("custom (OpenRouter) engine accounts", () => {
     expect(providerForExecutor("dsh", "anthropic")).toBeNull();
   });
 
-  it("admits a dsh custom pin only with nanoclaw:executor:dsh:custom, leases custom only, and never falls back", async () => {
+  it("rejects a dsh custom pin without nanoclaw:executor:dsh:custom", async () => {
     // Missing capability: the channel rejects the task instead of leasing any executor account.
     const wDenied = world({
       leases: [lease("harness", "dummy-harness-key"), executorLease()],
@@ -3971,7 +3971,9 @@ describe("custom (OpenRouter) engine accounts", () => {
       "nanoclaw:executor:dsh:custom",
     );
     await hDenied.adapter.teardown();
+  });
 
+  it("leases custom only for a dsh pin with nanoclaw:executor:dsh:custom", async () => {
     // Declared capability: leases role=executor with runtime_providers=["custom"], reuse_held=false.
     const wOk = world({
       leases: [lease("harness", "dummy-harness-key"), executorLease()],
@@ -4022,7 +4024,9 @@ describe("custom (OpenRouter) engine accounts", () => {
       "dummy-executor-key",
     );
     await hOk.adapter.teardown();
+  });
 
+  it("never falls back to another provider for a dsh custom pin", async () => {
     // When custom has no_account, dsh never falls back to cursor or any other provider.
     const wNoFallback = world({
       leases: [lease("harness", "dummy-harness-key"), cursorLease()],
