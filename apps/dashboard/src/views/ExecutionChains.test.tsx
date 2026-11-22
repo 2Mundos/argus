@@ -233,30 +233,6 @@ describe("execution chain editor", () => {
       (screen.getByRole("button", { name: "Save execution chains" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
-  it("edits review models under their own key and copy", async () => {
-    render(
-      <ExecutionChains
-        project={null}
-        setting={undefined}
-        settingKey="review.chains"
-        title="Review models"
-        unconfigured="No review models: the reviewer is the first non-author model in the model preferences."
-        onChanged={vi.fn()}
-      />,
-    );
-    expect(screen.getAllByText(/No review models/)).toHaveLength(4);
-    fireEvent.click(screen.getByRole("button", { name: "Add hard alternative" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save review models" }));
-    await waitFor(() =>
-      expect(saved.put).toHaveBeenCalledWith(
-        "review.chains",
-        { version: 1, difficulties: { hard: [expect.objectContaining({ mode: "single" })] } },
-        null,
-      ),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Reset review models" }));
-    await waitFor(() => expect(saved.reset).toHaveBeenCalledWith("review.chains", null));
-  });
   it("sets effort per role from the supported levels and blocks a level the model lacks", async () => {
     render(<ExecutionChains {...base} setting={setting} />);
     // Inherited alternatives show their effort; a local claude harness has none to set.

@@ -190,28 +190,6 @@ export function Settings({
               onChanged={() => reload()}
             />
           </div>
-          <div id={REVIEW_MODELS_ID}>
-            <ExecutionChains
-              key={scope}
-              project={project}
-              setting={byKey.get("review.chains")}
-              settingKey="review.chains"
-              title="Review models"
-              intro={
-                <p>
-                  Which model reviews a code task, per difficulty of the reviewed task, used when{" "}
-                  <JumpTo target={REVIEW_GATE_ID}>independent code review</JumpTo> is on. Author
-                  models are skipped automatically: an alternative whose model wrote the task (or,
-                  when a different provider is required, whose provider did) is never used. The
-                  order is the fallback order; the first remaining alternative with a usable account
-                  reviews and the rest follow if it cannot run. When only authors remain, the task
-                  waits in review.
-                </p>
-              }
-              unconfigured="No review models: the reviewer is the first non-author model in the model preferences."
-              onChanged={() => reload()}
-            />
-          </div>
         </>
       )}
     </section>
@@ -219,7 +197,6 @@ export function Settings({
 }
 
 const REVIEW_GATE_ID = "settings-independent-review";
-const REVIEW_MODELS_ID = "settings-review-models";
 
 /** In-page link; the hash is the router's, so scroll instead of navigating. */
 function JumpTo({ target, children }: { target: string; children: ReactNode }) {
@@ -501,8 +478,8 @@ function IndependentReviewSection(props: {
       </div>
       <p className="muted small">
         Require review by a different model before a code task succeeds. Stored setting:{" "}
-        <strong>{setting ? sourceLabel(setting.source) : "…"}</strong>. Choose which models review
-        in <JumpTo target={REVIEW_MODELS_ID}>Review models</JumpTo>.
+        <strong>{setting ? sourceLabel(setting.source) : "…"}</strong>. The reviewer is the first
+        model in the execution chains that differs from the author's in model and model vendor.
       </p>
       <div className="review-fields">
         <label>

@@ -98,13 +98,6 @@ REGISTRY: dict[str, SettingDefinition] = {
         scopes=["global", "project"],
         description="Ordered complete single-layer or harness/executor alternatives per difficulty.",
     ),
-    "review.chains": SettingDefinition(
-        key="review.chains",
-        schema=ExecutionChains.model_json_schema(),
-        default=ExecutionChains().model_dump(mode="json"),
-        scopes=["global", "project"],
-        description="Independent reviewer alternatives per reviewed-task difficulty; author models are skipped.",
-    ),
     "models": SettingDefinition(
         key="models",
         schema=_MODELS_SCHEMA,

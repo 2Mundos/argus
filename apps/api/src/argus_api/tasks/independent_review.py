@@ -660,6 +660,39 @@ async def _accounts(conn: aiosqlite.Connection, task_id: str) -> set[str]:
         return {r[0] for r in await cur.fetchall()}
 
 
+# Account kinds that route to someone else's model: never a vendor themselves.
+_ROUTER_PROVIDERS = frozenset({"custom", "local", "cursor", "copilot"})
+_MODEL_FAMILY_VENDORS = (
+    ("claude", "anthropic"),
+    ("gpt-", "openai"),
+    ("chatgpt", "openai"),
+    ("codex", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("o4", "openai"),
+    ("gemini", "google"),
+)
+
+
+def model_vendor(model: str, provider: str | None = None) -> str | None:
+    """The vendor of a model: an OpenRouter `vendor/model` prefix, else the native
+    family (claude-*, gpt-*, gemini-*), else the account's provider when that is a
+    vendor and not a router. None when unknown; never derived from a router."""
+    if "/" in model:
+        return model.split("/", 1)[0].lower() or None
+    lowered = model.lower()
+    for prefix, vendor in _MODEL_FAMILY_VENDORS:
+        if lowered.startswith(prefix):
+            return vendor
+    return provider if provider and provider not in _ROUTER_PROVIDERS else None
+
+
+def author_vendors(models: set[str], providers: set[str]) -> set[str]:
+    """Vendors of the models that wrote the task; routers are not vendors."""
+    vendors = {v for m in models if (v := model_vendor(m))}
+    return vendors | {p for p in providers if p not in _ROUTER_PROVIDERS}
+
+
 async def _may_author(
     conn: aiosqlite.Connection,
     selector: Selector,
@@ -671,32 +704,39 @@ async def _may_author(
     providers: set[str],
     accounts: set[str],
 ) -> bool:
-    """Whether this selector could run an author model (settings.spec.md 3.5).
+    """Whether this selector could run an author's model or an author's vendor.
 
-    An account-sourced model is the account's configured one; where that is unknown
+    A reviewer must differ from the author in model and in model vendor, in both
+    review modes (settings.spec.md 3.5). The vendor comes from the model, never from
+    the router or account kind: a `custom` (OpenRouter) or `local` account is no
+    vendor, and an unknown vendor is not excluded on provider alone. An
+    account-sourced model is the account's configured one; where that is unknown
     until lease (a local account), the account is a possible author when it served
     the task. An unpinned selector may land on any account of its provider.
     """
-    from argus_api.accounts import service as accounts_svc
-
-    if mode == "different_provider":
-        # A fix author's model is excluded by name even under another provider.
-        return selector.provider in providers or (
-            selector.model.source == "explicit" and selector.model.id in models
-        )
+    vendors = author_vendors(models, providers)
     if selector.model.source == "explicit":
-        return selector.model.id in models
+        return selector.model.id in models or (
+            model_vendor(selector.model.id, selector.provider) in vendors
+        )
+    if selector.provider in vendors:
+        return True
     async with conn.execute(
         "SELECT * FROM accounts WHERE provider = ? AND (? IS NULL OR id = ?)",
         (selector.provider, pin, pin),
     ) as cur:
         rows = await cur.fetchall()
+    from argus_api.accounts import service as accounts_svc
+
     for row in rows:
         if not accounts_svc._serves(row, role):
             continue
         settings = accounts_svc._settings(row, role)
         model = settings.model if settings is not None else None
-        if (model in models) if model else (row["id"] in accounts):
+        if model:
+            if model in models or model_vendor(model, selector.provider) in vendors:
+                return True
+        elif row["id"] in accounts:
             return True
     return False
 
@@ -770,113 +810,26 @@ async def review_route(
     exclude_alternatives: AbstractSet[str] = frozenset(),
     exclude_accounts: AbstractSet[str] = frozenset(),
 ) -> tuple[list[Alternative], routes.ReviewRoute] | None:
-    """The reviewer's route from `review.chains` (or cross-difficulty fallback).
+    """The reviewer's route, walked from `execution.chains` (settings.spec.md 3.5).
 
-    Precedence 1: a configured `review.chains` entry for the parent's difficulty is
-    used first, unchanged.
-    Precedence 2: when `review.chains` leaves that difficulty unconfigured, search
-    other difficulties in `review.chains` (sorted difficulty names, then chain order)
-    followed by `execution.chains` (sorted difficulty names, then chain order) for
-    alternatives that differ from both the author model and provider and have a
-    usable account.
-    Precedence 3: None when neither `review.chains` nor `execution.chains` configures
-    any difficulty (the legacy policy-chain picker applies).
+    The walk starts at the parent's difficulty chain (chain order), then continues
+    through the other difficulties (sorted names, chain order). Each alternative
+    that is not an author model, not excluded, and has a usable account and (when
+    workers are registered) a compatible worker joins the route; the first one is
+    selected. None when `execution.chains` configures no difficulty (the legacy
+    policy-chain picker applies).
     """
     from pydantic import TypeAdapter
 
-    setting = await routes.policy_setting(conn, parent["project"], routes.REVIEW_KEY)
+    setting = await routes.policy_setting(conn, parent["project"], routes.KEY)
     difficulty = parent["difficulty"]
-    raw = setting.value["difficulties"].get(difficulty)
-    if raw is not None:
-        chain = TypeAdapter(Chain).validate_python(raw)
-        skipped: list[routes.SkippedAlternative] = []
-        independent = []
-        for alternative in chain:
-            if alternative.id in exclude_alternatives or (
-                exclude_accounts & {p for p in routes.pins(alternative) if p}
-            ):
-                # A reviewer on this route (or pinned account) already ended without a
-                # verdict; the next alternative is tried instead.
-                skipped.append(
-                    routes.SkippedAlternative(id=alternative.id, reason="failed")
-                )
-            elif await _authored(
-                conn,
-                alternative,
-                mode=mode,
-                models=models,
-                providers=providers,
-                accounts=accounts,
-            ):
-                skipped.append(
-                    routes.SkippedAlternative(id=alternative.id, reason="author")
-                )
-            else:
-                independent.append(alternative)
-        async with conn.execute(
-            "SELECT capabilities, runtime_providers FROM agents WHERE state = 'active'"
-        ) as cur:
-            workers = await cur.fetchall()
-        ready = [
-            a
-            for a in independent
-            if any(
-                [
-                    await routes.alternative_eligible(
-                        conn,
-                        now,
-                        a,
-                        None,
-                        json.loads(w["capabilities"]),
-                        json.loads(w["runtime_providers"] or "[]"),
-                    )
-                    for w in workers
-                ]
+    configured = setting.value["difficulties"]
+    candidates: list[tuple[str, Alternative]] = []
+    for d in [difficulty, *sorted(d for d in configured if d != difficulty)]:
+        if d in configured:
+            candidates.extend(
+                (d, alt) for alt in TypeAdapter(Chain).validate_python(configured[d])
             )
-        ]
-        if ready:
-            skipped += [
-                routes.SkippedAlternative(id=a.id, reason="unavailable")
-                for a in independent
-                if a not in ready
-            ]
-            independent = ready
-        return independent, routes.ReviewRoute(
-            parent_id=parent["id"],
-            difficulty=difficulty,
-            chain_source="project"
-            if (setting.difficulty_sources or {})[difficulty] == "project"
-            else "global",
-            selected=independent[0].id if independent else "",
-            skipped=skipped,
-        )
-
-    exec_setting = await routes.policy_setting(conn, parent["project"], routes.KEY)
-    candidates: list[tuple[str, str, Alternative]] = []
-    for d in sorted(d for d in setting.value["difficulties"] if d != difficulty):
-        src = (
-            "project"
-            if (setting.difficulty_sources or {}).get(d) == "project"
-            else "global"
-        )
-        candidates.extend(
-            (d, src, alt)
-            for alt in TypeAdapter(Chain).validate_python(
-                setting.value["difficulties"][d]
-            )
-        )
-    for d in sorted(exec_setting.value["difficulties"]):
-        src = (
-            "project"
-            if (exec_setting.difficulty_sources or {}).get(d) == "project"
-            else "global"
-        )
-        candidates.extend(
-            (d, src, alt)
-            for alt in TypeAdapter(Chain).validate_python(
-                exec_setting.value["difficulties"][d]
-            )
-        )
     if not candidates:
         return None
 
@@ -890,8 +843,7 @@ async def review_route(
     seen_sigs: set[str] = set()
     used_ids: set[str] = set()
     chosen_diff = difficulty
-    chosen_source: Any = "global"
-    for cand_diff, cand_src, alternative in candidates:
+    for cand_diff, alternative in candidates:
         sig = _selector_signature(alternative)
         if sig in seen_sigs:
             continue
@@ -903,25 +855,14 @@ async def review_route(
                 routes.SkippedAlternative(id=alternative.id, reason="failed")
             )
             continue
-        # Cross-difficulty fallback requires both a different model AND a different
-        # provider from the parent's authors, and a usable account.
-        same_model = await _authored(
+        if await _authored(
             conn,
             alternative,
-            mode="different_model",
+            mode=mode,
             models=models,
             providers=providers,
             accounts=accounts,
-        )
-        same_provider = await _authored(
-            conn,
-            alternative,
-            mode="different_provider",
-            models=models,
-            providers=providers,
-            accounts=accounts,
-        )
-        if same_model or same_provider:
+        ):
             skipped.append(
                 routes.SkippedAlternative(id=alternative.id, reason="author")
             )
@@ -955,13 +896,11 @@ async def review_route(
         used_ids.add(alt_out.id)
         if not eligible:
             chosen_diff = cand_diff
-            chosen_source = "project" if cand_src == "project" else "global"
         eligible.append(alt_out)
 
     return eligible, routes.ReviewRoute(
         parent_id=parent["id"],
         difficulty=chosen_diff,
-        chain_source=chosen_source,
         selected=eligible[0].id if eligible else "",
         skipped=skipped,
     )

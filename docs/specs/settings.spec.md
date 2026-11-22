@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 # Settings
@@ -118,11 +118,13 @@ different model**, with `different_provider` shown as "…from a different provi
   [model observability](model-observability.spec.md) executions, harness and
   delegate, across all attempts: `observed_model` where present and
   `configured_model` too, because an unknown observation must not make two runs
-  look different. `different_provider` compares the execution's provider instead.
+  look different. The reviewer must also differ in model vendor, derived from the
+  model (reviewer route below), in both modes.
 - **Gate.** On completion with the mode on, the task moves to `in_review` and Argus
   creates a child task of kind `code_review` in the same project, `prompt_trust:
   orchestrator`, read-only, with input `{task_id, pr, head_sha}`. Its model comes
-  from **Review models** below; for a difficulty they leave unconfigured, its
+  from the reviewer route below (the author's `execution.chains`); with no
+  chain configured, its
   harness and executor are pinned ([task models](task-models.spec.md)) to the
   first model in the project's effective policy chains that is not an author (or,
   for `different_provider`, whose engine differs), among engines with a usable
@@ -134,31 +136,25 @@ different model**, with `different_provider` shown as "…from a different provi
   `data` and records `review.result_normalised`; no other kind takes an envelope, and a
   missing key is never invented. A `data` that fails the schema is a 422 whose details
   name the offending or missing keys and the expected keys.
-- **Review models.** Key `review.chains`, scopes `global` and `project`, has the
-  shape, validation, inheritance and legacy env lock of `execution.chains`
-  ([execution chains](execution-chains.spec.md) 3.1, 3.3), keyed by the reviewed
-  task's difficulty. When `review.chains` configures the parent's difficulty, Argus
-  walks that level's alternatives in order and skips every alternative that may be
-  an author: an explicit model that is an author (for `different_provider`, any
-  alternative of an author provider), or an account-source model whose account's
-  configured model is an author, or, when that model is unknown until lease
-  (local), whose account served the reviewed task. Alternatives with no usable
-  account or no worker that can run them go last. When `review.chains` leaves the
-  parent's difficulty unconfigured, Argus searches other difficulties in
-  `review.chains` (sorted difficulty names, then chain order) followed by
-  `execution.chains` (sorted difficulty names, then chain order) for alternatives
-  that differ from both the author model and author provider and have a usable
-  account (falling back to the legacy model policy only when neither chain setting
-  configures any difficulty). The rest, in order, become the child's explicit route
+- **Reviewer route.** There is no review-specific chain: the reviewer is picked from
+  `execution.chains` ([execution chains](execution-chains.spec.md) 3.1). Argus walks
+  the chain of the reviewed task's difficulty in order, then the other difficulties
+  (sorted difficulty names, then chain order), and skips every alternative that may be
+  an author: one whose model is an author's, or whose model vendor is an author's
+  (derived from the model: OpenRouter `vendor/model` prefix or the `claude-*`, `gpt-*`,
+  `gemini-*` family; `custom` and `local` are routers, never vendors, and an unknown
+  vendor is not excluded on provider alone), or, when an account-source model is
+  unknown until lease (local), whose account served the reviewed task. Alternatives that already ended a
+  review without a verdict, or have no usable account or no worker that can run them,
+  are skipped too (falling back to the legacy model policy only when
+  `execution.chains` configures no difficulty). The rest, in order, become the child's explicit route
   (execution chains 3.7): the first runs it and the others are its fallbacks. Argus
   records `review.independent_selected {child_id, selected, fallbacks, skipped,
-  chain_source, difficulty}` on the reviewed task, and the child's route view shows
+  chain_source, difficulty}` (`chain_source` is `execution.chains`) on the reviewed task, and the child's route view shows
   the same. If no eligible alternative remains, the gate blocks with
   `no_independent_reviewer`, the skipped list, and one actionable `review` decision
   (`retry_reviewer`, `approve_without_review`, `cancel`); an author is never used
-  and model IDs are never invented. Dashboard: the **Review models** card in
-  Settings, which reuses the execution chains editor and links to and from this
-  section.
+  and model IDs are never invented.
 - **Verdict.** The review task's result data is `{verdict: approve |
   request_changes, findings: [...]}` with `head_sha`. `approve` for the current
   head passes the gate; the task then goes through its own `review` gate if it has

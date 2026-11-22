@@ -35,8 +35,7 @@ COMMAND_GUARD_KEY = "command_guard.enabled"
 AUTO_MERGE_KEY = "delivery.auto_merge"
 FORGE_AGENTIC_KEY = "review.forge_agentic"
 ACCEPTANCE_KEY = "review.acceptance"
-# Execution and independent-reviewer chains share one shape and resolver.
-CHAIN_KEYS = frozenset({"execution.chains", "review.chains"})
+CHAIN_KEYS = frozenset({"execution.chains"})
 
 
 class GitIdentity(NamedTuple):

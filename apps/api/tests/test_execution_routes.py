@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -265,7 +266,7 @@ async def test_inheritance_scoped_map_locks_and_pin_bypass(db, fleet, monkeypatc
     _, route = await state(db, task.id)
     assert route.bypass == "legacy_task_pin"
     monkeypatch.setenv("ARGUS_MODEL_POLICY", "{}")
-    for key in (routes.KEY, routes.REVIEW_KEY):
+    for key in (routes.KEY,):
         with pytest.raises(ValidationFailedError, match="legacy_env_lock"):
             await policy(db, [direct()], key=key)
 
@@ -556,7 +557,7 @@ async def test_effort_reaches_snapshot_event_and_fallback_and_only_resets_its_le
         ),
     ],
 )
-@pytest.mark.parametrize("key", [routes.KEY, "review.chains"])
+@pytest.mark.parametrize("key", [routes.KEY])
 async def test_settings_reject_unsupported_effort_for_both_chain_keys(
     db, fleet, alternative, reason, key
 ):
@@ -622,7 +623,7 @@ async def test_capability_and_provider_restrictions_never_use_hidden_legacy(db, 
 
 
 async def test_reference_validation_and_role_change(db, fleet):
-    for key in (routes.KEY, routes.REVIEW_KEY):
+    for key in (routes.KEY,):
         with pytest.raises(ValidationFailedError):
             await policy(db, [direct(harness=selector("missing"))], key=key)
         with pytest.raises(ValidationFailedError):
@@ -774,7 +775,7 @@ async def test_pinned_pair_keeps_working_and_unpinned_default_is_unchanged(db, f
     assert (await state(db, task.id))[1].selection.executor.account_id == "custom"
 
 
-# Independent reviewers on `review.chains` (settings.spec.md 3.5).
+# Independent reviewers walking `execution.chains` (settings.spec.md 3.5).
 
 OPUS = {"source": "explicit", "id": "claude-opus-5-5"}
 
@@ -789,6 +790,20 @@ def explicit(id, provider, adapter, model, account=None):
 OPUS_ALT = explicit("opus", "anthropic", "claude", "claude-opus-5-5")
 SONNET_ALT = explicit("sonnet", "anthropic", "claude", "claude-sonnet-5-5")
 CODEX_ALT = explicit("codex", "openai", "codex", "gpt-5.5")
+# Routed through a `custom` (OpenRouter) account: the vendor comes from the model.
+
+
+def routed(id, model):
+    alternative = paired(id)
+    for role in ("harness", "executor"):
+        del alternative[role]["account_id"]
+    alternative["executor"]["model"] = {"source": "explicit", "id": model}
+    return alternative
+
+
+DEEPSEEK_ALT = routed("deepseek", "deepseek/deepseek-v4.1-flash")
+ROUTED_SONNET_ALT = routed("routed-sonnet", "claude-sonnet-5-5")
+ROUTED_GPT_ALT = routed("routed-gpt", "gpt-6.1-sol")
 
 
 async def reviewed_parent(db, store, *executions):
@@ -827,7 +842,7 @@ async def record_execution(tx, task_id, key, model, provider, account):
 
 
 async def review_policy(db, alternatives, difficulty="hard"):
-    await policy(db, alternatives, difficulty=difficulty, key=routes.REVIEW_KEY)
+    await policy(db, alternatives, difficulty=difficulty)
 
 
 async def spawn(db, parent_id, mode="different_model", policy=None, **kw):
@@ -860,21 +875,6 @@ async def parent_events(db, parent_id, kind):
 
 async def test_review_chain_skips_author_and_child_runs_on_fallback(db, fleet):
     await review_policy(db, [OPUS_ALT, CODEX_ALT])
-    # The generic chain for every level must not re-route the reviewer.
-    async with db.write() as tx:
-        await settings.put_setting(
-            tx,
-            Path(),
-            "global",
-            routes.KEY,
-            {
-                "version": 1,
-                "difficulties": {
-                    d: [direct()] for d in ("trivial", "simple", "standard", "hard")
-                },
-            },
-            "admin:test",
-        )
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     child_id = await spawn(db, parent.id)
     [selected] = await parent_events(db, parent.id, "review.independent_selected")
@@ -934,17 +934,54 @@ async def test_review_chain_of_only_authors_blocks(db, fleet):
         assert (await cur.fetchone())[0] == 0
 
 
-@pytest.mark.parametrize(
-    ("mode", "chosen"), [("different_model", "sonnet"), ("different_provider", "codex")]
-)
-async def test_review_chain_different_provider_skips_by_provider(
-    db, fleet, mode, chosen
-):
+@pytest.mark.parametrize("mode", ["different_model", "different_provider"])
+async def test_review_chain_different_provider_skips_by_provider(db, fleet, mode):
+    # Another model of the author's vendor is not independent in either mode.
     await review_policy(db, [OPUS_ALT, SONNET_ALT, CODEX_ALT])
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     child_id = await spawn(db, parent.id, mode=mode)
     _, route = await state(db, child_id)
-    assert route.review.selected == chosen
+    assert route.review.selected == "codex"
+    assert {s.id for s in route.review.skipped} == {"opus", "sonnet"}
+
+
+async def test_router_vendor_deepseek_via_custom_reviews_an_anthropic_author(db, fleet):
+    await review_policy(db, [DEEPSEEK_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child_id = await spawn(db, parent.id)
+    _, route = await state(db, child_id)
+    assert route.review.selected == "deepseek"
+
+
+async def test_router_vendor_claude_via_custom_cannot_review_an_anthropic_author(
+    db, fleet
+):
+    await review_policy(db, [ROUTED_SONNET_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    assert await spawn(db, parent.id) is None
+    [decision] = await open_decisions(db, parent.id)
+    assert decision.payload["reason"] == "no_independent_reviewer"
+
+
+async def test_two_models_sharing_the_custom_router_are_not_blocked(db, fleet):
+    # Author: claude-sonnet via `custom`; reviewer: gpt via the same `custom` router.
+    await review_policy(db, [ROUTED_SONNET_ALT, ROUTED_GPT_ALT, DEEPSEEK_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-sonnet-5-5", "custom", "custom"))
+    child_id = await spawn(db, parent.id)
+    _, route = await state(db, child_id)
+    assert route.review.selected == "routed-gpt"
+    assert [(s.id, s.reason) for s in route.review.skipped] == [
+        ("routed-sonnet", "author")
+    ]
+
+
+async def test_unknown_vendor_is_not_excluded_on_provider_alone(db, fleet):
+    unknown = routed("mystery", "mystery-model-1")
+    await review_policy(db, [unknown])
+    parent = await reviewed_parent(db, fleet, ("other-model", "custom", "custom"))
+    child_id = await spawn(db, parent.id)
+    _, route = await state(db, child_id)
+    assert route.review.selected == "mystery"
 
 
 async def test_unconfigured_review_level_uses_policy_picker_when_no_chains_exist(
@@ -996,7 +1033,7 @@ async def test_void_review_reselects_without_the_void_model(db, fleet):
     from argus_core.settings import IndependentReviewSetting
     from argus_core.tasks import TaskResult
 
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     first = await spawn(db, parent.id)
     async with db.write() as tx:
@@ -1015,7 +1052,7 @@ async def test_void_review_reselects_without_the_void_model(db, fleet):
         )
     assert await parent_events(db, parent.id, "review.independent_void")
     _, second = await parent_events(db, parent.id, "review.independent_selected")
-    assert second["selected"] == "sonnet"
+    assert second["selected"] == "deepseek"
     assert second["skipped"] == [{"id": "codex", "reason": "author"}]
 
 
@@ -1076,7 +1113,7 @@ async def answer(db, decision_id, choice, text="", forge=None):
 
 async def exhausted_parent(db, fleet):
     """A parent whose only reviewer alternative failed with the bound at zero."""
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     await review_setting(db, max_reviewer_failures=0)
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     first = await spawn(db, parent.id)
@@ -1085,7 +1122,7 @@ async def exhausted_parent(db, fleet):
 
 
 async def test_failed_reviewer_child_reselects_the_next_alternative(db, fleet):
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     await review_setting(db)
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     first = await spawn(db, parent.id)
@@ -1094,7 +1131,7 @@ async def test_failed_reviewer_child_reselects_the_next_alternative(db, fleet):
     assert failed["child_id"] == first and failed["state"] == "cancelled"
     assert failed["alternative"] == "codex"
     _, second = await parent_events(db, parent.id, "review.independent_selected")
-    assert second["selected"] == "sonnet"
+    assert second["selected"] == "deepseek"
     assert second["skipped"] == [{"id": "codex", "reason": "failed"}]
     row, _ = await state(db, parent.id)
     assert row["block_reason"] is None
@@ -1117,7 +1154,7 @@ async def test_failed_state_records_error_class_account_and_model(db, fleet):
     from argus_api.tasks import independent_review as review
     from argus_core.tasks import TaskState
 
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     await review_setting(db)
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     first = await spawn(db, parent.id)
@@ -1369,7 +1406,7 @@ async def test_forge_head_of_another_pr_is_not_used(db, fleet):
 
 async def test_a_merged_pr_still_gets_its_review_on_the_head(db, fleet):
     """Decision: a merged PR is reviewed at the head that merged, never skipped."""
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     assert await gate_on_parent_complete(db, parent.id, forge_read("merged"))
     child = await latest_child(db, parent.id)
@@ -1385,7 +1422,7 @@ async def test_no_head_opens_one_decision_not_a_silent_block(db, fleet):
     from argus_api.tasks import independent_review as review
     from argus_core.settings import IndependentReviewSetting
 
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     for _ in range(2):
         async with db.write() as tx:
@@ -1413,7 +1450,7 @@ async def test_no_head_opens_one_decision_not_a_silent_block(db, fleet):
 async def test_no_head_parent_completes_with_its_gate_decision(db, fleet):
     """The observed shape end to end at the gate: no forge head, so the parent waits
     on one operator decision and cancel still ends it."""
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     assert await gate_on_parent_complete(db, parent.id) is True
     row, _ = await state(db, parent.id)
@@ -1425,7 +1462,7 @@ async def test_no_head_parent_completes_with_its_gate_decision(db, fleet):
 
 
 async def test_retry_after_no_head_uses_the_forge_head(db, fleet):
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     await gate_on_parent_complete(db, parent.id)
     [decision] = await open_decisions(db, parent.id)
@@ -1684,7 +1721,7 @@ async def forge_checker(monkeypatch, pr: dict):
 
 async def reviewed_with_repository(db, fleet):
     """A parent of a project whose repository and review mode are configured."""
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     async with db.write() as tx:
         await tx.conn.execute(
@@ -1757,7 +1794,7 @@ async def test_head_only_in_progress_history_is_the_last_resort(db, fleet):
     from argus_api.tasks import worker
     from argus_core.tasks import TaskResult
 
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     async with db.write() as tx:
         await worker.report_progress(
@@ -1784,7 +1821,7 @@ async def test_head_only_in_progress_history_is_the_last_resort(db, fleet):
 
 async def test_headless_pr_still_blocks_once_without_any_history(db, fleet):
     """No forge head and no milestone sha anywhere: the one decision still opens."""
-    await review_policy(db, [CODEX_ALT, SONNET_ALT])
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
     parent = await claimed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
     assert await gate_on_parent_complete(db, parent.id) is True
     row, _ = await state(db, parent.id)
@@ -1847,3 +1884,71 @@ async def test_lost_tuple_ownership_on_advance_is_bounded_and_scoped_to_tuple(
             other_agent.lease_id,
             same_agent_other.lease_id,
         }
+
+
+async def test_review_chains_setting_is_gone(db):
+    for scope in ("global", "demo"):
+        async with db.write() as tx:
+            with pytest.raises(ValidationFailedError, match="unknown setting key"):
+                await settings.put_setting(
+                    tx,
+                    Path(),
+                    scope,
+                    "review.chains",
+                    {"version": 1, "difficulties": {}},
+                    "admin:test",
+                )
+        async with db.read() as conn:
+            with pytest.raises(ValidationFailedError, match="unknown setting key"):
+                await settings.get_setting(conn, Path(), scope, "review.chains")
+
+
+async def test_migration_removes_stored_review_chains_rows(db):
+    import argus_api
+
+    sql = (
+        Path(argus_api.__file__).parent
+        / "db"
+        / "migrations"
+        / "0089_remove_review_chains.sql"
+    ).read_text()
+    async with db.write() as tx:
+        for scope, key in (
+            ("global", "review.chains"),
+            ("demo", "review.chains"),
+            ("global", "execution.chains"),
+        ):
+            await tx.conn.execute(
+                "INSERT OR REPLACE INTO settings (scope, key, value, updated_at, updated_by)"
+                " VALUES (?, ?, '{}', '2026-01-01T00:00:00Z', 'test')",
+                (scope, key),
+            )
+        await tx.conn.execute(sql.split("\n", 2)[2].strip().rstrip(";"))
+    async with db.read() as conn, conn.execute("SELECT key FROM settings") as cur:
+        keys = {r[0] for r in await cur.fetchall()}
+    assert "review.chains" not in keys and "execution.chains" in keys
+
+
+async def test_legacy_reviewer_pick_only_without_execution_chains(db, fleet):
+    from argus_api.tasks import independent_review as review
+
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+
+    async def route():
+        async with db.read() as conn:
+            return await review.review_route(
+                conn,
+                datetime.now(UTC),
+                await tasks.task_row(conn, parent.id),
+                mode="different_model",
+                models={"claude-opus-5-5"},
+                providers={"anthropic"},
+                accounts={"cloud"},
+            )
+
+    assert await route() is None  # no chain configured: the legacy picker applies
+    await review_policy(db, [OPUS_ALT, CODEX_ALT])
+    alternatives, meta = await route()
+    assert [a.id for a in alternatives] == ["codex"]
+    assert meta.chain_source == "execution.chains" and meta.selected == "codex"
+    assert [(s.id, s.reason) for s in meta.skipped] == [("opus", "author")]

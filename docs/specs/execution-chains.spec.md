@@ -383,15 +383,15 @@ last recorded selection versus current eligibility, pins/locks and resets.
 
 ## 3.7 Independent reviewer routes
 
-`review.chains` has this setting's contract (3.1, 3.3: same shape, validation,
-inheritance and env lock), keyed by the reviewed task's difficulty
-([settings](settings.spec.md) 3.5). When an independent `code_review` child is
+The independent reviewer has no chain of its own: it walks `execution.chains`, from the
+reviewed task's difficulty and then the other difficulties, to the first alternative
+whose model differs from the author's ([settings](settings.spec.md) 3.5). When an independent `code_review` child is
 created, Argus drops the author alternatives and stores the remaining ordered list
 in `tasks.execution_route` (migration `0086_task_execution_route.sql`) with source
 `review` and the parent ID, difficulty, chosen ID and skipped alternatives. That
 explicit route replaces the generic chain for the child's own difficulty; admission,
 fallback, exhaustion, reset and diagnostics then work as above on that list. A new
-`review.chains` edit does not re-route an existing child. A void verdict creates a
+`execution.chains` edit does not re-route an existing child. A void verdict creates a
 new child with the void model's accounts treated as authors. A child that ends
 `failed` or `cancelled` without a verdict does the same for the failed
 alternative and any alternative pinned to its account, which are skipped as

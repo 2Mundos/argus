@@ -33,8 +33,6 @@ from argus_api.events import record
 from argus_api.secrets import SecretStore
 
 KEY = "execution.chains"
-# Independent reviewers: same shape, keyed by the reviewed task's difficulty.
-REVIEW_KEY = "review.chains"
 WAIT = "awaiting_execution_route"
 EXHAUSTED = "execution_chain_exhausted"
 
@@ -226,7 +224,8 @@ class ReviewRoute(BaseModel):
 
     parent_id: str
     difficulty: str
-    chain_source: Literal["global", "project"]
+    # "global"/"project" only appear on routes stored before `review.chains` was removed.
+    chain_source: Literal["execution.chains", "global", "project"] = "execution.chains"
     selected: str
     skipped: list[SkippedAlternative] = []
 
