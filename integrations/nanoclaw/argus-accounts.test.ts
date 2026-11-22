@@ -4028,8 +4028,10 @@ describe("custom (OpenRouter) engine accounts", () => {
 
   it("never falls back to another provider for a dsh custom pin", async () => {
     // When custom has no_account, dsh never falls back to cursor or any other provider.
+    // world() matches queued leases by role only, so "no_account" answers the pinned
+    // custom lease while cursorLease() stays queued to catch any fallback request.
     const wNoFallback = world({
-      leases: [lease("harness", "dummy-harness-key"), cursorLease()],
+      leases: [lease("harness", "dummy-harness-key"), "no_account", cursorLease()],
       tasks: [
         {
           ...task(),
