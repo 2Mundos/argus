@@ -40898,6 +40898,67 @@
         ]
       }
     },
+    "/api/tasks/{task_id}/prior-workspaces": {
+      "get": {
+        "description": "The claim's `prior_workspaces`, read again for `attempt`: a claimed worker whose\nfence saw an earlier attempt's checkpoint step still unreported re-reads it here\n(task workspace spec 3.7).",
+        "operationId": "list_prior_workspaces_api_tasks__task_id__prior_workspaces_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": true,
+            "schema": {
+              "title": "Attempt",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PriorWorkspace"
+                  },
+                  "title": "Response List Prior Workspaces Api Tasks  Task Id  Prior Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Prior Workspaces",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/tasks/{task_id}/progress": {
       "post": {
         "description": "Post a progress note (at most one per 10 s). Also renews the lease. A\n`pr_opened` that names a PR the task did not open is recorded as\n`progress.pr_rejected`, not as the task's PR.",

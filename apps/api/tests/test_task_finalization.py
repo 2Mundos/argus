@@ -291,6 +291,11 @@ def test_claim_offers_every_earlier_attempts_workspace_owner(
         }
     ]
     assert report(client, first, task, 1, "nothing_to_save").status_code == 204
+    # The report that landed after the claim shows on a re-read, for the same attempt.
+    reread = client.get(
+        f"/api/tasks/{task['id']}/prior-workspaces", params={"attempt": 2}
+    )
+    assert [p["checkpoint_state"] for p in reread.json()] == ["nothing_to_save"]
     client.post(f"/api/tasks/{task['id']}/release", json={"reason": "x"})
     third = client.post("/api/tasks/claim", json={}, headers=first).json()
     assert third["attempt"] == 3
