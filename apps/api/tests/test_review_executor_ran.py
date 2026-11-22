@@ -56,6 +56,8 @@ def _child(client: TestClient, db: Path, alternative: dict | None) -> str:
     )
     assert res.status_code == 201, res.text
     child = res.json()["id"]
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE tasks SET attempt = 1 WHERE id = ?", (child,))
     if alternative is not None:
         route = {
             "source": "review",
@@ -181,6 +183,23 @@ async def test_other_executor_model_or_state_is_void(env) -> None:
         state="failed",
     )
     assert await _void(db, failed) is True
+
+
+async def test_delegate_of_an_earlier_attempt_is_void(env) -> None:
+    client, db = env
+    child = _child(client, db, _paired())
+    _run(
+        db,
+        child,
+        layer="delegate",
+        executor="agy",
+        provider="google",
+        model="gemini-4-hydrogen",
+    )
+    assert await _void(db, child) is False
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE tasks SET attempt = 2 WHERE id = ?", (child,))
+    assert await _void(db, child) is True
 
 
 async def test_single_mode_review_is_unchanged(env) -> None:

@@ -1503,7 +1503,8 @@ async def _paired_alternative(
 
 async def executor_not_run(conn: aiosqlite.Connection, child: aiosqlite.Row) -> bool:
     """True when a paired reviewer's verdict is void: no succeeded `delegate` execution
-    matches the alternative's executor (adapter, provider and, when explicit, model).
+    matches the alternative's executor (adapter, provider and, when explicit, model)
+    in the child's current attempt; an earlier attempt's delegate run proves nothing.
 
     The harness of a paired alternative only coordinates; a verdict the harness
     produced itself was not given by the executor that was compared for independence.
@@ -1515,8 +1516,8 @@ async def executor_not_run(conn: aiosqlite.Connection, child: aiosqlite.Row) -> 
     async with conn.execute(
         "SELECT executor, provider, observed_model, configured_model"
         " FROM model_executions WHERE task_id = ? AND layer = 'delegate'"
-        " AND state = 'succeeded'",
-        (child["id"],),
+        " AND state = 'succeeded' AND attempt = ?",
+        (child["id"], child["attempt"]),
     ) as cur:
         rows = await cur.fetchall()
     for r in rows:
