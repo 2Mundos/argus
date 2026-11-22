@@ -24,6 +24,7 @@ from argus_core.task_edit import (
 from argus_core.tasks import (
     ENV_BLOCK_REASONS,
     ClaimedTask,
+    PriorWorkspace,
     Task,
     TaskCreate,
     TaskResult,
@@ -1013,6 +1014,18 @@ async def list_attempt_summaries(
     async with db.read() as conn:
         await require_task_readable(conn, caller, task_id)
         return await service.attempt_summaries(conn, task_id)
+
+
+@router.get("/{task_id}/prior-workspaces")
+async def list_prior_workspaces(
+    task_id: str, attempt: int, db: DbDep, caller: CallerDep
+) -> list[PriorWorkspace]:
+    """The claim's `prior_workspaces`, read again for `attempt`: a claimed worker whose
+    fence saw an earlier attempt's checkpoint step still unreported re-reads it here
+    (task workspace spec 3.7)."""
+    async with db.read() as conn:
+        await require_task_readable(conn, caller, task_id)
+        return await finalization.prior_workspaces(conn, task_id, attempt, utcnow())
 
 
 @router.get("/{task_id}/route")

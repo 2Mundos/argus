@@ -3548,6 +3548,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/prior-workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Prior Workspaces
+         * @description The claim's `prior_workspaces`, read again for `attempt`: a claimed worker whose
+         *     fence saw an earlier attempt's checkpoint step still unreported re-reads it here
+         *     (task workspace spec 3.7).
+         */
+        get: operations["list_prior_workspaces_api_tasks__task_id__prior_workspaces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/progress": {
         parameters: {
             query?: never;
@@ -20591,6 +20613,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrerequisitesView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_prior_workspaces_api_tasks__task_id__prior_workspaces_get: {
+        parameters: {
+            query: {
+                attempt: number;
+            };
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PriorWorkspace"][];
                 };
             };
             /** @description Validation Error */

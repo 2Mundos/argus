@@ -374,7 +374,9 @@ const describePrior = (p: PriorWorkspace): string =>
  * at attempt 1, or every earlier claim ran here, where the workspace's own state is checked
  * by `prepareTaskWorkspace`). Otherwise a typed refusal that names each attempt, owner, node
  * and checkpoint step. `prior` undefined on attempt > 1 is an older server that cannot say
- * where work lives: unknown, not absent. Read-only.
+ * where work lives: unknown, not absent. Read-only. A refusal carries `pending` when every
+ * unproven attempt has no step or a `running` one: its report may simply not have landed
+ * yet, so the caller may read the rows again before treating it as a block.
  */
 export function fencePriorWorkspaces(opts: {
   attempt: number;
@@ -382,8 +384,12 @@ export function fencePriorWorkspaces(opts: {
   prior: PriorWorkspace[] | null | undefined;
   /** A workspace already exists or was restored: an older server's silence then keeps the legacy reuse. */
   hasLocalWork?: boolean;
-}): { reason: WorkspaceFailureReason; error: string } | null {
-  const refuse = (reason: WorkspaceFailureReason, error: string) => ({ reason, error });
+}): { reason: WorkspaceFailureReason; error: string; pending?: true } | null {
+  const refuse = (reason: WorkspaceFailureReason, error: string, pending?: true) => ({
+    reason,
+    error,
+    ...(pending ? { pending } : {}),
+  });
   if (!opts.prior)
     return opts.attempt <= 1 || opts.hasLocalWork
       ? null
@@ -424,6 +430,11 @@ export function fencePriorWorkspaces(opts: {
         `${unproven.map(describePrior).join("; ")}. Absence is not proven; ` +
         "publish or checkpoint that work from there, or retry on that instance. " +
         "No empty workspace was created",
+      // Only steps that may still be on their way (not reported, or running) can resolve
+      // by themselves: an attempt that just ended has not had time to report yet.
+      unproven.every((p) => !p.checkpoint_state || p.checkpoint_state === "running")
+        ? true
+        : undefined,
     );
   return null;
 }

@@ -118,6 +118,11 @@ The channel sends `running` before it saves and the outcome after.
   different one is 409 `checkpoint_closed`. Reports never move backwards.
 - A report for attempt N never reads or writes attempt N+1; a worker that lost the
   attempt to someone else gets 409.
+- A claim the fence refused before any workspace existed reports `running` then
+  `nothing_to_save` after its block, naming the refusal ([task
+  workspace](task-workspace.spec.md) 3.7). A claim that finds an earlier attempt's report
+  not landed yet reads `GET /api/tasks/{id}/prior-workspaces?attempt=N` (the claim's
+  `prior_workspaces` rows, read again) before its fence may block.
 
 ## 3.3.1 Admin attestation for legacy unreported attempts
 

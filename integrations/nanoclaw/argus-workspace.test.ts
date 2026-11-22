@@ -661,6 +661,17 @@ describe("fencePriorWorkspaces: an empty workspace on another instance needs pro
     );
   });
 
+  it("marks a refusal pending only when every unproven step may still be reported", () => {
+    expect(fence([prior({ checkpoint_state: "running" })])?.pending).toBe(true);
+    expect(fence([prior({ checkpoint_state: null })])?.pending).toBe(true);
+    expect(fence([prior({ checkpoint_state: "failed" })])?.pending).toBeUndefined();
+    expect(
+      fence([prior({ checkpoint_state: null }), prior({ attempt: 2, checkpoint_state: "failed" })])
+        ?.pending,
+    ).toBeUndefined();
+    expect(fence([prior({ checkpoint_state: "saved" })])?.pending).toBeUndefined();
+  });
+
   it("refuses a missing owner (no node, unknown status) and an older server's silence", () => {
     const r = fence([
       prior({ owner_node_id: null, owner_status: "unknown", checkpoint_state: null }),
