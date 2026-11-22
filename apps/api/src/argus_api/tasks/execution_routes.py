@@ -217,6 +217,8 @@ async def validate_references(
 class SkippedAlternative(BaseModel):
     id: str
     reason: Literal["author", "unavailable", "failed"]
+    # Set to "executor" when a paired alternative's executor caused an author skip.
+    selector: Literal["executor"] | None = None
 
 
 class ReviewRoute(BaseModel):

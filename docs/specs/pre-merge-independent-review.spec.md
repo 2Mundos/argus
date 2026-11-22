@@ -124,6 +124,11 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   author in both model and model vendor, is not excluded (an alternative or account
   that already ended a review without a verdict), has a usable account, and has an
   active compatible worker when workers are registered.
+- A paired alternative (harness + executor) is compared by its executor only: the
+  harness merely coordinates, the executor is the model that reviews. Both selectors
+  must still have a usable account. A single alternative is compared by its harness.
+  The route's skipped entry for an author exclusion of a paired alternative carries
+  `selector: executor`.
 - The vendor is derived from the model, never from the account: an OpenRouter
   `vendor/model` id has that prefix as its vendor, and a native `claude-*`, `gpt-*` or
   `gemini-*` id is `anthropic`, `openai` or `google`. Routers and endpoints (`custom`
