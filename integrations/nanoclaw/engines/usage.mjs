@@ -16,10 +16,9 @@
 //   agy      - verified against a real `agy 1.5.12 --output-format stream-json` run
 //              (fixtures/agy-stream.jsonl): input_tokens already excludes cache_read_tokens,
 //              output_tokens already includes thinking_tokens.
-//   dsh      - SYNTHETIC / UNVERIFIED: fixtures/dsh-headless.jsonl is written from the
-//              draft (docs/drafts/2026-11-04.dsh-engine.draft.md), not recorded. Re-record
-//              it with the pinned dsh before trusting a figure; until then a miss is
-//              "not_reported".
+//   dsh      - verified against a real `dsh 0.2.2-alpha.3 --profile headless --json` run
+//              (fixtures/dsh-headless.jsonl, OpenRouter deepseek-v4.1-flash): usage is on the
+//              `status` step_end events, not on `final`; no model or cost is reported.
 //   codex, agent, opencode - SYNTHETIC / UNVERIFIED: written from the documented event
 //              shapes, with no real sample yet. Their fixtures in usage.test.mjs are
 //              hand-made. Treat a wrong guess as "not_reported", never as a number.
@@ -191,23 +190,21 @@ function parseOpencode(objects) {
   return parts.length ? measured(sumTokens(parts), null) : notReported("no_step_finish_tokens");
 }
 
-/** dsh --json: the `final` event's `usage` (camelCase or snake_case), once per run. */
+/**
+ * dsh --json: `status` events with phase `step_end` carry `usage` (inputTokens, outputTokens,
+ * totalTokens; recorded on dsh 0.2.2-alpha.3). Steps are summed. The `final` event has no usage
+ * and the stream has no model or cost, so those stay null.
+ */
 function parseDsh(objects) {
-  const final = [...objects].reverse().find((o) => o.type === "final");
-  if (!final) return notReported("no_final_event");
-  const u = final.usage;
-  const input = first(u, "inputTokens", "input_tokens");
-  const output = first(u, "outputTokens", "output_tokens");
-  if (input === null || output === null) return notReported("no_usage_in_final");
-  const sum = sumTokens([
-    {
-      input: input + (first(u, "cacheWriteTokens", "cache_write_tokens") ?? 0),
-      output,
-      cached: first(u, "cacheReadTokens", "cache_read_tokens") ?? 0,
-      cost: num(u.costUsd ?? u.cost_usd),
-    },
-  ]);
-  return measured(sum, typeof final.model === "string" ? final.model : null, 1);
+  const parts = [];
+  for (const o of objects) {
+    if (o.type !== "status" || o.phase !== "step_end") continue;
+    const input = first(o.usage, "inputTokens", "input_tokens");
+    const output = first(o.usage, "outputTokens", "output_tokens");
+    if (input === null || output === null) continue;
+    parts.push({ input, output, cached: 0, cost: null });
+  }
+  return parts.length ? measured(sumTokens(parts), null) : notReported("no_step_end_usage");
 }
 
 /** agy --output-format stream-json: `result` event's `result.usage` (verified on agy 1.5.12). */

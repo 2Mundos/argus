@@ -765,7 +765,7 @@ test("claude and cursor parsers keep their exact output through createStreamPars
   assert.deepEqual(agent, ["agent started (m)", "▸ read x", "agent finished"]);
 });
 
-// SYNTHETIC recording (fixtures/dsh-headless.README.md): the shapes dshOutcome reads.
+// Recorded from real dsh 0.2.2-alpha.3 via OpenRouter (fixtures/dsh-headless.README.md).
 const dshFixture = fs.readFileSync(
   new URL("./fixtures/dsh-headless.jsonl", import.meta.url),
   "utf8",
@@ -777,19 +777,14 @@ const dshMissingCredential = fs.readFileSync(
   "utf8",
 );
 
-test("dsh stream over the recorded fixture: text by line, no duplicate from the final, unknown events skipped", () => {
+test("dsh stream over the recorded fixture: status events skipped, text not duplicated by the final", () => {
   const got = [];
   const p = createStreamParser({ executor: "dsh", onLines: (l) => got.push(...l) });
   // Split mid-event to cover fragmented chunks.
   p.push(dshFixture.slice(0, 150));
   p.push(dshFixture.slice(150));
   p.end();
-  assert.deepEqual(got, [
-    "dsh started",
-    "Reading the config.",
-    "The setting is enabled by default.",
-    "dsh finished",
-  ]);
+  assert.deepEqual(got, ["dsh started", "OK", "dsh finished"]);
 });
 
 test("dsh stream over the recorded missing-credential run: status events skipped, error final reported", () => {
