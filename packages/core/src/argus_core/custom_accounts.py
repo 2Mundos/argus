@@ -178,15 +178,27 @@ class CustomConfig(BaseModel):
         return self.executor if role == "executor" else self.engine
 
 
-def serves_role(provider: str, config: CustomConfig | None, role: str) -> bool:
+def serves_role(
+    provider: str,
+    config: CustomConfig | None,
+    role: str,
+    *,
+    fallback_to_engine: bool = False,
+) -> bool:
     """May an account be leased for `role`? A native provider carries no config and
     is not restricted. A custom account serves a role only when that role has a
     model: `engine` configured and `executor` empty serves the harness, never a
-    delegated CLI. One with no model in either role, or no config, serves neither
-    (a request without a model cannot be made)."""
+    delegated CLI — unless `fallback_to_engine` is set (the opt-in `dsh` executor
+    route), which falls back to `engine.model` when `executor.model` is absent.
+    One with no model in either role, or no config, serves neither (a request
+    without a model cannot be made)."""
     if provider != PROVIDER:
         return True
-    return config is not None and config.role(role).model is not None
+    if config is None:
+        return False
+    if config.role(role).model is not None:
+        return True
+    return fallback_to_engine and role == "executor" and config.engine.model is not None
 
 
 class LeaseSettings(BaseModel):
@@ -208,8 +220,17 @@ def normalize_model_id(label: str, model: str | None) -> str | None:
     return model[len(prefix) :] if model.startswith(prefix) else model
 
 
-def lease_settings(config: CustomConfig, role: str) -> LeaseSettings:
+def lease_settings(
+    config: CustomConfig, role: str, *, fallback_to_engine: bool = False
+) -> LeaseSettings:
     chosen = config.role(role)
+    if (
+        fallback_to_engine
+        and role == "executor"
+        and chosen.model is None
+        and config.engine.model is not None
+    ):
+        chosen = config.engine
     return LeaseSettings(
         base_url=config.base_url,
         label=config.label,

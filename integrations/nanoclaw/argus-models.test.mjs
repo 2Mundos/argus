@@ -60,6 +60,7 @@ registerHooks({
   },
 });
 const { createArgusAdapter, harnessEffort, modelsFromEnv } = await import("./argus.ts");
+const { OneCliClient, providerForExecutor } = await import("./argus-accounts.ts");
 
 async function smoke(t, selectModels) {
   const calls = [];
@@ -258,6 +259,182 @@ test("route harness effort is applied to the container config and restored after
   assert.equal(await harnessEffort(groupDir, "low", route(null)), "low");
   assert.equal(await harnessEffort(groupDir, null, route("high")), "high");
   assert.equal(await harnessEffort(groupDir, "high", task(null).execution), null);
+});
+
+test("dsh channel route requires matching capability, leases custom only, and never falls back", async (t) => {
+  assert.equal(providerForExecutor("dsh", "custom"), "custom");
+  assert.equal(providerForExecutor("dsh", "local"), "local");
+  assert.equal(providerForExecutor("dsh"), null);
+
+  const customSettings = {
+    base_url: "https://openrouter.ai/api/v1",
+    label: "openrouter",
+    model: "deepseek/deepseek-chat",
+    provider: null,
+  };
+
+  async function runScenario({ capabilities, hasCustom, pinProvider = "custom" }) {
+    const leaseReqs = [];
+    const onecliSecrets = [];
+    const failures = [];
+    const selectedHeld = [];
+    let claimed = false;
+
+    const fakeFetch = async (url, init = {}) => {
+      const u = new URL(url);
+      const method = (init.method ?? "GET").toUpperCase();
+      const rawBody =
+        typeof init.body === "string"
+          ? init.body
+          : init.body
+            ? new TextDecoder().decode(init.body)
+            : null;
+      const body = rawBody ? JSON.parse(rawBody) : null;
+      const json = (data, status = 200) => new Response(JSON.stringify(data), { status });
+
+      if (u.origin === "http://127.0.0.1:10254") {
+        if (method === "GET" && u.pathname === "/api/agents")
+          return json([{ id: "ag1", identifier: "g1", name: "G1" }]);
+        if (method === "GET" && u.pathname === "/api/secrets") return json(onecliSecrets);
+        if (method === "POST" && u.pathname === "/api/secrets") {
+          const rec = { id: `s-${onecliSecrets.length + 1}`, ...body };
+          onecliSecrets.push(rec);
+          return json(rec, 201);
+        }
+        if (method === "DELETE" && u.pathname.startsWith("/api/secrets/")) return json({}, 200);
+        if (method === "POST" && u.pathname.endsWith("/secrets")) return json({}, 200);
+        return json({});
+      }
+
+      if (u.pathname.endsWith("/agents/register"))
+        return json({ token: "tok", agent: { id: "a1" }, heartbeat_interval_s: 60 });
+      if (u.pathname.endsWith("/tasks/claim")) {
+        if (!claimed) {
+          claimed = true;
+          return json({
+            id: "task-dsh",
+            attempt: 1,
+            failures: 0,
+            title: "dsh route",
+            spec: "test",
+            project: "demo",
+            acceptance: [],
+            command_guard_enabled: false,
+            knowledge_refs: [],
+            executor_model: {
+              executor: "dsh",
+              model: customSettings.model,
+              account_provider: pinProvider,
+            },
+          });
+        }
+        return new Promise((_, reject) =>
+          init.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+        );
+      }
+      if (u.pathname.endsWith("/accounts/lease")) {
+        leaseReqs.push(body);
+        if (body.role === "executor") {
+          if (hasCustom && body.runtime_providers.includes("custom")) {
+            return json({
+              lease_id: "l-exec",
+              account_id: "a-custom",
+              name: "openrouter-custom",
+              provider: "custom",
+              role: "executor",
+              kind: "api_key",
+              credential: { api_key: "sk-or-secret-never-leak" },
+              settings: customSettings,
+            });
+          }
+          return json({ detail: { code: "no_account", message: "no custom account" } }, 409);
+        }
+        return json({
+          lease_id: "l-eng",
+          account_id: "a-anth",
+          name: "anthropic-harness",
+          provider: "anthropic",
+          kind: "api_key",
+          credential: { api_key: "sk-ant-harness" },
+        });
+      }
+      if (u.pathname.endsWith("/fail")) {
+        failures.push(body);
+        return json({});
+      }
+      if (u.pathname.endsWith("/artifacts")) return json({ id: "art1" });
+      return json({});
+    };
+
+    const onecli = new OneCliClient("http://127.0.0.1:10254", fakeFetch);
+    const adapter = createArgusAdapter({
+      url: "http://argus.test/api",
+      bootstrapToken: "boot",
+      capabilities,
+      name: "dsh-worker",
+      fetch: fakeFetch,
+      accounts: {
+        models: true,
+        onecli,
+        resolveTarget: async () => ({ identifier: "g1", name: "G1" }),
+        selectEngine: async () => false,
+      },
+      selectModels: async (_task, held) => {
+        selectedHeld.push(held);
+        return selectModel(loadPolicy({}), "harness", "claude", 1, null);
+      },
+    });
+    t.after(() => adapter.teardown());
+    await adapter.setup({ onInbound: async () => {} });
+    const deadline = Date.now() + 2000;
+    while (!selectedHeld.length && !failures.length) {
+      assert.ok(Date.now() < deadline, "scenario should settle promptly");
+      // check-tests: allow sleep — node:test file; same poll as smoke() above
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await adapter.teardown();
+    return { leaseReqs, onecliSecrets, failures, selectedHeld };
+  }
+
+  // 1. Missing capability: refused before any account lease.
+  const denied = await runScenario({ capabilities: [], hasCustom: true });
+  assert.equal(denied.leaseReqs.length, 0);
+  assert.equal(denied.failures.length, 1);
+  assert.match(denied.failures[0].error, /nanoclaw:executor:dsh:custom/);
+
+  // 2. Local pin requires nanoclaw:executor:dsh:local (custom capability is not enough).
+  const deniedLocal = await runScenario({
+    capabilities: ["nanoclaw:executor:dsh:custom"],
+    hasCustom: true,
+    pinProvider: "local",
+  });
+  assert.equal(deniedLocal.leaseReqs.length, 0);
+  assert.equal(deniedLocal.failures.length, 1);
+  assert.match(deniedLocal.failures[0].error, /nanoclaw:executor:dsh:local/);
+
+  // 3. Declared capability + custom account: leases ["custom"] only, writes OneCLI custom executor secrets,
+  //    and passes base_url/model settings to selectModels without leaking the secret.
+  const ok = await runScenario({ capabilities: ["nanoclaw:executor:dsh:custom"], hasCustom: true });
+  const execReq = ok.leaseReqs.find((r) => r.role === "executor");
+  assert.deepEqual(execReq.runtime_providers, ["custom"]);
+  assert.equal(execReq.reuse_held, false);
+  assert.ok(ok.onecliSecrets.some((s) => s.name.includes("-custom-executor-")));
+  assert.equal(ok.selectedHeld[0].executor.provider, "custom");
+  assert.equal(ok.selectedHeld[0].executor.account_id, "a-custom");
+  assert.deepEqual(ok.selectedHeld[0].executor_settings, customSettings);
+
+  // 4. Declared capability + no custom account: requests ONLY ["custom"] and NEVER falls back to another provider.
+  const noFallback = await runScenario({
+    capabilities: ["nanoclaw:executor:dsh:custom"],
+    hasCustom: false,
+  });
+  const fallbackExecReqs = noFallback.leaseReqs
+    .filter((r) => r.role === "executor")
+    .map((r) => r.runtime_providers);
+  assert.deepEqual(fallbackExecReqs, [["custom"]]);
+  assert.equal(noFallback.selectedHeld[0].executor, null);
+  assert.equal(noFallback.selectedHeld[0].executor_settings, null);
+  assert.ok(!noFallback.onecliSecrets.some((s) => s.name.includes("-cursor")));
 });
 
 test("channel installer is idempotent and includes source and built policy assets", (t) => {

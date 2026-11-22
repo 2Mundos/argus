@@ -128,6 +128,7 @@ async def put_global_setting(
             key,
             body.value,
             caller.actor,
+            dsh_enabled=settings.dsh_enabled,
         )
 
 
@@ -161,7 +162,13 @@ async def put_project_setting(
 ) -> SettingValue:
     async with db.write() as tx:
         return await service.put_setting(
-            tx, settings.model_policy_path, slug, key, body.value, caller.actor
+            tx,
+            settings.model_policy_path,
+            slug,
+            key,
+            body.value,
+            caller.actor,
+            dsh_enabled=settings.dsh_enabled,
         )
 
 

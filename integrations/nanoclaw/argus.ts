@@ -3745,8 +3745,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         if (executorLease?.provider === "custom" || executorLease?.provider === "local")
           return executorLease.settings ?? null;
         if (
-          task.executor_model?.executor === "opencode" &&
-          task.executor_model.account_provider !== "custom" &&
+          ((task.executor_model?.executor === "opencode" &&
+            task.executor_model.account_provider !== "custom") ||
+            (task.executor_model?.executor === "dsh" &&
+              task.executor_model.account_provider === "local")) &&
           engineLease?.provider === "local"
         )
           return engineLease.settings ?? null;
@@ -3927,7 +3929,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     const cli = task.executor_model?.executor ?? preferredExecutorForLease(account, executor);
     if (!cli) return null;
     try {
-      return cli === "opencode"
+      return cli === "opencode" || cli === "dsh"
         ? await cfg.probeExecutor(cli, task.executor_model?.account_provider ?? executor?.provider)
         : await cfg.probeExecutor(cli);
     } catch (err) {
@@ -4932,24 +4934,34 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         const pinned = pinnedExecutor
           ? providerForExecutor(pinnedExecutor, task.executor_model?.account_provider)
           : null;
-        const first = pinned ? null : executorFirst(lease.provider);
-        if (first) {
-          try {
-            candidate = await leaseExecutor([first]);
-          } catch (err) {
-            if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+        if (pinnedExecutor && !pinned) {
+          log.warn(
+            `Pinned executor ${pinnedExecutor} has no resolvable account provider; no executor lease is held`,
+            {
+              executor: pinnedExecutor,
+              account_provider: task.executor_model?.account_provider ?? null,
+            },
+          );
+        } else {
+          const first = pinned ? null : executorFirst(lease.provider);
+          if (first) {
+            try {
+              candidate = await leaseExecutor([first]);
+            } catch (err) {
+              if (!(err instanceof ArgusError && err.code === "no_account")) throw err;
+            }
           }
-        }
-        try {
-          candidate ??= await leaseExecutor(pinned ? [pinned] : runtimeProviders("executor"));
-        } catch (err) {
-          if (pinned && err instanceof ArgusError && err.code === "no_account") {
-            log.warn(
-              `No ${pinned} account is usable for the pinned executor ${pinnedExecutor}; no executor lease is held`,
-              { provider: pinned, executor: pinnedExecutor, message: err.message },
-            );
-            candidate = null;
-          } else throw err;
+          try {
+            candidate ??= await leaseExecutor(pinned ? [pinned] : runtimeProviders("executor"));
+          } catch (err) {
+            if (pinned && err instanceof ArgusError && err.code === "no_account") {
+              log.warn(
+                `No ${pinned} account is usable for the pinned executor ${pinnedExecutor}; no executor lease is held`,
+                { provider: pinned, executor: pinnedExecutor, message: err.message },
+              );
+              candidate = null;
+            } else throw err;
+          }
         }
         if (candidate && pinned && candidate.provider !== pinned)
           throw new Error("executor lease provider does not match the task pin");
@@ -5131,6 +5143,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       ];
       if (!required.every((id) => cfg.capabilities.includes(id)))
         throw new Error("worker does not support the selected execution contract");
+    } else if (task.executor_model?.executor === "dsh") {
+      const provider = providerForExecutor("dsh", task.executor_model.account_provider);
+      if (!provider) throw new Error("dsh executor requires account_provider (custom or local)");
+      const needed = `nanoclaw:executor:dsh:${provider}`;
+      if (!cfg.capabilities.includes(needed))
+        throw new Error(`worker does not declare required capability ${needed}`);
     }
     if (task.execution && (!acc?.models || !task.engine_lease))
       throw new Error(

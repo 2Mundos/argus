@@ -580,6 +580,9 @@ export function providerForExecutor(
   accountProvider?: string | null,
 ): string | null {
   if (executor === "opencode" && accountProvider === "custom") return "custom";
+  if (executor === "dsh") {
+    return accountProvider === "custom" || accountProvider === "local" ? accountProvider : null;
+  }
   return Object.entries(EXECUTOR_BY_PROVIDER).find(([, name]) => name === executor)?.[0] ?? null;
 }
 

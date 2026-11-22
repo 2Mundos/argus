@@ -30,6 +30,7 @@ from argus_core.tasks import (
 )
 from pydantic import ValidationError
 
+from argus_api.config import is_dsh_enabled
 from argus_api.db import Tx, ts
 from argus_api.errors import ConflictError, NotFoundError, ValidationFailedError
 from argus_api.events import record
@@ -74,6 +75,7 @@ async def edit_task(
     actor: str,
     *,
     state_code: str = "task_not_editable",
+    dsh_enabled: bool | None = None,
 ) -> Task:
     """Edit a task's definition (task edit spec). The one path for REST, MCP and
     the dashboard: every check runs before the first write, so a refused edit
@@ -112,7 +114,9 @@ async def edit_task(
             ],
         )
     current = await get_task(tx.conn, task_id)
-    changed = await checked_changes(tx.conn, row, current, given)
+    changed = await checked_changes(
+        tx.conn, row, current, given, dsh_enabled=dsh_enabled
+    )
     if not changed:
         return current  # nothing differs: no write, same version
     deps = changed.get("depends_on")
@@ -194,7 +198,12 @@ async def edit_task(
 
 
 async def checked_changes(
-    conn: aiosqlite.Connection, row: aiosqlite.Row, current: Task, given: dict[str, Any]
+    conn: aiosqlite.Connection,
+    row: aiosqlite.Row,
+    current: Task,
+    given: dict[str, Any],
+    *,
+    dsh_enabled: bool | None = None,
 ) -> dict[str, Any]:
     """The values of `given` that differ from `current`, after
     the creation rules ran on the merged task. Raises before anything is written;
@@ -205,6 +214,18 @@ async def checked_changes(
     changed = {f: v for f, v in new.items() if v != getattr(current, f)}
     if not changed:
         return changed
+    if (
+        (pin := changed.get("executor_model")) is not None
+        and pin.executor == "dsh"
+        and not is_dsh_enabled(dsh_enabled)
+    ):
+        raise ValidationFailedError(
+            "dsh executor is disabled (set ARGUS_DSH_ENABLED=true on the API to enable)",
+            code="dsh_disabled",
+            details=[
+                "executor_model: dsh executor is disabled (ARGUS_DSH_ENABLED is not true)"
+            ],
+        )
     if why := check_harness_providers(
         new.get("harness_model", current.harness_model),
         new.get("account_providers", current.account_providers),
@@ -365,11 +386,11 @@ async def _resolve_harness_account(
     elif (
         provider == LOCAL_PROVIDER
         and executor_model is not None
-        and executor_model.executor not in ("agent", "opencode")
+        and executor_model.executor not in ("agent", "opencode", "dsh")
     ):
         why = (
             f"account {name} is the local harness, which delegates to the Cursor"
-            f" agent or OpenCode; executor_model {executor_model.executor} cannot run"
+            f" agent or OpenCode (or dsh when enabled); executor_model {executor_model.executor} cannot run"
         )
     if why:
         raise ValidationFailedError(

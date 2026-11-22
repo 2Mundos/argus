@@ -18,6 +18,7 @@ from argus_core.settings import (
 from jsonschema import Draft202012Validator
 
 from argus_api import model_policy
+from argus_api.config import is_dsh_enabled
 from argus_api.db import Tx, ts
 from argus_api.errors import NotFoundError, ValidationFailedError
 from argus_api.events import record
@@ -377,6 +378,8 @@ async def put_setting(
     key: str,
     value: Any,
     actor: str,
+    *,
+    dsh_enabled: bool | None = None,
 ) -> SettingValue:
     defn = registry.definition(key)
     if defn is None:
@@ -412,7 +415,23 @@ async def put_setting(
     if key in CHAIN_KEYS:
         from argus_api.tasks.execution_routes import validate_references
 
-        await validate_references(tx.conn, ExecutionChains.model_validate(normalised))
+        await validate_references(
+            tx.conn,
+            ExecutionChains.model_validate(normalised),
+            dsh_enabled=dsh_enabled,
+        )
+    if (
+        key == DIFFICULTY_EXECUTORS_KEY
+        and any("dsh" in chain for chain in normalised.values())
+        and not is_dsh_enabled(dsh_enabled)
+    ):
+        raise ValidationFailedError(
+            "dsh executor is disabled (set ARGUS_DSH_ENABLED=true on the API to enable)",
+            code="dsh_disabled",
+            details=[
+                "difficulty.executors: dsh executor is disabled (ARGUS_DSH_ENABLED is not true)"
+            ],
+        )
 
     await tx.conn.execute(
         "INSERT INTO settings (scope, key, value, updated_at, updated_by)"

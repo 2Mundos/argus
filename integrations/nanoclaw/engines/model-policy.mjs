@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
-const engines = new Set(["codex", "claude", "opencode", "agent"]);
+const engines = new Set(["codex", "claude", "opencode", "agent", "agy", "dsh"]);
 // Optional maps, in canonical order after the two required ones: a policy without
 // them keeps its revision (task complexity spec).
 const OPTIONAL = ["trivial", "hard_harness", "hard_implementation"];

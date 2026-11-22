@@ -1004,3 +1004,269 @@ def test_valid_google_executor_credential_claims_and_records_applied(
     }
     assert accounts_by_id[harness_id]["active_leases"] == 1
     assert accounts_by_id[google_id]["active_leases"] == 1
+
+
+def _paired_dsh(
+    harness_id: str,
+    custom_id: str,
+    *,
+    model: dict | None = None,
+    id: str = "claude-dsh",
+) -> dict:
+    return {
+        "id": id,
+        "mode": "paired",
+        "runtime": "nanoclaw",
+        "harness": {
+            "account_id": harness_id,
+            "provider": "anthropic",
+            "adapter": "claude",
+            "model": {"source": "explicit", "id": "claude-sonnet-4-6"},
+        },
+        "executor": {
+            "account_id": custom_id,
+            "provider": "custom",
+            "adapter": "dsh",
+            "model": model or {"source": "account"},
+        },
+    }
+
+
+def test_dsh_routes_refused_when_argus_dsh_enabled_is_not_true(
+    client: TestClient,
+) -> None:
+    project(client)
+    harness_id = account(client, "anthropic")
+    custom_id = account(client, "custom", config=custom_config())
+
+    # Catalogue hides both the engine entry and dsh execution capabilities by default.
+    engines = client.get("/api/engines", headers=ADMIN).json()
+    assert "dsh" not in {e["id"] for e in engines["engines"]}
+    assert not any(c["adapter"] == "dsh" for c in engines["execution_capabilities"])
+
+    # Task create with dsh executor_model is refused.
+    pin = {
+        "executor": "dsh",
+        "model": "deepseek/deepseek-chat",
+        "account_provider": "custom",
+    }
+    created = client.post(
+        "/api/tasks",
+        json={"project": "demo", "title": "dsh pin", "executor_model": pin},
+        headers=ADMIN,
+    )
+    assert created.status_code == 422, created.text
+    assert created.json()["detail"]["code"] == "dsh_disabled"
+
+    # Task edit setting dsh executor_model is refused.
+    plain = client.post(
+        "/api/tasks",
+        json={"project": "demo", "title": "plain"},
+        headers=ADMIN,
+    ).json()
+    edited = client.patch(
+        f"/api/tasks/{plain['id']}",
+        json={
+            "expected_version": plain["version"],
+            "changes": {"executor_model": pin},
+        },
+        headers=ADMIN,
+    )
+    assert edited.status_code == 422, edited.text
+    assert edited.json()["detail"]["code"] == "dsh_disabled"
+
+    # Execution chain and difficulty.executors referencing dsh are refused.
+    chain_res = put(
+        client,
+        {"version": 1, "difficulties": {"hard": [_paired_dsh(harness_id, custom_id)]}},
+    )
+    assert chain_res.status_code == 422, chain_res.text
+    assert chain_res.json()["detail"]["code"] == "dsh_disabled"
+
+    diff_res = client.put(
+        "/api/settings/difficulty.executors",
+        json={"value": {"standard": ["dsh"]}},
+        headers=ADMIN,
+    )
+    assert diff_res.status_code == 422, diff_res.text
+    assert diff_res.json()["detail"]["code"] == "dsh_disabled"
+
+
+def test_dsh_routes_enabled_engine_model_fallback_and_missing_model_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in list(os.environ):
+        if name.startswith(("ARGUS_", "DOCKER_HOST")) and not name.startswith(
+            "ARGUS_TEST_"
+        ):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("ARGUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ARGUS_ADMIN_TOKEN", ADMIN_TOKEN)
+    monkeypatch.setenv("ARGUS_DISK_GUARD_ENABLED", "false")
+    monkeypatch.setenv("ARGUS_DSH_ENABLED", "true")
+    with TestClient(app) as client:
+        app.state.secrets = MemorySecretStore()
+        project(client)
+
+        # Catalogue advertises dsh and both custom/local capabilities when enabled.
+        engines = client.get("/api/engines", headers=ADMIN).json()
+        assert "dsh" in {e["id"] for e in engines["engines"]}
+        cap_ids = {c["id"] for c in engines["execution_capabilities"]}
+        assert {
+            "nanoclaw:executor:dsh:custom",
+            "nanoclaw:executor:dsh:local",
+        } <= cap_ids
+
+        # Model policy accepts dsh chains.
+        pol = client.put(
+            "/api/models",
+            json={
+                "harness": {"claude": ["claude-sonnet-4-6"]},
+                "implementation": {"dsh": ["deepseek/deepseek-chat"]},
+            },
+            headers=ADMIN,
+        )
+        assert pol.status_code == 200, pol.text
+
+        harness_id = account(client, "anthropic", max_leases=2)
+        # Custom account with engine model ONLY (no executor model): dsh falls back to engine.model.
+        engine_only_id = account(
+            client,
+            "custom",
+            name="custom-engine-only",
+            config={
+                "base_url": "https://openrouter.ai/api/v1",
+                "label": "openrouter",
+                "engine": {"model": "deepseek/deepseek-chat"},
+                "executor": {"model": None},
+            },
+        )
+        # Custom account with NEITHER executor nor engine model: must fail with explicit reason.
+        no_model_id = account(
+            client,
+            "custom",
+            name="custom-no-model",
+            config={
+                "base_url": "https://openrouter.ai/api/v1",
+                "label": "openrouter",
+                "engine": {"model": None},
+                "executor": {"model": None},
+            },
+        )
+
+        # Saving a chain against the model-less custom account fails with explicit reason.
+        bad_chain = put(
+            client,
+            {
+                "version": 1,
+                "difficulties": {"hard": [_paired_dsh(harness_id, no_model_id)]},
+            },
+        )
+        assert bad_chain.status_code == 422, bad_chain.text
+        assert "executor_model_missing" in bad_chain.text
+
+        # Saving a chain against the engine-only custom account succeeds and resolves engine.model.
+        ok_chain = put(
+            client,
+            {
+                "version": 1,
+                "difficulties": {"hard": [_paired_dsh(harness_id, engine_only_id)]},
+            },
+        )
+        assert ok_chain.status_code == 200, ok_chain.text
+        assert ok_chain.json()["warnings"] == []
+
+        worker = _register_worker(client)
+        task_id = _create_ready_task(client, title="dsh chain task", difficulty="hard")
+
+        # Worker without nanoclaw:executor:dsh:custom cannot claim the dsh chain.
+        denied = client.post(
+            "/api/tasks/claim",
+            json={"capabilities": CAPS, "runtime_providers": ["anthropic", "custom"]},
+            headers=worker,
+        )
+        assert denied.status_code == 204
+
+        # Reset/unblock and claim with nanoclaw:executor:dsh:custom: lands cleanly with engine.model.
+        client.post(f"/api/tasks/{task_id}/unblock", headers=ADMIN)
+        dsh_caps = [*CAPS, "nanoclaw:executor:dsh:custom"]
+        claimed = client.post(
+            "/api/tasks/claim",
+            json={
+                "capabilities": dsh_caps,
+                "runtime_providers": ["anthropic", "custom"],
+            },
+            headers=worker,
+        )
+        assert claimed.status_code == 200, claimed.text
+        body = claimed.json()
+        assert body["execution"]["executor"]["selector"]["adapter"] == "dsh"
+        assert body["execution"]["executor"]["selector"]["provider"] == "custom"
+        assert body["execution"]["executor"]["model"] == "deepseek/deepseek-chat"
+        assert body["executor_lease"]["account_id"] == engine_only_id
+        assert body["executor_lease"]["settings"]["model"] == "deepseek/deepseek-chat"
+
+        # Task-pin path: dsh@custom accepted when enabled, and executor lease falls back to engine.model.
+        worker2 = _register_worker(client)
+        pin_task = client.post(
+            "/api/tasks",
+            json={
+                "project": "demo",
+                "title": "dsh pinned task",
+                "difficulty": "standard",
+                "executor_model": {
+                    "executor": "dsh",
+                    "model": "deepseek/deepseek-chat",
+                    "account_provider": "custom",
+                },
+            },
+            headers=ADMIN,
+        )
+        assert pin_task.status_code == 201, pin_task.text
+        # Release worker's leases so engine_only_id is free, then claim & lease executor.
+        assert client.post("/api/accounts/release", headers=worker).status_code == 204
+        c2 = client.post(
+            "/api/tasks/claim",
+            json={"capabilities": dsh_caps, "runtime_providers": ["anthropic"]},
+            headers=worker2,
+        )
+        assert c2.status_code == 200, c2.text
+        c2_body = c2.json()
+        assert c2_body["id"] == pin_task.json()["id"]
+        exec_lease = client.post(
+            "/api/accounts/lease",
+            json={
+                "role": "executor",
+                "runtime_providers": ["custom"],
+                "reuse_held": False,
+                "task_id": c2_body["id"],
+                "attempt": c2_body["attempt"],
+            },
+            headers=worker2,
+        )
+        assert exec_lease.status_code == 200, exec_lease.text
+        assert exec_lease.json()["account_id"] == engine_only_id
+        assert exec_lease.json()["settings"]["model"] == "deepseek/deepseek-chat"
+
+        # Disable the engine-only account so only the model-less custom account remains: explicit failure.
+        assert (
+            client.patch(
+                f"/api/accounts/{engine_only_id}",
+                json={"enabled": False},
+                headers=ADMIN,
+            ).status_code
+            == 200
+        )
+        no_model_lease = client.post(
+            "/api/accounts/lease",
+            json={
+                "role": "executor",
+                "runtime_providers": ["custom"],
+                "reuse_held": False,
+                "task_id": c2_body["id"],
+                "attempt": c2_body["attempt"],
+            },
+            headers=worker2,
+        )
+        assert no_model_lease.status_code == 409
+        assert "executor or engine model" in no_model_lease.text
