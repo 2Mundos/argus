@@ -621,6 +621,7 @@ async def lease_account(
             credential_kinds=body.credential_kinds,
             runtime=runtime,
             local_served_models=local_served_models,
+            dsh_enabled=settings.dsh_enabled,
         )
     return await local_health.deliver(_health(request), leased, runtime)
 

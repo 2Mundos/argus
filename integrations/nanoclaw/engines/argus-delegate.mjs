@@ -1621,7 +1621,8 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
   // harness-only bridge when its independently leased executor is unavailable.
   if (
     snapshot.context?.executor_model?.account_provider === "custom" &&
-    (executor !== "opencode" ||
+    ((executor !== "opencode" && executor !== "dsh") ||
+      snapshot.context.executor_model.executor !== executor ||
       snapshot.context.executor_account_provider !== "custom" ||
       !snapshot.context.executor_settings ||
       e[CUSTOM_KEY_ENV] !== OPENCODE_GATEWAY_SENTINEL)
@@ -1629,7 +1630,19 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
     finish(78, {
       ...identity,
       blocked: "auth_missing",
-      need: "custom OpenCode executor requires its own lease settings and scoped gateway sentinel",
+      ...(executor === "dsh" ? { code: "dsh_provider_credential_missing" } : {}),
+      need: `custom ${executor === "dsh" ? "dsh" : "OpenCode"} executor requires its own lease settings and scoped gateway sentinel`,
+    });
+  if (
+    executor === "dsh" &&
+    snapshot.context?.executor_model?.account_provider === "local" &&
+    (snapshot.context.executor_account_provider !== "local" || !snapshot.context.executor_settings)
+  )
+    finish(78, {
+      ...identity,
+      blocked: "auth_missing",
+      code: "dsh_provider_unconfigured",
+      need: "local dsh executor requires its own local lease settings",
     });
   // The Copilot CLI's own default model is never used: no model, no run.
   if (executor === "copilot" && !selection.configured_model)

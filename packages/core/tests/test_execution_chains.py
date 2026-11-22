@@ -151,12 +151,38 @@ def test_local_redirect_guard_and_executor_only_adapters():
         policy("trivial", [route])
     for adapter, provider in [
         ("opencode", "custom"),
+        ("dsh", "custom"),
+        ("dsh", "local"),
         ("agent", "cursor"),
         ("copilot", "copilot"),
     ]:
         route = single(adapter=adapter, provider=provider)
         with pytest.raises(ValidationError, match="unsupported_harness_selector"):
             policy("hard", [route])
+    # A local harness may pair with dsh (custom or local) just like opencode.
+    for provider, account_id, model in [
+        ("local", "account-one", {"source": "account"}),
+        ("custom", "account-two", {"source": "account"}),
+        ("custom", "account-two", {"source": "explicit", "id": "vendor/code"}),
+    ]:
+        ok = paired()
+        ok["executor"].update(
+            adapter="dsh", provider=provider, account_id=account_id, model=model
+        )
+        assert (
+            policy("trivial", [ok]).difficulties["trivial"][0].executor.adapter == "dsh"
+        )
+    # dsh rejects unsupported providers (no DeepSeek-native provider) and explicit local model.
+    for provider, model in [
+        ("anthropic", {"source": "explicit", "id": "vendor/code"}),
+        ("openai", {"source": "explicit", "id": "vendor/code"}),
+        ("local", {"source": "explicit", "id": "vendor/code"}),
+    ]:
+        bad = paired()
+        bad["harness"]["provider"] = "custom"
+        bad["executor"].update(adapter="dsh", provider=provider, model=model)
+        with pytest.raises(ValidationError, match="unsupported_executor_selector"):
+            policy("hard", [bad])
 
 
 def test_custom_harness_does_not_inherit_local_only_pair_restrictions():
@@ -223,6 +249,9 @@ def test_unpinned_native_pair_defers_the_same_account_rule_to_selection():
         ("opencode", "local", "account"),
         ("opencode", "custom", "account"),
         ("opencode", "custom", "explicit"),
+        ("dsh", "local", "account"),
+        ("dsh", "custom", "account"),
+        ("dsh", "custom", "explicit"),
     ],
 )
 def test_executor_selector_matrix_is_independent_of_harness_model(
@@ -383,6 +412,8 @@ def test_effort_rejects_invalid_levels_and_model_restrictions(
         ("harness", "claude", "local"),
         ("harness", "claude", "custom"),
         ("executor", "opencode", "custom"),
+        ("executor", "dsh", "custom"),
+        ("executor", "dsh", "local"),
         ("executor", "agent", "cursor"),
     ],
 )
@@ -394,6 +425,8 @@ def test_effort_on_adapter_without_interface_is_rejected_not_ignored(
     route[role].update(adapter=adapter, provider=provider, effort="high")
     if adapter == "agent":
         route[role]["model"] = {"source": "explicit", "id": "vendor/code"}
+    elif provider == "local":
+        route[role]["model"] = {"source": "account"}
     with pytest.raises(ValidationError, match=f"{role}_effort_unsupported:"):
         policy("hard", [route])
     del route[role]["effort"]
@@ -445,5 +478,7 @@ def test_capabilities_publish_effort_support_per_role():
         "nanoclaw:executor:agent:cursor",
         "nanoclaw:executor:opencode:local",
         "nanoclaw:executor:opencode:custom",
+        "nanoclaw:executor:dsh:local",
+        "nanoclaw:executor:dsh:custom",
     ]:
         assert caps[id].efforts == [] and caps[id].effort_interface is None

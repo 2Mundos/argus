@@ -247,6 +247,7 @@ async def create_task(
             hourly_limit=hourly_limit,
             idempotency_key=idempotency_key,
             chat_turn=x_argus_chat_turn,
+            dsh_enabled=settings.dsh_enabled,
         )
 
 
@@ -347,6 +348,7 @@ async def claim_task(
                     default_timeout_s=settings.task_timeout_s,
                     disk_guard=disk_guard,
                     local_served_models=local_served_models,
+                    dsh_enabled=settings.dsh_enabled,
                 )
                 project_repository = (
                     await delivery.project_repository_url(tx.conn, task.project)
@@ -853,6 +855,7 @@ async def unblock_task(
 async def retry_task(
     task_id: str,
     db: DbDep,
+    settings: SettingsDep,
     caller: ManagerDep,
     body: RetryOverrides | None = None,
     reset_execution_route: bool = False,
@@ -863,7 +866,9 @@ async def retry_task(
     budget_usd in the same transaction, with the edit rules; any other key is 422
     `immutable_field`, an invalid value 422, and a refused retry writes nothing."""
     async with db.write() as tx:
-        task = await service.retry(tx, task_id, caller.actor, body)
+        task = await service.retry(
+            tx, task_id, caller.actor, body, dsh_enabled=settings.dsh_enabled
+        )
         if reset_execution_route:
             await execution_routes.reset(tx, task_id, caller.actor)
         return task
@@ -885,7 +890,11 @@ async def release_task(
 
 @router.patch("/{task_id}")
 async def edit_task(
-    task_id: str, body: TaskEdit, db: DbDep, caller: ManagerDep
+    task_id: str,
+    body: TaskEdit,
+    db: DbDep,
+    settings: SettingsDep,
+    caller: ManagerDep,
 ) -> Task:
     """Edit a task's title, spec, acceptance, priority, required capabilities,
     knowledge pins or dependencies (orchestrator or admin). `changes` is a partial
@@ -895,7 +904,12 @@ async def edit_task(
     field 422 `immutable_field`; a refused edit writes nothing."""
     async with db.write() as tx:
         return await service.edit_task(
-            tx, task_id, body.changes, body.expected_version, caller.actor
+            tx,
+            task_id,
+            body.changes,
+            body.expected_version,
+            caller.actor,
+            dsh_enabled=settings.dsh_enabled,
         )
 
 

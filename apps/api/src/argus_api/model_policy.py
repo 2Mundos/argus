@@ -21,7 +21,7 @@ from argus_api.errors import ValidationFailedError
 
 router = APIRouter(tags=["models"])
 
-ENGINES = frozenset({"codex", "claude", "opencode", "agent", "agy"})
+ENGINES = frozenset({"codex", "claude", "opencode", "agent", "agy", "dsh"})
 SCOPES = ("harness", "implementation")
 # Optional (task complexity spec): `trivial` replaces `implementation` for trivial
 # tasks and local leases; `hard_harness` / `hard_implementation` replace `harness` /

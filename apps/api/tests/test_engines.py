@@ -1036,3 +1036,34 @@ def test_dsh_is_opt_in_and_a_version_never_authenticates_it() -> None:
         next(e for e in bare.engines if e.id == "dsh").readiness.authenticated.ok
         is None
     )
+    # Disabled: route_task skips dsh with explicit reason and catalogue hides dsh capabilities.
+    disabled_cat = catalog.build(
+        full_ledger("claude", "opencode", "dsh"),
+        None,
+        None,
+        dsh_enabled=False,
+    )
+    assert not any(c.adapter == "dsh" for c in disabled_cat.execution_capabilities)
+    decision_off = router.route(
+        RouteRequest(summary="edit", difficulty=Difficulty.STANDARD),
+        disabled_cat,
+        executor_chains={"standard": ("dsh", "opencode")},
+    )
+    assert decision_off.executor == "opencode"
+    assert "dsh (disabled; set ARGUS_DSH_ENABLED=true)" in (
+        decision_off.executor_reason or ""
+    )
+    # Enabled and usable: route_task selects dsh.
+    enabled_cat = catalog.build(
+        full_ledger("claude", "opencode", "dsh"),
+        None,
+        None,
+        dsh_enabled=True,
+    )
+    assert any(c.adapter == "dsh" for c in enabled_cat.execution_capabilities)
+    decision_on = router.route(
+        RouteRequest(summary="edit", difficulty=Difficulty.STANDARD),
+        enabled_cat,
+        executor_chains={"standard": ("dsh", "opencode")},
+    )
+    assert decision_on.executor == "dsh"

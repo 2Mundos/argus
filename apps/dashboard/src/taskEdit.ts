@@ -83,6 +83,12 @@ export function executorPin(text: string): ExecutorPin | null {
       model: pin.model,
       account_provider: pin.name === "opencode@custom" ? "custom" : "local",
     };
+  if (pin?.name === "dsh@custom" || pin?.name === "dsh@local")
+    return {
+      executor: "dsh",
+      model: pin.model,
+      account_provider: pin.name === "dsh@custom" ? "custom" : "local",
+    };
   return pin && { executor: pin.name as ExecutorPin["executor"], model: pin.model };
 }
 

@@ -458,7 +458,10 @@ export async function runExecutorPreflight(
   timeoutMs = PREFLIGHT_TIMEOUT_MS,
   accountProvider?: string,
 ): Promise<{ reason: "env_executor_auth"; error: string } | null> {
-  if (!PROBED_EXECUTORS.has(executor) && !(executor === "opencode" && accountProvider === "custom"))
+  if (
+    !PROBED_EXECUTORS.has(executor) &&
+    !((executor === "opencode" || executor === "dsh") && accountProvider === "custom")
+  )
     return null;
   let result: PreflightChildResult;
   try {

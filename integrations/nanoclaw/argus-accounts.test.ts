@@ -3940,6 +3940,134 @@ describe("custom (OpenRouter) engine accounts", () => {
     );
   });
 
+  it("maps dsh executor only to an explicit custom or local account_provider", () => {
+    expect(providerForExecutor("dsh", "custom")).toBe("custom");
+    expect(providerForExecutor("dsh", "local")).toBe("local");
+    expect(providerForExecutor("dsh")).toBeNull();
+    expect(providerForExecutor("dsh", "anthropic")).toBeNull();
+  });
+
+  it("admits a dsh custom pin only with nanoclaw:executor:dsh:custom, leases custom only, and never falls back", async () => {
+    // Missing capability: the channel rejects the task instead of leasing any executor account.
+    const wDenied = world({
+      leases: [lease("harness", "dummy-harness-key"), executorLease()],
+      tasks: [
+        {
+          ...task(),
+          executor_model: {
+            executor: "dsh",
+            model: settings.model,
+            account_provider: "custom",
+          },
+        },
+      ],
+    });
+    const hDenied = harness(wDenied, true, {}, { capabilities: [] });
+    live.push(hDenied.adapter);
+    await hDenied.adapter.setup(hDenied.setup);
+    await until(() => wDenied.calls.some((c) => c.path.endsWith("/fail")));
+    expect(wDenied.calls.filter((c) => c.path === "/accounts/lease")).toHaveLength(0);
+    expect(wDenied.calls.find((c) => c.path.endsWith("/fail"))?.body?.error).toContain(
+      "nanoclaw:executor:dsh:custom",
+    );
+    await hDenied.adapter.teardown();
+
+    // Declared capability: leases role=executor with runtime_providers=["custom"], reuse_held=false.
+    const wOk = world({
+      leases: [lease("harness", "dummy-harness-key"), executorLease()],
+      tasks: [
+        {
+          ...task(),
+          executor_model: {
+            executor: "dsh",
+            model: settings.model,
+            account_provider: "custom",
+          },
+        },
+      ],
+    });
+    const selectModels = vi.fn(async (_task: unknown, _held: unknown) => ({
+      scope: "harness",
+      policy_engine: "claude",
+      requested_model: "test-model",
+      configured_model: "test-model",
+      resolved_model: null,
+      policy_revision: "test",
+      model_attempt: 1,
+      fallback_reason: null,
+      has_next: false,
+    }));
+    const hOk = harness(
+      wOk,
+      true,
+      {},
+      { capabilities: ["nanoclaw:executor:dsh:custom"], selectModels },
+    );
+    live.push(hOk.adapter);
+    await hOk.adapter.setup(hOk.setup);
+    await until(() => wOk.calls.some((c) => c.path === "/engines/selected"));
+    const execReq = wOk.calls.filter((c) => c.path === "/accounts/lease")[1]!.body;
+    expect(execReq).toMatchObject({
+      role: "executor",
+      runtime_providers: ["custom"],
+      reuse_held: false,
+    });
+    expect(wOk.onecli.secrets.some((s) => s.name.includes("-custom-executor-"))).toBe(true);
+    await until(() => selectModels.mock.calls.length > 0);
+    expect(selectModels.mock.calls[0]?.[1]).toMatchObject({
+      executor: { provider: "custom", account_id: "a-or-executor" },
+      executor_settings: settings,
+    });
+    expect(JSON.stringify(wOk.calls.filter((c) => c.who === "argus"))).not.toContain(
+      "dummy-executor-key",
+    );
+    await hOk.adapter.teardown();
+
+    // When custom has no_account, dsh never falls back to cursor or any other provider.
+    const wNoFallback = world({
+      leases: [lease("harness", "dummy-harness-key"), cursorLease()],
+      tasks: [
+        {
+          ...task(),
+          executor_model: {
+            executor: "dsh",
+            model: settings.model,
+            account_provider: "custom",
+          },
+        },
+      ],
+    });
+    const selectNoFallback = vi.fn(async (_task: unknown, _held: unknown) => ({
+      scope: "harness",
+      policy_engine: "claude",
+      requested_model: "test-model",
+      configured_model: "test-model",
+      resolved_model: null,
+      policy_revision: "test",
+      model_attempt: 1,
+      fallback_reason: null,
+      has_next: false,
+    }));
+    const hNoFallback = harness(
+      wNoFallback,
+      true,
+      {},
+      { capabilities: ["nanoclaw:executor:dsh:custom"], selectModels: selectNoFallback },
+    );
+    live.push(hNoFallback.adapter);
+    await hNoFallback.adapter.setup(hNoFallback.setup);
+    await until(() => selectNoFallback.mock.calls.length > 0);
+    const execLeases = wNoFallback.calls
+      .filter((c) => c.path === "/accounts/lease" && c.body?.role === "executor")
+      .map((c) => c.body.runtime_providers);
+    expect(execLeases).toEqual([["custom"]]);
+    expect(wNoFallback.onecli.secrets.some((s) => s.name.includes("-cursor"))).toBe(false);
+    expect(selectNoFallback.mock.calls[0]?.[1]).toMatchObject({
+      executor: null,
+      executor_settings: null,
+    });
+  });
+
   it("lists custom among engine and executor runtime providers", () => {
     // a custom account also serves a delegated CLI (`executor_settings`, the delegate's
     // CUSTOM_KEY_ENV), so the executor role lists it too

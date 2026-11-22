@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-20
+updated: 2026-11-22
 ---
 
 # Task models
@@ -52,18 +52,25 @@ explicit list, or when task model/account pins choose the whole legacy pin path.
 | Field | Shape | Provider it needs |
 | --- | --- | --- |
 | `harness_model` | `{engine: claude \| codex, model}` or `null` | `claude` → `anthropic`, `codex` → `openai` |
-| `executor_model` | `{executor: claude \| codex \| agent \| opencode \| copilot \| agy, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local`, `copilot` → `copilot`, `agy` → `google` |
+| `executor_model` | `{executor: claude \| codex \| agent \| opencode \| copilot \| agy \| dsh, model, account_provider?: local \| custom}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local` (or `account_provider`), `copilot` → `copilot`, `agy` → `google`, `dsh` → `account_provider` (`local` or `custom`, required) |
 
-The `copilot` and `agy` executors are executor-only: they run on `copilot` and `google` respectively, never as an engine.
+The `copilot`, `agy` and `dsh` executors are executor-only: `copilot` and `agy` run on `copilot` and `google` respectively, `dsh` runs on `custom` or `local`, and none runs as an engine.
 
 An OpenCode pin optionally carries `account_provider: local | custom`. Omitted or
 null preserves the existing `local` route; `custom` strictly leases the existing
-custom/OpenRouter executor lane. Other executors reject this field. REST, MCP,
-routine task templates, edits and retries share this schema. The dashboard uses
-`opencode@custom <model>` for the custom lane and preserves it on edits. Example:
+custom/OpenRouter executor lane. A `dsh` pin **requires** `account_provider: local | custom`
+(there is no default or DeepSeek-native provider) and is accepted by the API only when
+`ARGUS_DSH_ENABLED=true` (`422 dsh_disabled` otherwise). When a `custom` account leased
+for `dsh` has no `executor` model configured, the route uses the account's `engine`
+model; if neither is configured, the lease fails with an explicit reason. Other
+executors reject `account_provider`. REST, MCP, routine task templates, edits and
+retries share this schema. The dashboard uses `opencode@custom <model>` (and parses
+`dsh@custom <model>` / `dsh@local <model>` on edit) and preserves it on edits. Example:
 `{"executor":"opencode","account_provider":"custom","model":"deepseek/deepseek-v4.1-flash-1017"}`.
 This selects a provider, not an account identity: eligible custom accounts still
-rank globally. The executor role must have a configured model.
+rank globally. For OpenCode, the executor role must have a configured model; for `dsh`,
+the executor model is used when configured, falling back to the engine model, and
+failing explicitly when neither is configured.
 
 `model` is required and follows the policy's model-ID rule
 (`[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}`). `null` (the default) means "follow the
@@ -152,8 +159,9 @@ win on priority: the Strata local account (`strata-local`) or one custom account
   allowed by `account_providers`; it is the provider a `harness_model` engine
   needs (so a local or custom account takes no `harness_model`: the account
   brings its model); and a `local` account allows an `executor_model` of
-  `agent` (default Cursor) or `opencode` (local model via OpenCode, [local
-  harness](local-harness.spec.md)), never `claude` or `codex`. A disabled
+  `agent` (default Cursor), `opencode` (local model via OpenCode, [local
+  harness](local-harness.spec.md)) or `dsh` (opt-in, on `local` or `custom`),
+  never `claude` or `codex`. A disabled
   account is accepted: the task waits until it is enabled.
 - **Leases.** The pin is a preference for that one account, on top of 3.2: while
   the caller holds an engine lease on it or it is usable (available or past its

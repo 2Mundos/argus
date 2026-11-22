@@ -17,7 +17,7 @@ export function openRouterExecutorSettings(settings) {
 /** A gateway sentinel must never authenticate against a different endpoint. */
 export function opencodeGatewayProblem(executor, e, settings) {
   if (e.ARGUS_ACCOUNT_API_KEY !== OPENCODE_GATEWAY_SENTINEL) return null;
-  if (executor !== "opencode" || !openRouterExecutorSettings(settings))
-    return "OpenRouter gateway sentinel requires the leased OpenCode endpoint";
+  if ((executor !== "opencode" && executor !== "dsh") || !openRouterExecutorSettings(settings))
+    return "OpenRouter gateway sentinel requires the leased OpenCode or dsh endpoint";
   return null;
 }
