@@ -103,8 +103,9 @@ async function unpublishedCommits(
   ceiling: string,
   ref: string,
   git: GitRunner,
+  forgeHeads: string[] = [],
 ): Promise<string[]> {
-  const out = await git(["rev-list", ref, "--not", "--remotes", "--"], ws, ceiling);
+  const out = await git(["rev-list", ref, "--not", "--remotes", ...forgeHeads, "--"], ws, ceiling);
   return out.split("\n").filter(Boolean);
 }
 
@@ -165,18 +166,51 @@ async function strandedCommits(
   branch: string,
   head: string,
   git: GitRunner,
+  forgeHeads: string[] = [],
 ): Promise<string[]> {
   const found = new Set<string>();
   const ref = `refs/heads/${branch}`;
   if (await git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], ws, ceiling).catch(() => "")) {
-    for (const sha of await unpublishedCommits(ws, ceiling, ref, git)) found.add(sha);
+    for (const sha of await unpublishedCommits(ws, ceiling, ref, git, forgeHeads)) found.add(sha);
   }
   if (
     !head &&
     (await git(["rev-parse", "--verify", "-q", "HEAD^{commit}"], ws, ceiling).catch(() => ""))
   )
-    for (const sha of await unpublishedCommits(ws, ceiling, "HEAD", git)) found.add(sha);
+    for (const sha of await unpublishedCommits(ws, ceiling, "HEAD", git, forgeHeads))
+      found.add(sha);
   return [...found];
+}
+
+/** A reviewed PR head the task input names: a commit the forge is shown to hold. */
+export type ReviewedHead = { pr: unknown; headSha: unknown };
+
+/**
+ * The reviewed head as forge evidence, or null. A commit counts as published only when the
+ * forge advertises `refs/pull/<n>/head` (it survives a squash merge and branch deletion)
+ * at the reviewed head, or at a descendant this workspace holds. Anything unverifiable,
+ * including an unreachable forge, is no evidence.
+ */
+async function verifiedForgeHead(
+  ws: string,
+  ceiling: string,
+  reviewed: ReviewedHead | undefined,
+  git: GitRunner,
+): Promise<string | null> {
+  if (!reviewed || typeof reviewed.headSha !== "string") return null;
+  const sha = reviewed.headSha.trim().toLowerCase();
+  const num = /^(?:#|.*\/pull\/)?(\d+)\/?$/.exec(String(reviewed.pr ?? "").trim())?.[1];
+  if (!/^[0-9a-f]{40}$/.test(sha) || !num) return null;
+  try {
+    const out = await git(["ls-remote", "origin", `refs/pull/${num}/head`], ws, ceiling);
+    const [forge, name] = out.split("\n")[0]?.split(/\s+/) ?? [];
+    if (name !== `refs/pull/${num}/head` || !/^[0-9a-f]{40}$/.test(forge ?? "")) return null;
+    if (forge === sha) return sha;
+    await git(["merge-base", "--is-ancestor", sha, forge!], ws, ceiling);
+    return sha;
+  } catch {
+    return null;
+  }
 }
 
 const z = (s: string) => s.split("\0").filter(Boolean);
@@ -237,6 +271,8 @@ export async function checkWorkspaceClean(opts: {
   groupDir: string | null;
   taskId: string;
   repositoryUrl: string | null | undefined;
+  /** The PR head a code_review attempt reviewed (task input `pr`, `head_sha`). */
+  reviewed?: ReviewedHead;
   git?: GitRunner;
 }): Promise<WorkspaceCleanResult> {
   const { groupDir, taskId, repositoryUrl } = opts;
@@ -291,9 +327,11 @@ export async function checkWorkspaceClean(opts: {
     const nonInert = await findNonInertGitConfig(real, realRoot, git);
     if (nonInert) return invalid(nonInert);
     const head = await git(["symbolic-ref", "-q", "HEAD"], real, realRoot).catch(() => "");
-    const stranded = await strandedCommits(real, realRoot, branch, head, git);
+    const forge = await verifiedForgeHead(real, realRoot, opts.reviewed, git);
+    const forgeHeads = forge ? [forge] : [];
+    const stranded = await strandedCommits(real, realRoot, branch, head, git, forgeHeads);
     if (stranded.length > 0) return { ok: true, clean: false, reason: "unpublished_commits" };
-    const otherUnpublished = await unpublishedCommits(real, realRoot, "--all", git);
+    const otherUnpublished = await unpublishedCommits(real, realRoot, "--all", git, forgeHeads);
     if (otherUnpublished.length > 0)
       return { ok: true, clean: false, reason: "unpublished_commits" };
     const diff = ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--name-only", "-z"];

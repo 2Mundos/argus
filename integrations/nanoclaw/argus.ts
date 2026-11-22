@@ -4293,6 +4293,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
         groupDir,
         taskId: task.id,
         repositoryUrl: task.repository_url,
+        reviewed: { pr: task.input?.pr, headSha: task.input?.head_sha },
       });
       if (!checked.ok) {
         log.warn("Could not verify the task workspace is clean", { task: task.id, ...checked });

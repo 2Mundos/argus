@@ -20,6 +20,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   branchWipClaim,
   checkWorkspaceClean,
+  defaultGit,
   fencePriorWorkspaces,
   maxWorkspacesFromEnv,
   type PriorWorkspace,
@@ -899,6 +900,65 @@ describe("checkWorkspaceClean: prove no unpublished work exists before reporting
       clean: false,
       reason: "unpublished_commits",
     });
+  });
+
+  it("treats a detached reviewed PR head as published only when the forge holds it", async () => {
+    const groupDir = mkGroup();
+    const taskId = randomUUID();
+    const prep = await prepareTaskWorkspace({ groupDir, taskId, repositoryUrl: REPO });
+    expect(prep.ok).toBe(true);
+    if (!prep.ok) return;
+    writeFileSync(path.join(prep.path, "a.txt"), "reviewed\n");
+    git(prep.path, ["add", "a.txt"]);
+    git(prep.path, ["commit", "-q", "-m", "reviewed head"]);
+    const sha = git(prep.path, ["rev-parse", "HEAD"]);
+    // The review checkout: detached, on a non-remote ref; the PR branch is gone from origin.
+    git(prep.path, ["update-ref", "refs/review/pr7head", sha]);
+    git(prep.path, ["checkout", "-q", "--detach", sha]);
+    git(prep.path, ["branch", "-q", "-D", prep.branch]);
+    const forge = (advertised: string) => async (args: string[], cwd: string, ceiling: string) =>
+      args[0] === "ls-remote" ? advertised : defaultGit(args, cwd, ceiling);
+    const reviewed = { pr: 7, headSha: sha };
+    const base = { groupDir, taskId, repositoryUrl: REPO };
+
+    // No forge evidence: still unpublished.
+    expect(await checkWorkspaceClean(base)).toEqual({
+      ok: true,
+      clean: false,
+      reason: "unpublished_commits",
+    });
+    expect(await checkWorkspaceClean({ ...base, reviewed, git: forge("") })).toMatchObject({
+      clean: false,
+    });
+    const other = "1".repeat(40);
+    expect(
+      await checkWorkspaceClean({
+        ...base,
+        reviewed,
+        git: forge(`${other}\trefs/pull/7/head`),
+      }),
+    ).toMatchObject({ clean: false });
+    // A reviewer commit on top of the reviewed head is not on the forge.
+    writeFileSync(path.join(prep.path, "b.txt"), "fix\n");
+    git(prep.path, ["add", "b.txt"]);
+    git(prep.path, ["commit", "-q", "-m", "reviewer fix"]);
+    expect(
+      await checkWorkspaceClean({
+        ...base,
+        reviewed,
+        git: forge(`${sha}\trefs/pull/7/head`),
+      }),
+    ).toMatchObject({ clean: false, reason: "unpublished_commits" });
+    git(prep.path, ["reset", "-q", "--hard", sha]);
+
+    // The forge advertises the reviewed head: published.
+    expect(
+      await checkWorkspaceClean({
+        ...base,
+        reviewed,
+        git: forge(`${sha}\trefs/pull/7/head`),
+      }),
+    ).toEqual({ ok: true, clean: true });
   });
 
   it("detects staged, unstaged, and untracked changes", async () => {

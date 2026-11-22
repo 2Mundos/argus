@@ -31,6 +31,8 @@ class CheckpointAttestation(BaseModel):
 
     reason: str = Field(min_length=1, max_length=500)
     owner_agent_id: str | None = Field(default=None, min_length=1, max_length=200)
+    override_failed: bool = False
+    """Supersede a recorded `failed` checkpoint state; no other state is replaced."""
 
     @field_validator("reason")
     @classmethod
@@ -48,6 +50,7 @@ class CheckpointAttestationResult(BaseModel):
     owner_agent_id: str
     owner_status: Literal["live", "stale", "ended", "unknown"]
     checkpoint_state: Literal["nothing_to_save"]
+    previous_state: str | None = None
     attested_at: datetime
     actor: str
     reason: str
@@ -239,8 +242,8 @@ async def attest_nothing_to_save(
     actor: str,
 ) -> CheckpointAttestationResult:
     """Admin recovery for one ended attempt whose checkpoint step was never reported.
-    Refuses open claims, live owners, and attempts with any recorded checkpoint state;
-    never writes `tasks` and records actor and reason in the audit event log."""
+    Refuses open claims, live owners, and attempts with a recorded checkpoint state, except
+    that a `failed` one is replaced when `override_failed` is set; never writes `tasks` and records actor and reason in the audit event log."""
     async with tx.conn.execute(
         "SELECT id, state FROM tasks WHERE id = ?", (task_id,)
     ) as cur:
@@ -290,7 +293,11 @@ async def attest_nothing_to_save(
         raise ConflictError(
             f"owner agent {row['agent_id']} is still live", code="owner_live"
         )
-    if row["checkpoint_state"] is not None:
+    previous_state = row["checkpoint_state"]
+    previous_detail = row["checkpoint_detail"]
+    if previous_state is not None and not (
+        previous_state == "failed" and body.override_failed
+    ):
         raise ConflictError(
             f"attempt {attempt} of task {task_id} already has checkpoint state"
             f" {row['checkpoint_state']}",
@@ -317,6 +324,8 @@ async def attest_nothing_to_save(
             "owner_status": owner_status,
             "checkpoint_state": "nothing_to_save",
             "reason": body.reason,
+            "previous_state": previous_state,
+            "previous_detail": previous_detail,
         },
     )
     return CheckpointAttestationResult(
@@ -326,6 +335,7 @@ async def attest_nothing_to_save(
         owner_agent_id=row["agent_id"],
         owner_status=owner_status,
         checkpoint_state="nothing_to_save",
+        previous_state=previous_state,
         attested_at=tx.now,
         actor=actor,
         reason=body.reason,

@@ -1706,11 +1706,14 @@ async def attest_checkpoint_nothing_to_save(
     attempt: int,
     reason: str,
     owner_agent_id: str | None = None,
+    override_failed: bool = False,
 ) -> dict:
     """Attest `nothing_to_save` for one ended attempt whose checkpoint step was never
     reported (admin only). Audited with actor and reason; refuses open claims, live
-    owners, and attempts with a recorded checkpoint state."""
+    owners, and recorded checkpoint states, except `failed` with override_failed=true."""
     body: dict[str, Any] = {"reason": reason}
+    if override_failed:
+        body["override_failed"] = True
     if owner_agent_id is not None:
         body["owner_agent_id"] = owner_agent_id
     return await _call(

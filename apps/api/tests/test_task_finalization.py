@@ -360,8 +360,11 @@ def attest(
     *,
     headers: dict[str, str] | None = None,
     owner_agent_id: str | None = None,
+    override_failed: bool = False,
 ):
     body: dict[str, object] = {"reason": reason}
+    if override_failed:
+        body["override_failed"] = True
     if owner_agent_id is not None:
         body["owner_agent_id"] = owner_agent_id
     return client.post(
@@ -389,6 +392,7 @@ def test_admin_attestation_sets_nothing_to_save_and_audits_and_refuses_unsafe_ca
     # End the claim without any checkpoint report; owner is still live -> refused.
     released = client.post(f"/api/tasks/{task_id}/release", json={"reason": "requeue"})
     assert released.status_code == 200
+    assert attest(client, task_id, 1, "x", override_failed=True).status_code == 409
     live_res = attest(client, task_id, 1, "owner still running")
     assert live_res.status_code == 409
     assert live_res.json()["detail"]["code"] == "owner_live"
@@ -471,3 +475,23 @@ def test_admin_attestation_sets_nothing_to_save_and_audits_and_refuses_unsafe_ca
     recorded = attest(client, task_id, 2, "cannot override failed")
     assert recorded.status_code == 409
     assert recorded.json()["detail"]["code"] == "checkpoint_already_recorded"
+
+    # `failed` alone is superseded only with the explicit flag; the audit keeps what it replaced.
+    done = attest(
+        client, task_id, 2, "unpublished commit is on the forge", override_failed=True
+    )
+    assert done.status_code == 200
+    assert done.json()["previous_state"] == "failed"
+    audit = [
+        e
+        for e in client.get(
+            "/api/events", params={"subject_id": task_id}, headers=ADMIN
+        ).json()
+        if e["kind"] == "task.checkpoint_attested" and e["data"]["attempt"] == 2
+    ]
+    assert audit[0]["data"]["previous_state"] == "failed"
+    assert audit[0]["data"]["previous_detail"] == "env_checkpoint_store_missing"
+    # A superseded state is nothing_to_save, which the flag does not replace.
+    again = attest(client, task_id, 2, "twice", override_failed=True)
+    assert again.status_code == 409
+    assert again.json()["detail"]["code"] == "checkpoint_already_recorded"

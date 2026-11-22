@@ -1191,3 +1191,17 @@ def test_mcp_attest_checkpoint_nothing_to_save_is_admin_only_and_audited(
     assert len(ev) == 1
     assert ev[0]["actor"] == "admin:preset"
     assert ev[0]["data"]["reason"] == reason
+    assert ev[0]["data"]["previous_state"] is None
+
+    # A recorded state is refused, with or without the failed-only override flag.
+    for flag in (False, True):
+        refused = tool(
+            client,
+            ADMIN_TOKEN,
+            "attest_checkpoint_nothing_to_save",
+            task_id=claimed["id"],
+            attempt=1,
+            reason="again",
+            override_failed=flag,
+        )
+        assert "checkpoint_already_recorded" in str(refused)
