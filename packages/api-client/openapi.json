@@ -4159,6 +4159,11 @@
       "CheckpointAttestation": {
         "description": "Admin attestation that one ended attempt left no unpublished work.",
         "properties": {
+          "override_failed": {
+            "default": false,
+            "title": "Override Failed",
+            "type": "boolean"
+          },
           "owner_agent_id": {
             "anyOf": [
               {
@@ -4222,6 +4227,17 @@
             ],
             "title": "Owner Status",
             "type": "string"
+          },
+          "previous_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous State"
           },
           "reason": {
             "title": "Reason",
@@ -39550,7 +39566,7 @@
     },
     "/api/tasks/{task_id}/attempts/{attempt}/checkpoint/attest": {
       "post": {
-        "description": "Admin attestation that one ended attempt left no unpublished work when its\ncheckpoint step was never reported. Audited with actor and reason; refuses open\nclaims (409 `claim_open`), live owners (409 `owner_live`), and attempts that\nalready have a recorded checkpoint state (409 `checkpoint_already_recorded`).",
+        "description": "Admin attestation that one ended attempt left no unpublished work when its\ncheckpoint step was never reported. Audited with actor and reason; refuses open\nclaims (409 `claim_open`), live owners (409 `owner_live`), and attempts that\nalready have a recorded checkpoint state (409 `checkpoint_already_recorded`); a\nrecorded `failed` state is replaced only with `override_failed: true`, and the\naudit event carries the previous state and detail.",
         "operationId": "attest_checkpoint_nothing_to_save_api_tasks__task_id__attempts__attempt__checkpoint_attest_post",
         "parameters": [
           {

@@ -807,7 +807,9 @@ async def attest_checkpoint_nothing_to_save(
     """Admin attestation that one ended attempt left no unpublished work when its
     checkpoint step was never reported. Audited with actor and reason; refuses open
     claims (409 `claim_open`), live owners (409 `owner_live`), and attempts that
-    already have a recorded checkpoint state (409 `checkpoint_already_recorded`)."""
+    already have a recorded checkpoint state (409 `checkpoint_already_recorded`); a
+    recorded `failed` state is replaced only with `override_failed: true`, and the
+    audit event carries the previous state and detail."""
     async with db.write() as tx:
         return await finalization.attest_nothing_to_save(
             tx, task_id, attempt, body, caller.actor

@@ -3126,7 +3126,9 @@ export interface paths {
          * @description Admin attestation that one ended attempt left no unpublished work when its
          *     checkpoint step was never reported. Audited with actor and reason; refuses open
          *     claims (409 `claim_open`), live owners (409 `owner_live`), and attempts that
-         *     already have a recorded checkpoint state (409 `checkpoint_already_recorded`).
+         *     already have a recorded checkpoint state (409 `checkpoint_already_recorded`); a
+         *     recorded `failed` state is replaced only with `override_failed: true`, and the
+         *     audit event carries the previous state and detail.
          */
         post: operations["attest_checkpoint_nothing_to_save_api_tasks__task_id__attempts__attempt__checkpoint_attest_post"];
         delete?: never;
@@ -5222,6 +5224,11 @@ export interface components {
          * @description Admin attestation that one ended attempt left no unpublished work.
          */
         CheckpointAttestation: {
+            /**
+             * Override Failed
+             * @default false
+             */
+            override_failed?: boolean;
             /** Owner Agent Id */
             owner_agent_id?: string | null;
             /** Reason */
@@ -5252,6 +5259,8 @@ export interface components {
              * @enum {string}
              */
             owner_status: "live" | "stale" | "ended" | "unknown";
+            /** Previous State */
+            previous_state?: string | null;
             /** Reason */
             reason: string;
             /** Task Id */

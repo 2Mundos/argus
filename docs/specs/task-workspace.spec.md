@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-27
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 # Task workspace: a stable per-task git workspace, checked before the model
@@ -241,6 +241,14 @@ Recovery is only through supported inputs: a verified checkpoint in this node's 
 other instance. Nothing is copied, reset or deleted, and the fence never writes, so
 concurrent attempts and stale leases cannot overwrite anything.
 
+A `code_review` attempt reviews a PR head the forge already holds, so that commit is
+published even after a squash merge deletes the branch. When the task input names `pr` and a
+full `head_sha`, the channel's clean check counts commits reachable from that head as
+published only if `git ls-remote origin refs/pull/<n>/head` shows the head itself, or a
+descendant this workspace holds. An unreachable forge, a different head or a commit
+beyond it (a reviewer's own) is no evidence and stays `unpublished_commits`, so the
+fence keeps refusing.
+
 # 4. Open Questions
 
 - Retention: when should a finished task's workspace go, given that cleanup
@@ -257,8 +265,9 @@ concurrent attempts and stale leases cannot overwrite anything.
 - **Cross-instance recovery.** 3.7 refuses to start empty without proof, and
   bytes stay on the other instance: nothing transfers them. An admin can attest
   `nothing_to_save` for one ended, unreported attempt whose owner is no longer
-  live ([task finalization](task-finalization.spec.md) 3.3.1), but saved or
-  failed checkpoints still require the work to be published or restored from the
+  live ([task finalization](task-finalization.spec.md) 3.3.1), and a recorded
+  `failed` one only with an explicit `override_failed` and a reason; saved
+  checkpoints still require the work to be published or restored from the
   owning node.
 - **No archive or publish fallback.** A refused workspace waits for an operator:
   there is no push (no grant for new refs) and no archive at the recorded path.

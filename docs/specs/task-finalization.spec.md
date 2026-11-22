@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 # Task finalization
@@ -122,8 +122,9 @@ The channel sends `running` before it saves and the outcome after.
 ## 3.3.1 Admin attestation for legacy unreported attempts
 
 `POST /api/tasks/{id}/attempts/{attempt}/checkpoint/attest`, admin credentials
-only, body `{reason, owner_agent_id?}` (required non-blank `reason`, optional
-`owner_agent_id` to disambiguate across retry generations). Recovers a single
+only, body `{reason, owner_agent_id?, override_failed?}` (required non-blank
+`reason`, optional `owner_agent_id` to disambiguate across retry generations,
+`override_failed` default false). Recovers a single
 ended attempt whose worker exited without recording a checkpoint state (for
 example, attempts completed before the channel proved `nothing_to_save` whose
 instance has since been replaced):
@@ -131,14 +132,18 @@ instance has since been replaced):
 - Refuses non-admin callers (403), blank reasons (422) and unknown tasks or
   attempts (404).
 - Refuses while the claim is still open (409 `claim_open`), while the owner
-  agent is `live` (409 `owner_live`), or when any `checkpoint_state` is already
-  recorded (409 `checkpoint_already_recorded`).
+  agent is `live` (409 `owner_live`), or when a `checkpoint_state` is already
+  recorded (409 `checkpoint_already_recorded`). The one exception is `failed`
+  with `override_failed: true`, for a failure the admin has since shown to be
+  false (for example, the "unpublished" commit is on the forge); `saved`,
+  `running` and `nothing_to_save` are never replaced.
 - Sets `checkpoint_state` to `nothing_to_save` on that single `task_attempts`
   row (`checkpoint_started_at = checkpoint_ended_at = tx.now`,
   `checkpoint_detail` recording actor and reason, truncated to 200 characters),
   writes no `tasks` column, and appends a `task.checkpoint_attested` audit event
-  with actor, attempt, attempt id, owner agent id, owner status and reason in
-  the same transaction.
+  with actor, attempt, attempt id, owner agent id, owner status, reason and the
+  previous state and detail (null when none) in the same transaction. The MCP tool
+  takes the same `override_failed` flag.
 
 ## 3.4 What the task read shows
 
