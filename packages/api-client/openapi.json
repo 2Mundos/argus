@@ -2008,7 +2008,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },
@@ -9339,6 +9340,41 @@
                 "role": "executor",
                 "runtime": "nanoclaw",
                 "same_provider_same_account": false
+              },
+              {
+                "adapter": "dsh",
+                "effort_model_rules": [],
+                "efforts": [],
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:executor:dsh:local",
+                "model_sources": [
+                  "account"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "local",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
+                "adapter": "dsh",
+                "effort_model_rules": [],
+                "efforts": [],
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:executor:dsh:custom",
+                "model_sources": [
+                  "account",
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "custom",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": false
               }
             ],
             "items": {
@@ -9941,7 +9977,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },
@@ -10342,7 +10379,8 @@
               "agent",
               "opencode",
               "copilot",
-              "agy"
+              "agy",
+              "dsh"
             ],
             "title": "Executor",
             "type": "string"
@@ -13405,7 +13443,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },
@@ -22012,7 +22051,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },
@@ -22135,7 +22175,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },
@@ -22200,7 +22241,8 @@
               "agent",
               "copilot",
               "opencode",
-              "agy"
+              "agy",
+              "dsh"
             ],
             "title": "Adapter",
             "type": "string"
@@ -29397,7 +29439,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },
@@ -29612,7 +29655,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },
@@ -29759,7 +29803,8 @@
                   "opencode",
                   "agent",
                   "copilot",
-                  "agy"
+                  "agy",
+                  "dsh"
                 ],
                 "type": "string"
               },

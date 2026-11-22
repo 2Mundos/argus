@@ -2584,6 +2584,95 @@ test("--auth-probe for dsh: installed does not mean authenticated", async (t) =>
   assert.equal(ready.code, 0);
 });
 
+test("dsh: OpenRouter sentinel auth-probe targets only the leased endpoint and fails closed on redirect", async (t) => {
+  const s = dshSandbox(t, { emit: [] });
+  const env = {
+    ...s.env,
+    ARGUS_ACCOUNT_API_KEY: OPENCODE_GATEWAY_SENTINEL,
+    ARGUS_ACCOUNT_SETTINGS: JSON.stringify(OPENCODE_GATEWAY_SETTINGS),
+  };
+  for (const [status, code] of [
+    [200, 0],
+    [401, 79],
+    [403, 79],
+  ]) {
+    const calls = [];
+    const result = await authProbeWithProvider("dsh", env, {
+      request: async (url, headers) => {
+        calls.push({ url, headers });
+        return status;
+      },
+    });
+    assert.equal(result.code, code);
+    assert.equal(calls[0].url, "https://openrouter.ai/api/v1/models");
+    assert.equal(calls[0].headers.authorization, `Bearer ${OPENCODE_GATEWAY_SENTINEL}`);
+  }
+  for (const settings of [
+    null,
+    { ...OPENCODE_GATEWAY_SETTINGS, base_url: "https://evil.example/v1" },
+  ]) {
+    assert.equal(authStatus("dsh", env, s.home, settings).ok, false);
+  }
+  assert.equal(authStatus("dsh", {}, s.home, OPENCODE_GATEWAY_SETTINGS).ok, false);
+});
+
+test("dsh: managed custom and local pins require matching provider, settings and ARGUS_ACCOUNT_API_KEY", async (t) => {
+  const s = dshSandbox(t, {
+    emit: [ev({ type: "final", sessionId: "s1", reason: { kind: "completed" }, text: "ok" })],
+  });
+  const policy = JSON.parse(
+    fs.readFileSync(new URL("./model-policy.defaults.json", import.meta.url), "utf8"),
+  );
+  const customSettings = { ...OPENCODE_GATEWAY_SETTINGS, model: "deepseek/deepseek-chat" };
+  const localSettings = { base_url: "http://127.0.0.1:8080/v1", label: "local", model: "qwen" };
+  const file = path.join(s.dir, "policy.json");
+  for (const [pinProvider, heldProvider, roleSettings, key, expected] of [
+    ["custom", "custom", customSettings, OPENCODE_GATEWAY_SENTINEL, 0],
+    ["custom", "local", customSettings, OPENCODE_GATEWAY_SENTINEL, 78],
+    ["custom", "cursor", customSettings, OPENCODE_GATEWAY_SENTINEL, 78],
+    ["custom", "custom", null, OPENCODE_GATEWAY_SENTINEL, 78],
+    ["custom", "custom", customSettings, "argus-local-harness", 78],
+    ["custom", "custom", customSettings, "", 78],
+    ["local", "local", localSettings, "argus-local-harness", 0],
+    ["local", "custom", localSettings, OPENCODE_GATEWAY_SENTINEL, 78],
+    ["local", "local", null, "argus-local-harness", 78],
+  ]) {
+    fs.writeFileSync(
+      file,
+      JSON.stringify(
+        policySnapshot(policy, {
+          task_id: "t1",
+          attempt: 1,
+          executor_account_provider: heldProvider,
+          executor_settings: roleSettings,
+          executor_model: {
+            executor: "dsh",
+            model: (roleSettings ?? customSettings).model,
+            account_provider: pinProvider,
+          },
+        }),
+      ),
+    );
+    const { code, report } = await run(["dsh", "--cwd", s.work, "--out", s.out], {
+      env: {
+        ...s.env,
+        ARGUS_ACCOUNT_API_KEY: key,
+        ARGUS_MODEL_POLICY_FILE: file,
+      },
+    });
+    assert.equal(code, expected, JSON.stringify({ pinProvider, heldProvider, key, report }));
+    if (expected === 78) {
+      assert.equal(report.blocked, "auth_missing");
+    } else if (pinProvider === "custom") {
+      const overlay = s.read("overlay");
+      assert.match(overlay, /baseURL: "https:\/\/openrouter\.ai\/api\/v1"/);
+      assert.match(overlay, /apiKeyEnv: ARGUS_ACCOUNT_API_KEY/);
+      assert.match(overlay, /model: "deepseek\/deepseek-chat"/);
+      assert.ok(!overlay.includes(OPENCODE_GATEWAY_SENTINEL));
+    }
+  }
+});
+
 import { attemptKubeconfig, scopeKubeconfig } from "./argus-delegate.mjs";
 
 test("integrations: only the claude executor gets the attempt's kubeconfig; others are refused", async (t) => {

@@ -17,6 +17,7 @@ from argus_core.engines import (
     LocalModelInfo,
     Readiness,
 )
+from argus_core.execution_chains import EXECUTION_CAPABILITIES
 
 from argus_api.engines.local_readiness import merge_local_validated
 
@@ -311,4 +312,11 @@ def build(
                 ),
             )
         )
-    return EngineCatalog(engines=entries, local=local)
+    capabilities = (
+        EXECUTION_CAPABILITIES
+        if dsh_enabled
+        else [c for c in EXECUTION_CAPABILITIES if c.adapter != "dsh"]
+    )
+    return EngineCatalog(
+        engines=entries, execution_capabilities=capabilities, local=local
+    )

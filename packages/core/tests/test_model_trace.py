@@ -29,7 +29,7 @@ def test_missing_metadata_is_explicitly_not_reported() -> None:
 
 
 def test_delegate_executor_set_matches_the_supported_executors() -> None:
-    for executor in ("claude", "codex", "opencode", "agent", "copilot"):
+    for executor in ("claude", "codex", "opencode", "agent", "copilot", "agy", "dsh"):
         assert ExecutionReport(**RUN, executor=executor).executor == executor
     with pytest.raises(ValidationError):
         ExecutionReport(**RUN, executor="unknown-cli")

@@ -58,6 +58,7 @@ from pydantic import TypeAdapter
 from argus_api.accounts import usage
 from argus_api.accounts.eligibility import LEASE_BLOCK_SQL, engine_pool
 from argus_api.accounts.local_health import HEALTH_REASONS
+from argus_api.config import is_dsh_enabled
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decision_store
 from argus_api.disk_guard import DiskGuard
@@ -396,6 +397,7 @@ async def lease(
     credential_kinds: Sequence[str] | None = None,
     runtime: str = "worker",
     local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
+    dsh_enabled: bool | None = None,
 ) -> AccountLease:
     """Lease the best usable account for `role`, ranked globally by priority (then
     least leased, then name); the local model is a tier below every cloud account,
@@ -413,6 +415,7 @@ async def lease(
     (builtin-orchestrator spec 3.4)."""
     if not runtime_providers:
         raise ValidationFailedError("runtime_providers must be non-empty")
+    pin = None
     if task_id is None or attempt is None:
         scope = _Scope(runtime_providers, None, None)
         prefer_local = False
@@ -428,8 +431,22 @@ async def lease(
                 code="execution_lease_owned",
             )
         await tasks.check_lease(tx, task_id, attempt, agent_id)
+        if role == "executor":
+            pin = await tasks.executor_pin(tx.conn, task_id)
+            if (
+                pin is not None
+                and pin.executor == "dsh"
+                and not is_dsh_enabled(dsh_enabled)
+            ):
+                raise ValidationFailedError(
+                    "dsh executor is disabled (set ARGUS_DSH_ENABLED=true on the API to enable)",
+                    code="dsh_disabled",
+                )
         scope = await _scope(tx, task_id, role, runtime_providers, agent_id)
         prefer_local = await _prefer_local(tx, task_id, role)
+    fallback_to_engine = (
+        role == "executor" and pin is not None and pin.executor == "dsh"
+    )
     allowed = scope.providers
     await release(tx, agent_id, "replaced", role)
     result = None
@@ -444,6 +461,7 @@ async def lease(
             runtime=runtime,
             local_served_models=local_served_models,
             prefer=prefer,
+            fallback_to_engine=fallback_to_engine,
         )
         if result is not None:
             result = prefer.apply(result)
@@ -461,18 +479,28 @@ async def lease(
             runtime=runtime,
             local_served_models=local_served_models,
             prefer=prefer,
+            fallback_to_engine=fallback_to_engine,
         )
     if result is None:
         reset = await earliest_reset(tx, role, allowed)
         pinned = (
-            await tasks.executor_provider(tx.conn, task_id)
-            if role == "executor" and task_id is not None
-            else None
+            pin.provider
+            if pin is not None
+            else (
+                await tasks.executor_provider(tx.conn, task_id)
+                if role == "executor" and task_id is not None
+                else None
+            )
+        )
+        model_note = (
+            " (account must configure an executor or engine model)"
+            if fallback_to_engine and pinned == CUSTOM_PROVIDER
+            else ""
         )
         raise NoAccountError(
             f"no usable {role} account"
             + (
-                f": the task's pinned executor needs provider {pinned}"
+                f": the task's pinned executor needs provider {pinned}{model_note}"
                 if pinned
                 else ""
             )
@@ -612,6 +640,7 @@ async def claim(
     default_timeout_s: int = 0,
     disk_guard: DiskGuard | None = None,
     local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
+    dsh_enabled: bool | None = None,
 ) -> tuple[Task | None, AccountLease | None]:
     """Claim a task and, when the agent holds no engine lease, reserve its account
     in the same transaction: a task is only claimed when an account leases for it
@@ -640,6 +669,7 @@ async def claim(
             capabilities,
             store,
             local_served_models,
+            dsh_enabled=dsh_enabled,
         )
         return selected is not None
 
@@ -1605,6 +1635,7 @@ async def _try_lease(
     runtime: str = "worker",
     local_served_models: Mapping[str, tuple[str, ...] | None] | None = None,
     prefer: "OrchestratorPreference | None" = None,
+    fallback_to_engine: bool = False,
 ) -> AccountLease | None:
     """The best usable account for `role` across every provider: cloud before the
     local model (the reverse with `prefer_local`, whose fallback is the cloud in this
@@ -1628,6 +1659,7 @@ async def _try_lease(
         reuse=reuse,
         prefer_local=prefer_local,
         kinds=kinds,
+        fallback_to_engine=fallback_to_engine,
     )
     candidates = [r for r in _only(candidates, only_account) if r["id"] not in exclude]
     for row in candidates:
@@ -1690,7 +1722,9 @@ async def _try_lease(
             kind=row["kind"],
             role=role,
             credential=credential,
-            settings=_settings(row, role, credential),
+            settings=_settings(
+                row, role, credential, fallback_to_engine=fallback_to_engine
+            ),
         )
     return None
 
@@ -1720,20 +1754,31 @@ def _local_model_eligible(
     return model in served if isinstance(model, str) and model else True
 
 
-def _serves(row: aiosqlite.Row, role: LeaseRole) -> bool:
-    """A custom account with no model for `role` cannot serve it (only that role)."""
+def _serves(
+    row: aiosqlite.Row, role: LeaseRole, *, fallback_to_engine: bool = False
+) -> bool:
+    """A custom account with no model for `role` cannot serve it (only that role),
+    unless `fallback_to_engine` is enabled (the `dsh` executor route)."""
     config = CustomConfig.model_validate_json(row["config"]) if row["config"] else None
-    return serves_role(row["provider"], config, role)
+    return serves_role(
+        row["provider"], config, role, fallback_to_engine=fallback_to_engine
+    )
 
 
 def _settings(
     row: aiosqlite.Row,
     role: LeaseRole,
     credential: dict | None = None,
+    *,
+    fallback_to_engine: bool = False,
 ) -> LeaseSettings | None:
     """Where and how to call a custom or local account, for the role it is leased in."""
     if row["provider"] == CUSTOM_PROVIDER and row["config"]:
-        return lease_settings(CustomConfig.model_validate_json(row["config"]), role)
+        return lease_settings(
+            CustomConfig.model_validate_json(row["config"]),
+            role,
+            fallback_to_engine=fallback_to_engine,
+        )
     if row["provider"] == LOCAL_PROVIDER and credential is not None:
         return local_lease_settings(credential)
     return None
@@ -1748,6 +1793,7 @@ async def _ranked(
     reuse: bool = False,
     prefer_local: bool = False,
     kinds: Sequence[str] | None = None,
+    fallback_to_engine: bool = False,
 ) -> list[aiosqlite.Row]:
     """The usable accounts for `role` in lease order (cloud before the local
     model, or the reverse with `prefer_local`, then priority, least leased, then provider/name/id). An exhausted
@@ -1768,7 +1814,7 @@ async def _ranked(
             r
             for r in rows
             if role_accepts(role, r["provider"], runtime_providers)
-            and _serves(r, role)
+            and _serves(r, role, fallback_to_engine=fallback_to_engine)
             and (kinds is None or r["kind"] in kinds)
             and (
                 (reuse and r["mine"] is not None)

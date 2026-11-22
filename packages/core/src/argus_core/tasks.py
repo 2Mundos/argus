@@ -82,7 +82,7 @@ class ExecutorModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    executor: Literal["claude", "codex", "agent", "opencode", "copilot", "agy"]
+    executor: Literal["claude", "codex", "agent", "opencode", "copilot", "agy", "dsh"]
     model: ModelId
     account_provider: Literal["local", "custom"] | None = Field(
         default=None, exclude_if=lambda value: value is None
@@ -90,8 +90,13 @@ class ExecutorModel(BaseModel):
 
     @model_validator(mode="after")
     def check_account_provider(self) -> "ExecutorModel":
-        if self.account_provider is not None and self.executor != "opencode":
-            raise ValueError("account_provider is supported only for opencode")
+        if self.executor == "dsh" and self.account_provider is None:
+            raise ValueError("dsh requires account_provider (local or custom)")
+        if self.account_provider is not None and self.executor not in (
+            "opencode",
+            "dsh",
+        ):
+            raise ValueError("account_provider is supported only for opencode and dsh")
         return self
 
     @property

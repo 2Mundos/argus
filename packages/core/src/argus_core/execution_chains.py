@@ -34,7 +34,7 @@ class ExplicitModel(ClosedModel):
 
 
 class Selector(ClosedModel):
-    adapter: Literal["claude", "codex", "agent", "copilot", "opencode", "agy"]
+    adapter: Literal["claude", "codex", "agent", "copilot", "opencode", "agy", "dsh"]
     provider: Literal[
         "anthropic", "openai", "local", "custom", "cursor", "copilot", "google"
     ]
@@ -53,7 +53,8 @@ class Selector(ClosedModel):
 # Runtime conformance/readiness and account-role validation remain API concerns.
 # It mirrors what the NanoClaw worker can run: harness engines are claude (anthropic,
 # local, custom) and codex (openai); executors are the delegate CLIs, one per
-# provider (`EXECUTOR_BY_PROVIDER` in integrations/nanoclaw/argus-accounts.ts).
+# provider (`EXECUTOR_BY_PROVIDER` in integrations/nanoclaw/argus-accounts.ts), plus
+# opt-in dsh on the custom/local account contract.
 _SELECTOR_SOURCES = {
     ("harness", "claude", "anthropic"): {"explicit"},
     ("harness", "claude", "local"): {"account"},
@@ -66,6 +67,8 @@ _SELECTOR_SOURCES = {
     ("executor", "agy", "google"): {"explicit"},
     ("executor", "opencode", "local"): {"account"},
     ("executor", "opencode", "custom"): {"account", "explicit"},
+    ("executor", "dsh", "local"): {"account"},
+    ("executor", "dsh", "custom"): {"account", "explicit"},
 }
 
 
@@ -252,9 +255,10 @@ class PairedAlternative(ClosedModel):
         if self.harness.provider == "local" and self.executor.adapter not in {
             "agent",
             "opencode",
+            "dsh",
         }:
             raise ValueError(
-                "local_pair_restriction: requires agent or opencode executor"
+                "local_pair_restriction: requires agent, opencode or dsh executor"
             )
         # Two pins that differ can never be satisfied; an unpinned side adopts the
         # other's account at selection time (one native identity per provider).
@@ -411,7 +415,7 @@ EXECUTION_CAPABILITIES = [
             "model_sources": sorted(sources),
             "modes": ["single", "paired"] if role == "harness" else ["paired"],
             "excluded_harness_providers": ["local"]
-            if role == "executor" and adapter not in {"agent", "opencode"}
+            if role == "executor" and adapter not in {"agent", "opencode", "dsh"}
             else [],
             "same_provider_same_account": role == "executor" and provider != "custom",
             **(

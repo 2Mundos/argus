@@ -72,6 +72,8 @@ def _lacks_account(entry: EngineEntry | None) -> bool:
 
 def _why_unusable(entry: EngineEntry | None, name: str) -> str:
     if entry is None:
+        if name == "dsh":
+            return "dsh is not usable (disabled; set ARGUS_DSH_ENABLED=true)"
         return f"{name} is not usable (not in the catalogue)"
     r = entry.readiness
     missing = ", ".join(

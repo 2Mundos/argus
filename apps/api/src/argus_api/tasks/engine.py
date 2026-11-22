@@ -26,10 +26,18 @@ async def prefers_local(conn: aiosqlite.Connection, task_id: str) -> bool:
     return row["difficulty"] == Difficulty.TRIVIAL
 
 
+async def executor_pin(
+    conn: aiosqlite.Connection, task_id: str
+) -> ExecutorModel | None:
+    """The task's pinned executor model, None when not pinned."""
+    pin = (await _row(conn, task_id))["executor_model"]
+    return None if pin is None else ExecutorModel.model_validate_json(pin)
+
+
 async def executor_provider(conn: aiosqlite.Connection, task_id: str) -> str | None:
     """The provider of the task's pinned executor, None when not pinned."""
-    pin = (await _row(conn, task_id))["executor_model"]
-    return None if pin is None else ExecutorModel.model_validate_json(pin).provider
+    pin = await executor_pin(conn, task_id)
+    return None if pin is None else pin.provider
 
 
 def pinned_provider(row: aiosqlite.Row) -> str | None:

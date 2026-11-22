@@ -26,6 +26,7 @@ from argus_core.execution_chains import (
 from argus_core.settings import SettingValue
 from pydantic import BaseModel
 
+from argus_api.config import is_dsh_enabled
 from argus_api.db import Tx, ts
 from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.events import record
@@ -96,7 +97,23 @@ async def policy_setting(
     )
 
 
-async def readiness(conn: aiosqlite.Connection, levels: Mapping[str, Any]) -> list[str]:
+def _fallback_to_engine(role: LeaseRole, adapter: str) -> bool:
+    """`dsh` falls back to a custom account's engine model when its executor model is absent."""
+    return role == "executor" and adapter == "dsh"
+
+
+def _uses_dsh(alternative: Alternative) -> bool:
+    return isinstance(alternative, PairedAlternative) and (
+        alternative.executor.adapter == "dsh"
+    )
+
+
+async def readiness(
+    conn: aiosqlite.Connection,
+    levels: Mapping[str, Any],
+    *,
+    dsh_enabled: bool | None = None,
+) -> list[str]:
     """Bounded, non-secret readiness notes for accounts a saved chain references.
 
     A disabled or exhausted account may be saved; admission refuses it with the
@@ -104,7 +121,8 @@ async def readiness(conn: aiosqlite.Connection, levels: Mapping[str, Any]) -> li
     """
     from argus_api.accounts import service as accounts
 
-    wanted: dict[str, set[LeaseRole]] = {}
+    wanted: dict[str, set[tuple[LeaseRole, bool]]] = {}
+    has_dsh = False
     for alternatives in levels.values():
         for alternative in alternatives:
             selectors: list[tuple[LeaseRole, Any]] = [
@@ -113,10 +131,17 @@ async def readiness(conn: aiosqlite.Connection, levels: Mapping[str, Any]) -> li
             executor = alternative.get("executor")
             if executor is not None:
                 selectors.append(("executor", executor))
+                if executor.get("adapter") == "dsh":
+                    has_dsh = True
             for role, selector in selectors:
                 if selector.get("account_id") is not None:
-                    wanted.setdefault(selector["account_id"], set()).add(role)
+                    fallback = _fallback_to_engine(role, selector.get("adapter", ""))
+                    wanted.setdefault(selector["account_id"], set()).add(
+                        (role, fallback)
+                    )
     warnings: list[str] = []
+    if has_dsh and not is_dsh_enabled(dsh_enabled):
+        warnings.append("dsh executor is disabled (ARGUS_DSH_ENABLED is not true)")
     for account_id in sorted(wanted):
         async with conn.execute(
             "SELECT provider, state, exhausted_until, config FROM accounts WHERE id = ?",
@@ -130,16 +155,21 @@ async def readiness(conn: aiosqlite.Connection, levels: Mapping[str, Any]) -> li
             warnings.append(f"account {account_id} is disabled")
         elif account["state"] == "exhausted":
             warnings.append(f"account {account_id} is exhausted")
-        warnings.extend(
-            f"account {account_id} does not serve the {role} role"
-            for role in sorted(wanted[account_id])
-            if not accounts._serves(account, role)
-        )
+        for role, fallback in sorted(wanted[account_id]):
+            if not accounts._serves(account, role, fallback_to_engine=fallback):
+                warnings.append(
+                    f"account {account_id} has neither executor nor engine model"
+                    if fallback
+                    else f"account {account_id} does not serve the {role} role"
+                )
     return warnings
 
 
 async def validate_references(
-    conn: aiosqlite.Connection, policy: ExecutionChains
+    conn: aiosqlite.Connection,
+    policy: ExecutionChains,
+    *,
+    dsh_enabled: bool | None = None,
 ) -> None:
     from argus_api.accounts import service as accounts
 
@@ -147,6 +177,14 @@ async def validate_references(
         raise ValidationFailedError("legacy_env_lock", code="legacy_env_lock")
     for difficulty, alternatives in policy.difficulties.items():
         for index, alternative in enumerate(alternatives):
+            if _uses_dsh(alternative) and not is_dsh_enabled(dsh_enabled):
+                raise ValidationFailedError(
+                    "dsh executor is disabled (set ARGUS_DSH_ENABLED=true on the API to enable)",
+                    code="dsh_disabled",
+                    details=[
+                        f"difficulties/{difficulty}/{index}/executor: dsh_disabled"
+                    ],
+                )
             selectors: list[tuple[LeaseRole, Selector]] = [
                 ("engine", alternative.harness)
             ]
@@ -159,13 +197,14 @@ async def validate_references(
                     "SELECT * FROM accounts WHERE id = ?", (selector.account_id,)
                 ) as cur:
                     account = await cur.fetchone()
+                fallback = _fallback_to_engine(role, selector.adapter)
                 reason = (
                     "account_missing"
                     if account is None
                     else "provider_mismatch"
                     if account["provider"] != selector.provider
-                    else "role_unavailable"
-                    if not accounts._serves(account, role)
+                    else ("executor_model_missing" if fallback else "role_unavailable")
+                    if not accounts._serves(account, role, fallback_to_engine=fallback)
                     else None
                 )
                 if reason:
@@ -362,6 +401,7 @@ async def _reserve_account(
 ) -> tuple[AccountLease, ResolvedSelector]:
     from argus_api.accounts import service as accounts
 
+    fallback = _fallback_to_engine(role, selector.adapter)
     # A pin narrows to exactly that account; never fall back to the priority winner.
     lease = await accounts._try_lease(
         tx,
@@ -373,8 +413,18 @@ async def _reserve_account(
         exclude=rejected,
         reuse_held=reuse,
         local_served_models=served,
+        fallback_to_engine=fallback,
     )
     if lease is None:
+        if fallback and selector.provider == "custom" and account_id is not None:
+            async with tx.conn.execute(
+                "SELECT provider, config FROM accounts WHERE id = ?", (account_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            if row is not None and not accounts._serves(
+                row, role, fallback_to_engine=True
+            ):
+                raise Unavailable("executor_model_missing")
         raise Unavailable(f"{role}_account_unavailable")
     known = (served or {}).get(lease.account_id)
     if selector.model.source == "explicit":
@@ -415,6 +465,8 @@ async def reserve(
     capabilities: list[str],
     store: SecretStore,
     served: Mapping[str, tuple[str, ...] | None] | None,
+    *,
+    dsh_enabled: bool | None = None,
 ) -> tuple[ExecutionSelection, AccountLease, AccountLease | None] | None:
 
     if locked():
@@ -457,6 +509,8 @@ async def reserve(
         alternative = policy.alternatives[index]
         try:
             async with tx.savepoint():
+                if _uses_dsh(alternative) and not is_dsh_enabled(dsh_enabled):
+                    raise Unavailable("dsh_disabled")
                 if not required_capabilities(alternative) <= set(capabilities):
                     raise Unavailable("worker_capability_missing")
                 if alternative.harness.provider not in providers or (
@@ -797,7 +851,12 @@ async def executor_delivery(
         raise ConflictError(
             "execution credential missing", code="execution_lease_missing"
         )
-    settings = accounts._settings(row, "executor", credential)
+    settings = accounts._settings(
+        row,
+        "executor",
+        credential,
+        fallback_to_engine=_fallback_to_engine("executor", resolved.selector.adapter),
+    )
     if settings is not None:
         settings = settings.model_copy(update={"model": resolved.model})
     return AccountLease(
@@ -888,6 +947,8 @@ async def eligible(
     policy: RoutePolicy,
     capabilities: list[str],
     providers: list[str],
+    *,
+    dsh_enabled: bool | None = None,
 ) -> bool:
     """Read-only capacity/role evidence; credential delivery is checked at reservation.
 
@@ -902,7 +963,13 @@ async def eligible(
     )
     for alternative in policy.alternatives[policy.cursor :]:
         if await alternative_eligible(
-            conn, now, alternative, restriction, capabilities, providers
+            conn,
+            now,
+            alternative,
+            restriction,
+            capabilities,
+            providers,
+            dsh_enabled=dsh_enabled,
         ):
             return True
     return False
@@ -915,7 +982,11 @@ async def alternative_eligible(
     restriction: list[str] | None,
     capabilities: list[str],
     providers: list[str],
+    *,
+    dsh_enabled: bool | None = None,
 ) -> bool:
+    if _uses_dsh(alternative) and not is_dsh_enabled(dsh_enabled):
+        return False
     if not required_capabilities(alternative) <= set(capabilities):
         return False
     if alternative.harness.provider not in providers or (
@@ -966,7 +1037,8 @@ async def _usable_accounts(
         (selector.provider, pin, pin, ts(now)),
     ) as cur:
         rows = await cur.fetchall()
-    return [a for a in rows if accounts._serves(a, role)]
+    fallback = _fallback_to_engine(role, selector.adapter)
+    return [a for a in rows if accounts._serves(a, role, fallback_to_engine=fallback)]
 
 
 def _fits(

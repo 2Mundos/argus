@@ -14,8 +14,8 @@ T, S = Difficulty.TRIVIAL, Difficulty.STANDARD
 def test_parse_difficulty_executors_empty_means_none() -> None:
     assert parse_difficulty_executors({"trivial": []}) == {"trivial": ()}
     assert parse_difficulty_executors({"trivial": ["none"]}) == {"trivial": ()}
-    assert parse_difficulty_executors({"hard": ["codex", "claude"]}) == {
-        "hard": ("codex", "claude")
+    assert parse_difficulty_executors({"hard": ["codex", "claude", "dsh"]}) == {
+        "hard": ("codex", "claude", "dsh")
     }
     with pytest.raises(ValueError, match="must be alone"):
         parse_difficulty_executors({"hard": ["none", "claude"]})

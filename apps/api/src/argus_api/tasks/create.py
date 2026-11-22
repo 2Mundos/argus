@@ -17,6 +17,7 @@ from argus_core.kinds import TaskKind
 from argus_core.tasks import Deliverable, PromptTrust, Task, TaskCreate
 
 from argus_api import orchestrator
+from argus_api.config import is_dsh_enabled
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
 from argus_api.errors import (
@@ -41,6 +42,21 @@ from argus_api.tasks.reads import S, _row, _states, get_task
 from argus_api.tasks.transitions import _dependency_failed_event
 
 
+def _check_dsh_enabled(body: TaskCreate, dsh_enabled: bool | None) -> None:
+    if (
+        body.executor_model is not None
+        and body.executor_model.executor == "dsh"
+        and not is_dsh_enabled(dsh_enabled)
+    ):
+        raise ValidationFailedError(
+            "dsh executor is disabled (set ARGUS_DSH_ENABLED=true on the API to enable)",
+            code="dsh_disabled",
+            details=[
+                "executor_model: dsh executor is disabled (ARGUS_DSH_ENABLED is not true)"
+            ],
+        )
+
+
 async def create_task(
     tx: Tx,
     body: TaskCreate,
@@ -51,6 +67,7 @@ async def create_task(
     untrusted: bool = False,
     idempotency_key: str | None = None,
     chat_turn: str | None = None,
+    dsh_enabled: bool | None = None,
 ) -> Task:
     """Create a task.
 
@@ -71,6 +88,7 @@ async def create_task(
             hourly_limit=hourly_limit,
             untrusted=untrusted,
             chat_turn=chat_turn,
+            dsh_enabled=dsh_enabled,
         )
     # What was sent, not what defaults would fill: an omitted and a null budget
     # differ, and a replay after a settings change returns the same task (3.3).
@@ -98,6 +116,7 @@ async def create_task(
         hourly_limit=hourly_limit,
         untrusted=untrusted,
         chat_turn=chat_turn,
+        dsh_enabled=dsh_enabled,
     )
     await tx.conn.execute(
         "INSERT INTO task_creation_keys (actor, idempotency_key, request_digest,"
@@ -116,7 +135,9 @@ async def _create_task(
     hourly_limit: int | None,
     untrusted: bool,
     chat_turn: str | None = None,
+    dsh_enabled: bool | None = None,
 ) -> Task:
+    _check_dsh_enabled(body, dsh_enabled)
     if body.parent_id is not None:
         parent = await _row(tx.conn, body.parent_id)
         if as_worker is not None and not (
@@ -316,10 +337,13 @@ def _apply_kind_defaults(body: TaskCreate, kind: TaskKind) -> TaskCreate:
     return body.model_copy(update=update)
 
 
-async def check_create(conn: aiosqlite.Connection, body: TaskCreate) -> None:
+async def check_create(
+    conn: aiosqlite.Connection, body: TaskCreate, *, dsh_enabled: bool | None = None
+) -> None:
     """The create rules that need no actor or parent: the kind and its input schema,
     the project and pinned pages. Routine templates are checked with it on save
     (routines spec 3.1)."""
+    _check_dsh_enabled(body, dsh_enabled)
     own_pins = body.knowledge
     kind = await kinds.get_kind(conn, body.kind)
     body = _apply_kind_defaults(body, kind)

@@ -4525,7 +4525,7 @@ export interface components {
          */
         Alternative: {
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** Model */
             model?: string | null;
             /** Provider */
@@ -7320,6 +7320,41 @@ export interface components {
              *         "role": "executor",
              *         "runtime": "nanoclaw",
              *         "same_provider_same_account": false
+             *       },
+             *       {
+             *         "adapter": "dsh",
+             *         "effort_model_rules": [],
+             *         "efforts": [],
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:executor:dsh:local",
+             *         "model_sources": [
+             *           "account"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "local",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": true
+             *       },
+             *       {
+             *         "adapter": "dsh",
+             *         "effort_model_rules": [],
+             *         "efforts": [],
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:executor:dsh:custom",
+             *         "model_sources": [
+             *           "account",
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "paired"
+             *         ],
+             *         "provider": "custom",
+             *         "role": "executor",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": false
              *       }
              *     ]
              */
@@ -7530,7 +7565,7 @@ export interface components {
             /** Evidence Reason */
             evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** Id */
             id: string;
             /** Key */
@@ -7652,7 +7687,7 @@ export interface components {
              * Executor
              * @enum {string}
              */
-            executor: "claude" | "codex" | "agent" | "opencode" | "copilot" | "agy";
+            executor: "claude" | "codex" | "agent" | "opencode" | "copilot" | "agy" | "dsh";
             /** Model */
             model: string;
         };
@@ -8660,7 +8695,7 @@ export interface components {
             /** Executions */
             executions: number;
             /** Executor */
-            executor: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            executor: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** Observed Model */
             observed_model: string | null;
             /** Provider */
@@ -11742,7 +11777,7 @@ export interface components {
             /** From Account Id */
             from_account_id?: string | null;
             /** From Executor */
-            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** From Model */
             from_model?: string | null;
             /** From Provider */
@@ -11777,7 +11812,7 @@ export interface components {
             /** To Account Id */
             to_account_id?: string | null;
             /** To Executor */
-            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** To Model */
             to_model?: string | null;
             /** To Provider */
@@ -11791,7 +11826,7 @@ export interface components {
              * Adapter
              * @enum {string}
              */
-            adapter: "claude" | "codex" | "agent" | "copilot" | "opencode" | "agy";
+            adapter: "claude" | "codex" | "agent" | "copilot" | "opencode" | "agy" | "dsh";
             /** Effort */
             effort?: string | null;
             /** Model */
@@ -14101,7 +14136,7 @@ export interface components {
             /** Evidence Reason */
             evidence_reason?: ("engine_output_has_no_model" | "executor_not_verified" | "engine_not_verified" | "run_not_started") | null;
             /** Executor */
-            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** Key */
             key: string;
             /**
@@ -14153,7 +14188,7 @@ export interface components {
             /** From Account Name */
             from_account_name?: string | null;
             /** From Executor */
-            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            from_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** From Model */
             from_model?: string | null;
             /** From Provider */
@@ -14199,7 +14234,7 @@ export interface components {
             /** To Account Name */
             to_account_name?: string | null;
             /** To Executor */
-            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy") | null;
+            to_executor?: ("claude" | "codex" | "opencode" | "agent" | "copilot" | "agy" | "dsh") | null;
             /** To Model */
             to_model?: string | null;
             /** To Provider */

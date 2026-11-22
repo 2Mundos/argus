@@ -106,7 +106,14 @@ selectors, including a single-layer first choice and mixed fallback modes.
   Claude/Codex harnesses and native executors require `source: explicit`.
   OpenCode/custom permits account or explicit model, preserving its existing pin
   precedence and routing options; its account must still configure the executor
-  role and a model as required by the custom-account contract.
+  role and a model as required by the custom-account contract. `dsh` (opt-in,
+  off unless `ARGUS_DSH_ENABLED=true` on the API; saving or admitting a `dsh`
+  route while disabled fails with `dsh_disabled`) follows the same `local`
+  (`source: account`) and `custom` (`source: account` or `explicit`) contract
+  without a DeepSeek-native provider. When a `custom` account referenced by a
+  `dsh` executor has no `executor` model, the route uses the account's `engine`
+  model; if neither is configured, validation and admission fail explicitly with
+  `executor_model_missing`.
 - `mode: single` requires `harness` and **forbids** `executor`, including null.
   `mode: paired` requires both selectors. Unknown fields, duplicate IDs within a
   difficulty, unknown difficulty/version, invalid provider/adapter and unsupported
@@ -132,7 +139,7 @@ The initial implementation targets these existing adapter combinations:
 | NanoClaw | `claude` | `local` | target | target |
 | NanoClaw | `claude` | `custom` | target | target |
 | NanoClaw | `codex` | `openai` | target | target |
-| Any | `agent`, `opencode`, `copilot`, `agy` | any | unsupported | not harnesses |
+| Any | `agent`, `opencode`, `copilot`, `agy`, `dsh` | any | unsupported | not harnesses |
 
 The matrix mirrors what the NanoClaw worker runs: harness engines are `claude`
 (anthropic, local, custom) and `codex` (openai); each provider has exactly one
@@ -153,10 +160,12 @@ Anthropic. Its eligibility must not be reused to silently exclude local direct
 routes or to claim all providers are verified. Do not enable its env flags.
 
 Paired executors are `claude`/`anthropic`, `codex`/`openai`, `agent`/`cursor`,
-`copilot`/`copilot`, `agy`/`google`, `opencode`/`local`, and `opencode`/`custom`, subject to the
+`copilot`/`copilot`, `agy`/`google`, `opencode`/`local`, `opencode`/`custom`,
+`dsh`/`local`, and `dsh`/`custom` (the `dsh` entries are opt-in and listed by
+`GET /api/engines` only when `ARGUS_DSH_ENABLED=true`), subject to the
 existing account role and harness pairing restrictions. In particular a local
 harness must not run `argus-delegate claude` on its redirected endpoint; the
-initial local pair accepts `agent` or `opencode`, matching current pinned-route
+local pair accepts `agent`, `opencode` or `dsh`, matching pinned-route
 validation. Do not weaken redirect guards to expand the matrix. Custom harnesses
 have their own bridge-environment stripping in `argus-delegate.mjs`; do not copy
 local-only pair restrictions to them. Native same-provider pairs must name the
@@ -410,6 +419,7 @@ it; Setup renders from it.
 | executor | `agy` / `google` | low, medium, high, xhigh, max | `agy --effort <level>` | agy 1.5.12 model list; unlisted models unverified |
 | executor | `agent` / `cursor` | unsupported | only bracketed model parameters, which model IDs forbid | — |
 | executor | `opencode` / `local`, `opencode` / `custom` | unsupported | `--variant` needs provider variants Argus does not define | — |
+| executor | `dsh` / `local`, `dsh` / `custom` | unsupported | no configured effort interface in the headless overlay | — |
 
 Sources: claude-code 2.1.296 (`--effort`, per-model support functions), Claude
 Agent SDK 0.3.296 (`EffortLevel`), codex-cli 0.162.1 (bundled model catalogue

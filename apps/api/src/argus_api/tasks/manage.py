@@ -55,7 +55,12 @@ _RETRY_ERROR_MAX = 500
 
 
 async def retry(
-    tx: Tx, task_id: str, actor: str, overrides: RetryOverrides | None = None
+    tx: Tx,
+    task_id: str,
+    actor: str,
+    overrides: RetryOverrides | None = None,
+    *,
+    dsh_enabled: bool | None = None,
 ) -> Task:
     """Give a `failed` task a fresh window of attempts (`max_attempts` is kept).
 
@@ -84,7 +89,9 @@ async def retry(
     applied: dict[str, Any] = {}  # the audit of what the overrides changed
     if given.given():
         current = await get_task(tx.conn, task_id)
-        changed = await checked_changes(tx.conn, row, current, given.given())
+        changed = await checked_changes(
+            tx.conn, row, current, given.given(), dsh_enabled=dsh_enabled
+        )
         applied = {f: _diff(f, getattr(current, f), v) for f, v in changed.items()}
     await tx.conn.execute(
         "UPDATE tasks SET state = ?, attempt = 0, failures = 0, error = NULL,"

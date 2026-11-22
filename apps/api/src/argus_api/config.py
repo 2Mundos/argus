@@ -404,6 +404,13 @@ class Settings:
             )
 
 
+def is_dsh_enabled(dsh_enabled: bool | None = None) -> bool:
+    """Whether the opt-in dsh executor is enabled on this API instance."""
+    if dsh_enabled is not None:
+        return dsh_enabled
+    return os.environ.get("ARGUS_DSH_ENABLED") == "true"
+
+
 def refuse_preview_data(
     data_dir: Path,
     checkout: Path | None = None,

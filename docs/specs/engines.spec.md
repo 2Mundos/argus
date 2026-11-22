@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-19
+updated: 2026-11-22
 ---
 
 # Engines, executors and the local model
@@ -63,14 +63,24 @@ In scope:
   The harness uses Claude Code against a host bridge, not the provider URL directly.
 
 - **`dsh` (DeepSeek Harness) is an opt-in executor** ([draft](../drafts/2026-11-04.dsh-engine.draft.md)),
-  off unless `ARGUS_DSH_ENABLED=true`: disabled, the catalogue does not list it and
-  `smoke.sh` does not probe it; no other engine's default changes. It is an executor
-  only, on the custom-account contract: `argus-delegate dsh` takes `base_url` and
-  `model` from the lease `settings` and the key from `ARGUS_ACCOUNT_API_KEY` (never
-  in a file or argv). dsh reads its provider from a profile overlay, so the delegate
-  writes a per-run overlay (no key) and runs
-  `dsh --profile headless --patch OVERLAY --json -` in the task workspace, prompt on
-  stdin, `DSH_HOME` a private per-run dir. Its ndjson `final` event is the summary;
+  off unless `ARGUS_DSH_ENABLED=true`: disabled, the catalogue does not list it
+  (neither in `engines` nor in `execution_capabilities`), `smoke.sh` does not probe
+  it, `route_task` skips it as disabled, and the API refuses task pins,
+  `execution.chains`, `review.chains`, `difficulty.executors` and executor leases
+  targeting `dsh` with `422 dsh_disabled`; no other engine's default changes. It is
+  an executor only, on the `custom` or `local` account contract (never a
+  DeepSeek-native provider and never falling back to another provider):
+  `argus-delegate dsh` takes `base_url` and `model` from the lease `settings` and
+  the key only from `ARGUS_ACCOUNT_API_KEY` (never in a file or argv; in managed
+  NanoClaw sessions `custom` uses the scoped OpenRouter gateway sentinel and
+  `local` uses the local harness placeholder). When a `custom` account leased for
+  `dsh` has no `executor` model configured, the route uses the account's `engine`
+  model; if neither model is configured, the route fails with an explicit reason
+  (`executor_model_missing` / no usable account). Workers admit a `dsh` route only
+  when declaring `nanoclaw:executor:dsh:custom` (or `nanoclaw:executor:dsh:local`).
+  dsh reads its provider from a profile overlay, so the delegate writes a per-run
+  overlay (no key) and runs `dsh --profile headless --patch OVERLAY --json -` in the
+  task workspace, prompt on stdin, `DSH_HOME` a private per-run dir. Its ndjson `final` event is the summary;
   an `error` event, a non-`completed` final or no final is a failure; unknown events
   are ignored; the dsh version is reported. Blocked reports keep the usual
   `blocked` value and add a `code`: `dsh_not_installed` (127),

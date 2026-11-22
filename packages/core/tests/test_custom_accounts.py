@@ -16,12 +16,14 @@ from argus_core.custom_accounts import (
     lease_settings,
     normalize_model_id,
     parse_endpoints,
+    serves_role,
     validate_credential,
 )
 from argus_core.custom_accounts import (
     openrouter_provider_block_from_preferences as block,
 )
 from argus_core.quota import classify_quota, quota_notice_from_response
+from argus_core.tasks import EXECUTOR_PROVIDERS, ExecutorModel
 from pydantic import ValidationError
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -228,3 +230,52 @@ def test_quota_notice_from_402_and_429() -> None:
 @pytest.mark.parametrize("status", [200, 400, 401, 500])
 def test_other_statuses_are_not_quota(status: int) -> None:
     assert quota_notice_from_response(status, {}, NOW) is None
+
+
+def test_dsh_executor_model_requires_custom_or_local_account_provider() -> None:
+    assert "dsh" not in EXECUTOR_PROVIDERS
+    custom = ExecutorModel(
+        executor="dsh", model="deepseek/deepseek-chat", account_provider="custom"
+    )
+    assert custom.provider == "custom"
+    local = ExecutorModel(executor="dsh", model="qwen3", account_provider="local")
+    assert local.provider == "local"
+    with pytest.raises(ValidationError, match="dsh requires account_provider"):
+        ExecutorModel(executor="dsh", model="deepseek/deepseek-chat")
+    with pytest.raises(ValidationError, match="dsh requires account_provider"):
+        ExecutorModel(
+            executor="dsh", model="deepseek/deepseek-chat", account_provider=None
+        )
+    with pytest.raises(ValidationError):
+        ExecutorModel(
+            executor="dsh", model="deepseek/deepseek-chat", account_provider="deepseek"
+        )
+    # Other executors still reject account_provider; opencode still accepts both or omitted.
+    with pytest.raises(ValidationError, match="opencode and dsh"):
+        ExecutorModel(
+            executor="claude", model="claude-sonnet-4", account_provider="custom"
+        )
+    assert ExecutorModel(executor="opencode", model="qwen3").provider == "local"
+    assert (
+        ExecutorModel(
+            executor="opencode", model="deepseek/chat", account_provider="custom"
+        ).provider
+        == "custom"
+    )
+
+
+def test_custom_executor_engine_model_fallback_is_opt_in() -> None:
+    engine_only = CustomConfig(
+        base_url=OR, label="openrouter", engine={"model": "a/engine"}
+    )
+    empty = CustomConfig(base_url=OR, label="openrouter")
+    assert serves_role("custom", engine_only, "executor") is False
+    assert (
+        serves_role("custom", engine_only, "executor", fallback_to_engine=True) is True
+    )
+    assert (
+        lease_settings(engine_only, "executor", fallback_to_engine=True).model
+        == "a/engine"
+    )
+    assert serves_role("custom", empty, "executor", fallback_to_engine=True) is False
+    assert lease_settings(empty, "executor", fallback_to_engine=True).model is None
