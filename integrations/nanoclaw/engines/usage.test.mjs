@@ -136,7 +136,9 @@ test("dsh: step_end usage is summed across steps; snake_case accepted", () => {
   const step = (u) => JSON.stringify({ type: "status", phase: "step_end", usage: u });
   const u = parseUsage(
     "dsh",
-    [step({ inputTokens: 10, outputTokens: 2 }), step({ input_tokens: 5, output_tokens: 1 })].join("\n"),
+    [step({ inputTokens: 10, outputTokens: 2 }), step({ input_tokens: 5, output_tokens: 1 })].join(
+      "\n",
+    ),
   );
   assert.deepEqual([u.input_tokens, u.output_tokens, u.turns], [15, 3, 2]);
 });
@@ -179,7 +181,10 @@ test("absent, partial or garbage usage is not_reported, never zeros", () => {
     ["agent", '{"type":"result","result":"hi"}'],
     ["opencode", '{"type":"step_finish","part":{"tokens":{}}}'],
     ["dsh", '{"type":"text","text":"hi"}'], // no step_end
-    ["dsh", '{"type":"final","reason":{"kind":"completed"},"text":"hi","usage":{"inputTokens":1,"outputTokens":1}}'], // usage on final is not read
+    [
+      "dsh",
+      '{"type":"final","reason":{"kind":"completed"},"text":"hi","usage":{"inputTokens":1,"outputTokens":1}}',
+    ], // usage on final is not read
     ["dsh", '{"type":"status","phase":"step_end","usage":{"outputTokens":3}}'], // input missing: do not invent 0
     ["unknown", "{}"],
   ]) {
