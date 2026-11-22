@@ -129,6 +129,15 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   must still have a usable account. A single alternative is compared by its harness.
   The route's skipped entry for an author exclusion of a paired alternative carries
   `selector: executor`.
+- A paired reviewer's verdict counts only when its executor ran: the review child's
+  attempt must record a `succeeded` `delegate` model execution whose executor
+  (adapter) and provider match the selected alternative's executor selector, and its
+  model when the selector is explicit. Otherwise the verdict is void: the parent is
+  neither accepted nor rejected, `review.independent_void` is recorded with
+  `reason: executor_not_run`, and Argus selects again without that alternative (a
+  fresh reviewer, or `no_independent_reviewer`). The child's spec tells the harness
+  to run the review through `argus-delegate` and not to review the code itself.
+  Single-alternative reviews are unchanged.
 - The vendor is derived from the model, never from the account: an OpenRouter
   `vendor/model` id has that prefix as its vendor, and a native `claude-*`, `gpt-*` or
   `gemini-*` id is `anthropic`, `openai` or `google`. Routers and endpoints (`custom`

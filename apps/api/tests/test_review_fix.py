@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -171,6 +172,31 @@ def _finish(
         _record_model(
             client, headers, claimed, engine=engine, provider=provider, model=name
         )
+        executor = (claimed.get("execution") or {}).get("executor")
+        if executor:
+            # A paired reviewer's verdict counts only when its executor ran.
+            res = client.post(
+                f"/api/tasks/{claimed['id']}/models",
+                json={
+                    "attempt": claimed["attempt"],
+                    "execution_generation": claimed["execution"]["generation"],
+                    "executions": [
+                        {
+                            "key": f"{claimed['id']}:{claimed['attempt']}:delegate",
+                            "layer": "delegate",
+                            "state": "succeeded",
+                            "executor": executor["selector"]["adapter"],
+                            "provider": executor["selector"]["provider"],
+                            "configured_model": executor["model"],
+                            "observed_model": executor["model"],
+                            "evidence": "cli_output",
+                            "started_at": datetime.now(UTC).isoformat(),
+                        }
+                    ],
+                },
+                headers=headers,
+            )
+            assert res.status_code == 200, res.text
     res = client.post(
         f"/api/tasks/{claimed['id']}/complete",
         json={

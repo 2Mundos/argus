@@ -30,7 +30,13 @@ from argus_core.decisions import (
     DecisionKind,
 )
 from argus_core.delivery import FailedReviewer
-from argus_core.execution_chains import Alternative, Chain, PairedAlternative, Selector
+from argus_core.execution_chains import (
+    Alternative,
+    Chain,
+    ExecutionSelection,
+    PairedAlternative,
+    Selector,
+)
 from argus_core.quota import failure_class, sanitize_notice
 from argus_core.settings import IndependentReviewSetting, ReviewMode
 from argus_core.tasks import (
@@ -1153,6 +1159,25 @@ async def _manual_unless_escalating(
         )
 
 
+_PAIRED_GUIDANCE = (
+    "\n\nThis review runs on a delegated executor. You must perform the review"
+    " through it with `argus-delegate` and must not review the code yourself: do not"
+    " read the diff to form a verdict, and do not decide on your own. Pass the"
+    " executor's findings and verdict on in your COMPLETE. A verdict given without a"
+    " succeeded delegate execution is void and the review is repeated."
+)
+
+
+def _paired_route(
+    route: tuple[list[Alternative], routes.ReviewRoute] | None,
+) -> bool:
+    return (
+        route is not None
+        and bool(route[0])
+        and isinstance(route[0][0], PairedAlternative)
+    )
+
+
 async def spawn_reviewer(
     tx: Tx,
     parent: aiosqlite.Row,
@@ -1276,6 +1301,7 @@ async def spawn_reviewer(
             " your own fix: Argus schedules a fresh review of the new head with"
             " another model. If you cannot fix safely, return `request_changes` and"
             " change nothing. With no findings, return `approve` and change nothing."
+            + (_PAIRED_GUIDANCE if _paired_route(route) else "")
         ),
         kind=CODE_REVIEW_KIND,
         project=parent["project"],
@@ -1443,6 +1469,66 @@ async def fixers(
                 children.add(data["child_id"])
             models.update(m for m in data.get("fix_models") or [] if isinstance(m, str))
     return models, children
+
+
+async def _paired_alternative(
+    conn: aiosqlite.Connection, child: aiosqlite.Row
+) -> PairedAlternative | None:
+    """The paired alternative the review child ran on, when it ran on one."""
+    async with conn.execute(
+        "SELECT selection FROM task_execution_routes WHERE task_id = ?", (child["id"],)
+    ) as cur:
+        picked = await cur.fetchone()
+    alternative: Alternative | None = None
+    if picked and picked["selection"]:
+        alternative = ExecutionSelection.model_validate_json(
+            picked["selection"]
+        ).alternative
+    else:
+        async with conn.execute(
+            "SELECT execution_route FROM tasks WHERE id = ?", (child["id"],)
+        ) as cur:
+            row = await cur.fetchone()
+        route = (
+            json.loads(row["execution_route"]) if row and row["execution_route"] else {}
+        )
+        from pydantic import TypeAdapter
+
+        selected = route.get("review", {}).get("selected")
+        for raw in route.get("alternatives", []):
+            if raw.get("id") == selected:
+                alternative = TypeAdapter(Alternative).validate_python(raw)
+    return alternative if isinstance(alternative, PairedAlternative) else None
+
+
+async def executor_not_run(conn: aiosqlite.Connection, child: aiosqlite.Row) -> bool:
+    """True when a paired reviewer's verdict is void: no succeeded `delegate` execution
+    matches the alternative's executor (adapter, provider and, when explicit, model).
+
+    The harness of a paired alternative only coordinates; a verdict the harness
+    produced itself was not given by the executor that was compared for independence.
+    """
+    paired = await _paired_alternative(conn, child)
+    if paired is None:
+        return False
+    want = paired.executor
+    async with conn.execute(
+        "SELECT executor, provider, observed_model, configured_model"
+        " FROM model_executions WHERE task_id = ? AND layer = 'delegate'"
+        " AND state = 'succeeded'",
+        (child["id"],),
+    ) as cur:
+        rows = await cur.fetchall()
+    for r in rows:
+        if r["executor"] != want.adapter or r["provider"] != want.provider:
+            continue
+        if want.model.source == "explicit" and want.model.id not in (
+            r["observed_model"],
+            r["configured_model"],
+        ):
+            continue
+        return False
+    return True
 
 
 async def child_models_clean(
@@ -1682,6 +1768,38 @@ async def on_review_child_complete(
             policy=policy,
             actor=actor,
             exclude_models=author_models | child_models,
+            exclude_accounts=await _accounts(tx.conn, child["id"]),
+            replace_child_id=child["id"],
+        )
+        return
+
+    if await executor_not_run(tx.conn, child):
+        # The paired executor never ran: the harness reviewed by itself, so the
+        # verdict is void. Select again without this alternative.
+        child_facts = await _child_facts(tx.conn, child)
+        await record(
+            tx,
+            actor,
+            "task",
+            parent_id,
+            "review.independent_void",
+            {
+                "reason": "executor_not_run",
+                "child_id": child["id"],
+                "alternative": child_facts["alternative"],
+            },
+        )
+        await spawn_reviewer(
+            tx,
+            parent,
+            pr=child_input.get("pr"),
+            head_sha=child_input.get("head_sha"),
+            setting=setting,
+            policy=policy,
+            actor=actor,
+            exclude_alternatives={child_facts["alternative"]}
+            if child_facts["alternative"]
+            else None,
             exclude_accounts=await _accounts(tx.conn, child["id"]),
             replace_child_id=child["id"],
         )
