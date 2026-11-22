@@ -1,6 +1,7 @@
-{"type":"session","sessionId":"s-0001","cwd":"/workspace/task"}
-{"type":"text","text":"Reading the config.\n"}
-{"type":"future_event","n":1}
-{"type":"text","text":"The setting is "}
-{"type":"text","text":"enabled by default.\n"}
-{"type":"final","sessionId":"s-0001","reason":{"kind":"completed"},"text":"Reading the config.\nThe setting is enabled by default.","model":"deepseek-v4","usage":{"inputTokens":1200,"outputTokens":85,"cacheReadTokens":900,"cacheWriteTokens":40,"costUsd":0.0021}}
+{"type":"session","sessionId":"session-56e0ba97-b5f0-4b54-bdd7-de109f18c6ae","cwd":"/tmp"}
+{"type":"status","phase":"turn_start","turn":1}
+{"type":"status","phase":"step_start","turn":1,"step":1}
+{"type":"text","text":"OK"}
+{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":5390,"outputTokens":2,"totalTokens":5392}}
+{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}
+{"type":"final","sessionId":"session-56e0ba97-b5f0-4b54-bdd7-de109f18c6ae","reason":{"kind":"completed"},"text":"OK"}

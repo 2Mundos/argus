@@ -109,7 +109,7 @@ test("opencode (synthetic): step-finish tokens and cost are summed", () => {
   assert.ok(Math.abs(u.cost_usd - 0.03) < 1e-9);
 });
 
-// SYNTHETIC recording (fixtures/dsh-headless.README.md): usage on the final event is a guess.
+// Recorded from real dsh 0.2.2-alpha.3 (fixtures/dsh-headless.README.md): usage is on step_end.
 const dshReal = fs.readFileSync(new URL("./fixtures/dsh-headless.jsonl", import.meta.url), "utf8");
 
 test("dsh recorded missing-credential run: final without usage is not_reported", () => {
@@ -120,21 +120,25 @@ test("dsh recorded missing-credential run: final without usage is not_reported",
   assert.equal(parseUsage("dsh", rec).measurement, "not_reported");
 });
 
-test("dsh (synthetic fixture): final usage, cache writes counted as input", () => {
+test("dsh (recorded fixture): usage from the step_end status event", () => {
   assert.deepEqual(parseUsage("dsh", dshReal), {
     measurement: "measured",
-    input_tokens: 1240, // 1200 fresh + 40 cache writes
-    output_tokens: 85,
-    cached_input_tokens: 900,
-    cost_usd: 0.0021,
-    model: "deepseek-v4",
+    input_tokens: 5390,
+    output_tokens: 2,
+    cached_input_tokens: 0,
+    cost_usd: null,
+    model: null,
     turns: 1,
   });
-  const snake = parseUsage("dsh", '{"type":"final","usage":{"input_tokens":10,"output_tokens":2}}');
-  assert.deepEqual(
-    [snake.input_tokens, snake.output_tokens, snake.cached_input_tokens, snake.cost_usd],
-    [10, 2, 0, null],
+});
+
+test("dsh: step_end usage is summed across steps; snake_case accepted", () => {
+  const step = (u) => JSON.stringify({ type: "status", phase: "step_end", usage: u });
+  const u = parseUsage(
+    "dsh",
+    [step({ inputTokens: 10, outputTokens: 2 }), step({ input_tokens: 5, output_tokens: 1 })].join("\n"),
   );
+  assert.deepEqual([u.input_tokens, u.output_tokens, u.turns], [15, 3, 2]);
 });
 
 // Recorded from real agy 1.5.12 against a local mock Gemini SSE server.
@@ -174,9 +178,9 @@ test("absent, partial or garbage usage is not_reported, never zeros", () => {
     ["codex", '{"type":"turn.completed","usage":{"input_tokens":"many"}}'],
     ["agent", '{"type":"result","result":"hi"}'],
     ["opencode", '{"type":"step_finish","part":{"tokens":{}}}'],
-    ["dsh", '{"type":"text","text":"hi"}'], // no final event
-    ["dsh", '{"type":"final","reason":{"kind":"completed"},"text":"hi"}'], // no usage
-    ["dsh", '{"type":"final","usage":{"outputTokens":3}}'], // input missing: do not invent 0
+    ["dsh", '{"type":"text","text":"hi"}'], // no step_end
+    ["dsh", '{"type":"final","reason":{"kind":"completed"},"text":"hi","usage":{"inputTokens":1,"outputTokens":1}}'], // usage on final is not read
+    ["dsh", '{"type":"status","phase":"step_end","usage":{"outputTokens":3}}'], // input missing: do not invent 0
     ["unknown", "{}"],
   ]) {
     const u = parseUsage(executor, text);
