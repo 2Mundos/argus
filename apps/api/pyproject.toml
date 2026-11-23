@@ -7,7 +7,7 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "argus-core",
     "docker>=7.1",
-    "fastapi>=0.162.7",
+    "fastapi>=0.165.0",
     "jsonschema>=4.26.0",
     "kubernetes>=37.0.2,<38",
     "mcp>=1.20",
