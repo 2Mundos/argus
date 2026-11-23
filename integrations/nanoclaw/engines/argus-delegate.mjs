@@ -755,7 +755,7 @@ export function buildCommand(
           "--disable-request-user-input",
           ...(effort ? ["--reasoning-effort", effort] : []),
         ],
-        promptVia: "argv",
+        promptVia: "file",
         readOnlyEnforcement: readOnly ? "muse_disable_write_and_shell" : "muse_sandbox_only",
       };
     }
@@ -1956,7 +1956,15 @@ async function runAttempt(
   );
   e = applySettingsEnv(executor, e, settings, selection.configured_model);
   e = waitCapEnv(executor, e);
-  const args = cmd.promptVia === "argv" ? [...cmd.args, prompt] : cmd.args;
+  // A prompt file has no single-argument size limit and stays out of the process list.
+  const promptFile = cmd.promptVia === "file" ? `${base}.prompt.txt` : null;
+  if (promptFile) fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
+  const args =
+    cmd.promptVia === "argv"
+      ? [...cmd.args, prompt]
+      : promptFile
+        ? [...cmd.args, "--prompt-file", promptFile]
+        : cmd.args;
 
   const stdoutFile = `${base}.out`;
   const stderrFile = `${base}.err`;

@@ -3459,14 +3459,14 @@ test("muse: sentinel-only authStatus, explicit-model buildCommand and private HO
   const env = { ...s.env, META_API_KEY: MUSE_SENTINEL_API_KEY };
   assert.deepEqual(authStatus("muse", env, s.home), { ok: true });
 
-  // Explicit model only, argv prompt, sandbox kept on, no yolo/approval flags.
+  // Explicit model only, prompt file, sandbox kept on, no yolo/approval flags.
   const roCmd = buildCommand(
     "muse",
     { cwd: s.work, model: "muse-spark", readOnly: true, effort: "high" },
     env,
   );
   assert.equal(roCmd.bin, "muse");
-  assert.equal(roCmd.promptVia, "argv");
+  assert.equal(roCmd.promptVia, "file");
   assert.equal(roCmd.readOnlyEnforcement, "muse_disable_write_and_shell");
   assert.deepEqual(roCmd.args, [
     "exec",
@@ -3499,4 +3499,27 @@ test("muse: sentinel-only authStatus, explicit-model buildCommand and private HO
   });
   assert.equal(probed.code, 0);
   assert.equal(probed.report.evidence, "unprobed");
+});
+
+test("muse: a prompt over the single-argument limit runs through --prompt-file", async (t) => {
+  const s = sandbox(t);
+  const seen = path.join(s.dir, "seen");
+  s.fake(
+    "muse",
+    `if [ "$1" = "--version" ]; then echo "Muse Code 1.4.25 (1.4.25-R9361.1)"; exit 0; fi
+printf '%s\\n' "$@" > "${seen}.argv"
+while [ $# -gt 1 ]; do [ "$1" = "--prompt-file" ] && cp "$2" "${seen}.prompt"; shift; done
+echo '{"type":"done"}'`,
+  );
+  const prompt = "x".repeat(200_000); // Linux caps one argv entry at 128 KiB
+  const { code } = await run(
+    ["muse", "--cwd", s.work, "--model", "muse-spark-1.3", "--read-only"],
+    {
+      env: { ...s.env, META_API_KEY: MUSE_SENTINEL_API_KEY },
+      input: prompt,
+    },
+  );
+  assert.equal(code, 0);
+  assert.ok(fs.readFileSync(`${seen}.prompt`, "utf8").includes(prompt));
+  assert.ok(!fs.readFileSync(`${seen}.argv`, "utf8").includes("xxxx"));
 });

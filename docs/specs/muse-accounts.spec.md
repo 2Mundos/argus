@@ -8,14 +8,15 @@ updated: 2026-11-23
 
 ## Open items
 
-- A live Muse call with a real key or login (fleet smoke, §6 acceptance).
-- A NanoClaw `muse` provider running a worker loop in a real agent image
-  (upstream provider support assumed by the channel mapping).
+- A worker loop on a leased Muse account in a real agent image, through a
+  real OneCLI gateway swap (fleet smoke, §6 acceptance).
 - An agent image build running `engines/install-muse.sh` and `smoke.sh`.
-- A proxy probe of the real Meta API paths to narrow the gateway secret
-  from host-wide (`/*`) to exact paths, and to record auth-rejection text,
-  rate-limit signals and the `muse exec --json` event shape (usage parser
-  and live-log events).
+- Narrowing the gateway secret from host-wide (`/*`) to exact API paths, and
+  recording auth-rejection text and rate-limit signals so a rejected or
+  exhausted Muse account rotates.
+- A usage parser and live-log events for Muse.
+- Shell commands in a delegated `muse exec`: it keeps its Bubblewrap sandbox,
+  which Docker's default profile denies in a worker container (§4).
 
 Builds on [engines](engines.spec.md), the account pool in
 [worker lifecycle 3.9](worker-lifecycle.spec.md) and the executor pattern of
@@ -90,20 +91,35 @@ executor (`argus-delegate muse`):
   `META_API_KEY` (the variable the CLI documents as taking priority over
   the account login, so no other variable or login in the container can
   supply a different credential), and the gateway injects the real value on
-  the wire. The path pattern is host-wide (`/*`) until a proxy probe
-  records the exact API paths (§4). A missing lease is `78 auth_missing`,
-  never a silent fallback.
-- **Usage and live log**: `parseUsage("muse", …)` reports `not_reported`
-  (the `muse exec --json` event shape is unverified) and the live log has
-  no muse event parser until a real stream is recorded (§4). Accounting
-  still spools the delegate report; figures are absent, never zero.
+  the wire. Muse 1.4.25 sends the key as `Authorization: Bearer`, reaches
+  `api.meta.ai:443` through `HTTPS_PROXY`, and trusts the gateway CA through
+  `SSL_CERT_FILE`. The path pattern is host-wide (`/*`) until the exact API
+  paths are recorded (§4). A missing lease is `78 auth_missing`, never a
+  silent fallback.
+- **Harness runtime** (`integrations/nanoclaw/overlays/muse-provider.ts`):
+  the runner drives `muse acp` (Agent Client Protocol over stdio) with an
+  explicit model. As for the Claude, Codex and OpenCode harnesses, the worker
+  container and the OneCLI allow-list are the boundary: `--disable-sandbox`,
+  because Docker's default profiles deny Muse's Bubblewrap, and tool
+  permission requests are allowed once. `--trust-workspace` covers the group
+  directory only; without it Muse neither loads the composed `CLAUDE.md` nor
+  starts the MCP servers given in `session/new`. Runner instructions and
+  memory open each new session. Sessions persist in a per-group directory
+  (`XDG_DATA_HOME`, `overlays/muse-host.ts`); a stored session the host no
+  longer holds (`-32020`) becomes a new session and the message is kept.
+- **Default model**: `muse-spark-1.3` for the harness and for implementation,
+  so a worker switching to Muse never keeps the previous engine's model.
+- **Usage and live log**: `parseUsage("muse", …)` reports `not_reported` and
+  the live log has no muse event parser until usage fields are verified on a
+  real stream (§4). Accounting still spools the delegate report; figures are
+  absent, never zero.
 - **Child runtime** (`argus-delegate muse`):
-  `authStatus` accepts only a non-empty `META_API_KEY`. Invocation is
-  `muse exec --json --model <explicit> [--workspace <cwd>]` with the prompt
-  via `--prompt-file`, so the key is never an argv value. The model is always
-  explicit, never the CLI default. Read-only delegation adds
-  `--disable-write --disable-shell`; write mode keeps the workspace sandbox
-  on and never passes `--yolo`/`--disable-approval`.
+  `authStatus` accepts only the gateway sentinel in `META_API_KEY`. Invocation
+  is `muse exec --json --workspace <cwd> --model <explicit>` with the prompt
+  in a private `--prompt-file`, so its size is not bound by the argv limit.
+  The model is always explicit, never the CLI default. Read-only delegation
+  adds `--disable-write --disable-shell`; write mode keeps the workspace
+  sandbox on and never passes `--yolo`/`--disable-approval`.
 - **Engine catalogue** (public API): Muse (`id: "muse"`) has both layers
   (`harness` and `executor`), like Claude and Codex. Readiness follows the
   usual ledger-plus-registry rule; `usable` needs one available account, and
@@ -117,15 +133,20 @@ executor (`argus-delegate muse`):
 
 - The exact Meta token format for `oauth_token` (no prefix is enforced until
   a real login token is observed) and the exact Meta API request paths the
-  CLI calls: v1 scopes the gateway secret by host (`api.meta.ai`, observed
-  in the shipped binary's strings) until a proxy probe records the paths
-  for a Cursor-style path-scoped secret.
+  CLI calls: v1 scopes the gateway secret by host (`api.meta.ai`, the only
+  host a real run contacted) until the paths are recorded for a Cursor-style
+  path-scoped secret.
+- How a delegated `muse exec` should run shell commands in a worker
+  container, where Docker's default profile denies its Bubblewrap sandbox.
+  The Codex sandbox profile excludes other providers and has not passed a
+  runtime test, so delegated Muse keeps its sandbox flags for now.
 - Whether a dedicated Argus-driven Muse login flow (like Codex/Claude) is
   worth adding once Muse harness runs are observed in production.
 - The CLI's exit codes and error text for auth rejection and rate limits;
   until verified the delegate treats every non-zero exit as an ordinary
   failure (no account exhaustion from delegate output).
-- The `muse exec --json` event shape: usage figures and the live-log parser
+- The usage fields of a real `muse exec --json` stream: the record envelope
+  is known from the echo provider, but usage figures and the live-log parser
   stay unverified until a real stream is recorded.
 - An agent image build running `install-muse.sh` and `smoke.sh` (the
   installer is verified below only for checksum pinning and script shape).
@@ -151,17 +172,19 @@ executor (`argus-delegate muse`):
   (`make openapi`).
 - `integrations/nanoclaw`: `argus-accounts.ts` (`muse` mapping, engine
   `muse`, `EXECUTOR_BY_PROVIDER`), `argus-muse-stub.ts` (sentinel
-  `META_API_KEY` runtime), `argus.ts` (harness selection), `install.sh`
-  (stub hook), `argus-delegate` (`muse` subcommand, private `HOME`,
-  explicit model, `not_reported` usage), `smoke.sh` (version and auth
+  `META_API_KEY` runtime), `overlays/muse-provider.ts` and
+  `overlays/muse-host.ts` (harness, installed by `install-engines.sh`),
+  `argus.ts` (harness selection), `install.sh` (stub hook), `argus-delegate`
+  (`muse` subcommand, private `HOME`, explicit model, `not_reported` usage),
+  `model-policy.defaults.json` (default model), `smoke.sh` (version and auth
   rows), `engines/install-muse.sh` (pinned `1.4.25-R9361.1`, SHA-256 per
   arch, verified against Meta's release manifest), and
   `patch-engines-dockerfile.py` (installer step and version smoke).
-- Dashboard: `accountProviders.ts` (`MUSE_PROVIDER`, credential notice),
-  `providerIcons.tsx` (`muse` mark), `AccountDialogs.tsx` (add and replace
-  dialogs), catalogue fixture.
-- **Acceptance (automated)**: `make check`; channel/delegate/parser unit
-  tests with fake credentials (no live Muse call in CI).
+- Dashboard: `accountProviders.ts` (`MUSE_PROVIDER`, credential notice) and
+  `AccountDialogs.tsx` (add and replace dialogs).
+- **Acceptance (automated)**: `make check` and the NanoClaw release build;
+  channel, delegate, parser and ACP provider tests with fake credentials and
+  a fake agent (no live Muse call in CI).
 - **Acceptance (fleet)**: parent-run `argus-delegate muse --read-only` with
   an explicit model, native CLI exit code `0`, and a controlled nonce echoed
   in the CLI result; plus one harness run of a worker on a leased muse
@@ -171,12 +194,16 @@ executor (`argus-delegate muse`):
 ## Verification boundary
 
 - Commands:
-  - `uv run pytest -q -p no:cacheprovider packages/core/tests/test_muse_auth.py apps/api/tests/test_muse_accounts.py`
+  - `uv run pytest -q -p no:cacheprovider packages/core/tests/test_muse_auth.py`
   - `node --test integrations/nanoclaw/engines/argus-delegate.test.mjs`
+  - `deploy/nanoclaw-host/build-release.sh <tag>` runs the channel and ACP
+    provider suites.
   - `make test` runs the whole Python and Node suite.
-- Verified: unit and fake-API level only. Import validation, the engine and
-  executor leases and the delegate run against an in-memory database and
-  store with fake credentials.
-- Not verified: a live Muse call with a real key or login; the NanoClaw
-  `muse` provider running a worker loop in a real agent image; a real OneCLI
-  gateway swap in a live worker container; any production node.
+- Verified with Muse 1.4.25 on a host, outside a container, on a real login:
+  the ACP provider's model call, composed `CLAUDE.md`, an MCP tool call and a
+  session resume, with shell and file-write tools disabled for the check.
+  The bearer header, the API host and `SSL_CERT_FILE` trust were probed
+  separately.
+- Not verified: the harness inside a real agent image, including shell tools
+  with `--disable-sandbox`; a real OneCLI gateway swap in a live worker
+  container; any production node.

@@ -53,6 +53,14 @@ for barrel in src/providers/index.ts src/provider-contracts/index.ts \
     container/agent-runner/src/providers/index.ts setup/providers/index.ts; do
   grep -q "import './codex.js';" "$target/$barrel" || printf "import './codex.js';\n" >> "$target/$barrel"
 done
+# The Muse harness over `muse acp` (muse accounts spec 3). Its test sits at container/
+# because vitest runs that level and the provider imports nothing Bun-only.
+cp "$here/../overlays/muse-provider.ts" "$target/container/agent-runner/src/providers/muse.ts"
+cp "$here/../overlays/muse-provider.test.ts" "$target/container/argus-muse-provider.test.ts"
+cp "$here/../overlays/muse-host.ts" "$target/src/providers/muse.ts"
+for barrel in src/providers/index.ts container/agent-runner/src/providers/index.ts; do
+  grep -q "import './muse.js';" "$target/$barrel" || printf "import './muse.js';\n" >> "$target/$barrel"
+done
 
 # 2. CLI manifest (exact versions; claude-code stays as the checkout pins it)
 node - "$target/container/cli-tools.json" "$CODEX_VERSION" "$OPENCODE_VERSION" <<'JS'

@@ -1,11 +1,13 @@
 {
   "harness": {
     "codex": ["gpt-6-luna"],
-    "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
+    "claude": ["claude-sonnet-5-5", "claude-opus-5-5"],
+    "muse": ["muse-spark-1.3"]
   },
   "implementation": {
     "codex": ["gpt-6.1-sol"],
-    "claude": ["claude-sonnet-5-5", "claude-opus-5-5"]
+    "claude": ["claude-sonnet-5-5", "claude-opus-5-5"],
+    "muse": ["muse-spark-1.3"]
   },
   "trivial": {
     "agent": ["composer-2.5"]
