@@ -11,10 +11,10 @@ dev = [
     "argus-core",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.5.0",
-    "ruff>=0.17.5",
+    "ruff>=0.17.6",
     "pip-audit>=2.7",
-    "ty>=0.0.103",
-    "httpx2>=2.16.0",
+    "ty>=0.0.107",
+    "httpx2>=2.16.2",
     "pytest-xdist>=3.8.0",
 ]
 
