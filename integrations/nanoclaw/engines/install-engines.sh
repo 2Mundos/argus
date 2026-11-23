@@ -53,6 +53,14 @@ for barrel in src/providers/index.ts src/provider-contracts/index.ts \
     container/agent-runner/src/providers/index.ts setup/providers/index.ts; do
   grep -q "import './codex.js';" "$target/$barrel" || printf "import './codex.js';\n" >> "$target/$barrel"
 done
+# The Muse harness over `muse acp` (muse accounts spec 3). Its test sits at container/
+# because vitest runs that level and the provider imports nothing Bun-only.
+cp "$here/../overlays/muse-provider.ts" "$target/container/agent-runner/src/providers/muse.ts"
+cp "$here/../overlays/muse-provider.test.ts" "$target/container/argus-muse-provider.test.ts"
+cp "$here/../overlays/muse-host.ts" "$target/src/providers/muse.ts"
+for barrel in src/providers/index.ts container/agent-runner/src/providers/index.ts; do
+  grep -q "import './muse.js';" "$target/$barrel" || printf "import './muse.js';\n" >> "$target/$barrel"
+done
 
 # 2. CLI manifest (exact versions; claude-code stays as the checkout pins it)
 node - "$target/container/cli-tools.json" "$CODEX_VERSION" "$OPENCODE_VERSION" <<'JS'
@@ -71,7 +79,7 @@ fs.writeFileSync(file, `${JSON.stringify(tools, null, 2)}\n`);
 JS
 
 # 3. image: the Cursor agent, Copilot CLI, Antigravity CLI, argus-delegate, the opt-in dsh install (ARGUS_DSH_ENABLED build arg), and a version smoke that fails the build
-cp "$here/install-cursor-agent.sh" "$here/install-copilot-cli.sh" "$here/install-agy.sh" "$here/../install-dsh.sh" "$here/argus-delegate.mjs" "$here/account-settings.mjs" "$here/opencode-gateway.mjs" "$here/anthropic-redirect.mjs" "$here/model-policy.mjs" "$here/model-policy.defaults.json" "$here/milestones.mjs" "$here/livelog.mjs" "$here/changes.mjs" "$here/usage.mjs" "$target/container/"
+cp "$here/install-cursor-agent.sh" "$here/install-copilot-cli.sh" "$here/install-agy.sh" "$here/install-muse.sh" "$here/../install-dsh.sh" "$here/argus-delegate.mjs" "$here/account-settings.mjs" "$here/opencode-gateway.mjs" "$here/anthropic-redirect.mjs" "$here/model-policy.mjs" "$here/model-policy.defaults.json" "$here/milestones.mjs" "$here/livelog.mjs" "$here/changes.mjs" "$here/usage.mjs" "$target/container/"
 bash "$here/../install-gitea-api.sh" stage-engines "$target"
 python3 "$here/patch-engines-dockerfile.py" "$target/container/Dockerfile"
 echo "engines overlay applied to $target"

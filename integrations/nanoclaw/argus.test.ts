@@ -685,7 +685,7 @@ describe("renderTask", () => {
     expect(text).toContain("Example (normal implementation, not --read-only):");
     expect(text).not.toMatch(/argus-delegate agent[^\n]*--read-only/);
     expect(text).toContain(
-      "Do not invoke agent, cursor-agent, claude, codex, opencode, copilot, or agy directly",
+      "Do not invoke agent, cursor-agent, claude, codex, opencode, copilot, agy, or muse directly",
     );
     expect(text).toContain("prepareExecutorEnv");
     expect(text).toContain("argus-model-policy.json");

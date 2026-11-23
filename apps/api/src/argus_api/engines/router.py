@@ -101,7 +101,7 @@ def _why_unusable(entry: EngineEntry | None, name: str) -> str:
 
 
 # Engines a NanoClaw harness can run (an engine id is also its executor name).
-_HARNESSES = ("claude", "codex")
+_HARNESSES = ("claude", "codex", "muse")
 
 
 def _rank(entry: EngineEntry | None) -> int | None:
@@ -157,7 +157,7 @@ def _fallback(catalog: EngineCatalog) -> tuple[str, str | None, str | None]:
                     f"{name} ({reason.removeprefix(f'{name} is not usable ')})",
                 )
         return target, None, None
-    entry = by_id.get("claude") or by_id.get("codex")
+    entry = by_id.get("claude") or by_id.get("codex") or by_id.get("muse")
     name = entry.id if entry is not None else "claude"
     return name, _why_unusable(entry, name), None
 

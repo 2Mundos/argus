@@ -349,6 +349,43 @@ export const GOOGLE_OAUTH_ENDPOINTS = [
   { suffix: "-cloudcode", host: "cloudcode-pa.googleapis.com", pathPattern: "/v1internal*" },
 ];
 
+/**
+ * Where the Muse CLI (`muse`) sends its credential: `META_API_KEY` takes
+ * priority over the account login, so the leased value is delivered as that
+ * variable and the gateway injects it as a bearer token on the Meta API host
+ * (host observed in the shipped binary's strings; exact API paths are still
+ * unprobed, so v1 scopes by host until a proxy probe narrows the paths —
+ * muse accounts spec 4).
+ */
+export const MUSE_API_HOST = "api.meta.ai";
+export const MUSE_ENDPOINTS = [{ suffix: "-api", host: MUSE_API_HOST, pathPattern: "/*" }];
+
+/** The access token of a pasted `muse login` auth file (`providers.meta`), or null. */
+export function nativeMuseAccessToken(c: Record<string, unknown>): string | null {
+  const providers =
+    c.providers && typeof c.providers === "object" && !Array.isArray(c.providers)
+      ? (c.providers as Record<string, unknown>)
+      : null;
+  const meta =
+    providers?.meta && typeof providers.meta === "object" && !Array.isArray(providers.meta)
+      ? (providers.meta as Record<string, unknown>)
+      : null;
+  return text(meta?.access_token);
+}
+
+/** Validate a Muse credential before OneCLI apply; names fields only. */
+export function museProblem(c: Record<string, unknown>): string | null {
+  const shapes = ["api_key" in c, "oauth_token" in c, nativeMuseAccessToken(c) !== null].filter(
+    Boolean,
+  ).length;
+  if (shapes === 0) return "muse credential needs api_key, oauth_token, or a muse auth file";
+  if (shapes > 1)
+    return "muse credential must give only one of api_key, oauth_token, or a muse auth file";
+  const value = text(c.api_key) ?? text(c.oauth_token) ?? nativeMuseAccessToken(c);
+  if (!value) return "muse credential must be a non-empty string";
+  return null;
+}
+
 const GOOGLE_EXPIRY_MARGIN_MS = 5 * 60 * 1000;
 
 function googleOauthFields(c: Record<string, unknown>): Record<string, unknown> | null {
@@ -512,6 +549,22 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
       return key ? exchangeCursorApiKey(key, fetchImpl) : null;
     },
   },
+  // Muse: the worker holds `META_API_KEY` (the CLI's priority variable, so no
+  // other login in the container can supply a different credential); the
+  // gateway swaps in the leased value on the Meta API host.
+  muse: {
+    type: "generic",
+    host: MUSE_API_HOST,
+    engine: "muse",
+    secretSuffix: "-muse",
+    generic: {
+      headerName: "Authorization",
+      valueFormat: "Bearer {value}",
+      endpoints: MUSE_ENDPOINTS,
+    },
+    problem: (c) => museProblem(c),
+    pick: (c) => text(c.api_key) ?? text(c.oauth_token) ?? nativeMuseAccessToken(c),
+  },
   // GitHub Copilot: the delegated CLI holds a sentinel `COPILOT_GITHUB_TOKEN`; the
   // gateway swaps in the real token for exactly the endpoints above.
   copilot: {
@@ -565,6 +618,7 @@ const EXECUTOR_BY_PROVIDER: Record<string, string> = {
   cursor: "agent",
   copilot: "copilot",
   google: "agy",
+  muse: "muse",
   local: "opencode",
   custom: "opencode",
 };

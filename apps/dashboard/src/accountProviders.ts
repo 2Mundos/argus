@@ -16,6 +16,8 @@ export const GITHUB_PROVIDER = "github";
 export const COPILOT_PROVIDER = "copilot";
 /** Executor-only Google Antigravity account: Gemini API key or imported OAuth login. */
 export const GOOGLE_PROVIDER = "google";
+/** Harness and executor Muse account: Meta API key or imported muse login. */
+export const MUSE_PROVIDER = "muse";
 
 const PROVIDER_ID = /^[a-z0-9_-]{1,50}$/;
 
@@ -99,10 +101,21 @@ export function nativeAuthNotice(providerId: string): string | undefined {
   }
   if (providerId === COPILOT_PROVIDER) return copilotTokenNotice();
   if (providerId === GOOGLE_PROVIDER) return googleCredentialNotice();
+  if (providerId === MUSE_PROVIDER) return museCredentialNotice();
   return undefined;
 }
 
 const COPILOT_PREFIXES = ["github_pat_", "gho_", "ghu_"];
+
+/** Accepted Muse credential shapes, as the import form states them. */
+export function museCredentialNotice(): string {
+  return (
+    'A Muse account accepts a Meta API key ({"api_key": "…"}) or an imported muse login ' +
+    '(an OAuth token as {"oauth_token": "…"} or a pasted muse auth file with ' +
+    "providers.meta.access_token). The account kind (api_key or subscription) is derived " +
+    "from the credential. It runs as a harness and as an executor (muse), and is write-only."
+  );
+}
 
 /** Accepted Google/Antigravity credential shapes, as the import form states them. */
 export function googleCredentialNotice(): string {

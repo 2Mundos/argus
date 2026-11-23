@@ -12,6 +12,7 @@ from argus_core import (
     cursor_auth,
     custom_accounts,
     google_auth,
+    muse_auth,
 )
 from argus_core.accounts import (
     LOCAL_PROVIDER,
@@ -95,6 +96,8 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             found = copilot_auth.validate(credential)
         elif provider == google_auth.PROVIDER:
             found = google_auth.validate(credential)
+        elif provider == muse_auth.PROVIDER:
+            found = muse_auth.validate(credential)
         elif provider == custom_accounts.PROVIDER:
             custom_accounts.validate_credential(credential)
             return "api_key", "api_key"
@@ -150,6 +153,7 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
         cursor_auth.CursorAuthError,
         custom_accounts.CustomAccountError,
         google_auth.GoogleAuthError,
+        muse_auth.MuseAuthError,
     ) as exc:
         raise ValidationFailedError(f"invalid {provider} credential: {exc}") from None
     return found.kind, found.mode
@@ -259,6 +263,10 @@ async def create_account(
     if body.provider == google_auth.PROVIDER and body.credential is None:
         raise ValidationFailedError(
             "invalid google credential: the credential must be validated at registration"
+        )
+    if body.provider == muse_auth.PROVIDER and body.credential is None:
+        raise ValidationFailedError(
+            "invalid muse credential: the credential must be validated at registration"
         )
     if body.provider == custom_accounts.PROVIDER and body.credential is None:
         raise ValidationFailedError(

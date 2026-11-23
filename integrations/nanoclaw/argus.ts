@@ -774,7 +774,11 @@ export interface ContinuationContract {
   gaps: string[];
 }
 
-const PIN_PROVIDERS: Record<string, string> = { claude: "anthropic", codex: "openai" };
+const PIN_PROVIDERS: Record<string, string> = {
+  claude: "anthropic",
+  codex: "openai",
+  muse: "muse",
+};
 
 /**
  * Does the engine account the worker holds fit what the task allows (harness account
@@ -1616,7 +1620,7 @@ export function renderTask(
           ]
         : [
             "Delegated implementation (mandatory): run all coding/model work through /usr/local/bin/argus-delegate EXECUTOR.",
-            "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot | agy). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit). For Google Antigravity use EXECUTOR agy.",
+            "EXECUTOR is the leased CLI role (claude | codex | opencode | agent | copilot | agy | muse). When Cursor is the selected coding executor, use EXECUTOR agent. For GitHub Copilot use EXECUTOR copilot (the model is always explicit). For Google Antigravity use EXECUTOR agy. For Muse use EXECUTOR muse.",
             ...(pinned
               ? pinBlocked
                 ? [
@@ -1637,7 +1641,7 @@ export function renderTask(
                 : []),
             ...(opts.localHarness ? ["", ...localHarnessRules(effective), ""] : []),
             ...(opts.customHarness ? ["", ...customHarnessRules(effective), ""] : []),
-            "Do not invoke agent, cursor-agent, claude, codex, opencode, copilot, or agy directly for implementation — that bypasses",
+            "Do not invoke agent, cursor-agent, claude, codex, opencode, copilot, agy, or muse directly for implementation — that bypasses",
             "prepareExecutorEnv (writable private Cursor config), model policy, timeouts, and the JSON delegate report.",
             "Direct Git, gates, QA, and other non-delegated shell commands in the checkout are fine when they are not a",
             "substitute for argus-delegate.",

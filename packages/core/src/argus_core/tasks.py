@@ -46,7 +46,11 @@ def validate_account_providers(value: list[str] | None) -> list[str] | None:
 
 
 # The account provider a pinned engine or executor needs (task models spec 3.1).
-HARNESS_PROVIDERS: dict[str, str] = {"claude": "anthropic", "codex": "openai"}
+HARNESS_PROVIDERS: dict[str, str] = {
+    "claude": "anthropic",
+    "codex": "openai",
+    "muse": "muse",
+}
 EXECUTOR_PROVIDERS: dict[str, str] = {
     "claude": "anthropic",
     "codex": "openai",
@@ -54,6 +58,7 @@ EXECUTOR_PROVIDERS: dict[str, str] = {
     "opencode": "local",
     "copilot": "copilot",
     "agy": "google",
+    "muse": "muse",
 }
 # An account id or name: what a harness account pin names (task models spec 3.4).
 AccountRef = Annotated[
@@ -69,7 +74,7 @@ class HarnessModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    engine: Literal["claude", "codex"]
+    engine: Literal["claude", "codex", "muse"]
     model: ModelId
 
     @property
@@ -82,7 +87,9 @@ class ExecutorModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    executor: Literal["claude", "codex", "agent", "opencode", "copilot", "agy", "dsh"]
+    executor: Literal[
+        "claude", "codex", "agent", "opencode", "copilot", "agy", "dsh", "muse"
+    ]
     model: ModelId
     account_provider: Literal["local", "custom"] | None = Field(
         default=None, exclude_if=lambda value: value is None

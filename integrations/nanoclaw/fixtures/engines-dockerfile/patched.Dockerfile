@@ -128,10 +128,11 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # part of the image: each worker logs in with the vendor client. dsh is opt-in:
 # build with --build-arg ARGUS_DSH_ENABLED=true to add it; the default adds nothing.
 ARG ARGUS_DSH_ENABLED=false
-COPY install-cursor-agent.sh install-copilot-cli.sh install-agy.sh argus-delegate.mjs account-settings.mjs opencode-gateway.mjs anthropic-redirect.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs changes.mjs usage.mjs gitea-api.mjs github-api.mjs install-dsh.sh /tmp/argus-engines/
+COPY install-cursor-agent.sh install-copilot-cli.sh install-agy.sh install-muse.sh argus-delegate.mjs account-settings.mjs opencode-gateway.mjs anthropic-redirect.mjs model-policy.mjs model-policy.defaults.json milestones.mjs livelog.mjs changes.mjs usage.mjs gitea-api.mjs github-api.mjs install-dsh.sh /tmp/argus-engines/
 RUN sh /tmp/argus-engines/install-cursor-agent.sh \
  && sh /tmp/argus-engines/install-copilot-cli.sh \
  && sh /tmp/argus-engines/install-agy.sh \
+ && sh /tmp/argus-engines/install-muse.sh \
  && install -m 0644 /tmp/argus-engines/anthropic-redirect.mjs /usr/local/bin/anthropic-redirect.mjs \
  && install -m 0755 /tmp/argus-engines/argus-delegate.mjs /usr/local/bin/argus-delegate \
  && install -m 0644 /tmp/argus-engines/opencode-gateway.mjs /tmp/argus-engines/account-settings.mjs /tmp/argus-engines/model-policy.mjs /tmp/argus-engines/model-policy.defaults.json /tmp/argus-engines/milestones.mjs /tmp/argus-engines/livelog.mjs /tmp/argus-engines/changes.mjs /tmp/argus-engines/usage.mjs /usr/local/bin/ \
@@ -147,7 +148,7 @@ RUN sh /tmp/argus-engines/install-cursor-agent.sh \
    && sh /tmp/argus-engines/install-dsh.sh; \
     fi \
  && rm -rf /tmp/argus-engines \
- && claude --version && codex --version && opencode --version && agent --version && copilot --version && agy --version
+ && claude --version && codex --version && opencode --version && agent --version && copilot --version && agy --version && muse --version
 
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.

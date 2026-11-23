@@ -54,6 +54,7 @@ Every spec in this directory with its status, kept in sync by
 | [Model-Facing Evals](model-facing-evals.spec.md) | `implemented` |
 | [Model observability](model-observability.spec.md) | `implemented` |
 | [Preferred models](model-selection.spec.md) | `implemented` |
+| [Muse accounts: import, harness and executor lease, delegated CLI](muse-accounts.spec.md) | `partial` |
 | [Onboarding](onboarding.spec.md) | `implemented` |
 | [OneCLI cleanup: vault entries of terminated NanoClaw instances](onecli-cleanup.spec.md) | `implemented` |
 | [Operations Spec](operations.spec.md) | `implemented` |

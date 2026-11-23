@@ -113,6 +113,7 @@ cp "$here/argus-copilot-stub.ts" "$target/src/gateway-providers/argus-copilot-st
 cp "$here/argus-copilot-stub.test.ts" "$target/src/gateway-providers/argus-copilot-stub.test.ts"
 cp "$here/argus-agy-stub.ts" "$target/src/gateway-providers/argus-agy-stub.ts"
 cp "$here/argus-agy-stub.test.ts" "$target/src/gateway-providers/argus-agy-stub.test.ts"
+cp "$here/argus-muse-stub.ts" "$target/src/gateway-providers/argus-muse-stub.ts"
 cp "$here/argus-opencode-stub.ts" "$target/src/gateway-providers/argus-opencode-stub.ts"
 cp "$here/argus-opencode-stub.test.ts" "$target/src/gateway-providers/argus-opencode-stub.test.ts"
 cp "$here/argus-claude-stub.ts" "$target/src/gateway-providers/argus-claude-stub.ts"
@@ -326,6 +327,37 @@ s = s.replace(tail, tail[:-2] + "), async () =>\n      onecliUrl ? agyExecutorAs
 open(p, "w").write(s)
 PY
   echo "patched $onecli_ts (Antigravity delegate sentinel runtime)"
+fi
+# The first muse revision closed with `)),` (one `)` too many), which is not
+# valid TypeScript. Repair a checkout it already damaged; a no-op otherwise.
+if [ -f "$onecli_ts" ] && grep -q "withMuseDelegateRuntime" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+broken = "onecliUrl ? agyExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : null)), async () =>\n      onecliUrl ? museExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : false);"
+fixed = "onecliUrl ? agyExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : null), async () =>\n      onecliUrl ? museExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : false);"
+if broken in s:
+    open(p, "w").write(s.replace(broken, fixed, 1))
+    print(f"repaired {p} (Muse delegate unbalanced close)")
+PY
+fi
+if [ -f "$onecli_ts" ] && ! grep -q "withMuseDelegateRuntime" "$onecli_ts"; then
+  python3 - "$onecli_ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = "import { agyExecutorAssigned, withAgyDelegateRuntime } from './argus-agy-stub.js';"
+assert needle in s, "run install after the Antigravity delegate hook is present"
+s = s.replace(needle, needle + "\nimport { museExecutorAssigned, withMuseDelegateRuntime } from './argus-muse-stub.js';", 1)
+head = "  const config = await withAgyDelegateRuntime(await withOpencodeDelegateRuntime("
+tail = "onecliUrl ? agyExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : null);"
+assert head in s and tail in s, "onecli.ts ensureSession shape changed upstream"
+s = s.replace(head, "  const config = await withMuseDelegateRuntime(await withAgyDelegateRuntime(await withOpencodeDelegateRuntime(", 1)
+s = s.replace(tail, tail[:-2] + "), async () =>\n      onecliUrl ? museExecutorAssigned(onecliUrl, onecliApiKey, input.key.agentGroupId) : false);", 1)
+open(p, "w").write(s)
+PY
+  echo "patched $onecli_ts (Muse delegate sentinel runtime)"
 fi
 onecli_test="$target/src/gateway-providers/onecli.test.ts"
 if [ -f "$onecli_test" ] && grep -q 'expect(fetchMock).toHaveBeenCalledTimes(1);' "$onecli_test"; then

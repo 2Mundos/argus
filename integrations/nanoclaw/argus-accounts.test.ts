@@ -756,12 +756,12 @@ describe("channel with accounts", () => {
     await until(() => h.inbound.length === 1);
     const claim = w.calls.find((c) => c.path === "/tasks/claim")!;
     expect(claim.body).toMatchObject({
-      runtime_providers: ["anthropic", "openai", "local", "custom"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
     });
     // the restriction is the server's: the lease request is unchanged and names the task
     const leaseCall = w.calls.find((c) => c.path === "/accounts/lease")!;
     expect(leaseCall.body).toMatchObject({
-      runtime_providers: ["anthropic", "openai", "local", "custom"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
       task_id: "t1",
       attempt: 1,
     });
@@ -1055,7 +1055,11 @@ describe("engine and executor leases in the channel", () => {
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
     expect(leaseCalls).toEqual([
-      { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
+      {
+        runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+        task_id: "t1",
+        attempt: 1,
+      },
       {
         role: "executor",
         runtime_providers: [
@@ -1064,6 +1068,7 @@ describe("engine and executor leases in the channel", () => {
           "local",
           "custom",
           "cursor",
+          "muse",
           "copilot",
           "google",
         ],
@@ -1703,7 +1708,11 @@ describe("cursor executor selection in the channel", () => {
     await adapter.setup(setup);
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
-      { runtime_providers: ["anthropic", "openai", "local", "custom"], task_id: "t1", attempt: 1 },
+      {
+        runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+        task_id: "t1",
+        attempt: 1,
+      },
       {
         role: "executor",
         runtime_providers: [
@@ -1712,6 +1721,7 @@ describe("cursor executor selection in the channel", () => {
           "local",
           "custom",
           "cursor",
+          "muse",
           "copilot",
           "google",
         ],
@@ -1811,7 +1821,7 @@ describe("structured providerFailure on a failure notice", () => {
       source: "structured",
       reset_status: "absent",
       role: "engine",
-      runtime_providers: ["anthropic", "openai", "local", "custom"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
       task_id: "t1",
       attempt: 1,
     });
@@ -2026,7 +2036,7 @@ describe("task-scoped repository auth", () => {
       expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
         {
-          runtime_providers: ["anthropic", "openai", "local", "custom"],
+          runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
           task_id: REPO_ID,
           attempt: 1,
         },
@@ -2038,6 +2048,7 @@ describe("task-scoped repository auth", () => {
             "local",
             "custom",
             "cursor",
+            "muse",
             "copilot",
             "google",
           ],
@@ -3676,6 +3687,7 @@ describe("global account selection in the channel", () => {
           "local",
           "custom",
           "cursor",
+          "muse",
           "copilot",
           "google",
         ],
@@ -4461,7 +4473,7 @@ describe("no usable account at claim time", () => {
     await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"), 7000);
     const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
     expect(call.body).toMatchObject({
-      runtime_providers: ["anthropic", "openai", "local", "custom"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
     });
     expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(true);
     expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toMatchObject({
@@ -4788,7 +4800,7 @@ describe("Cursor first on a local or custom engine lease", () => {
     const { calls } = await executorCalls(["no_account", "no_account"]);
     expect(calls).toEqual([
       ["cursor"],
-      ["anthropic", "openai", "local", "custom", "cursor", "copilot", "google"],
+      ["anthropic", "openai", "local", "custom", "cursor", "muse", "copilot", "google"],
     ]);
   });
 

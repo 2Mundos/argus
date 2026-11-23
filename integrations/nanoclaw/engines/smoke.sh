@@ -35,6 +35,7 @@ rows=(
   "$(expect cursor-agent agent '2026.10.16-e3cb207')"
   "$(expect copilot copilot '1.0.105')"
   "$(expect antigravity agy '1.5.12')"
+  "$(expect muse muse '1.4.25')"
 )
 # dsh is opt-in (ARGUS_DSH_ENABLED=true, like the API): not probed otherwise.
 if [[ "${ARGUS_DSH_ENABLED:-}" == true ]]; then rows+=("$(expect dsh dsh '0.2.2-alpha.3')"); fi
@@ -45,6 +46,7 @@ arows=(
   "$(auth cursor-agent agent)"
   "$(auth copilot copilot)"
   "$(auth antigravity agy)"
+  "$(auth muse muse)"
 )
 if [[ "${ARGUS_DSH_ENABLED:-}" == true ]]; then arows+=("$(auth dsh dsh)"); fi
 mkdir -p "$(dirname "$ledger")"

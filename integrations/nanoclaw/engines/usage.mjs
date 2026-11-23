@@ -240,6 +240,9 @@ const PARSERS = {
   agy: parseAgy,
   // copilot -s prints the answer only: the pinned CLI (1.0.105) has no usage output.
   copilot: () => notReported("no_usage_output"),
+  // muse exec --json emits JSONL events whose usage shape is unverified: never
+  // report a parsed figure until a real stream is recorded (muse accounts spec 4).
+  muse: () => notReported("no_usage_output"),
 };
 
 /** Never throws; anything unrecognizable is `not_reported` with a reason code. */
@@ -247,7 +250,7 @@ export function parseUsage(executor, stdoutText) {
   const parser = PARSERS[executor];
   if (!parser) return notReported("unknown_executor");
   try {
-    if (executor === "copilot") return parser([]);
+    if (executor === "copilot" || executor === "muse") return parser([]);
     const objects = jsonObjects(String(stdoutText ?? ""));
     if (!objects.length) return notReported("no_json_output");
     return parser(objects);

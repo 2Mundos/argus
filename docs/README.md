@@ -100,6 +100,9 @@ why you are here.
 - [Google (Antigravity) accounts](specs/google-accounts.spec.md) — import a Gemini API
   key or Google OAuth login for the delegated Antigravity CLI (`agy`); executor lease,
   sentinel env/stub and OneCLI injection
+- [Muse accounts](specs/muse-accounts.spec.md) — import a Meta API key or muse
+  login for the Muse harness and delegated CLI (`muse`); engine and executor leases,
+  sentinel env and OneCLI injection
 - [Custom accounts](specs/custom-accounts.spec.md) — an OpenAI-compatible endpoint
   (OpenRouter first) as an account: model and routing per role, probe, 402/429 failover
 - [Custom harness](specs/custom-harness.spec.md) — NanoClaw Claude Code on a custom

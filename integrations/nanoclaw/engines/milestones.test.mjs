@@ -7,7 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { COPILOT_SENTINEL_TOKEN, EXECUTORS } from "./argus-delegate.mjs";
+import { COPILOT_SENTINEL_TOKEN, EXECUTORS, MUSE_SENTINEL_API_KEY } from "./argus-delegate.mjs";
 import {
   ciState,
   createSink,
@@ -501,6 +501,7 @@ const AUTH = {
     return {};
   },
   copilot: () => ({ COPILOT_GITHUB_TOKEN: COPILOT_SENTINEL_TOKEN }),
+  muse: () => ({ META_API_KEY: MUSE_SENTINEL_API_KEY }),
 };
 
 for (const executor of EXECUTORS) {

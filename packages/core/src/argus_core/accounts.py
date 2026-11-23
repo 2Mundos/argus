@@ -27,7 +27,9 @@ LOCAL_PROVIDER = "local"
 ENGINE_ONLY: frozenset[str] = frozenset()
 # Account providers a harness (the `engine` role) can run on: what a task may be
 # restricted to. Never the repository provider or the executor-only ones.
-ENGINE_PROVIDERS = frozenset({"anthropic", "openai", CUSTOM_PROVIDER, LOCAL_PROVIDER})
+ENGINE_PROVIDERS = frozenset(
+    {"anthropic", "openai", "muse", CUSTOM_PROVIDER, LOCAL_PROVIDER}
+)
 
 
 def role_accepts(

@@ -58,6 +58,21 @@ _DECLARED: list[tuple[str, str, tuple[EngineLayer, ...], Axes, list[str], str]] 
         "NanoClaw harness and code executor, chosen by account priority like any other.",
     ),
     (
+        "muse",
+        "Muse",
+        (H, X),
+        Axes(
+            model_provider="meta",
+            model=None,
+            harness="nanoclaw provider muse",
+            executor="muse",
+            account_provider="muse",
+        ),
+        ["argus-account", "muse-login", "META_API_KEY"],
+        "NanoClaw harness and code executor, chosen by account priority like any "
+        "other. Its login is an Argus account (imported or minted where authorised).",
+    ),
+    (
         "opencode",
         "OpenCode",
         (X,),

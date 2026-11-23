@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
-const engines = new Set(["codex", "claude", "opencode", "agent", "agy", "dsh"]);
+const engines = new Set(["codex", "claude", "opencode", "agent", "agy", "dsh", "muse"]);
 // Optional maps, in canonical order after the two required ones: a policy without
 // them keeps its revision (task complexity spec).
 const OPTIONAL = ["trivial", "hard_harness", "hard_implementation"];
@@ -103,6 +103,8 @@ export const EFFORTS = {
   "executor:codex:openai": ["low", "medium", "high", "xhigh", "max", "ultra"],
   "executor:copilot:copilot": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
   "executor:agy:google": ["low", "medium", "high", "xhigh", "max"],
+  "harness:muse:muse": ["low", "medium", "high", "xhigh", "max"],
+  "executor:muse:muse": ["low", "medium", "high", "xhigh", "max", "ultra"],
 };
 
 /** The configured effort of one role of an execution route; null when omitted. */
@@ -116,7 +118,7 @@ export function executionEffort(execution, role) {
   return effort;
 }
 
-const PIN_PROVIDERS = { claude: "anthropic", codex: "openai" };
+const PIN_PROVIDERS = { claude: "anthropic", codex: "openai", muse: "muse" };
 
 /**
  * The harness model of the attempt. A task pin is fixed while the lease is on the
