@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 //   argus-delegate EXECUTOR --auth-probe [--result-file F]
 //   argus-delegate --probe-matrix   (static proven/mocked-only/unprobed table; no request)
 //
-// EXECUTOR is claude | codex | opencode | agent | copilot | agy | dsh. The prompt comes from stdin or
+// EXECUTOR is claude | codex | opencode | agent | copilot | agy | dsh | muse. The prompt comes from stdin or
 // --prompt-file. The last line on stdout is one JSON object: the identity of the
 // engine that delegated and the executor that did the work, how it ended, and
 // the artifacts, and the run's token usage (`usage`, `run_key`, `usage_report`; see
@@ -63,7 +63,7 @@ import {
   USAGE_RELAY_FILE,
 } from "./usage.mjs";
 
-export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot", "agy", "dsh"];
+export const EXECUTORS = ["claude", "codex", "opencode", "agent", "copilot", "agy", "dsh", "muse"];
 
 /**
  * Not a credential: the value the NanoClaw host gives the worker when every Copilot
@@ -79,6 +79,14 @@ export const COPILOT_SENTINEL_TOKEN =
  */
 export const AGY_SENTINEL_API_KEY = "AIzaSyARGUS_ONECLI_SENTINEL_not_a_credential_00000";
 export const AGY_SENTINEL_OAUTH_TOKEN = "ya29.ARGUS_ONECLI_SENTINEL_not_a_credential";
+
+/**
+ * Not a credential: the value the NanoClaw host gives the worker when the Muse
+ * secret is assigned in the vault (argus-muse-stub.ts, keep in step). The gateway
+ * swaps in the real leased value on the wire; any other value here is refused
+ * (fail closed): only the sentinel authenticates a run.
+ */
+export const MUSE_SENTINEL_API_KEY = "ARGUS-MUSE-SENTINEL-not-a-credential";
 
 /**
  * Did the Antigravity CLI (`agy 1.5.12`) reject its credential? Reads structured
@@ -334,6 +342,14 @@ export function authStatus(executor, e = process.env, home = os.homedir(), setti
       return env(e, CUSTOM_KEY_ENV)
         ? { ok: true }
         : { ok: false, need: DSH_NEED_KEY, code: "dsh_provider_credential_missing" };
+    case "muse":
+      // Only the gateway sentinel: a real key in the container is refused, never used.
+      return e.META_API_KEY === MUSE_SENTINEL_API_KEY
+        ? { ok: true }
+        : {
+            ok: false,
+            need: "no usable muse account: the muse provider has no lease for this task (the gateway's META_API_KEY sentinel is absent); Argus leases muse for a harness or an executor pin to muse",
+          };
     default:
       return { ok: false, need: "unknown executor" };
   }
@@ -592,7 +608,7 @@ export function buildCommand(
   { cwd, model, readOnly, lastMessageFile, settings = null, overlayFile = null, effort = null },
   e = process.env,
 ) {
-  if (effort !== null && !["claude", "codex", "copilot", "agy"].includes(executor))
+  if (effort !== null && !["claude", "codex", "copilot", "agy", "muse"].includes(executor))
     throw new Error(`${executor} has no reasoning effort interface`);
   switch (executor) {
     case "claude":
@@ -722,6 +738,27 @@ export function buildCommand(
         promptVia: "stdin",
         readOnlyEnforcement: "prompt_only",
       };
+    case "muse": {
+      if (!model) throw new Error("muse needs an explicit model");
+      return {
+        bin: "muse",
+        args: [
+          "exec",
+          "--json",
+          "--workspace",
+          cwd,
+          ...(model ? ["--model", model] : []),
+          // Never --yolo, --disable-approval or --disable-sandbox: the workspace
+          // sandbox stays on. Read-only delegation denies writes and shell.
+          ...(readOnly ? ["--disable-write", "--disable-shell"] : []),
+          // Headless: never wait on an interactive question, fail the tool instead.
+          "--disable-request-user-input",
+          ...(effort ? ["--reasoning-effort", effort] : []),
+        ],
+        promptVia: "argv",
+        readOnlyEnforcement: readOnly ? "muse_disable_write_and_shell" : "muse_sandbox_only",
+      };
+    }
     default:
       throw new Error(`unknown executor ${executor}`);
   }
@@ -860,6 +897,20 @@ export function prepareDshEnv(e, runtimeRoot) {
 }
 
 /**
+ * Muse runtime: only the sentinel may authenticate, so HOME is a fresh private
+ * tree under the authorized cwd (removed on exit): session logs, indexes and
+ * state never mutate a shared home or persist across tasks. No credential file
+ * is materialized: the key stays in META_API_KEY for the gateway to swap.
+ */
+export function prepareMuseEnv(e, runtimeRoot) {
+  const home = path.join(runtimeRoot, "muse-home", randomUUID());
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  fs.chmodSync(home, 0o700);
+  process.once("exit", () => fs.rmSync(home, { recursive: true, force: true }));
+  return { ...e, HOME: home };
+}
+
+/**
  * Cursor CLI runtime: gateway stubs stay read-only mounts; the native CLI needs a
  * writable CURSOR_CONFIG_DIR for atomic cli-config updates even when HTTP/1.1 is preset.
  */
@@ -871,6 +922,7 @@ export function prepareExecutorEnv(
   if (executor === "copilot") return prepareCopilotEnv(e, runtimeRoot);
   if (executor === "agy") return prepareAgyEnv(e, runtimeRoot);
   if (executor === "dsh") return prepareDshEnv(e, runtimeRoot);
+  if (executor === "muse") return prepareMuseEnv(e, runtimeRoot);
   if (executor !== "agent") return e;
   const home = e.HOME || os.homedir();
   const xdg = e.XDG_CONFIG_HOME || path.join(home, ".config");
@@ -1269,6 +1321,7 @@ const PROVIDER_TIMEOUT_MS = 10_000;
  *            auth.json or an attached server (never read): unproven.
  *   copilot  GET api.individual.githubcopilot.com/models, a path the gateway injects on,
  *            with the sentinel the host placed in COPILOT_GITHUB_TOKEN.
+ *   muse     unproven: no verified read-only endpoint on the Meta API host yet.
  *   dsh      with account settings, GET <base_url>/models.
  * The credential value goes only into the header of the request to the provider's own host
  * (or the account's base URL); it is never printed, logged or reported.
@@ -1338,6 +1391,8 @@ export function providerRequest(executor, e, settings) {
     }
     case "agent":
       return { unproven: "no_read_only_endpoint" };
+    case "muse":
+      return { unproven: "no_verified_read_only_endpoint" };
     default:
       return { unproven: "credential_not_in_env" };
   }
@@ -1358,6 +1413,7 @@ export const PROBE_EVIDENCE = Object.freeze({
   copilot: { status: "mocked-only", route: "GET api.individual.githubcopilot.com/models" },
   agent: { status: "unprobed", route: "no read-only endpoint" },
   agy: { status: "mocked-only", route: "GET generativelanguage.googleapis.com or oauth2 userinfo" },
+  muse: { status: "unprobed", route: "no verified read-only endpoint" },
   opencode: {
     status: "mocked-only",
     route: "GET <base_url>/models (custom/OpenRouter account only)",
@@ -1650,6 +1706,13 @@ export async function main(argv, e = process.env, { claudeStub = CLAUDE_GATEWAY_
       ...identity,
       error: "usage",
       detail: "copilot needs an explicit model (--model, a task pin or the model policy)",
+    });
+  // The Muse CLI's own default model is never used: no model, no run.
+  if (executor === "muse" && !selection.configured_model)
+    finish(64, {
+      ...identity,
+      error: "usage",
+      detail: "muse needs an explicit model (--model, a task pin or the model policy)",
     });
 
   const roots = (e.ARGUS_DELEGATE_ROOTS || "/workspace").split(":").filter(Boolean);
@@ -2125,7 +2188,7 @@ async function runAttempt(
     executor === "dsh" ? dshOutcome(stdoutText, fs.readFileSync(stderrFile, "utf8")) : null;
   if (dsh?.summary) fs.writeFileSync(lastMessageFile, dsh.summary);
   const tailSource = fs.existsSync(lastMessageFile) ? lastMessageFile : stdoutFile;
-  const secrets = [e[CUSTOM_KEY_ENV], e.COPILOT_GITHUB_TOKEN]
+  const secrets = [e[CUSTOM_KEY_ENV], e.COPILOT_GITHUB_TOKEN, e.META_API_KEY]
     .map((v) => (v ?? "").trim())
     .filter(Boolean);
   const redact = (text) => secrets.reduce((t, s) => t.split(s).join("[redacted]"), text);

@@ -34,9 +34,11 @@ class ExplicitModel(ClosedModel):
 
 
 class Selector(ClosedModel):
-    adapter: Literal["claude", "codex", "agent", "copilot", "opencode", "agy", "dsh"]
+    adapter: Literal[
+        "claude", "codex", "agent", "copilot", "opencode", "agy", "dsh", "muse"
+    ]
     provider: Literal[
-        "anthropic", "openai", "local", "custom", "cursor", "copilot", "google"
+        "anthropic", "openai", "local", "custom", "cursor", "copilot", "google", "muse"
     ]
     # None = any available account of this provider that can serve the role; admission
     # picks one and records it. A value pins that exact account.
@@ -60,11 +62,13 @@ _SELECTOR_SOURCES = {
     ("harness", "claude", "local"): {"account"},
     ("harness", "claude", "custom"): {"account"},
     ("harness", "codex", "openai"): {"explicit"},
+    ("harness", "muse", "muse"): {"explicit"},
     ("executor", "claude", "anthropic"): {"explicit"},
     ("executor", "codex", "openai"): {"explicit"},
     ("executor", "agent", "cursor"): {"explicit"},
     ("executor", "copilot", "copilot"): {"explicit"},
     ("executor", "agy", "google"): {"explicit"},
+    ("executor", "muse", "muse"): {"explicit"},
     ("executor", "opencode", "local"): {"account"},
     ("executor", "opencode", "custom"): {"account", "explicit"},
     ("executor", "dsh", "local"): {"account"},
@@ -182,6 +186,18 @@ _EFFORT = {
             ),
             EffortModelRule(models=["gemini-3.1-pro"], efforts=["low", "high"]),
         ],
+        unlisted_models="unverified",
+    ),
+    # `muse exec` documents none|minimal|low|medium|high|xhigh|max|ultra; no
+    # model takes none/minimal until observed, so rules stay empty (v1).
+    ("executor", "muse", "muse"): EffortSupport(
+        interface="muse exec --reasoning-effort <level>",
+        efforts=["low", "medium", "high", "xhigh", "max", "ultra"],
+        unlisted_models="unverified",
+    ),
+    ("harness", "muse", "muse"): EffortSupport(
+        interface="NanoClaw muse provider effort",
+        efforts=["low", "medium", "high", "xhigh", "max"],
         unlisted_models="unverified",
     ),
 }

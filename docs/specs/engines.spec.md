@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-16
-updated: 2026-11-22
+updated: 2026-11-23
 ---
 
 # Engines, executors and the local model
@@ -135,7 +135,8 @@ In scope:
   login proves nothing about a container.
 - **Two layers per engine.** An engine is a *harness* (the NanoClaw provider that
   runs the agent loop) and/or an *executor* (the CLI `argus-delegate` runs for
-  the code). Matrix: Claude and Codex are both; opencode, Cursor (`agent`),
+  the code). Matrix: Claude, Codex and Muse ([Muse accounts](muse-accounts.spec.md))
+  are both; opencode, Cursor (`agent`),
   Antigravity (`agy`, [Google accounts](google-accounts.spec.md)), Copilot and
   `dsh` are executors only; `local` is an executor only. Each layer has its own
   `readiness`, `accounts` and `usable` in `layers[]`: validating Claude as a
@@ -164,8 +165,8 @@ In scope:
   `validated` for routing. `escalate` or insufficient answers do not. Changing
   the configured endpoint, served model, or `n_ctx` invalidates earlier events.
   Prompts, answers and credentials are not stored in the catalogue.
-- **The engine follows the leased account.** Which of Codex or Claude Code runs the
-  worker loop, and which is the preferred executor, is decided by account priority
+- **The engine follows the leased account.** Which of Codex, Claude Code or Muse runs
+  the worker loop, and which is the preferred executor, is decided by account priority
   ([global account selection](account-selection.spec.md)), not by a fixed role.
 - **Codex turn deadline is configurable for Argus delivery.** Upstream NanoClaw
   hard-codes a ten-minute engine turn timeout in `container/agent-runner/src/providers/codex.ts`.

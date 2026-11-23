@@ -17,7 +17,7 @@ LEVELS = tuple(Difficulty)
 
 # Delegate CLIs a difficulty executor chain may name (plus empty / `none` = none).
 DIFFICULTY_EXECUTOR_CLIS = frozenset(
-    {"claude", "codex", "opencode", "agent", "agy", "dsh"}
+    {"claude", "codex", "opencode", "agent", "agy", "dsh", "muse"}
 )
 NONE_EXECUTOR = "none"
 

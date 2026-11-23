@@ -9,6 +9,8 @@ import {
   GOOGLE_PROVIDER,
   googleCredentialNotice,
   localBrokerNotice,
+  MUSE_PROVIDER,
+  museCredentialNotice,
   nativeAuthNotice,
   PROVIDER_PICK_CUSTOM,
   providerOptionsFromCatalog,
@@ -249,6 +251,7 @@ export function ReplaceCredential({
   const isGithub = account.provider === GITHUB_PROVIDER;
   const isCopilot = account.provider === COPILOT_PROVIDER;
   const isGoogle = account.provider === GOOGLE_PROVIDER;
+  const isMuse = account.provider === MUSE_PROVIDER;
   const [text, setText] = useState("");
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
@@ -328,6 +331,7 @@ export function ReplaceCredential({
         </p>
         {isCopilot && <p className="muted small">{copilotTokenNotice()}</p>}
         {isGoogle && <p className="muted small">{googleCredentialNotice()}</p>}
+        {isMuse && <p className="muted small">{museCredentialNotice()}</p>}
         {isCopilot ? (
           <label>
             Copilot token

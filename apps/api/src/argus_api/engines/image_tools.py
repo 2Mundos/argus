@@ -11,7 +11,7 @@ from pathlib import Path
 
 REQUIRED = ("ssh", "rsync", "git", "kubectl", "rg", "jq", "wget", "patch")
 _SCRIPT = f'for b in {" ".join(REQUIRED)}; do command -v "$b" >/dev/null 2>&1 || echo "$b"; done'
-_ENGINE_IDS = ("codex", "claude", "opencode", "cursor-agent", "antigravity")
+_ENGINE_IDS = ("codex", "claude", "muse", "opencode", "cursor-agent", "antigravity")
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 

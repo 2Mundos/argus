@@ -609,7 +609,7 @@ def test_catalogue_is_read_only_and_does_not_log_events(client: TestClient) -> N
         events_of(client, "engine.local_run")
     )
     assert before == after
-    assert len(client.get("/api/engines", headers=worker).json()["engines"]) == 6
+    assert len(client.get("/api/engines", headers=worker).json()["engines"]) == 7
 
 
 def test_catalogue_over_rest_for_any_token(client: TestClient) -> None:
@@ -621,6 +621,7 @@ def test_catalogue_over_rest_for_any_token(client: TestClient) -> None:
     assert ids == [
         "codex",
         "claude",
+        "muse",
         "opencode",
         "cursor-agent",
         "antigravity",

@@ -2009,7 +2009,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },
@@ -9052,6 +9053,32 @@
                 "same_provider_same_account": false
               },
               {
+                "adapter": "muse",
+                "effort_interface": "NanoClaw muse provider effort",
+                "effort_model_rules": [],
+                "effort_unlisted_models": "unverified",
+                "efforts": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "excluded_harness_providers": [],
+                "id": "nanoclaw:harness:muse:muse",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "single",
+                  "paired"
+                ],
+                "provider": "muse",
+                "role": "harness",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": false
+              },
+              {
                 "adapter": "claude",
                 "effort_interface": "claude --effort <level>",
                 "effort_model_rules": [
@@ -9302,6 +9329,34 @@
                   "paired"
                 ],
                 "provider": "google",
+                "role": "executor",
+                "runtime": "nanoclaw",
+                "same_provider_same_account": true
+              },
+              {
+                "adapter": "muse",
+                "effort_interface": "muse exec --reasoning-effort <level>",
+                "effort_model_rules": [],
+                "effort_unlisted_models": "unverified",
+                "efforts": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ],
+                "excluded_harness_providers": [
+                  "local"
+                ],
+                "id": "nanoclaw:executor:muse:muse",
+                "model_sources": [
+                  "explicit"
+                ],
+                "modes": [
+                  "paired"
+                ],
+                "provider": "muse",
                 "role": "executor",
                 "runtime": "nanoclaw",
                 "same_provider_same_account": true
@@ -9978,7 +10033,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },
@@ -10380,7 +10436,8 @@
               "opencode",
               "copilot",
               "agy",
-              "dsh"
+              "dsh",
+              "muse"
             ],
             "title": "Executor",
             "type": "string"
@@ -11401,7 +11458,8 @@
           "engine": {
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "muse"
             ],
             "title": "Engine",
             "type": "string"
@@ -13444,7 +13502,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },
@@ -22052,7 +22111,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },
@@ -22176,7 +22236,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },
@@ -22242,7 +22303,8 @@
               "copilot",
               "opencode",
               "agy",
-              "dsh"
+              "dsh",
+              "muse"
             ],
             "title": "Adapter",
             "type": "string"
@@ -22285,7 +22347,8 @@
               "custom",
               "cursor",
               "copilot",
-              "google"
+              "google",
+              "muse"
             ],
             "title": "Provider",
             "type": "string"
@@ -29452,7 +29515,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },
@@ -29668,7 +29732,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },
@@ -29816,7 +29881,8 @@
                   "agent",
                   "copilot",
                   "agy",
-                  "dsh"
+                  "dsh",
+                  "muse"
                 ],
                 "type": "string"
               },

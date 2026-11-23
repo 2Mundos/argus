@@ -26,6 +26,7 @@ import {
   executorJsonFailure,
   httpStatus,
   localHarnessRefusal,
+  MUSE_SENTINEL_API_KEY,
   materializePrivateCursorConfig,
   PROBE_EVIDENCE,
   parseAccountSettings,
@@ -3440,4 +3441,62 @@ test("--probe-matrix prints the static table without reading env or making a req
   assert.equal(r.code, 0);
   assert.deepEqual(r.report.probe_matrix, JSON.parse(JSON.stringify(PROBE_EVIDENCE)));
   assert.equal(JSON.stringify(r.report).includes(SECRET), false);
+});
+
+test("muse: sentinel-only authStatus, explicit-model buildCommand and private HOME", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "muse",
+    'if [ "$1" = "--version" ]; then echo "Muse Code 1.4.25 (1.4.25-R9361.1)"; exit 0; fi',
+  );
+
+  // Missing or real-looking META_API_KEY is refused: only the sentinel runs.
+  assert.equal(authStatus("muse", { HOME: s.home }, s.home).ok, false);
+  assert.equal(
+    authStatus("muse", { HOME: s.home, META_API_KEY: "meta-real-key-rejected" }, s.home).ok,
+    false,
+  );
+  const env = { ...s.env, META_API_KEY: MUSE_SENTINEL_API_KEY };
+  assert.deepEqual(authStatus("muse", env, s.home), { ok: true });
+
+  // Explicit model only, argv prompt, sandbox kept on, no yolo/approval flags.
+  const roCmd = buildCommand(
+    "muse",
+    { cwd: s.work, model: "muse-spark", readOnly: true, effort: "high" },
+    env,
+  );
+  assert.equal(roCmd.bin, "muse");
+  assert.equal(roCmd.promptVia, "argv");
+  assert.equal(roCmd.readOnlyEnforcement, "muse_disable_write_and_shell");
+  assert.deepEqual(roCmd.args, [
+    "exec",
+    "--json",
+    "--workspace",
+    s.work,
+    "--model",
+    "muse-spark",
+    "--disable-write",
+    "--disable-shell",
+    "--disable-request-user-input",
+    "--reasoning-effort",
+    "high",
+  ]);
+  const rwCmd = buildCommand("muse", { cwd: s.work, model: "muse-spark", readOnly: false }, env);
+  assert.equal(rwCmd.readOnlyEnforcement, "muse_sandbox_only");
+  assert.ok(!rwCmd.args.includes("--disable-write"));
+  assert.ok(!rwCmd.args.join(" ").includes("--yolo"));
+  assert.throws(() => buildCommand("muse", { cwd: s.work, model: null, readOnly: false }, env));
+
+  // Private HOME under the run root, removed bookkeeping only; key stays in env.
+  const prepared = prepareExecutorEnv("muse", env, path.join(s.work, ".argus-delegate-runtime"));
+  assert.notEqual(prepared.HOME, s.home);
+  assert.ok(String(prepared.HOME).includes(".argus-delegate-runtime"));
+  assert.equal(prepared.META_API_KEY, MUSE_SENTINEL_API_KEY);
+
+  // --auth-probe: no verified read-only endpoint, so it stays unproven without a request.
+  const probed = await authProbeWithProvider("muse", env, {
+    request: async () => assert.fail("no request for muse"),
+  });
+  assert.equal(probed.code, 0);
+  assert.equal(probed.report.evidence, "unprobed");
 });
