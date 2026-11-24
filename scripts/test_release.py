@@ -166,6 +166,21 @@ def test_prepare_refuses_a_merged_but_untagged_release(repo: Path) -> None:
     assert _git(repo, "tag") == ""
 
 
+def test_prepare_ignores_untagged_notes_older_than_the_newest_tag(repo: Path) -> None:
+    assert main(["--date", "2026-10-18", "--no-pr"], root=repo) == 0
+    _merge_notes(repo, "release/v0.1.0", "v0.1.0")
+    assert main(["--tag"], root=repo) == 0
+    old = repo / "docs/releases/2026-10-17.v0-0-1.ref.md"
+    old.write_text("# v0.0.1\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "--quiet", "-m", "docs: old notes")
+    _git(repo, "push", "--quiet")
+    _git(repo, "commit", "--quiet", "--allow-empty", "-m", "fix: later")
+    _git(repo, "push", "--quiet")
+    assert main(["--date", "2026-10-19", "--no-pr"], root=repo) == 0
+    assert _git(repo, "ls-remote", "--heads", "origin", "release/v0.1.1")
+
+
 def test_push_is_retired(repo: Path) -> None:
     assert main(["--push"], root=repo) == 1
     assert _git(repo, "tag") == ""
