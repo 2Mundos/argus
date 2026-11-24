@@ -1,5 +1,5 @@
 ---
-status: partial
+status: implemented
 created: 2026-11-01
 updated: 2026-11-24
 ---
@@ -163,13 +163,7 @@ bypass. Background: draft (removed; in git history),
 
 # 4. Open Questions
 
-## Open items
-
-- `sessionImageCommandGuardBlock` with its default reader (`readImageFile`, a
-  throwaway `docker run --rm --pull=never --network=none --entrypoint cat`) against
-  the configured base image (NanoClaw's `CONTAINER_IMAGE`) and the project image, each
-  separately, on a host with a Docker daemon. A null result is a passed preflight (the
-  managed settings register the hook), not a hook run; the hook run is the live probe.
+None.
 
 # 5. Constraints
 
@@ -249,6 +243,15 @@ bypass. Background: draft (removed; in git history),
   `buildCommand("claude", …)` and the managed hook denies). Codex not covered and not
   claimed: `codex exec` reads no Claude managed settings and the image has no Codex
   hook configuration (Non-Goals, Decisions).
-- Not verified: `sessionImageCommandGuardBlock` through Docker (Open items), the image
-  build, a blocked `rm -rf ~` on a disposable worker, a live Codex turn ([Codex hook
+- Verified through Docker (2026-11-24) on the same host, from `1bf55084` in a
+  detached worktree, Node 22.22.2, `ARGUS_COMMAND_GUARD` unset:
+  `sessionImageCommandGuardBlock("claude", …)` with its default reader
+  (`readImageFile`, `docker run --rm --pull=never --network=none --entrypoint cat`)
+  returned `null` for the base image `argus-nanoclaw-agent:f0fbec0-candidate`
+  (NanoClaw's `CONTAINER_IMAGE`, from `ARGUS_NANOCLAW_AGENT_IMAGE` in the host
+  `nanoclaw.env`) and `null` for the project image
+  `argus-project-runtime:argus-b88b194735b6`, each read separately (exit 0). A null
+  result is a passed preflight (the managed settings register the hook), not a hook
+  run; the hook run is the live probe above.
+- Not verified: the image build, a blocked `rm -rf ~` on a disposable worker, a live Codex turn ([Codex hook
   trust](codex-hook-trust.spec.md)).
