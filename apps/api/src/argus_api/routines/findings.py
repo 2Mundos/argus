@@ -34,6 +34,14 @@ async def after_succeeded_run(tx: Tx, routine_id: str, run_id: str) -> None:
         return
     entries = await _entries(tx.conn, run_id)
     if entries is None:
+        await record(
+            tx,
+            ACTOR,
+            "routine",
+            routine_id,
+            "routine.findings_missing",
+            {"task_id": run_id},
+        )
         return
     try:
         intake = FindingIntake.model_validate(json.loads(routine["template"]))
