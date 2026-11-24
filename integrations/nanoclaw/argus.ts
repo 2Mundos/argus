@@ -6046,10 +6046,12 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           err instanceof ArgusError &&
           err.status === 422 &&
           err.code === "validation_failed" &&
+          err.details.length > 0 &&
           d.kind === "complete" &&
           !schemaRejected.has(`${task.id}:${task.attempt}`)
         ) {
-          // The reply's result.data does not match the kind's schema. Keep what the
+          // The reply's result.data does not match the kind's schema (only that rejection carries
+          // `detail.details`; request-validation 422s are permanent). Keep what the
           // worker produced, show it which fields are wrong, and let it deliver once more.
           schemaRejected.add(`${task.id}:${task.attempt}`);
           const kept = await storeRejectedResult(task, d.text);
