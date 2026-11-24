@@ -4,8 +4,8 @@ import { describe, it } from "node:test";
 import {
   COMPACT_OUTPUT_MAX_BYTES,
   GiteaApi,
-  RAW_OUTPUT_MAX_BYTES,
   preflightEvidence,
+  RAW_OUTPUT_MAX_BYTES,
 } from "./gitea-api.mjs";
 import { GitHubApi, main, repositoryClient, repositoryProvider } from "./github-api.mjs";
 
