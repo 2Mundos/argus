@@ -343,7 +343,7 @@ async def list_tasks(
     unless `archived` asks for exactly those. `task_scope` is an optional SQL
     fragment (worker lease grants) that further restricts which tasks appear.
     `q` is optional literal substring search over title and spec.
-    `hide_review_children` leaves out `code_review` tasks that have a parent and puts
+    `hide_review_children` leaves out `code_review` and `review_verification` tasks that have a parent and puts
     a `review_badge` on the parents that have review rounds."""
     limit = clamp(limit)
     terms = parse_query(q)
@@ -359,8 +359,8 @@ async def list_tasks(
     where = ["archived_at IS NOT NULL" if archived else "archived_at IS NULL"]
     params: list[Any] = []
     if hide_review_children:
-        where.append("NOT (kind = ? AND parent_id IS NOT NULL)")
-        params.append(CODE_REVIEW_KIND)
+        where.append("NOT (kind IN (?, ?) AND parent_id IS NOT NULL)")
+        params += [CODE_REVIEW_KIND, "review_verification"]
     if task_scope is not None:
         clause, scope_params = task_scope
         where.append(clause)

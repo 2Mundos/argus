@@ -319,10 +319,6 @@ class PolicyReport(BaseModel):
     skipped_with_findings: list[SkipFinding]
 
 
-class ReviewReport(BaseModel):
-    policy: PolicyReport
-
-
 async def policy_report(
     conn: aiosqlite.Connection, project: str, since: str, days: int
 ) -> PolicyReport:

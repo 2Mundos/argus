@@ -52,6 +52,15 @@ ROUNDS_EXHAUSTED_GATE = "rounds_exhausted"
 # `human`: its payload is `{"gate": "policy_human", "rules", "pr", "head_sha"}`
 # (review policy spec 3.4).
 POLICY_HUMAN_GATE = "policy_human"
+# The review decision opened when the approved PR is closed or cannot become ready
+# without a change (PR steward spec 3.3). Its payload is `{"gate": "pr_not_ready",
+# "class", "pr", "head_sha", "failed_checks"}`.
+PR_NOT_READY_GATE = "pr_not_ready"
+# The review decision opened when `review.independent.verify_findings` is `enforce` and
+# the verifier refuted every finding of a request_changes verdict. Its payload is
+# `{"gate": "findings_refuted", "review_child_id": ..., "verifier_id": ...}`: `reject`
+# sends the findings anyway, `accept_with_deviation` waives the independent review.
+FINDINGS_REFUTED_GATE = "findings_refuted"
 
 
 class DecisionState(StrEnum):

@@ -2358,7 +2358,8 @@ export interface paths {
         };
         /**
          * Get Review Report
-         * @description How the `review.policy` tiers fared in the last `days` (review policy spec 3.5).
+         * @description How a project's independent-review findings and `review.policy` tiers fared in
+         *     the last `days` days (default 30, at most 90). Admin only; read-only.
          */
         get: operations["get_review_report_api_projects__slug__review_report_get"];
         put?: never;
@@ -2886,7 +2887,7 @@ export interface paths {
          *     and spec (task discovery). `view=compact` returns only id, title, state, attempt,
          *     max_attempts, block_reason, progress_message, created_at and updated_at (no refs,
          *     models or `matches`): the cheapest way to scan many tasks. `hide_review_children=true`
-         *     leaves out `code_review` tasks that have a parent (their rounds are read with
+         *     leaves out `code_review` and `review_verification` tasks that have a parent (their rounds are read with
          *     `GET /tasks/{id}/reviews`) and adds `review_badge` to parents with rounds; it is
          *     off by default.
          */
@@ -6712,6 +6713,32 @@ export interface components {
              */
             role: "data" | "instances" | "docker";
         };
+        /**
+         * DisputeOutcomes
+         * @description What the next round did with each finding the implementer disputed.
+         */
+        DisputeOutcomes: {
+            /**
+             * Disputed
+             * @default 0
+             */
+            disputed?: number;
+            /**
+             * Dropped
+             * @default 0
+             */
+            dropped?: number;
+            /**
+             * No Next Round
+             * @default 0
+             */
+            no_next_round?: number;
+            /**
+             * Raised Again
+             * @default 0
+             */
+            raised_again?: number;
+        };
         /** DockerOptions */
         "DockerOptions-Input": {
             /**
@@ -8000,6 +8027,65 @@ export interface components {
              * @enum {string}
              */
             step: "executing" | "finalizing_checkpoint" | "finished" | "unknown";
+        };
+        /** FindingsReport */
+        FindingsReport: {
+            /**
+             * By Priority
+             * @default {}
+             */
+            by_priority?: {
+                [key: string]: number;
+            };
+            /**
+             * By Priority Verification
+             * @default {}
+             */
+            by_priority_verification?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /**
+             * By Verification
+             * @default {}
+             */
+            by_verification?: {
+                [key: string]: number;
+            };
+            /**
+             * @default {
+             *       "disputed": 0,
+             *       "dropped": 0,
+             *       "no_next_round": 0,
+             *       "raised_again": 0
+             *     }
+             */
+            disputes?: components["schemas"]["DisputeOutcomes"];
+            /**
+             * @default {
+             *       "raised_again_later": 0,
+             *       "refuted": 0
+             *     }
+             */
+            refuted?: components["schemas"]["RefutedOutcomes"];
+            /**
+             * Repeats
+             * @default 0
+             */
+            repeats?: number;
+            /**
+             * Repeats By Task
+             * @default []
+             */
+            repeats_by_task?: components["schemas"]["TaskRepeats"][];
+            /**
+             * Responses
+             * @default {}
+             */
+            responses?: {
+                [key: string]: number;
+            };
         };
         /** FleetCapabilities */
         FleetCapabilities: {
@@ -11110,6 +11196,19 @@ export interface components {
              */
             requeue?: boolean;
         };
+        /** RefutedOutcomes */
+        RefutedOutcomes: {
+            /**
+             * Raised Again Later
+             * @default 0
+             */
+            raised_again_later?: number;
+            /**
+             * Refuted
+             * @default 0
+             */
+            refuted?: number;
+        };
         /** Registration */
         Registration: {
             agent: components["schemas"]["Agent"];
@@ -11297,16 +11396,39 @@ export interface components {
         ReviewFinding: {
             /** Description */
             description: string;
+            /** Evidence Kind */
+            evidence_kind?: ("test" | "reproduction" | "reading") | null;
             /** File */
             file?: string | null;
+            /** Id */
+            id?: string | null;
             /** Lines */
             lines?: string | null;
             /** Priority */
             priority?: string | null;
+            /** Repeat Of */
+            repeat_of?: string | null;
+            /** Repeat Response */
+            repeat_response?: ("fixed" | "disputed" | "unanswered") | null;
+            /** Repeat Round */
+            repeat_round?: number | null;
+            /** Response */
+            response?: ("fixed" | "disputed" | "unanswered") | null;
+            /** Response Evidence */
+            response_evidence?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Verification */
+            verification?: ("confirmed" | "refuted" | "unclear") | null;
         };
         /** ReviewReport */
         ReviewReport: {
+            /** Days */
+            days: number;
+            findings: components["schemas"]["FindingsReport"];
             policy: components["schemas"]["PolicyReport"];
+            /** Project */
+            project: string;
         };
         /** ReviewRound */
         ReviewRound: {
@@ -11329,6 +11451,8 @@ export interface components {
             finished_at: string | null;
             /** Head Sha */
             head_sha: string | null;
+            /** Repeats */
+            repeats: number;
             /** Reviewer Model */
             reviewer_model: string | null;
             /** Reviewer Provider */
@@ -11338,6 +11462,9 @@ export interface components {
             state: components["schemas"]["TaskState"];
             /** Verdict */
             verdict: ("approve" | "request_changes" | "void") | null;
+            /** Verifier Child Id */
+            verifier_child_id: string | null;
+            verifier_state: components["schemas"]["TaskState"] | null;
         };
         /** ReviewRounds */
         ReviewRounds: {
@@ -11346,8 +11473,14 @@ export interface components {
              * @default []
              */
             policy?: components["schemas"]["HeadPolicy"][];
+            /**
+             * Repeats
+             * @default 0
+             */
+            repeats?: number;
             /** Rounds */
             rounds: components["schemas"]["ReviewRound"][];
+            steward?: components["schemas"]["StewardState"] | null;
             /** Task Id */
             task_id: string;
         };
@@ -12183,6 +12316,43 @@ export interface components {
             attempt: number;
             /** Items */
             items?: components["schemas"]["Steer"][];
+        };
+        /**
+         * StewardState
+         * @description The newest PR steward event (PR steward spec 3.5): a repair requested, a repair
+         *     pushed, or the steward stopped with a decision.
+         */
+        StewardState: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Classes
+             * @default []
+             */
+            classes?: string[];
+            /** Decision Id */
+            decision_id?: string | null;
+            /**
+             * Failed Checks
+             * @default []
+             */
+            failed_checks?: string[];
+            /** Head Sha */
+            head_sha?: string | null;
+            /** New Head Sha */
+            new_head_sha?: string | null;
+            /** Old Head Sha */
+            old_head_sha?: string | null;
+            /** Pr */
+            pr?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "repair_requested" | "repair_pushed" | "stopped";
         };
         /**
          * Stuck
@@ -13334,6 +13504,13 @@ export interface components {
             /** Version */
             version: string;
             workspace?: components["schemas"]["WorkspaceFacts"] | null;
+        };
+        /** TaskRepeats */
+        TaskRepeats: {
+            /** Repeats */
+            repeats: number;
+            /** Task Id */
+            task_id: string;
         };
         /**
          * TaskResult

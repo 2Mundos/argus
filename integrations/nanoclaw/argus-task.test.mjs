@@ -1454,6 +1454,132 @@ describe("deliver", () => {
     git(["merge-base", "--is-ancestor", "main", "feature"], origin);
   });
 
+  describe("--undo-note", () => {
+    const note = "repair the failing check";
+    // The open PR 8 on `feature` whose head is `sha`; comments are collected in `posted`.
+    const openPr = (sha, posted, { fail = false, state = "open" } = {}) => ({
+      "GET /": { default_branch: "main" },
+      "GET /pulls":
+        state === "open"
+          ? [
+              {
+                number: 8,
+                html_url: `${REPO}/pulls/8`,
+                head: { ref: "feature", sha },
+                base: { ref: "main" },
+              },
+            ]
+          : [],
+      "POST /issues/8/comments": (_, body) => {
+        if (fail) return new Response("{}", { status: 404 });
+        posted.push(body.body);
+        return { id: 5 };
+      },
+      "GET /issues/comments/5": () => ({ id: 5, body: posted.at(-1) }),
+    });
+    const commit = (work, file) => {
+      writeFileSync(join(work, file), "x\n");
+      git(["add", "."], work);
+      git(["commit", "-qm", `add ${file}`], work);
+    };
+
+    it("comments the revert command after a fast-forward that moves the PR head", async () => {
+      const { origin, work } = setup();
+      commit(work, "b.txt");
+      git(["push", "-q", "origin", "feature"], work);
+      const old = git(["rev-parse", "HEAD"], work);
+      commit(work, "c.txt");
+      const posted = [];
+      const r = await run(["deliver", "--undo-note", note], {
+        routes: openPr(old, posted),
+        cwd: work,
+        ...gateFixture().options,
+      });
+      assert.equal(r.code, EXIT.ok, r.err);
+      assert.equal(r.out.undo_note, "posted");
+      assert.equal(posted.length, 1);
+      assert.match(posted[0], new RegExp(note));
+      assert.ok(posted[0].includes(`git revert --no-edit ${old}..${r.out.head_sha}`));
+      assert.equal(git(["rev-parse", "refs/heads/feature"], origin), r.out.head_sha);
+    });
+
+    it("comments the lease command after a rebase", async () => {
+      const { origin, seed, work } = setup();
+      commit(work, "b.txt");
+      git(["push", "-q", "origin", "feature"], work);
+      const old = git(["rev-parse", "HEAD"], work);
+      advance(seed, origin, "a.txt", "theirs\n");
+      const posted = [];
+      const r = await run(["deliver", "--undo-note", note], {
+        routes: openPr(old, posted),
+        cwd: work,
+        ...gateFixture().options,
+      });
+      assert.equal(r.code, EXIT.ok, r.err);
+      assert.equal(r.out.rebased, true);
+      assert.equal(r.out.undo_note, "posted");
+      assert.ok(
+        posted[0].includes(
+          `git push --force-with-lease=feature:${r.out.head_sha} origin ${old}:refs/heads/feature`,
+        ),
+      );
+    });
+
+    it("posts nothing when the head did not move or the PR is not open", async () => {
+      const { work } = setup();
+      commit(work, "b.txt");
+      git(["push", "-q", "origin", "feature"], work);
+      const same = git(["rev-parse", "HEAD"], work);
+      const posted = [];
+      const unmoved = await run(["deliver", "--undo-note", note], {
+        routes: openPr(same, posted),
+        cwd: work,
+        ...gateFixture().options,
+      });
+      assert.equal(unmoved.out.undo_note, undefined);
+      commit(work, "c.txt");
+      const closed = await run(["deliver", "--undo-note", note], {
+        routes: {
+          ...openPr(same, posted, { state: "closed" }),
+          "POST /pulls": () => ({ number: 9 }),
+        },
+        cwd: work,
+        ...gateFixture().options,
+      });
+      assert.equal(closed.code, EXIT.ok, closed.err);
+      assert.equal(closed.out.undo_note, undefined);
+      assert.deepEqual(posted, []);
+    });
+
+    it("reports a failed comment without failing the delivery", async () => {
+      const { work } = setup();
+      commit(work, "b.txt");
+      git(["push", "-q", "origin", "feature"], work);
+      const old = git(["rev-parse", "HEAD"], work);
+      commit(work, "c.txt");
+      const r = await run(["deliver", "--undo-note", note], {
+        routes: openPr(old, [], { fail: true }),
+        cwd: work,
+        ...gateFixture().options,
+      });
+      assert.equal(r.code, EXIT.ok, r.err);
+      assert.equal(r.out.undo_note, "failed");
+    });
+
+    it("refuses a multi-line or over-long note before pushing", async () => {
+      const { origin, work } = setup();
+      commit(work, "b.txt");
+      for (const bad of ["a\nb", "x".repeat(201)]) {
+        const r = await run(["deliver", "--undo-note", bad], {
+          routes: forgeRoutes([]),
+          cwd: work,
+        });
+        assert.equal(r.code, EXIT.usage, r.err);
+      }
+      assert.equal(git(["for-each-ref", "refs/heads/feature"], origin), "");
+    });
+  });
+
   it("stops on a rebase conflict and leaves the branch as it was", async () => {
     const { origin, seed, work } = setup();
     writeFileSync(join(work, "a.txt"), "mine\n");

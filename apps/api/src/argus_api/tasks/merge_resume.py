@@ -47,16 +47,20 @@ async def resumed_for_approval(
     conn: aiosqlite.Connection, task_id: str, pr: str | None, head: str | None
 ) -> bool:
     """True when the current approval of exactly (pr, head) already earned its one
-    merge attempt: a resume event newer than the approval, for the same PR and head."""
+    worker attempt: a merge resume or a steward repair request newer than the approval,
+    for the same PR and head."""
     passed = 0
     for kind in (indep.PASSED_EVENT, review_policy.SKIPPED_EVENT):
         passed = max(passed, (await _newest_id(conn, task_id, kind))[0])
-    resumed, data = await _newest_id(conn, task_id, RESUMED_EVENT)
-    return (
-        resumed > passed > 0
-        and indep._same_pr(data.get("pr"), pr)
-        and indep._same_sha(data.get("head_sha"), head)
-    )
+    for kind in (RESUMED_EVENT, "review.steward_repair_requested"):
+        resumed, data = await _newest_id(conn, task_id, kind)
+        if (
+            resumed > passed > 0
+            and indep._same_pr(data.get("pr"), pr)
+            and indep._same_sha(data.get("head_sha"), head)
+        ):
+            return True
+    return False
 
 
 async def _block(tx: Tx, parent_id: str, reason: str, actor: str, **extra: Any) -> None:

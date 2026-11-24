@@ -5,6 +5,7 @@ import { shortId } from "../format";
 import { useLiveData } from "../live";
 
 type Round = components["schemas"]["ReviewRound"];
+type Steward = NonNullable<components["schemas"]["ReviewRounds"]["steward"]>;
 
 const VERDICT_TEXT = {
   approve: "approved",
@@ -43,6 +44,7 @@ function RoundPanel({ round }: { round: Round }) {
           {round.findings.map((f, i) => (
             <li key={i}>
               <span className="badge">{f.priority ?? "unranked"}</span>{" "}
+              {f.id && <code>{f.id}</code>} {f.title && <strong>{f.title}</strong>}{" "}
               {f.file && (
                 <code>
                   {f.file}
@@ -50,12 +52,45 @@ function RoundPanel({ round }: { round: Round }) {
                 </code>
               )}{" "}
               {f.description}
+              {f.evidence_kind && (
+                <span className="muted small"> · evidence: {f.evidence_kind}</span>
+              )}
+              {f.verification && <span className="badge"> {f.verification}</span>}
+              {f.response && (
+                <span className="muted small">
+                  {" "}
+                  · implementer: {f.response}
+                  {f.response_evidence ? ` (${f.response_evidence})` : ""}
+                </span>
+              )}
+              {f.repeat_of && (
+                <span className="muted small">
+                  {" "}
+                  · repeats <code>{f.repeat_of}</code>
+                  {f.repeat_response ? `, earlier ${f.repeat_response}` : ""}
+                </span>
+              )}
             </li>
           ))}
         </ul>
       )}
       <p className="small">
         <a href={`#tasks/${round.child_id}`}>Review task {shortId(round.child_id)}</a>
+        {round.verifier_child_id && (
+          <span>
+            {" · "}
+            <a href={`#tasks/${round.verifier_child_id}`}>
+              verifier {shortId(round.verifier_child_id)}
+            </a>{" "}
+            ({round.verifier_state})
+          </span>
+        )}
+        {round.repeats > 0 && (
+          <span>
+            {" · "}
+            {round.repeats} repeated {round.repeats === 1 ? "finding" : "findings"}
+          </span>
+        )}
         {round.artifact_ids.map((id) => (
           <span key={id}>
             {" · "}
@@ -73,6 +108,39 @@ function RoundPanel({ round }: { round: Round }) {
   );
 }
 
+const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 12) : "unknown");
+
+/** The newest PR steward state, shown between review rounds (PR steward spec 3.5). */
+export function StewardLine({ steward }: { steward: Steward }) {
+  const classes = (steward.classes ?? []).join(" + ");
+  const failed = steward.failed_checks ?? [];
+  if (steward.state === "repair_pushed")
+    return (
+      <p className="small" aria-label="PR steward">
+        Repair pushed: head <code>{short(steward.old_head_sha)}</code> →{" "}
+        <code>{short(steward.new_head_sha)}</code>
+      </p>
+    );
+  if (steward.state === "stopped")
+    return (
+      <p className="small" aria-label="PR steward">
+        PR steward stopped: {classes}
+        {steward.decision_id && (
+          <>
+            {" · "}
+            <a href="#inbox">decision</a>
+          </>
+        )}
+      </p>
+    );
+  return (
+    <p className="small" aria-label="PR steward">
+      Repair requested: {classes}
+      {failed.length > 0 && <> ({failed.join(", ")})</>}
+    </p>
+  );
+}
+
 /** One tab per independent review round of the task, the newest selected by default. */
 export function TaskReviews({ taskId }: { taskId: string }) {
   const { data } = useLiveData(
@@ -87,7 +155,8 @@ export function TaskReviews({ taskId }: { taskId: string }) {
   const selected =
     rounds.find((r) => picked?.taskId === taskId && r.round === picked.round) ?? rounds.at(-1);
   const heads = data?.policy ?? [];
-  if (!selected && heads.length === 0) return null;
+  const steward = data?.steward;
+  if (!selected && heads.length === 0 && !steward) return null;
   return (
     <section aria-label="Reviews">
       <header className="task-section-label">Reviews</header>
@@ -102,6 +171,7 @@ export function TaskReviews({ taskId }: { taskId: string }) {
           ))}
         </ul>
       )}
+      {steward && <StewardLine steward={steward} />}
       {selected && (
         <>
           <div role="tablist" aria-label="Review rounds">

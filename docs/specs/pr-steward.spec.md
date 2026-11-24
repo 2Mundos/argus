@@ -1,5 +1,5 @@
 ---
-status: draft
+status: implemented
 created: 2026-11-24
 updated: 2026-11-24
 ---
@@ -181,22 +181,25 @@ the worker to pass it.
   `github-api.mjs` and `gitea-api.mjs` if missing.
 - Dashboard: the Reviews section and the settings field; `make openapi` if the
   setting model is on the wire.
-- When built, update [settings](settings.spec.md) 3.5, [pre-merge independent
+- Kept in step: [settings](settings.spec.md) 3.5, [pre-merge independent
   review](pre-merge-independent-review.spec.md) 3.6 and 3.7, and [task
   helpers](task-helpers.spec.md) (`--undo-note`).
 
 ## Verification boundary
 
-- Commands (planned): `uv run pytest apps/api/tests/test_review_settle.py
+- Commands: `uv run pytest apps/api/tests/test_review_settle.py
   apps/api/tests/test_pre_merge_independent_review.py apps/api/tests/test_settings.py`;
   `node --test integrations/nanoclaw/argus-task.test.mjs
   integrations/nanoclaw/github-api.test.mjs integrations/nanoclaw/gitea-api.test.mjs`;
   `make openapi-check`.
-- Tests to write: each row of the 3.1 table; one repair per approval and the total
+- Tests: each row of the 3.1 table; one repair per approval and the total
   cap; a spent budget; a repair that pushes nothing; one open decision per stop; a
   head that moves between the read and the write; the undo note after a fast-forward
   and after a rebase.
-- Verified: nothing yet (draft). The closed-PR wait comes from the preview database;
-  the failed-check and conflict waits come from reading `review_settle.py` and
-  `merge_resume.py`, not from a reproduction.
+- Verified: the 3.1 rows, one repair per approval and the total cap, a repair that
+  pushes and one that pushes nothing, one decision per stop, a head moving between
+  the read and the write (`test_review_settle.py`); the `max_repairs` range and
+  default (`test_settings.py`); the undo note after a fast-forward and after a
+  rebase, and when the head did not move, the PR is closed or the comment fails
+  (`argus-task.test.mjs`). `max_repairs` ships at 0; no live repair has run.
 - Not verified: live GitHub and Gitea comment writes.

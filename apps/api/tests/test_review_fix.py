@@ -218,10 +218,22 @@ OPUS = ("claude", "anthropic", "claude-opus-5-5")
 CODEX_IMPL = ("codex", "openai", "gpt-5.5")
 
 
+def _finding(priority: str = "P2", **extra: Any) -> dict[str, Any]:
+    return {
+        "id": "f1",
+        "priority": priority,
+        "file": "a.py",
+        "title": "boundary check",
+        "description": "the boundary is off by one",
+        "evidence": {"kind": "reading", "detail": "a.py:10"},
+        **extra,
+    }
+
+
 def _fixed(new: str = HEAD_2, old: str = HEAD_1) -> dict[str, Any]:
     return {
         "verdict": "fixed",
-        "findings": ["P2: boundary check"],
+        "findings": [_finding()],
         "head_sha": old,
         "fixed_head_sha": new,
         "tests": ["pytest -q: 12 passed"],
@@ -266,7 +278,7 @@ def test_fix_then_fresh_different_model_approval_then_authorized_merge(
     assert fix["pr"] == PR_450_URL
     assert (fix["old_head_sha"], fix["new_head_sha"]) == (HEAD_1, HEAD_2)
     assert fix["fix_models"] == ["gpt-5.5"] and fix["fix_providers"] == ["openai"]
-    assert fix["findings"] == ["P2: boundary check"]
+    assert fix["findings"] == [_finding()]
     # Nothing is approved and nothing merges until another model reviews HEAD_2.
     assert _approval(api_client, parent_id) == (None, None)
     assert _may_merge(api_client, parent_id) is False
@@ -544,14 +556,14 @@ def test_cannot_fix_request_changes_hands_back_to_the_implementer(
         r1,
         {
             "verdict": "request_changes",
-            "findings": ["P1: redesign"],
+            "findings": [_finding("P1", title="redesign")],
             "head_sha": HEAD_1,
         },
         model=CODEX,
     )
     parent = api_client.get(f"/api/tasks/{parent_id}").json()
     assert parent["state"] == "ready"
-    assert "P1: redesign" in parent["spec"]
+    assert "redesign" in parent["spec"]
     assert _events(api_client, parent_id, indep.FIX_PUSHED_EVENT) == []
 
 

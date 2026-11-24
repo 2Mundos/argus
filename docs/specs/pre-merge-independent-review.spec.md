@@ -95,6 +95,17 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   records `review.independent_waived` (`decision_id`, `notes`, unresolved `child_id`).
   Plain `accept` still requires an independent approval at the exact head; `reject`
   sends the task back for rework. No other decision kind gains this waiver.
+- A `request_changes` verdict carries structured findings (`id`, `priority`, `file`,
+  `title`, `description`, `evidence {kind, detail}`, optional `lines` and `repeat_of`);
+  the kind schema answers anything else with a 422 and `approve` keeps `findings: []`.
+  The implementer answers each finding in `data.review_responses`, and the next
+  reviewer sees the earlier findings, responses and repeats ([review finding
+  verification](review-finding-verification.spec.md) 3.1 to 3.3). With
+  `verify_findings` on, a read-only `review_verification` child checks the findings
+  first (3.4 there); an all-refuted round opens a review decision with payload
+  `{"gate": "findings_refuted", review_child_id, verifier_id}`, where
+  `accept_with_deviation` waives like `rounds_exhausted` and records
+  `review.independent_waived` with `reason: findings_refuted`.
 
 ## 3.3 Pre-merge gate and merge authorization
 
@@ -216,6 +227,14 @@ still open it opens one orchestrator review decision (merge it and accept, or re
 try again). A rejected review, failed CI or a new approval cycle starts from the start.
 Review-disabled and non-code tasks never take this path.
 
+When the approved PR's checks fail, it stops being mergeable or it is closed, the sweep
+does not wait on it: the [PR steward](pr-steward.spec.md) opens a decision, or, with
+`review.independent.max_repairs` above 0, requeues the parent for one bounded repair
+attempt. A repair request counts like a resume in the idempotency rule above (one per
+approval, newer than the approval for the same PR and head). A repair that moves the
+head is reviewed again from the start and is not a review round; one that does not
+move it settles from the forge or opens the decision.
+
 ## 3.7 Reviewer fixes its findings
 
 An independent reviewer that finds actionable problems may fix them itself instead of
@@ -225,7 +244,10 @@ sending the parent back for a full attempt.
   `fix: {pr, base_head_sha, force_push: false}`. Its deliverable is a response with no
   merge grant, so it can push to the PR's own branch and nothing else: one normal
   fast-forward commit with tests, never a force-push, history rewrite, other branch or
-  merge (the kind schema rejects `force_push: true`; `force_push` stays `no`).
+  merge (the kind schema rejects `force_push: true`; `force_push` stays `no`). The
+  instructions tell it to push with `argus-task deliver --undo-note "<reason>"`, so the
+  PR records the old and new head and how to undo the push
+  ([PR steward](pr-steward.spec.md) 3.4).
 - Verdicts: `approve` (no findings, nothing changed), `request_changes` (cannot fix
   safely, nothing changed; the existing handoff to the implementer), `fixed` with
   `head_sha` (reviewed), `fixed_head_sha` (full 40-character new head), `findings` and
@@ -256,8 +278,8 @@ sending the parent back for a full attempt.
 
 Each review round stays a `code_review` child task; the board does not show them. The
 dashboard board asks `GET /api/tasks` with `hide_review_children=true`, which the server
-applies before paging (so totals and cursors stay correct) by leaving out `code_review`
-tasks that have a `parent_id`. A parent with rounds then carries `review_badge
+applies before paging (so totals and cursors stay correct) by leaving out `code_review` and
+`review_verification` tasks that have a `parent_id`. A parent with rounds then carries `review_badge
 {round, verdict, state}` for its newest round, shown on its card (for example `review 3 ·
 changes requested`). The flag is off by default, so the MCP `list_tasks` and other callers
 still see review children; a review child without a parent stays on the board, and the
@@ -265,8 +287,10 @@ inbox and `q` search never hide review children.
 
 `GET /api/tasks/{id}/reviews` lists a task's rounds, oldest first (round 1), read-only and
 scoped like the task: child id, state, verdict (`approve`, `request_changes`, `void`, or
-null when the child ended without one), reviewed `head_sha`, findings (priority, file,
-lines, description) with counts by priority, reviewer provider and model, report artifact
+null when the child ended without one), reviewed `head_sha`, findings (id, priority, title, file,
+lines, description, evidence kind, `repeat_of`, the implementer's response and the
+verification status) with counts by priority, the round's verifier child and its state,
+the number of repeats, reviewer provider and model, report artifact
 ids, `created_at` and `finished_at` (the child's last update once it has ended). It does
 not change how reviewers are spawned, picked, counted or completed.
 

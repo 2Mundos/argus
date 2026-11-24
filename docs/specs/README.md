@@ -62,7 +62,7 @@ Every spec in this directory with its status, kept in sync by
 | [Path and type gate](path-gate.spec.md) | `implemented` |
 | [Pool delete](pool-delete.spec.md) | `implemented` |
 | [Pool editor](pool-editor.spec.md) | `implemented` |
-| [PR steward: keep an approved pull request moving](pr-steward.spec.md) | `draft` |
+| [PR steward: keep an approved pull request moving](pr-steward.spec.md) | `implemented` |
 | [Pre-merge independent review workflow](pre-merge-independent-review.spec.md) | `draft` |
 | [Progress milestones](progress-milestones.spec.md) | `implemented` |
 | [Project code availability](project-code-availability.spec.md) | `implemented` |
@@ -70,7 +70,7 @@ Every spec in this directory with its status, kept in sync by
 | [Prompt-data isolation (task spec, knowledge, child tasks)](prompt-data-isolation.spec.md) | `implemented` |
 | [Session resume: resume the same native conversation after an interruption](quota-resume.spec.md) | `implemented` |
 | [Releases](releases.spec.md) | `implemented` |
-| [Review finding verification: structured findings, checked before they cost a round](review-finding-verification.spec.md) | `draft` |
+| [Review finding verification: structured findings, checked before they cost a round](review-finding-verification.spec.md) | `implemented` |
 | [Review policy: review tiers by changed path, observed before enforced](review-policy.spec.md) | `implemented` |
 | [Routines](routines.spec.md) | `implemented` |
 | [Security hardening (2026-10-20 review, medium/low)](security-hardening.spec.md) | `implemented` |

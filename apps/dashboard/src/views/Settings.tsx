@@ -439,6 +439,7 @@ function IndependentReviewSection(props: {
   const value = (setting?.value ?? { mode: "off", max_rounds: 3 }) as IndependentReview;
   const [mode, setMode] = useState<ReviewMode>(value.mode);
   const [rounds, setRounds] = useState(value.max_rounds);
+  const [repairs, setRepairs] = useState(value.max_repairs ?? 0);
   const action = useAction();
   const [failure, setFailure] = useState<string>();
   const [done, setDone] = useState<string>();
@@ -450,14 +451,19 @@ function IndependentReviewSection(props: {
   useEffect(() => {
     setMode(value.mode);
     setRounds(value.max_rounds);
-  }, [value.mode, value.max_rounds, setting?.updated_at]);
+    setRepairs(value.max_repairs ?? 0);
+  }, [value.mode, value.max_rounds, value.max_repairs, setting?.updated_at]);
 
   async function save() {
     await action.run(async () => {
       setFailure(undefined);
       setDone(undefined);
       try {
-        await putSetting("review.independent", { ...value, mode, max_rounds: rounds }, project);
+        await putSetting(
+          "review.independent",
+          { ...value, mode, max_rounds: rounds, max_repairs: repairs },
+          project,
+        );
         setDone("Saved.");
         onChanged();
       } catch (e) {
@@ -514,6 +520,17 @@ function IndependentReviewSection(props: {
             max={20}
             value={rounds}
             onChange={(e) => setRounds(Number(e.target.value) || 1)}
+          />
+        </label>
+        <label>
+          Repair an approved PR that breaks (attempts)
+          <input
+            aria-label="independent review max repairs"
+            type="number"
+            min={0}
+            max={3}
+            value={repairs}
+            onChange={(e) => setRepairs(Math.min(3, Math.max(0, Number(e.target.value) || 0)))}
           />
         </label>
       </div>

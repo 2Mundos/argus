@@ -121,10 +121,13 @@ Key `review.independent`, scopes `global` and `project`, value:
 
 ```json
 { "mode": "off" | "different_model" | "different_provider", "max_rounds": 3,
-  "max_reviewer_failures": 2 }
+  "max_reviewer_failures": 2, "max_repairs": 0,
+  "verify_findings": "off" | "observe" | "enforce" }
 ```
 
-Default `{"mode": "off", "max_rounds": 3, "max_reviewer_failures": 2}`. Dashboard label: **Require review by a
+Default `{"mode": "off", "max_rounds": 3, "max_reviewer_failures": 2, "max_repairs": 0,
+"verify_findings": "off"}`; `verify_findings` is read from the value when set and is
+`off` otherwise ([review finding verification](review-finding-verification.spec.md) 3.4). Dashboard label: **Require review by a
 different model**, with `different_provider` shown as "…from a different provider".
 
 - **Applies to** tasks that deliver code: completion carries a PR or commit
@@ -247,6 +250,11 @@ different model**, with `different_provider` shown as "…from a different provi
   gate or `succeeded`) and `cancel`. An author model is never selected as a
   fallback. The callback is idempotent per child. The delivery summary
   (`independent.failed_reviewers`) lists each failed attempt with its child link.
+- **Repairs.** `max_repairs` (0-3, default 0) bounds the worker attempts that repair
+  an approved PR whose checks fail or that stopped being mergeable, in total per
+  task and at most one per approval. At 0, such a PR opens a decision for a person.
+  A closed PR always does. See [PR steward](pr-steward.spec.md). Dashboard label:
+  **Repair an approved PR that breaks (attempts)**.
 - **Manual review when the gate cannot deliver.** A task in `in_review` always has
   an active `code_review` child or an open `review` decision, never neither. When
   the last reviewer is gone without a verdict and the retry decision above does not

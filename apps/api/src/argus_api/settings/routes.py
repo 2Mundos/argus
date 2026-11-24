@@ -1,7 +1,6 @@
 """REST routes for typed settings (docs/specs/settings.spec.md 3.3)."""
 
-from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Any
 
 from argus_core.settings import (
     SettingDefinition,
@@ -10,16 +9,14 @@ from argus_core.settings import (
     SettingWrite,
 )
 from argus_core.task_defaults import TaskDefaults
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Request
 
 from argus_api import orchestrator
 from argus_api.access import require_project_readable
-from argus_api.db import ts
 from argus_api.deps import AdminDep, CallerDep, DbDep, SettingsDep
 from argus_api.kinds import service as kinds
 from argus_api.settings import registry, service
 from argus_api.tasks import defaults as task_defaults
-from argus_api.tasks import review_policy
 
 router = APIRouter(tags=["settings"])
 
@@ -84,24 +81,6 @@ async def get_task_defaults(
         await service.ensure_project_exists(conn, slug)
         return await task_defaults.effective(
             conn, slug, await kinds.get_kind(conn, kind)
-        )
-
-
-@router.get("/projects/{slug}/review-report")
-async def get_review_report(
-    slug: str,
-    db: DbDep,
-    _: AdminDep,
-    days: Annotated[
-        int, Query(ge=1, le=review_policy.REPORT_MAX_DAYS)
-    ] = review_policy.REPORT_DEFAULT_DAYS,
-) -> review_policy.ReviewReport:
-    """How the `review.policy` tiers fared in the last `days` (review policy spec 3.5)."""
-    since = ts(datetime.now(UTC) - timedelta(days=days))
-    async with db.read() as conn:
-        await service.ensure_project_exists(conn, slug)
-        return review_policy.ReviewReport(
-            policy=await review_policy.policy_report(conn, slug, since, days)
         )
 
 
