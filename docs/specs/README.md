@@ -32,6 +32,7 @@ Every spec in this directory with its status, kept in sync by
 | [Dashboard action feedback](dashboard-actions.spec.md) | `implemented` |
 | [Dashboard navigation](dashboard-navigation.spec.md) | `implemented` |
 | [Dashboard live data performance](dashboard-performance.spec.md) | `implemented` |
+| [Dashboard PWA](dashboard-pwa.spec.md) | `implemented` |
 | [Dashboard working indicator](dashboard-working.spec.md) | `implemented` |
 | [Engines, executors and the local model](engines.spec.md) | `implemented` |
 | [Execution chains](execution-chains.spec.md) | `implemented` |

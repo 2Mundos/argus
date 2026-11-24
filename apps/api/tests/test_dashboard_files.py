@@ -35,3 +35,18 @@ def test_root_icons_and_manifest_are_served(tmp_path: Path) -> None:
         response = client.get(f"/{name}")
         assert response.status_code == 200, name
         assert response.headers["content-type"].startswith(content_type), name
+
+
+def test_service_worker_and_offline_page_are_served_uncached(tmp_path: Path) -> None:
+    """The worker must be fetched at the root scope and revalidated on every load."""
+    (tmp_path / "index.html").write_text("<html></html>")
+    (tmp_path / "sw.js").write_text("// worker")
+    (tmp_path / "offline.html").write_text("<html>offline</html>")
+    app = FastAPI()
+    app.mount("/", DashboardFiles(directory=tmp_path, html=True))
+    client = TestClient(app)
+    for name in ("sw.js", "offline.html"):
+        response = client.get(f"/{name}")
+        assert response.status_code == 200, name
+        assert response.headers["cache-control"] == "no-cache", name
+    assert "javascript" in client.get("/sw.js").headers["content-type"]
