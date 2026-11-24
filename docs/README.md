@@ -274,7 +274,7 @@ why you are here.
   automated push leaves an undo note on the PR
 - [Review policy](specs/review-policy.spec.md) — draft: review tiers (`skip`,
   `standard`, `human`) by changed path, observed before enforced, with a review report
-- [Review finding verification](specs/review-finding-verification.spec.md) — draft:
+- [Review finding verification](specs/review-finding-verification.spec.md) — implemented:
   structured findings, implementer disputes, repeats, and a verifier that starts in
   observe mode
 - [Integrations](specs/integrations.spec.md) — the Setup tab for MCP connections and

@@ -51,6 +51,7 @@ def test_registry_lists_phase1_keys(client: TestClient) -> None:
         "max_rounds": 3,
         "max_reviewer_failures": 2,
         "max_repairs": 0,
+        "verify_findings": "off",
     }
     assert "schema" in review
     assert set(review["scopes"]) == {"global", "project"}

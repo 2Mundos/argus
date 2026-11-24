@@ -27,6 +27,7 @@ export type IndependentReview = {
   max_rounds: number;
   max_reviewer_failures?: number;
   max_repairs?: number;
+  verify_findings?: "off" | "observe" | "enforce";
 };
 
 export type DifficultyLevel = "trivial" | "simple" | "standard" | "hard";

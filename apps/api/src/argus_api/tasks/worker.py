@@ -67,7 +67,14 @@ async def complete(
     row = await _owned(tx, task_id, attempt, agent_id)
     kind = await kinds.get_kind(tx.conn, row["kind"])
     result, normalised = indep.normalise_result(row["kind"], result)
+    result, review_responses = indep.take_responses(row["kind"], result)
     kinds.validate(kind.result_schema, result.data, "result.data", shape_hint=True)
+    indep.check_findings(row["kind"], result.data)
+    if review_responses is not None or row["kind"] not in (
+        indep.CODE_REVIEW_KIND,
+        indep.VERIFICATION_KIND,
+    ):
+        await indep.record_responses(tx, row, review_responses, f"agent:{agent_id}")
     if normalised:
         await record(
             tx,
@@ -159,6 +166,19 @@ async def complete(
             policy=policy,
             actor=actor,
             forge=forge,
+        )
+        return await get_task(tx.conn, task_id)
+
+    if row["kind"] == indep.VERIFICATION_KIND and row["parent_id"]:
+        await _apply(
+            tx,
+            row,
+            Action.COMPLETE,
+            actor,
+            set_={"result": result.model_dump_json(exclude_none=True)},
+        )
+        await indep.on_verification_complete(
+            tx, await _row(tx.conn, task_id), result, actor
         )
         return await get_task(tx.conn, task_id)
 

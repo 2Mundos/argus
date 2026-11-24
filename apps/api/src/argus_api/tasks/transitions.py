@@ -211,6 +211,12 @@ async def _apply(
             await independent_review.on_review_child_ended(
                 tx, await _row(tx.conn, row["id"]), new, actor
             )
+        elif row["kind"] == "review_verification" and row["parent_id"]:
+            from argus_api.tasks import independent_review
+
+            await independent_review.on_verification_ended(
+                tx, await _row(tx.conn, row["id"]), actor
+            )
     if new in (S.SUCCEEDED, S.FAILED, S.CANCELLED) and row["origin_conversation_id"]:
         # Imported here: conversations import the orchestrator, which imports us.
         from argus_api.conversations import service as conversations

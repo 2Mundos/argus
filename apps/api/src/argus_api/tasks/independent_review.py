@@ -18,6 +18,7 @@ import aiosqlite
 from argus_core.accounts import LeaseRole
 from argus_core.continuation import ArtifactKind
 from argus_core.decisions import (
+    FINDINGS_REFUTED_GATE,
     GATE_DISABLED_GATE,
     NO_REVIEWER_GATE,
     REVIEW_FAILED_GATE,
@@ -82,6 +83,13 @@ RETRY_EVENT = "review.independent_retry"
 model_policy_path = Path("data/model-policy.json")
 CODE_REVIEW_KIND = "code_review"
 REVIEW_KEYS = ("verdict", "findings", "head_sha", "fixed_head_sha", "tests")
+VERIFICATION_KIND = "review_verification"
+CHANGES_EVENT = "review.independent_changes_requested"
+RESPONDED_EVENT = "review.findings_responded"
+VERIFY_REQUESTED_EVENT = "review.finding_verification_requested"
+VERIFIED_EVENT = "review.finding_verified"
+VERIFY_SKIPPED_EVENT = "review.finding_verification_skipped"
+REFUTED_EVENT = "review.independent_findings_refuted"
 FIX_PUSHED_EVENT = "review.independent_fix_pushed"
 FIX_VERDICT = "fixed"
 # Verdicts that spend one review round (`review.independent.max_rounds`).
@@ -1007,16 +1015,294 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> int:
     return n
 
 
-def _findings_text(findings: list[Any]) -> str:
-    lines = []
+FINDING_SHAPE = (
+    "Each finding is an object: `id` (short slug, unique in the result: f1, f2, …),"
+    " `priority` (P1, P2 or P3), `file` (repository-relative path), optional `lines`"
+    " (N or N-M), `title` (one line, up to 120 characters), `description` (up to 2000"
+    " characters), `evidence` {`kind`, `detail`} and, only for a finding raised again,"
+    " `repeat_of` (`<child id>:<finding id>` of the earlier round's finding). Evidence"
+    " `kind` is `test` (a failing test or command and its output), `reproduction`"
+    " (steps run and what was seen) or `reading` (code reasoning only); `detail` is up"
+    " to 2000 characters. A string finding, or a missing or empty field, is refused."
+)
+RESPONSE_SHAPE = (
+    "Answer every finding by id in `data.review_responses` of your next COMPLETE:"
+    ' `[{"id":"f1","status":"fixed"|"disputed","evidence":"..."}]`. `fixed` names the'
+    " test or check that shows it; `disputed` explains why the finding is wrong, with a"
+    " test, command output or code reference. A finding left unanswered is recorded as"
+    " unanswered."
+)
+
+
+def check_findings(kind: str, data: dict[str, Any] | None) -> None:
+    """Finding ids are unique in one result (review finding verification spec 3.1)."""
+    if kind != CODE_REVIEW_KIND or not data:
+        return
+    ids = [
+        f["id"]
+        for f in data.get("findings") or []
+        if isinstance(f, dict) and isinstance(f.get("id"), str)
+    ]
+    dup = sorted({i for i in ids if ids.count(i) > 1})
+    if dup:
+        raise ValidationFailedError(
+            "result does not match its kind's schema",
+            details=[f"findings: id {i} is used more than once" for i in dup],
+        )
+
+
+def take_responses(
+    kind: str, result: TaskResult
+) -> tuple[TaskResult, list[Any] | None]:
+    """Split `data.review_responses` off an implementer's result (spec 3.2): it is not
+    part of any kind's result schema. None when the result carries none."""
+    if (
+        kind in (CODE_REVIEW_KIND, VERIFICATION_KIND)
+        or not isinstance(result.data, dict)
+        or "review_responses" not in result.data
+    ):
+        return result, None
+    data = dict(result.data)
+    raw = data.pop("review_responses")
+    return result.model_copy(update={"data": data}), raw if isinstance(
+        raw, list
+    ) else []
+
+
+def _result_data(raw: str | None) -> dict[str, Any]:
+    try:
+        data = (json.loads(raw) if raw else {}).get("data")
+    except (json.JSONDecodeError, AttributeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _structured(data: dict[str, Any]) -> list[dict[str, Any]]:
+    return [f for f in data.get("findings") or [] if isinstance(f, dict)]
+
+
+async def _review_children(
+    conn: aiosqlite.Connection, parent_id: str
+) -> list[aiosqlite.Row]:
+    """The parent's `code_review` children, oldest first (round 1)."""
+    async with conn.execute(
+        "SELECT id, state, result FROM tasks WHERE parent_id = ? AND kind = ?"
+        " ORDER BY rowid",
+        (parent_id, CODE_REVIEW_KIND),
+    ) as cur:
+        return list(await cur.fetchall())
+
+
+async def _event_data(
+    conn: aiosqlite.Connection, parent_id: str, *kinds: str
+) -> list[tuple[str, dict[str, Any]]]:
+    marks = ",".join("?" * len(kinds))
+    async with conn.execute(
+        "SELECT kind, data FROM events WHERE subject_type = 'task' AND subject_id = ?"  # noqa: S608
+        f" AND kind IN ({marks}) ORDER BY id",
+        (parent_id, *kinds),
+    ) as cur:
+        out = []
+        for r in await cur.fetchall():
+            try:
+                data = json.loads(r["data"] or "{}")
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                out.append((r["kind"], data))
+        return out
+
+
+async def responses_by_child(
+    conn: aiosqlite.Connection, parent_id: str
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """child id -> finding id -> `{status, evidence}` the implementer answered."""
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    for _, data in await _event_data(conn, parent_id, RESPONDED_EVENT):
+        if isinstance(data.get("child_id"), str) and isinstance(
+            data.get("responses"), dict
+        ):
+            out[data["child_id"]] = data["responses"]
+    return out
+
+
+async def record_responses(
+    tx: Tx, row: aiosqlite.Row, raw: list[Any] | None, actor: str
+) -> None:
+    """Record the implementer's answers to the findings last sent back (spec 3.2).
+
+    One entry per finding: a missing one is `unanswered` and never refuses the
+    completion. Nothing is recorded when no round's findings await an answer."""
+    pending = None
+    for kind, data in await _event_data(
+        tx.conn, row["id"], CHANGES_EVENT, RESPONDED_EVENT
+    ):
+        if kind == CHANGES_EVENT:
+            pending = data.get("child_id")
+        elif data.get("child_id") == pending:
+            pending = None
+    if not isinstance(pending, str):
+        return
+    async with tx.conn.execute(
+        "SELECT result FROM tasks WHERE id = ?", (pending,)
+    ) as cur:
+        child = await cur.fetchone()
+    findings = _structured(_result_data(child["result"] if child else None))
+    given: dict[str, dict[str, Any]] = {}
+    for entry in raw or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("status") in ("fixed", "disputed")
+            and isinstance(entry.get("id"), str)
+            and entry["id"] not in given
+        ):
+            given[entry["id"]] = {
+                "status": entry["status"],
+                "evidence": str(entry.get("evidence") or "")[:2000],
+            }
+    responses = {
+        f["id"]: given.get(f["id"], {"status": "unanswered", "evidence": ""})
+        for f in findings
+        if isinstance(f.get("id"), str)
+    }
+    await record(
+        tx,
+        actor,
+        "task",
+        row["id"],
+        RESPONDED_EVENT,
+        {"child_id": pending, "responses": responses},
+    )
+
+
+def _finding_lines(
+    f: dict[str, Any],
+    rounds: dict[str, int],
+    responses: dict[str, dict[str, dict[str, Any]]],
+) -> list[str]:
+    where = f"{f.get('file', '?')}" + (f":{f['lines']}" if f.get("lines") else "")
+    evidence = f.get("evidence") if isinstance(f.get("evidence"), dict) else {}
+    head = f"- [{f['id']}] {f.get('priority', '?')} `{where}`: {f.get('title', '')}"
+    lines = [head, f"  {f.get('description', '')}"]
+    if evidence:
+        lines.append(f"  Evidence ({evidence.get('kind')}): {evidence.get('detail')}")
+    earlier = str(f.get("repeat_of") or "")
+    if earlier:
+        child, _, fid = earlier.partition(":")
+        before = responses.get(child, {}).get(fid, {}).get("status", "unanswered")
+        n = rounds.get(child)
+        lines.append(
+            f"  Raised again (round {n if n else '?'}); your earlier response: {before}."
+        )
+    return lines
+
+
+async def _findings_text(
+    conn: aiosqlite.Connection,
+    parent_id: str,
+    findings: list[Any],
+    refuted: list[tuple[dict[str, Any], str]] | None = None,
+) -> str:
+    """The Review findings section handed to the implementer: ids, responses to earlier
+    rounds, repeats marked, and the findings the verifier refuted (spec 3.2, 3.3)."""
+    rounds = {
+        c["id"]: n for n, c in enumerate(await _review_children(conn, parent_id), 1)
+    }
+    responses = await responses_by_child(conn, parent_id)
+    lines: list[str] = []
     for f in findings:
-        if isinstance(f, str):
-            lines.append(f"- {f}")
+        if isinstance(f, dict) and isinstance(f.get("id"), str):
+            lines += _finding_lines(f, rounds, responses)
         elif isinstance(f, dict):
             lines.append(f"- {json.dumps(f, ensure_ascii=False)}")
         else:
             lines.append(f"- {f}")
-    return "\n".join(lines) if lines else "- (no details)"
+    text = "\n".join(lines) if lines else "- (no details)"
+    if any(isinstance(f, dict) and "id" in f for f in findings):
+        text += f"\n\n{RESPONSE_SHAPE}"
+    if refuted:
+        text += (
+            "\n\nRefuted by the verifier (not required; listed with the refutation):\n"
+            + "\n".join(
+                f"- [{f['id']}] {f.get('priority', '?')} {f.get('title', '')}: {why}"
+                for f, why in refuted
+            )
+        )
+    return text
+
+
+async def _prior_rounds_text(conn: aiosqlite.Connection, parent_id: str) -> str:
+    """What the next reviewer receives: the earlier findings and the responses (spec 3.2)."""
+    responses = await responses_by_child(conn, parent_id)
+    blocks: list[str] = []
+    for n, child in enumerate(await _review_children(conn, parent_id), 1):
+        data = _result_data(child["result"])
+        if (
+            child["state"] != TaskState.SUCCEEDED
+            or data.get("verdict") != "request_changes"
+        ):
+            continue
+        lines = []
+        for f in _structured(data):
+            if not isinstance(f.get("id"), str):
+                continue
+            got = responses.get(child["id"], {}).get(f["id"])
+            answer = (
+                f"{got['status']}: {got['evidence']}".rstrip(": ")
+                if got
+                else "no response yet"
+            )
+            lines.append(
+                f"- `{child['id']}:{f['id']}` {f.get('priority', '?')} {f.get('title', '')}"
+                f" (`{f.get('file', '?')}`) — implementer: {answer}"
+            )
+        if lines:
+            blocks.append(f"Round {n}:\n" + "\n".join(lines))
+    if not blocks:
+        return ""
+    return (
+        "\n\nEarlier rounds of this review, with the implementer's responses:\n\n"
+        + "\n\n".join(blocks)
+        + "\n\nDrop a finding the implementer disputed, or raise it again with"
+        " `repeat_of` (`<child id>:<finding id>` as listed above) and new evidence."
+        " Do not raise a disputed finding again without new evidence."
+    )
+
+
+async def _send_findings(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    child: aiosqlite.Row,
+    findings: list[Any],
+    rounds: int,
+    actor: str,
+    *,
+    refuted: list[tuple[dict[str, Any], str]] | None = None,
+) -> None:
+    """Send a request_changes verdict's findings to the implementer (a new attempt)."""
+    from argus_api.tasks import service as tasks_svc
+
+    notes = await _findings_text(tx.conn, parent["id"], findings, refuted)
+    spec = parent["spec"] + (
+        f"\n\n## Review findings (attempt {parent['attempt']})\n\n{notes}"
+    )
+    await tasks_svc._apply(
+        tx,
+        parent,
+        Action.REJECT,
+        actor,
+        set_={"spec": spec, "block_reason": None},
+        data={"notes": notes, "independent_review": True},
+        open_review_decision=False,
+    )
+    await record(
+        tx,
+        actor,
+        "task",
+        parent["id"],
+        CHANGES_EVENT,
+        {"child_id": child["id"], "round": rounds},
+    )
 
 
 async def _block(
@@ -1084,11 +1370,12 @@ async def _no_head(tx: Tx, parent: aiosqlite.Row, pr: str | None, actor: str) ->
 
 async def has_active_reviewer(conn: aiosqlite.Connection, parent_id: str) -> bool:
     async with conn.execute(
-        "SELECT 1 FROM tasks WHERE parent_id = ? AND kind = ? AND state NOT IN (?, ?, ?)"
-        " LIMIT 1",
+        "SELECT 1 FROM tasks WHERE parent_id = ? AND kind IN (?, ?)"
+        " AND state NOT IN (?, ?, ?) LIMIT 1",
         (
             parent_id,
             CODE_REVIEW_KIND,
+            VERIFICATION_KIND,
             TaskState.SUCCEEDED,
             TaskState.FAILED,
             TaskState.CANCELLED,
@@ -1288,7 +1575,7 @@ async def spawn_reviewer(
             "Finish with `COMPLETE:` and one JSON object, sent with the send_message"
             ' tool to `to: "argus"`, in exactly this shape:\n'
             '`COMPLETE: {"summary":"<one line>","data":{"verdict":"approve",'
-            '"findings":[<strings or objects>],"head_sha":"<the full sha you reviewed>"}}`\n'
+            '"findings":[<finding objects>],"head_sha":"<the full sha you reviewed>"}}`\n'
             "`verdict` is `approve`, `request_changes` or `fixed`. `data` takes only"
             " verdict, findings, head_sha, fixed_head_sha and tests; do not put them at"
             " the top level.\n\n"
@@ -1303,6 +1590,10 @@ async def spawn_reviewer(
             " your own fix: Argus schedules a fresh review of the new head with"
             " another model. If you cannot fix safely, return `request_changes` and"
             " change nothing. With no findings, return `approve` and change nothing."
+            f"\n\n{FINDING_SHAPE} When findings may be checked by a verifier, P1"
+            " findings with only `reading` evidence are checked first: run a test or"
+            " reproduce the problem whenever you can."
+            + await _prior_rounds_text(tx.conn, parent["id"])
             + (_PAIRED_GUIDANCE if _paired_route(route) else "")
         ),
         kind=CODE_REVIEW_KIND,
@@ -1565,7 +1856,8 @@ async def child_models_clean(
 _CHILD_OUTCOME_EVENTS = (
     PASSED_EVENT,
     FIX_PUSHED_EVENT,
-    "review.independent_changes_requested",
+    CHANGES_EVENT,
+    REFUTED_EVENT,
     "review.independent_escalated",
     "review.independent_void",
 )
@@ -2024,6 +2316,21 @@ async def on_review_child_complete(
     if verdict == "request_changes":
         # Count prior request_changes rounds plus this one.
         rounds = await review_rounds(tx.conn, parent_id)
+        listed = findings if isinstance(findings, list) else [findings]
+        verifier_id = None
+        if setting.verify_findings != "off" and (
+            setting.verify_findings == "observe" or rounds < setting.max_rounds
+        ):
+            verifier_id = await spawn_verifier(
+                tx,
+                parent,
+                child,
+                [f for f in listed if isinstance(f, dict)],
+                child_input,
+                setting=setting,
+                policy=policy,
+                actor=actor,
+            )
         if rounds >= setting.max_rounds:
             await decisions.open_decision(
                 tx,
@@ -2052,27 +2359,9 @@ async def on_review_child_complete(
                 {"child_id": child["id"], "rounds": rounds},
             )
             return
-        notes = _findings_text(findings if isinstance(findings, list) else [findings])
-        spec = parent["spec"] + (
-            f"\n\n## Review findings (attempt {parent['attempt']})\n\n{notes}"
-        )
-        await tasks_svc._apply(
-            tx,
-            parent,
-            Action.REJECT,
-            actor,
-            set_={"spec": spec, "block_reason": None},
-            data={"notes": notes, "independent_review": True},
-            open_review_decision=False,
-        )
-        await record(
-            tx,
-            actor,
-            "task",
-            parent_id,
-            "review.independent_changes_requested",
-            {"child_id": child["id"], "round": rounds},
-        )
+        if verifier_id is not None and setting.verify_findings == "enforce":
+            return  # the verdict waits for the verifier (spec 3.4)
+        await _send_findings(tx, parent, child, listed, rounds, actor)
         return
 
 
@@ -2416,9 +2705,10 @@ async def waive_exhausted(
     decision_id: str,
     notes: str,
     child_id: str,
+    reason: str = "rounds_exhausted",
 ) -> None:
-    """`accept_with_deviation` on an exhausted-rounds decision: the independent
-    review requirement is waived and the waiver is audited."""
+    """`accept_with_deviation` on an exhausted-rounds or findings-refuted decision: the
+    independent review requirement is waived and the waiver is audited."""
     await record(
         tx,
         actor,
@@ -2429,8 +2719,384 @@ async def waive_exhausted(
             "decision_id": decision_id,
             "notes": notes,
             "child_id": child_id,
-            "reason": "rounds_exhausted",
+            "reason": reason,
         },
+    )
+
+
+async def _skip_verification(
+    tx: Tx,
+    parent_id: str,
+    review_id: str,
+    verifier_id: str | None,
+    reason: str,
+    actor: str,
+) -> None:
+    await record(
+        tx,
+        actor,
+        "task",
+        parent_id,
+        VERIFY_SKIPPED_EVENT,
+        {"review_child_id": review_id, "verifier_id": verifier_id, "reason": reason},
+    )
+
+
+async def spawn_verifier(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    review: aiosqlite.Row,
+    findings: list[dict[str, Any]],
+    review_input: dict[str, Any],
+    *,
+    setting: IndependentReviewSetting,
+    policy: model_policy.Policy,
+    actor: str,
+) -> str | None:
+    """Create the read-only `review_verification` child of a request_changes verdict
+    (review finding verification spec 3.4); None, with a skipped event, when no
+    verifier is eligible. Its model is neither an author's nor the reviewer's."""
+    from argus_api.tasks import service as tasks_svc
+
+    head_sha = review_input.get("head_sha")
+    if not findings or not head_sha:
+        await _skip_verification(
+            tx, parent["id"], review["id"], None, "no_findings", actor
+        )
+        return None
+    author_models, author_providers = await authors(tx.conn, parent["id"])
+    fix_models, _ = await fixers(tx.conn, parent["id"])
+    reviewer_models, _ = await authors(tx.conn, review["id"])
+    excluded = author_models | fix_models | reviewer_models
+    route = await review_route(
+        tx.conn,
+        tx.now,
+        parent,
+        mode=setting.mode,
+        models=excluded,
+        providers=author_providers,
+        accounts=await _accounts(tx.conn, parent["id"]),
+    )
+    harness: HarnessModel | None = None
+    executor: ExecutorModel | None = None
+    if route is not None:
+        alternatives, _ = route
+        if not alternatives:
+            await _skip_verification(
+                tx, parent["id"], review["id"], None, "no_eligible_verifier", actor
+            )
+            return None
+    else:
+        harness, executor = pick_reviewer(
+            policy,
+            mode=setting.mode,
+            author_models=excluded,
+            author_providers=author_providers,
+            usable=await usable_providers(tx.conn, ts(tx.now)),
+        )
+        if harness is None and executor is None:
+            await _skip_verification(
+                tx, parent["id"], review["id"], None, "no_eligible_verifier", actor
+            )
+            return None
+    responses = await responses_by_child(tx.conn, parent["id"])
+    disputes = []
+    for f in findings:
+        child_id, _, fid = str(f.get("repeat_of") or "").partition(":")
+        earlier = responses.get(child_id, {}).get(fid)
+        if earlier and earlier["status"] == "disputed":
+            disputes.append(
+                f"- `{f.get('id')}` repeats `{child_id}:{fid}`, which the implementer"
+                f" disputed: {earlier['evidence']}"
+            )
+    # P1 findings with only `reading` evidence are checked first (spec 3.1).
+    ordered = sorted(
+        findings,
+        key=lambda f: (
+            not (
+                f.get("priority") == "P1"
+                and (f.get("evidence") or {}).get("kind") == "reading"
+            )
+        ),
+    )
+    body = TaskCreate(
+        title=f"Verification of review findings of {parent['title']!r}"[:200],
+        spec=(
+            f"Verify the findings of independent review `{review['id']}` of task"
+            f" `{parent['id']}` (head `{head_sha}`). You are read-only: change,"
+            " commit and push nothing. Try to refute each finding: run its evidence,"
+            " read the code, and say what you ran or read and what you saw. Check"
+            " the findings in the order given.\n\nFinish with `COMPLETE:` and one JSON"
+            ' object, sent with the send_message tool to `to: "argus"`:\n'
+            '`COMPLETE: {"summary":"<one line>","data":{"verifications":'
+            '[{"id":"f1","status":"confirmed","evidence":"<what you ran or read>"}]}}`\n'
+            "`status` is `confirmed` (you could not refute it), `refuted` (it is"
+            " wrong; the evidence shows why) or `unclear` (you could not decide)."
+            " Return one entry per finding id.\n\nFindings:\n"
+            + json.dumps(ordered, ensure_ascii=False, indent=1)
+            + ("\n\nDisputes:\n" + "\n".join(disputes) if disputes else "")
+            + (_PAIRED_GUIDANCE if _paired_route(route) else "")
+        ),
+        kind=VERIFICATION_KIND,
+        project=parent["project"],
+        parent_id=parent["id"],
+        input={
+            "review_child_id": review["id"],
+            "pr": review_input.get("pr"),
+            "head_sha": head_sha,
+            "findings": ordered,
+        },
+        review=Review.NONE,
+        harness_model=harness,
+        executor_model=executor,
+        required_capabilities=[],  # read-only: never repository:write
+        deliverable=Deliverable.RESPONSE,
+    )
+    child = await tasks_svc.create_task(tx, body, actor)
+    if route is not None:
+        alternatives, review_route_ = route
+        await tx.conn.execute(
+            "UPDATE tasks SET execution_route = ? WHERE id = ?",
+            (routes.explicit_route(alternatives, review_route_), child.id),
+        )
+    await record(
+        tx,
+        actor,
+        "task",
+        parent["id"],
+        VERIFY_REQUESTED_EVENT,
+        {
+            "review_child_id": review["id"],
+            "verifier_id": child.id,
+            "mode": setting.verify_findings,
+        },
+    )
+    return child.id
+
+
+async def _held_for(
+    conn: aiosqlite.Connection, parent: aiosqlite.Row, review_id: str, verifier_id: str
+) -> bool:
+    """True while an `enforce` verdict still waits for this verifier."""
+    if parent["state"] != TaskState.IN_REVIEW:
+        return False
+    mode = None
+    for _, data in await _event_data(conn, parent["id"], VERIFY_REQUESTED_EVENT):
+        if data.get("verifier_id") == verifier_id:
+            mode = data.get("mode")
+    if mode != "enforce":
+        return False
+    async with conn.execute(
+        "SELECT id FROM tasks WHERE parent_id = ? AND kind = ? ORDER BY rowid DESC LIMIT 1",
+        (parent["id"], CODE_REVIEW_KIND),
+    ) as cur:
+        latest = await cur.fetchone()
+    return (
+        latest is not None
+        and latest["id"] == review_id
+        and not await _child_already_processed(conn, parent["id"], review_id)
+    )
+
+
+async def _verifier_clean(
+    conn: aiosqlite.Connection,
+    parent: aiosqlite.Row,
+    verifier: aiosqlite.Row,
+    review_id: str,
+) -> bool:
+    """True when the verifier's runs prove it used neither an author's nor the
+    reviewer's model."""
+    models, _ = await authors(conn, verifier["id"])
+    author_models, _ = await authors(conn, parent["id"])
+    fix_models, _ = await fixers(conn, parent["id"])
+    reviewer_models, _ = await authors(conn, review_id)
+    return models.isdisjoint(author_models | fix_models | reviewer_models) and (
+        bool(models) or not author_models
+    )
+
+
+async def _apply_verdict(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    review: aiosqlite.Row,
+    findings: list[dict[str, Any]],
+    actor: str,
+    *,
+    refuted: dict[str, str] | None = None,
+    verifier_id: str | None = None,
+) -> None:
+    """Resolve a held `enforce` verdict: confirmed and unclear findings go to the
+    implementer; when every finding is refuted a person decides (spec 3.4)."""
+    rounds = await review_rounds(tx.conn, parent["id"])
+    refuted = refuted or {}
+    send = [f for f in findings if f.get("id") not in refuted]
+    if send:
+        await _send_findings(
+            tx,
+            parent,
+            review,
+            send,
+            rounds,
+            actor,
+            refuted=[(f, refuted[f["id"]]) for f in findings if f.get("id") in refuted],
+        )
+        return
+    both = "\n".join(
+        f"- [{f.get('id')}] {f.get('priority', '?')} {f.get('title', '')}\n"
+        f"  Reviewer ({(f.get('evidence') or {}).get('kind')}):"
+        f" {(f.get('evidence') or {}).get('detail')}\n"
+        f"  Verifier (refuted): {refuted[f['id']]}"
+        for f in findings
+    )
+    await decisions.open_decision(
+        tx,
+        subject_type="task",
+        subject_id=parent["id"],
+        kind=DecisionKind.REVIEW,
+        question=(
+            f"The verifier refuted every finding of the independent review of"
+            f" {parent['title']!r}. Reject sends the findings to the implementer"
+            " anyway; accept_with_deviation waives the independent review; accept"
+            f" needs an approval at this head.\n\n{both}"
+        ),
+        options=list(REVIEW_OPTIONS),
+        audience=Audience.HUMAN,
+        requested_by=actor,
+        payload={
+            "gate": FINDINGS_REFUTED_GATE,
+            "review_child_id": review["id"],
+            "verifier_id": verifier_id,
+        },
+    )
+    await record(
+        tx,
+        actor,
+        "task",
+        parent["id"],
+        REFUTED_EVENT,
+        {"child_id": review["id"], "verifier_id": verifier_id},
+    )
+
+
+async def _review_row(
+    conn: aiosqlite.Connection, review_id: Any
+) -> aiosqlite.Row | None:
+    if not isinstance(review_id, str):
+        return None
+    async with conn.execute(
+        "SELECT * FROM tasks WHERE id = ? AND kind = ?", (review_id, CODE_REVIEW_KIND)
+    ) as cur:
+        return await cur.fetchone()
+
+
+async def on_verification_complete(
+    tx: Tx, child: aiosqlite.Row, result: TaskResult, actor: str
+) -> None:
+    """The verifier answered: record each verdict on a finding (`observe` and `enforce`);
+    in `enforce` also apply the held verdict. An unusable answer leaves the original
+    verdict as it was and records why (spec 3.4)."""
+    from argus_api.tasks import service as tasks_svc
+
+    parent_id = child["parent_id"]
+    inp = json.loads(child["input"] or "{}")
+    review = await _review_row(tx.conn, inp.get("review_child_id"))
+    if not parent_id or review is None:
+        return
+    parent = await tasks_svc._row(tx.conn, parent_id)
+    held = await _held_for(tx.conn, parent, review["id"], child["id"])
+    findings = [f for f in inp.get("findings") or [] if isinstance(f, dict)]
+    by_id = {f.get("id"): f for f in findings}
+    answers: dict[str, dict[str, Any]] = {}
+    for a in (result.data or {}).get("verifications") or []:
+        if isinstance(a, dict) and a.get("id") in by_id and a["id"] not in answers:
+            answers[a["id"]] = a
+    reason = None
+    if not answers:
+        reason = "no_answer"
+    elif not await _verifier_clean(tx.conn, parent, child, review["id"]):
+        reason = "same_model"
+    elif await executor_not_run(tx.conn, child):
+        reason = "executor_not_run"
+    if reason:
+        await _skip_verification(
+            tx, parent_id, review["id"], child["id"], reason, actor
+        )
+        if held:
+            await _apply_verdict(
+                tx, parent, review, _structured(_result_data(review["result"])), actor
+            )
+        return
+    for f in findings:
+        if f.get("id") in answers:
+            await record(
+                tx,
+                actor,
+                "task",
+                parent_id,
+                VERIFIED_EVENT,
+                {
+                    "review_child_id": review["id"],
+                    "verifier_id": child["id"],
+                    "id": f["id"],
+                    "priority": f.get("priority"),
+                    "status": answers[f["id"]]["status"],
+                },
+            )
+    if held:
+        await _apply_verdict(
+            tx,
+            parent,
+            review,
+            findings,
+            actor,
+            refuted={
+                i: str(a["evidence"])
+                for i, a in answers.items()
+                if a["status"] == "refuted"
+            },
+            verifier_id=child["id"],
+        )
+
+
+async def on_verification_ended(tx: Tx, child: aiosqlite.Row, actor: str) -> None:
+    """The verifier failed or was cancelled without an answer: the original verdict
+    applies unchanged and the skip is recorded (spec 3.4)."""
+    from argus_api.tasks import service as tasks_svc
+
+    parent_id = child["parent_id"]
+    inp = json.loads(child["input"] or "{}")
+    review = await _review_row(tx.conn, inp.get("review_child_id"))
+    if not parent_id or review is None:
+        return
+    parent = await tasks_svc._row(tx.conn, parent_id)
+    held = await _held_for(tx.conn, parent, review["id"], child["id"])
+    await _skip_verification(
+        tx, parent_id, review["id"], child["id"], "verifier_failed", actor
+    )
+    if held:
+        await _apply_verdict(
+            tx, parent, review, _structured(_result_data(review["result"])), actor
+        )
+
+
+async def release_refuted(
+    tx: Tx, parent_id: str, review_child_id: str, actor: str
+) -> None:
+    """`reject` on a findings_refuted decision: the findings go to the implementer
+    anyway (spec 3.4)."""
+    from argus_api.tasks import service as tasks_svc
+
+    parent = await tasks_svc._row(tx.conn, parent_id)
+    review = await _review_row(tx.conn, review_child_id)
+    if review is None or parent["state"] != TaskState.IN_REVIEW:
+        return
+    await _send_findings(
+        tx,
+        parent,
+        review,
+        _structured(_result_data(review["result"])),
+        await review_rounds(tx.conn, parent_id),
+        actor,
     )
 
 

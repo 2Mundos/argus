@@ -13,18 +13,38 @@ import aiosqlite
 from argus_core.tasks import TaskState
 from pydantic import BaseModel
 
-from argus_api.tasks.independent_review import CODE_REVIEW_KIND
+from argus_api.tasks.independent_review import (
+    CODE_REVIEW_KIND,
+    VERIFICATION_KIND,
+    VERIFIED_EVENT,
+    responses_by_child,
+)
 
 Verdict = Literal["approve", "request_changes", "void"]
 _PRIORITY = re.compile(r"^\s*\[?(P\d)\b\]?\s*[:\-]?\s*", re.IGNORECASE)
 _ENDED = (TaskState.SUCCEEDED, TaskState.FAILED, TaskState.CANCELLED)
 
 
+ResponseStatus = Literal["fixed", "disputed", "unanswered"]
+VerificationStatus = Literal["confirmed", "refuted", "unclear"]
+
+
 class ReviewFinding(BaseModel):
+    id: str | None = None  # null for a finding stored before findings were structured
     priority: str | None = None
     file: str | None = None
     lines: str | None = None
+    title: str | None = None
     description: str
+    evidence_kind: Literal["test", "reproduction", "reading"] | None = None
+    repeat_of: str | None = None
+    # How the implementer answered this finding; null until the next attempt completes.
+    response: ResponseStatus | None = None
+    response_evidence: str | None = None
+    # For a repeat: how the earlier round's finding was answered.
+    repeat_response: ResponseStatus | None = None
+    repeat_round: int | None = None
+    verification: VerificationStatus | None = None
 
 
 class ReviewRound(BaseModel):
@@ -37,6 +57,9 @@ class ReviewRound(BaseModel):
     findings_by_priority: dict[str, int]
     reviewer_provider: str | None
     reviewer_model: str | None
+    repeats: int  # findings raised again from an earlier round
+    verifier_child_id: str | None
+    verifier_state: TaskState | None
     artifact_ids: list[str]
     created_at: datetime
     finished_at: datetime | None
@@ -59,6 +82,7 @@ class StewardState(BaseModel):
 
 class ReviewRounds(BaseModel):
     task_id: str
+    repeats: int = 0  # findings raised again, over all rounds
     rounds: list[ReviewRound]
     steward: StewardState | None = None
 
@@ -73,11 +97,17 @@ def _finding(raw: Any) -> ReviewFinding:
         if isinstance(lines, list):
             lines = "-".join(str(n) for n in lines[:2])
         text = raw.get("description") or raw.get("message") or raw.get("title")
+        evidence = raw.get("evidence")
+        kind = evidence.get("kind") if isinstance(evidence, dict) else None
         return ReviewFinding(
+            id=_text(raw.get("id")),
             priority=_text(raw.get("priority") or raw.get("severity")),
             file=_text(raw.get("file") or raw.get("path")),
             lines=_text(lines),
+            title=_text(raw.get("title")),
             description=str(text) if text else json.dumps(raw, ensure_ascii=False),
+            evidence_kind=kind if kind in ("test", "reproduction", "reading") else None,
+            repeat_of=_text(raw.get("repeat_of")),
         )
     text = str(raw)
     hit = _PRIORITY.match(text)
@@ -186,6 +216,58 @@ async def _steward(conn: aiosqlite.Connection, parent_id: str) -> StewardState |
     )
 
 
+async def _verifications(
+    conn: aiosqlite.Connection, parent_id: str
+) -> tuple[dict[str, aiosqlite.Row], dict[tuple[str, str], VerificationStatus]]:
+    """(review child id -> its newest verifier child, (review child id, finding id) ->
+    verification status)."""
+    verifiers: dict[str, aiosqlite.Row] = {}
+    async with conn.execute(
+        "SELECT id, state, input FROM tasks WHERE parent_id = ? AND kind = ?"
+        " ORDER BY rowid",
+        (parent_id, VERIFICATION_KIND),
+    ) as cur:
+        for row in await cur.fetchall():
+            try:
+                review_id = json.loads(row["input"] or "{}").get("review_child_id")
+            except json.JSONDecodeError:
+                continue
+            if isinstance(review_id, str):
+                verifiers[review_id] = row
+    verified: dict[tuple[str, str], VerificationStatus] = {}
+    async with conn.execute(
+        "SELECT data FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = ? ORDER BY id",
+        (parent_id, VERIFIED_EVENT),
+    ) as cur:
+        for (raw,) in await cur.fetchall():
+            data = json.loads(raw or "{}")
+            verified[(data.get("review_child_id"), data.get("id"))] = data.get("status")
+    return verifiers, verified
+
+
+def _annotate(
+    f: ReviewFinding,
+    child_id: str,
+    responses: dict[str, dict[str, dict[str, Any]]],
+    verified: dict[tuple[str, str], VerificationStatus],
+    numbers: dict[str, int],
+) -> None:
+    """Fill in the implementer's response, the verification and the repeat's history."""
+    if f.id is not None:
+        got = responses.get(child_id, {}).get(f.id)
+        if got:
+            f.response = got["status"]
+            f.response_evidence = got.get("evidence") or None
+        f.verification = verified.get((child_id, f.id))
+    if f.repeat_of:
+        earlier, _, fid = f.repeat_of.partition(":")
+        f.repeat_round = numbers.get(earlier)
+        f.repeat_response = (
+            responses.get(earlier, {}).get(fid, {}).get("status", "unanswered")
+        )
+
+
 async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRounds:
     steward = await _steward(conn, parent_id)
     async with conn.execute(
@@ -212,6 +294,9 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
         " ORDER BY attempt, created_at, id",
         ids,
     )
+    responses = await responses_by_child(conn, parent_id)
+    verifiers, verified = await _verifications(conn, parent_id)
+    numbers = {c["id"]: n for n, c in enumerate(children, 1)}
     rounds = []
     for n, child in enumerate(children, 1):
         data = _data(child["result"])
@@ -225,6 +310,8 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
         ):
             verdict = data["verdict"]
         findings = [_finding(f) for f in data.get("findings") or []]
+        for f in findings:
+            _annotate(f, child["id"], responses, verified, numbers)
         by_priority: dict[str, int] = {}
         for f in findings:
             key = f.priority or "unranked"
@@ -247,12 +334,24 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
                 reviewer_model=(run["observed_model"] or run["configured_model"])
                 if run
                 else None,
+                repeats=sum(1 for f in findings if f.repeat_of),
+                verifier_child_id=verifiers[child["id"]]["id"]
+                if child["id"] in verifiers
+                else None,
+                verifier_state=verifiers[child["id"]]["state"]
+                if child["id"] in verifiers
+                else None,
                 artifact_ids=[a["id"] for a in artifacts[child["id"]]],
                 created_at=child["created_at"],
                 finished_at=child["updated_at"] if ended else None,
             )
         )
-    return ReviewRounds(task_id=parent_id, rounds=rounds, steward=steward)
+    return ReviewRounds(
+        task_id=parent_id,
+        repeats=sum(r.repeats for r in rounds),
+        rounds=rounds,
+        steward=steward,
+    )
 
 
 class ReviewBadge(BaseModel):
