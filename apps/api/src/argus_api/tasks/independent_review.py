@@ -1603,17 +1603,20 @@ async def spawn_reviewer(
             "`verdict` is `approve`, `request_changes` or `fixed`. `data` takes only"
             " verdict, findings, head_sha, fixed_head_sha and tests; do not put them at"
             " the top level.\n\n"
-            "If you find actionable problems you can safely fix, fix them on the PR's"
-            " own branch: add tests, run the gates, and push one normal new commit"
-            " (fast-forward only; never force-push, never rewrite history, never"
-            " touch another branch or merge). Push with `argus-task deliver --undo-note"
-            ' "<what you fixed>"` so the PR records how to undo it. Then finish with'
-            " verdict `fixed`,"
-            " `head_sha` the head you reviewed, `fixed_head_sha` the full new head,"
-            " `findings` what you fixed and `tests` what you ran. You cannot approve"
-            " your own fix: Argus schedules a fresh review of the new head with"
-            " another model. If you cannot fix safely, return `request_changes` and"
-            " change nothing. With no findings, return `approve` and change nothing."
+            "You are a verdict-only reviewer. Do not change the repository or the"
+            " pull request: no commit, no push (not to the PR's branch, not to any"
+            " other), no `argus-task deliver`, no PR create, update, close or reopen,"
+            " no merge. The verdict you return is bound to head `" + sha + "`;"
+            " if that head moves while you review, your verdict is void. Report"
+            " problems as findings and return `request_changes`; with no findings,"
+            " return `approve`. `fixed` is refused.\n\n"
+            "Keep the context small: `argus-github-api` prints a compact projection by"
+            " default; do not use `--raw`. Read the diff with `pr-diff` or `git diff`,"
+            " not by pasting API payloads. Run only the targeted tests that cover the"
+            " change, each wrapped in `timeout 300`; never run a whole test suite"
+            " (for example all of `argus-delegate`, `make test` or `make check`). If a"
+            " command hangs or runs over its timeout, stop it and report it as a"
+            " finding or in `tests`, then return your verdict.\n"
             f"\n\n{FINDING_SHAPE} When findings may be checked by a verifier, P1"
             " findings with only `reading` evidence are checked first: run a test or"
             " reproduce the problem whenever you can."
@@ -1627,15 +1630,13 @@ async def spawn_reviewer(
             "task_id": parent["id"],
             "pr": pr,
             "head_sha": sha,
-            # Scoped write: push to this PR's branch, fast-forward only, no merge.
-            "fix": {"pr": pr, "base_head_sha": sha, "force_push": False},
         },
         review=Review.NONE,
         harness_model=harness,
         executor_model=executor,
-        # Fixed shape: the reviewer may push a fix to the PR branch and nothing else
-        # (no merge grant: the deliverable is a response, `allow_merge` is not set).
-        required_capabilities=["repository:write"],
+        # Verdict-only: no write capability, so no push to the parent's branch and no
+        # PR create or close; a reviewer is a response, never a delivery.
+        required_capabilities=[],
         deliverable=Deliverable.RESPONSE,
     )
     child = await tasks_svc.create_task(tx, body, actor)
@@ -2034,112 +2035,6 @@ async def _fix_refused(
     await open_manual_review(tx, parent, REVIEWER_FAILED_GATE, actor)
 
 
-async def _on_fix_pushed(
-    tx: Tx,
-    parent: aiosqlite.Row,
-    child: aiosqlite.Row,
-    child_input: dict[str, Any],
-    data: dict[str, Any],
-    *,
-    forge: deliverable.ForgeRead | None,
-    setting: IndependentReviewSetting,
-    policy: model_policy.Policy,
-    actor: str,
-) -> None:
-    """The reviewer pushed a correction: record who fixed what, invalidate any older
-    approval, and schedule a fresh review of the exact new head by another model.
-    The fixer never approves its own change."""
-    expected_pr = child_input.get("pr")
-    old_head = child_input.get("head_sha")
-    new_head = data.get("fixed_head_sha")
-    new_head = new_head.strip().lower() if isinstance(new_head, str) else None
-    if (
-        not new_head
-        or not _FULL_SHA.fullmatch(new_head)
-        or not old_head
-        or not _same_sha(data.get("head_sha"), old_head)
-        or _same_sha(new_head, old_head)
-    ):
-        await _fix_refused(tx, parent, child, "fix_head_invalid", actor)
-        return
-    seen = forge.delivery if forge is not None else None
-    forge_pr = seen.pr if seen is not None else None
-    forge_sha = (
-        seen.head.sha.lower()
-        if seen is not None and seen.head is not None and seen.head.sha
-        else None
-    )
-    if not forge_pr or not forge_sha:
-        await _fix_refused(tx, parent, child, "fix_unverified", actor)
-        return
-    if expected_pr and not _same_pr(expected_pr, forge_pr):
-        await _fix_refused(tx, parent, child, "fix_pr_mismatch", actor)
-        return
-    if forge_sha != new_head:
-        await _fix_refused(tx, parent, child, "fix_head_mismatch", actor)
-        return
-    child_models, child_providers = await authors(tx.conn, child["id"])
-    if len(child_models) != 1:
-        # Which model wrote the fix must be exact: none or several is ambiguous.
-        await _fix_refused(tx, parent, child, "fix_provenance_unclear", actor)
-        return
-    findings = data.get("findings")
-    tests = data.get("tests")
-    await record(
-        tx,
-        actor,
-        "task",
-        parent["id"],
-        FIX_PUSHED_EVENT,
-        {
-            "child_id": child["id"],
-            "pr": forge_pr,
-            "old_head_sha": old_head,
-            "new_head_sha": new_head,
-            "fix_models": sorted(child_models),
-            "fix_providers": sorted(child_providers),
-            "findings": findings if isinstance(findings, list) else [],
-            "tests": tests if isinstance(tests, list) else [],
-        },
-    )
-    rounds = await review_rounds(tx.conn, parent["id"])
-    if rounds >= setting.max_rounds:
-        await decisions.open_decision(
-            tx,
-            subject_type="task",
-            subject_id=parent["id"],
-            kind=DecisionKind.REVIEW,
-            question=(
-                f"Independent review exhausted {setting.max_rounds} rounds for"
-                f" {parent['title']!r}; the last fix ({new_head}) is unreviewed."
-                " Accept or reject?"
-            ),
-            options=list(REVIEW_OPTIONS),
-            audience=Audience.HUMAN,
-            requested_by=actor,
-        )
-        await record(
-            tx,
-            actor,
-            "task",
-            parent["id"],
-            "review.independent_escalated",
-            {"child_id": child["id"], "rounds": rounds},
-        )
-        return
-    await spawn_reviewer(
-        tx,
-        parent,
-        pr=forge_pr,
-        head_sha=new_head,
-        setting=setting,
-        policy=policy,
-        actor=actor,
-        forge=forge,
-        replace_child_id=child["id"],
-    )
-
-
 async def on_review_child_complete(
     tx: Tx,
     child: aiosqlite.Row,
@@ -2246,17 +2141,9 @@ async def on_review_child_complete(
         return
 
     if verdict == FIX_VERDICT:
-        await _on_fix_pushed(
-            tx,
-            parent,
-            child,
-            child_input,
-            data,
-            forge=forge,
-            setting=setting,
-            policy=policy,
-            actor=actor,
-        )
+        # Reviewers are verdict-only (spec 3.7): they hold no write grant, so a fix is
+        # a write Argus never authorized and the verdict does not count.
+        await _fix_refused(tx, parent, child, "fix_not_permitted", actor)
         return
 
     if verdict == "approve":

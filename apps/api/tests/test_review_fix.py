@@ -1,8 +1,7 @@
-"""Reviewer fixes its findings on the PR branch (pre-merge independent review spec 3.7).
+"""Independent reviewers are verdict-only (pre-merge independent review spec 3.7).
 
-A reviewer that pushes a correction never approves it: the old approval is void, a
-fresh review of the exact new head runs in another session on another model, and
-merge stays blocked until that approval exists.
+A reviewer holds no write grant and no fix fence; a `fixed` verdict, or any verdict
+for a head that moved during the review, is void and approves nothing.
 """
 
 from __future__ import annotations
@@ -12,10 +11,8 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-import pytest
 from argus_api import main as _main  # noqa: F401 - loads packages in order
 from argus_api.tasks import independent_review as indep
-from argus_api.tasks import review_settle
 from fastapi.testclient import TestClient
 from test_execution_routes import (
     CODEX_ALT,
@@ -26,7 +23,6 @@ from test_execution_routes import (
 from test_pre_merge_independent_review import (
     HEAD_1,
     HEAD_2,
-    HEAD_Y,
     PR_450_NUM,
     PR_450_URL,
     StatefulForge,
@@ -254,278 +250,60 @@ def _push_fix(forge: StatefulForge, checker: Any, parent_id: str, head: str) -> 
     checker._cache.clear()
 
 
-def test_fix_then_fresh_different_model_approval_then_authorized_merge(
-    api_client: TestClient,
-) -> None:
-    forge, checker, parent_id, headers, _ = _setup(api_client)
-    r1 = _claim(api_client, headers)
-    assert r1["kind"] == "code_review"
-    assert r1["execution"]["harness"]["model"] == "gpt-5.5"
-    assert r1["required_capabilities"] == ["repository:write"]
-    assert r1["input"]["fix"] == {
-        "pr": PR_450_URL,
-        "base_head_sha": HEAD_1,
-        "force_push": False,
-    }
-    # The reviewer holds no merge grant: it cannot merge its own or any PR.
-    assert _may_merge(api_client, r1["id"]) is False
-
-    _push_fix(forge, checker, parent_id, HEAD_2)
-    _finish(api_client, headers, r1, _fixed(), model=CODEX)
-
-    [fix] = _events(api_client, parent_id, indep.FIX_PUSHED_EVENT)
-    assert fix["child_id"] == r1["id"]
-    assert fix["pr"] == PR_450_URL
-    assert (fix["old_head_sha"], fix["new_head_sha"]) == (HEAD_1, HEAD_2)
-    assert fix["fix_models"] == ["gpt-5.5"] and fix["fix_providers"] == ["openai"]
-    assert fix["findings"] == [_finding()]
-    # Nothing is approved and nothing merges until another model reviews HEAD_2.
-    assert _approval(api_client, parent_id) == (None, None)
-    assert _may_merge(api_client, parent_id) is False
-    parent = api_client.get(f"/api/tasks/{parent_id}").json()
-    assert parent["state"] == "in_review"
-
-    r2_id = _children(api_client, parent_id)[-1]
-    assert r2_id != r1["id"]
-    r2 = _claim(api_client, headers)
-    assert r2["id"] == r2_id
-    assert r2["input"]["head_sha"] == HEAD_2
-    assert r2["execution"]["executor"]["model"] == "deepseek/deepseek-v4.1-flash"
-    assert r2["engine_lease"]["lease_id"] != r1["engine_lease"]["lease_id"]
-    assert _may_merge(api_client, parent_id) is False
-
-    _finish(
-        api_client,
-        headers,
-        r2,
-        {"verdict": "approve", "findings": [], "head_sha": HEAD_2},
-        model=DEEPSEEK,
-    )
-    assert _approval(api_client, parent_id) == (PR_450_URL, HEAD_2)
-    awaiting = api_client.get(f"/api/tasks/{parent_id}").json()
-    assert awaiting["block_reason"] == "awaiting_forge"
-    assert awaiting["merge"]["may_merge"] is True
-
-    forge.set_pr(
-        PR_450_NUM,
-        head_sha=HEAD_2,
-        merged=True,
-        head_ref=f"argus/task-{parent_id[:8]}",
-    )
-    checker._cache.clear()
-    assert asyncio.run(
-        review_settle.settle_task(api_client.app.state.db, checker, parent_id)
-    )
-    assert api_client.get(f"/api/tasks/{parent_id}").json()["state"] == "succeeded"
-
-
-def test_fixer_model_and_session_never_approve_and_old_approval_is_void(
-    api_client: TestClient,
-) -> None:
-    forge, checker, parent_id, headers, _ = _setup(api_client)
-    r1 = _claim(api_client, headers)
-    _push_fix(forge, checker, parent_id, HEAD_2)
-    _finish(api_client, headers, r1, _fixed(), model=CODEX)
-    r2 = _claim(api_client, headers)
-    # The next reviewer's session turns out to have run the fixer's model: its
-    # approval is void and never recorded; another reviewer is scheduled.
-    _insert_execution(api_client, r2["id"], "x", "gpt-5.5")
-    _finish(
-        api_client,
-        headers,
-        r2,
-        {"verdict": "approve", "findings": [], "head_sha": HEAD_2},
-        model=None,
-    )
-    assert _approval(api_client, parent_id) == (None, None)
-    assert _may_merge(api_client, parent_id) is False
-    voids = _events(api_client, parent_id, "review.independent_void")
-    assert [v["reason"] for v in voids] == ["same_model"]
-
-    async def clean(child: str) -> bool:
-        async with api_client.app.state.db.read() as conn:
-            row = await conn.execute_fetchall(
-                "SELECT 1"  # parent id is the child's parent
-            )
-            assert row
-            return await indep.child_models_clean(
-                conn,
-                child,
-                mode="different_model",
-                author_models={"claude-opus-5-5"},
-                author_providers={"anthropic"},
-                parent_id=parent_id,
-            )
-
-    # The fixing session itself is never clean, whatever model it reports.
-    assert asyncio.run(clean(r1["id"])) is False
-
-
-@pytest.mark.parametrize(
-    ("case", "reason"),
-    [
-        ("two_models", "fix_provenance_unclear"),
-        ("same_head", "fix_head_invalid"),
-        ("stale_head", "fix_head_mismatch"),
-        ("moved_head", "fix_head_mismatch"),
-    ],
-)
-def test_unverifiable_fix_is_refused_and_nothing_is_approved(
-    api_client: TestClient, case: str, reason: str
-) -> None:
-    forge, checker, parent_id, headers, _ = _setup(api_client)
-    r1 = _claim(api_client, headers)
-    data = _fixed()
-    model: tuple[str, str, str] | None = CODEX
-    if case == "two_models":
-        _insert_execution(api_client, r1["id"], "y", "claude-sonnet-5-5")
-        _push_fix(forge, checker, parent_id, HEAD_2)
-    elif case == "same_head":
-        data = _fixed(new=HEAD_1)
-    elif case == "stale_head":
-        _push_fix(forge, checker, parent_id, HEAD_2)
-        data = _fixed(new=HEAD_Y)
-    else:  # moved_head: the branch moved again after the fix
-        _push_fix(forge, checker, parent_id, HEAD_Y)
-    _finish(api_client, headers, r1, data, model=model)
-    assert _events(api_client, parent_id, indep.FIX_PUSHED_EVENT) == []
-    voids = _events(api_client, parent_id, "review.independent_void")
-    assert [v["reason"] for v in voids] == [reason]
-    assert _approval(api_client, parent_id) == (None, None)
-    assert _may_merge(api_client, parent_id) is False
-    assert _children(api_client, parent_id) == [r1["id"]]  # no loop, no respawn
-
-
-def test_fix_without_recorded_model_is_void_and_never_trusted(
-    api_client: TestClient,
-) -> None:
-    forge, checker, parent_id, headers, _ = _setup(api_client)
-    r1 = _claim(api_client, headers)
-    _push_fix(forge, checker, parent_id, HEAD_2)
-    _finish(api_client, headers, r1, _fixed(), model=None)
-    assert _events(api_client, parent_id, indep.FIX_PUSHED_EVENT) == []
-    assert [
-        v["reason"] for v in _events(api_client, parent_id, "review.independent_void")
-    ] == ["same_model"]
-    assert _approval(api_client, parent_id) == (None, None)
-    assert _may_merge(api_client, parent_id) is False
-
-
-def test_short_fixed_head_is_rejected_by_the_result_schema(
+def test_reviewer_is_verdict_only_and_its_prompt_bounds_tests(
     api_client: TestClient,
 ) -> None:
     _forge, _checker, _parent_id, headers, _ = _setup(api_client)
     r1 = _claim(api_client, headers)
-    res = api_client.post(
-        f"/api/tasks/{r1['id']}/complete",
-        json={
-            "attempt": r1["attempt"],
-            "result": {"summary": "x", "data": _fixed(new=HEAD_2[:10])},
-        },
-        headers=headers,
-    )
-    assert res.status_code == 422
+    assert r1["kind"] == "code_review"
+    assert r1["required_capabilities"] == []
+    assert "fix" not in r1["input"]
+    # The reviewer holds no merge grant either.
+    assert _may_merge(api_client, r1["id"]) is False
+    spec = api_client.get(f"/api/tasks/{r1['id']}").json()["spec"]
+    assert "verdict-only" in spec
+    assert "no commit, no push" in spec
+    assert "no PR create" in spec
+    assert "timeout 300" in spec
+    assert "never run a whole test suite" in spec
+    assert "do not use `--raw`" in spec
 
 
-def test_head_moving_after_the_fix_voids_the_fresh_approval(
+def test_fixed_verdict_is_void_and_nothing_is_approved(
     api_client: TestClient,
 ) -> None:
     forge, checker, parent_id, headers, _ = _setup(api_client)
     r1 = _claim(api_client, headers)
     _push_fix(forge, checker, parent_id, HEAD_2)
     _finish(api_client, headers, r1, _fixed(), model=CODEX)
-    r2 = _claim(api_client, headers)
-    _push_fix(forge, checker, parent_id, HEAD_Y)
+    assert _events(api_client, parent_id, indep.FIX_PUSHED_EVENT) == []
+    assert [
+        v["reason"] for v in _events(api_client, parent_id, "review.independent_void")
+    ] == ["fix_not_permitted"]
+    assert _approval(api_client, parent_id) == (None, None)
+    assert _may_merge(api_client, parent_id) is False
+    assert _children(api_client, parent_id) == [r1["id"]]  # no automatic respawn
+
+
+def test_head_moved_by_the_reviewer_voids_its_approval(
+    api_client: TestClient,
+) -> None:
+    forge, checker, parent_id, headers, _ = _setup(api_client)
+    r1 = _claim(api_client, headers)
+    # The reviewer pushed to the PR branch anyway and still reports the head it was given.
+    _push_fix(forge, checker, parent_id, HEAD_2)
     _finish(
         api_client,
         headers,
-        r2,
-        {"verdict": "approve", "findings": [], "head_sha": HEAD_2},
-        model=DEEPSEEK,
+        r1,
+        {"verdict": "approve", "findings": [], "head_sha": HEAD_1},
+        model=CODEX,
     )
     assert _approval(api_client, parent_id) == (None, None)
     assert _may_merge(api_client, parent_id) is False
     assert [
         v["reason"] for v in _events(api_client, parent_id, "review.independent_void")
     ] == ["head_mismatch"]
-
-
-def test_no_independent_model_left_after_a_fix_blocks_without_bypass(
-    api_client: TestClient,
-) -> None:
-    forge, checker, parent_id, headers, _ = _setup(
-        api_client, review_chain=[OPUS_ALT, CODEX_ALT]
-    )
-    r1 = _claim(api_client, headers)
-    _push_fix(forge, checker, parent_id, HEAD_2)
-    _finish(api_client, headers, r1, _fixed(), model=CODEX)
-    parent = api_client.get(f"/api/tasks/{parent_id}").json()
-    assert parent["state"] == "in_review"
-    assert parent["block_reason"] == "no_independent_reviewer"
-    assert _approval(api_client, parent_id) == (None, None)
-    assert _may_merge(api_client, parent_id) is False
-    assert _children(api_client, parent_id) == [r1["id"]]
-
-
-def test_post_fix_review_falls_back_across_difficulty_chains(
-    api_client: TestClient,
-) -> None:
-    # No review chain for the parent's difficulty: other difficulties are searched,
-    # and the fixer's model is skipped like an author's.
-    forge, checker, parent_id, headers, _ = _setup(
-        api_client,
-        review_chains={"hard": [OPUS_ALT, DEEPSEEK_ALT]},
-        exec_chains={"standard": [CODEX_ALT]},
-        impl=CODEX_IMPL,
-    )
-    r1 = _claim(api_client, headers)
-    assert r1["execution"]["harness"]["model"] == "claude-opus-5-5"
-    _push_fix(forge, checker, parent_id, HEAD_2)
-    _finish(api_client, headers, r1, _fixed(), model=OPUS)
-    r2 = _claim(api_client, headers)
-    assert r2["input"]["head_sha"] == HEAD_2
-    assert r2["execution"]["executor"]["model"] == "deepseek/deepseek-v4.1-flash"
-
-
-def test_fix_rounds_are_bounded(api_client: TestClient) -> None:
-    forge, checker, parent_id, headers, _ = _setup(api_client, max_rounds=1)
-    r1 = _claim(api_client, headers)
-    _push_fix(forge, checker, parent_id, HEAD_2)
-    _finish(api_client, headers, r1, _fixed(), model=CODEX)
-    assert len(_events(api_client, parent_id, indep.FIX_PUSHED_EVENT)) == 1
-    assert len(_events(api_client, parent_id, "review.independent_escalated")) == 1
-    assert _children(api_client, parent_id) == [r1["id"]]
-    assert _approval(api_client, parent_id) == (None, None)
-    assert _may_merge(api_client, parent_id) is False
-
-
-def test_replayed_fix_completion_is_idempotent(api_client: TestClient) -> None:
-    from argus_api.tasks import service as tasks_svc
-    from argus_core.settings import IndependentReviewSetting
-    from argus_core.tasks import TaskResult
-
-    forge, checker, parent_id, headers, _ = _setup(api_client)
-    r1 = _claim(api_client, headers)
-    _push_fix(forge, checker, parent_id, HEAD_2)
-    _finish(api_client, headers, r1, _fixed(), model=CODEX)
-    children = _children(api_client, parent_id)
-
-    async def replay() -> None:
-        db = api_client.app.state.db
-        async with db.write() as tx:
-            child = await tasks_svc._row(tx.conn, r1["id"])
-            await indep.on_review_child_complete(
-                tx,
-                child,
-                TaskResult(summary="again", data=_fixed()),
-                setting=IndependentReviewSetting(mode="different_model"),
-                policy=indep.model_policy.Policy(),
-                actor="test",
-            )
-
-    asyncio.run(replay())
-    assert len(_events(api_client, parent_id, indep.FIX_PUSHED_EVENT)) == 1
-    assert _children(api_client, parent_id) == children
 
 
 def test_no_finding_approve_and_cannot_fix_request_changes_are_unchanged(

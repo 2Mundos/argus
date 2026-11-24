@@ -244,44 +244,32 @@ approval, newer than the approval for the same PR and head). A repair that moves
 head is reviewed again from the start and is not a review round; one that does not
 move it settles from the forge or opens the decision.
 
-## 3.7 Reviewer fixes its findings
+## 3.7 Reviewers are verdict-only
 
-An independent reviewer that finds actionable problems may fix them itself instead of
-sending the parent back for a full attempt.
+An independent reviewer judges the PR head it was given and never changes the PR.
 
-- The `code_review` child is created with `repository:write` and input
-  `fix: {pr, base_head_sha, force_push: false}`. Its deliverable is a response with no
-  merge grant, so it can push to the PR's own branch and nothing else: one normal
-  fast-forward commit with tests, never a force-push, history rewrite, other branch or
-  merge (the kind schema rejects `force_push: true`; `force_push` stays `no`). The
-  instructions tell it to push with `argus-task deliver --undo-note "<reason>"`, so the
-  PR records the old and new head and how to undo the push
-  ([PR steward](pr-steward.spec.md) 3.4).
-- Verdicts: `approve` (no findings, nothing changed), `request_changes` (cannot fix
-  safely, nothing changed; the existing handoff to the implementer), `fixed` with
-  `head_sha` (reviewed), `fixed_head_sha` (full 40-character new head), `findings` and
-  `tests`.
-- On `fixed`, in one write transaction and after the usual model-proof check of the
-  reviewer: the live forge read (always taken for a fixing child) must show the same PR
-  at exactly `fixed_head_sha`, which differs from the reviewed head, and the reviewer's
-  recorded executions must name exactly one model. Otherwise the verdict is void
-  (`fix_head_invalid`, `fix_unverified`, `fix_pr_mismatch`, `fix_head_mismatch`,
-  `fix_provenance_unclear`) and a manual review decides; nothing is approved and no
-  reviewer is respawned automatically.
-- A verified fix records `review.independent_fix_pushed {child_id, pr, old_head_sha,
-  new_head_sha, fix_models, fix_providers, findings, tests}`. As the newest lifecycle
-  event it invalidates every older approval.
-- The fix author is an author of the code: `fixers()` adds its models to the exclusion
-  set of the next review (in every mode, by model name), and `child_models_clean`
-  rejects any approval by the fixing child or by a child running a fix author's model.
-  Chain precedence (3.4) is unchanged, so the fresh review runs on a different model in a
-  separate session on the exact new head; with no eligible model the parent stays blocked
-  (`no_independent_reviewer`, one actionable decision) and no merge is allowed.
-- A fix spends one review round like `request_changes`; at `max_rounds` the parent opens
-  one escalation decision and starts no reviewer. Replays of the same child are ignored
+- The `code_review` child has no `repository:write` capability and no `fix` input: it
+  cannot push to the PR branch and cannot create or close a PR, and its deliverable is a
+  response with no merge grant. The instructions say so ("verdict-only: no commit, no
+  push, no PR create or close") and tell it to hand fixes to the implementer through a
+  `request_changes` verdict with findings.
+- Verdicts: `approve` (no findings) and `request_changes` (the existing handoff to the
+  implementer). A `fixed` verdict is not accepted: it is void (`fix_not_permitted`), a
+  manual review decides, nothing is approved and no reviewer is respawned automatically.
+- If the PR head differs from the reviewed head when the verdict arrives (anything moved
+  the branch during the review), the verdict is void (`head_mismatch`) and a fresh review
+  of the new head is spawned, as in 3.2. The merge fence (3.3) refuses any other head.
+- Output and tests are bounded. The reviewer reads the forge with the compact default of
+  `argus-github-api` (never `--raw`, [GitHub repositories](github-repositories.spec.md)
+  3.4) and runs only the tests that cover the diff, each under `timeout 300`; it never
+  runs a whole test suite. A reviewer that cannot finish within its context reports what
+  it checked instead of exhausting it.
+- A reviewer whose login is rejected before any model ran does not count a failure: the
+  claim is voided and requeued, leaves no unsaved-work block, and the next eligible
+  chain serves the review ([failure classes](failure-classes.spec.md) 3.2).
+- A review spends one round like `request_changes`; at `max_rounds` the parent opens one
+  escalation decision and starts no reviewer. Replays of the same child are ignored
   (`_child_already_processed`) and the spawn is idempotent per `(pr, head)`.
-- A head change during review or merge is handled as before: the approval is void
-  (`head_mismatch`) and the merge fence (3.3) refuses any other head.
 
 A reviewer's reply whose `result.data` fails the kind's schema (a finding without
 `description`, say) is never lost: the API's 422 `validation_failed` carries a bounded
@@ -330,7 +318,6 @@ None.
 
 # 6. Implementation Consequences
 
-- `apps/api/src/argus_api/db/migrations/0088_code_review_fix.sql`: `code_review` schemas.
 - `packages/core/src/argus_core/tasks.py`, `delivery.py`: additive fields on
   `ClaimedTask` and `IndependentReviewSummary`.
 - `apps/api/src/argus_api/tasks/merge_resume.py`, `independent_review.py`, `deliverable.py`,
@@ -346,8 +333,8 @@ None.
 ## Verification boundary
 
 - Commands:
-  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_review_fix.py apps/api/tests/test_pre_merge_independent_review.py apps/api/tests/test_review_settle.py apps/api/tests/test_execution_routes.py apps/api/tests/test_settings.py apps/api/tests/test_task_deliverable.py apps/api/tests/test_task_readiness.py`
-  - `node --test integrations/nanoclaw/argus-task-merge.test.mjs integrations/nanoclaw/argus-merge-auth-env.test.mjs`
+  - `uv run pytest -q -p no:cacheprovider apps/api/tests/test_review_fix.py apps/api/tests/test_codex_failover.py apps/api/tests/test_pre_merge_independent_review.py apps/api/tests/test_review_settle.py apps/api/tests/test_execution_routes.py apps/api/tests/test_settings.py apps/api/tests/test_task_deliverable.py apps/api/tests/test_task_readiness.py`
+  - `node --test integrations/nanoclaw/github-api.test.mjs integrations/nanoclaw/argus-task-merge.test.mjs integrations/nanoclaw/argus-merge-auth-env.test.mjs`
   - `uv run ruff check` / `ruff format --check` / `uv run ty check`
   - `python3 scripts/check_specs.py && python3 scripts/validate_docs.py && python3 scripts/validate_language.py && python3 scripts/check_paths.py`
 - Verified: deterministic end-to-end pre-merge workflow against in-memory SQLite

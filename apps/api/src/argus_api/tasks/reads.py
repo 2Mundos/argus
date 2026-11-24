@@ -162,8 +162,6 @@ async def _last_failover(
     """The last switch of the serving account, derived from events: the failover
     itself plus what the channel reported after it (applied, or failed to stop the
     old runtime). Never a credential or a prompt."""
-    if row["attempt"] == 0:
-        return None
     async with conn.execute(
         "SELECT id, at, data FROM events WHERE subject_type = 'task'"
         " AND subject_id = ? AND kind = 'account.failover' ORDER BY id DESC LIMIT 1",

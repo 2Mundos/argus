@@ -436,8 +436,8 @@ def test_pre_merge_e2e_open_ci_review_changes_re_review_authorized_merge_settle(
     assert rev_1["parent_id"] == parent_id
     assert rev_1["id"] != parent_id
     assert rev_1["assignee_agent_id"] == worker_id
-    assert rev_1["required_capabilities"] == ["repository:write"]
-    assert rev_1["input"]["fix"]["force_push"] is False
+    assert rev_1["required_capabilities"] == []
+    assert "fix" not in rev_1["input"]
     rev_detail = api_client.get(f"/api/tasks/{rev_1['id']}").json()
     assert rev_detail["merge"]["may_merge"] is False
     assert rev_1["input"]["pr"] == PR_450_URL

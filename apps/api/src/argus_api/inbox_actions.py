@@ -225,6 +225,18 @@ async def _account_names(snap: Snapshot, tasks: dict[str, Task]) -> dict[str, st
             row = await cur.fetchone()
         if row is not None:
             names[task.id] = row["name"]
+            continue
+        # A login rejected before any model ran voids the claim, so no attempt row
+        # remains: the failover event still names the account.
+        async with snap.conn.execute(
+            "SELECT json_extract(data, '$.from') AS name FROM events"
+            " WHERE subject_type = 'task' AND subject_id = ?"
+            " AND kind = 'account.failover' ORDER BY id DESC LIMIT 1",
+            (task.id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is not None and row["name"]:
+            names[task.id] = row["name"]
     return names
 
 

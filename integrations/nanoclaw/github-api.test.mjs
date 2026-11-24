@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
-import { GiteaApi, preflightEvidence } from "./gitea-api.mjs";
+import {
+  COMPACT_OUTPUT_MAX_BYTES,
+  GiteaApi,
+  RAW_OUTPUT_MAX_BYTES,
+  preflightEvidence,
+} from "./gitea-api.mjs";
 import { GitHubApi, main, repositoryClient, repositoryProvider } from "./github-api.mjs";
 
 const REPO = "https://github.com/acme/widget";
@@ -792,5 +797,84 @@ describe("deadline across paginated CI reads", () => {
     api.deadline = { at: 25, now: () => now };
     await assert.rejects(api.checkRuns("abc"), { code: "deadline_exceeded" });
     assert.equal(calls.length, 3); // starts at 0, 10, 20; the one at 30 is refused
+  });
+});
+
+describe("compact output", () => {
+  const sha = "a".repeat(40);
+  const pr = {
+    number: 7,
+    state: "open",
+    title: "T",
+    html_url: "https://github.com/acme/widget/pull/7",
+    url: "https://api.github.com/repos/acme/widget/pulls/7",
+    mergeable: true,
+    mergeable_state: "clean",
+    body: "b".repeat(5000),
+    user: { login: "alice", id: 1, avatar_url: "https://x/y" },
+    head: { sha, ref: "feat", repo: { big: "payload" } },
+    base: { sha: "b".repeat(40), ref: "main" },
+    labels: [{ name: "bug", id: 3 }],
+    requested_reviewers: [{ login: "bob" }],
+    reactions: { "+1": 3 },
+    _links: { self: { href: "x" } },
+  };
+
+  it("prints a compact PR projection by default", async () => {
+    const r = await run(["get", "--number", "7"], { "GET /pulls/7": pr });
+    assert.equal(r.code, 0);
+    const out = r.json();
+    assert.equal(out.number, 7);
+    assert.equal(out.head.sha, sha);
+    assert.equal(out.mergeable, true);
+    assert.equal(out.user, "alice");
+    assert.deepEqual(out.requested_reviewers, ["bob"]);
+    assert.match(out.body, /truncated 4000 chars/);
+    assert.equal(out._links, undefined);
+    assert.equal(out.reactions, undefined);
+    assert.equal(out.head.repo, undefined);
+    assert.ok(r.out.length < 2000);
+  });
+
+  it("keeps the forge payload with --raw", async () => {
+    const r = await run(["get", "--number", "7", "--raw"], { "GET /pulls/7": pr });
+    assert.deepEqual(r.json(), pr);
+  });
+
+  it("projects comments to id, author and a truncated body", async () => {
+    const c = {
+      id: 9,
+      html_url: "h",
+      user: { login: "carol", id: 2 },
+      body: "x".repeat(3000),
+      reactions: { total_count: 1 },
+      url: "u",
+    };
+    const r = await run(["comment-get", "--comment-id", "9"], { "GET /issues/comments/9": c });
+    assert.equal(r.code, 0);
+    const out = r.json();
+    assert.equal(JSON.stringify(out).includes("reactions"), false);
+    assert.equal(JSON.stringify(out).includes("carol"), true);
+    assert.ok(r.out.length < 1500);
+  });
+
+  it("caps output with a valid-JSON truncation marker", async () => {
+    const items = Array.from({ length: 200 }, (_, i) => ({
+      id: i + 1,
+      user: { login: "u" },
+      body: "z".repeat(900),
+    }));
+    const r = await run(["comment-list", "--number", "1"], { "GET /issues/1/comments": items });
+    assert.equal(r.code, 0);
+    const out = r.json();
+    assert.equal(out.truncated, true);
+    assert.ok(Buffer.byteLength(r.out) <= COMPACT_OUTPUT_MAX_BYTES + 1);
+  });
+
+  it("caps --raw output too", async () => {
+    const big = { number: 1, head: {}, base: {}, body: "q".repeat(RAW_OUTPUT_MAX_BYTES * 2) };
+    const r = await run(["get", "--number", "1", "--raw"], { "GET /pulls/1": big });
+    assert.equal(r.json().truncated, true);
+    assert.ok(Buffer.byteLength(r.out) <= RAW_OUTPUT_MAX_BYTES + 1);
   });
 });

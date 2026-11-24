@@ -104,7 +104,8 @@ reasons and adds `failure_class` to each failure row and a count per class.
   token), opens one notice per account ([account
   selection](account-selection.spec.md) 3.14), releases the lease and requeues the task
   (`awaiting_quota` when no other account of its providers is left) with `failures`
-  and `attempt` unchanged. The blocked account is no candidate at the next claim,
+  and `attempt` unchanged; when no model ran in the attempt the claim is voided, so
+  the attempt number is handed back and no unsaved-work checkpoint block is left. The blocked account is no candidate at the next claim,
   so another account of the same provider, or the next chain alternative, serves
   it. A task on an explicit execution route reaches the same result through
   `POST /tasks/{id}/execution` with `action` `advance` and reason `auth_expired`
