@@ -202,7 +202,8 @@ None.
 - Commands: `pytest integrations/nanoclaw/tests/test_command_guard.py`,
   `pytest integrations/nanoclaw/tests/test_commit_attribution.py`,
   `pytest integrations/nanoclaw/tests/test_tools_layer_permissions.py` (Docker
-  probe when available).
+  probe when available), `pytest integrations/nanoclaw/tests/test_claude_guard_live_probe.py`
+  (the probe's marker quoting and hook-error wrapper check, with stub `node` and `claude`).
 - Verified: rule tables (block and allow, shell forms), the hook's stdin/stdout
   contract, fail-open and the env opt-out, at unit level; the event route and
   service (`apps/api/tests/test_task_command_blocked.py`: one event, dedupe, the

@@ -5012,6 +5012,19 @@ export interface components {
             /** Dry Run */
             dry_run: boolean;
         };
+        /**
+         * CapabilityDrift
+         * @description An available account whose provider no live pool can serve: every execution
+         *     capability of that provider is on no pool that is wanted or running.
+         */
+        CapabilityDrift: {
+            /** Accounts */
+            accounts: string[];
+            /** Missing */
+            missing: string[];
+            /** Provider */
+            provider: string;
+        };
         /** ChangedFile */
         ChangedFile: {
             /** Added */
@@ -9629,7 +9642,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "answer_decision" | "escalate_to_human" | "unblock_task" | "set_project_repository" | "raise_task_budget" | "retry_dependency" | "inspect_stall" | "reread" | "none";
+            action: "answer_decision" | "escalate_to_human" | "unblock_task" | "set_project_repository" | "raise_task_budget" | "fix_account" | "retry_dependency" | "inspect_stall" | "reread" | "none";
             /** Args */
             args: {
                 [key: string]: string;
@@ -10058,6 +10071,11 @@ export interface components {
         };
         /** PoolInspection */
         PoolInspection: {
+            /**
+             * Capability Drift
+             * @default []
+             */
+            capability_drift?: components["schemas"]["CapabilityDrift"][];
             /** Instances */
             instances: components["schemas"]["InspectedInstance"][];
             pool: components["schemas"]["Pool"];

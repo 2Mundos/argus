@@ -1,5 +1,5 @@
 #!/bin/sh
-# Live command guard probe (docs/specs/command-guard.spec.md 4): Claude Code, as
+# Live command guard probe (docs/specs/command-guard.spec.md 6): Claude Code, as
 # installed in an agent image, runs one model turn against fake-anthropic.mjs (a local
 # Messages API, dummy key, no credentials) in a fresh HOME, with the CLI's default
 # permission mode and no --bare, guard-off or permission bypass. The fake API asks for a
@@ -53,9 +53,9 @@ for f in "$work/home/.claude/settings.json" "$work/ws/.claude/settings.json" \
 done
 
 FAKE_ANTHROPIC_LOG="$work/api.log" FAKE_ANTHROPIC_BASH="$(python3 -I -c '
-import json, sys
-print(json.dumps([f"printf %s\\\\n argus-guard-benign > {sys.argv[1]}",
-                  f"rm --no-preserve-root --version > {sys.argv[2]}"]))
+import json, shlex, sys
+print(json.dumps([f"printf %s\\\\n argus-guard-benign > {shlex.quote(sys.argv[1])}",
+                  f"rm --no-preserve-root --version > {shlex.quote(sys.argv[2])}"]))
 ' "$benign" "$denied")" node "$here/fake-anthropic.mjs" >"$work/port" &
 api_pid=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -88,6 +88,8 @@ set +e
   # One argument per line in $work/argv (no argument holds a newline).
   IFS='
 '
+  # Argv words are split on newlines only; no glob expansion of the paths in them.
+  set -f
   # shellcheck disable=SC2046
   printf '%s' "$prompt" | env -i PATH="$PATH" HOME="$work/home" \
     ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_API_KEY=sk-ant-local-dummy \
@@ -137,7 +139,18 @@ results = [
     for b in (e.get("message") or {}).get("content") or []
     if isinstance(b, dict) and b.get("type") == "tool_result"
 ]
-blocked = [b for b in results if b.get("is_error") and BLOCK in json.dumps(b.get("content"))]
+# Claude Code writes the denial as an is_error tool_result: the hook-error wrapper around
+# the guard's message, nothing else (same shape as argus-command-blocked.ts).
+HOOK_ERROR = ("<tool_use_error>PreToolUse:Bash hook error: " + BLOCK, "</tool_use_error>")
+
+
+def wrapped_denial(content):
+    if isinstance(content, list):
+        content = "".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
+    return isinstance(content, str) and content.startswith(HOOK_ERROR[0]) and content.endswith(HOOK_ERROR[1])
+
+
+blocked = [b for b in results if b.get("is_error") and wrapped_denial(b.get("content"))]
 for b in blocked:
     print("tool_result:", json.dumps({k: b.get(k) for k in ("tool_use_id", "is_error", "content")}))
 benign_path = os.path.join(work, "ws", "benign.marker")

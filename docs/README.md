@@ -113,6 +113,7 @@ why you are here.
   complete totals for every core state, recent activity, and health
 - [Dashboard action feedback](specs/dashboard-actions.spec.md) — every control
   that awaits a server mutation disables and shows an in-button spinner
+- [Dashboard PWA](specs/dashboard-pwa.spec.md) — installable dashboard: manifest, shell-only service worker, mobile install banner
 - [Dashboard working indicator](specs/dashboard-working.spec.md) — the ARGUS wordmark
   gradient rolls while a mutation runs or the orchestrator is answering
 - [Dashboard navigation](specs/dashboard-navigation.spec.md) — a nine-entry menu, Workers

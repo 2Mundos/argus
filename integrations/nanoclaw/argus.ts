@@ -219,6 +219,7 @@ import {
   type PriorWorkspace,
   prepareTaskWorkspace,
   probeTaskBranch,
+  reviewHeadPublished,
   taskBranch,
   taskWorkspacePath,
   type WorkspaceResult,
@@ -4014,12 +4015,22 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     if (needsWrite) {
       // Whether the workspace exists, was restored or starts empty, work from a later attempt
       // on another instance must be proven absent (an older local state is stale, not safe).
+      // A review whose branch and PR head the forge shows at the reviewed head holds nothing.
+      const publishedHead =
+        task.attempt > 1 &&
+        (await reviewHeadPublished({
+          groupDir,
+          taskId: task.id,
+          repositoryUrl: task.repository_url,
+          reviewed: { pr: task.input?.pr, headSha: task.input?.head_sha },
+        }));
       const fence = (prior: ArgusTask["prior_workspaces"]) =>
         fencePriorWorkspaces({
           attempt: task.attempt,
           selfAgentId: agentId,
           prior,
           hasLocalWork: existed || restoredWork,
+          publishedHead,
         });
       let fenced = fence(task.prior_workspaces);
       // An attempt that ended a moment ago (a quota requeue) may not have reported its

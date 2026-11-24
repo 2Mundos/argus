@@ -2592,6 +2592,30 @@ async def _escalate(
     )
 
 
+async def _current_target(
+    conn: aiosqlite.Connection,
+    parent: aiosqlite.Row,
+    child_input: dict[str, Any],
+    forge: deliverable.ForgeRead | None = None,
+) -> tuple[str | None, str | None]:
+    """(pr, head_sha) a respawned reviewer targets: the parent's current delivery
+    when it names a different PR with a head (a follow-up PR bound after the ended
+    reviewer was spawned), else what the ended reviewer was assigned."""
+    old_pr, old_sha = child_input.get("pr"), child_input.get("head_sha")
+    result = (
+        TaskResult.model_validate_json(parent["result"])
+        if parent["result"]
+        else TaskResult(summary=".")
+    )
+    refs = await has_code_delivery(conn, parent, result, forge)
+    if refs is None:
+        return old_pr, old_sha
+    pr, sha = refs
+    if pr and sha and (not old_pr or not _same_pr(old_pr, pr)):
+        return pr, sha
+    return old_pr, old_sha
+
+
 async def on_review_child_ended(
     tx: Tx, child: aiosqlite.Row, state: TaskState, actor: str
 ) -> None:
@@ -2643,11 +2667,12 @@ async def on_review_child_ended(
         await _escalate(tx, parent, attempts, actor, blocked=False)
         return
     child_input = json.loads(child["input"] or "{}")
+    target_pr, target_sha = await _current_target(tx.conn, parent, child_input)
     spawned = await spawn_reviewer(
         tx,
         parent,
-        pr=child_input.get("pr"),
-        head_sha=child_input.get("head_sha"),
+        pr=target_pr,
+        head_sha=target_sha,
         setting=setting,
         policy=policy,
         actor=actor,
@@ -2705,7 +2730,7 @@ async def retry_reviewer(
     ) as cur:
         last = await cur.fetchone()
     child_input = json.loads(last["input"] or "{}") if last else {}
-    pr, head_sha = child_input.get("pr"), child_input.get("head_sha")
+    pr, head_sha = await _current_target(tx.conn, parent, child_input)
     if head_sha is None and forge is not None and forge.delivery is not None:
         pr = forge.delivery.pr
         head_sha = _forge_head(pr, forge)

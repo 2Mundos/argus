@@ -213,6 +213,45 @@ async function verifiedForgeHead(
   }
 }
 
+/**
+ * Whether a review's earlier attempts can have left nothing behind: the forge shows the
+ * task branch and `refs/pull/<n>/head` both at the reviewed head, so a review that ran
+ * elsewhere published everything it could hold. Read-only, runs before any workspace
+ * exists, and fails closed: a missing branch, a different head, a credentialed URL or an
+ * unreachable forge is no proof.
+ */
+export async function reviewHeadPublished(opts: {
+  groupDir: string | null;
+  taskId: string;
+  repositoryUrl: string | null | undefined;
+  reviewed: ReviewedHead | undefined;
+  git?: GitRunner;
+}): Promise<boolean> {
+  const { groupDir, repositoryUrl, reviewed } = opts;
+  if (!groupDir || !repositoryUrl || hasCredentials(repositoryUrl) || !reviewed) return false;
+  if (typeof reviewed.headSha !== "string") return false;
+  const sha = reviewed.headSha.trim().toLowerCase();
+  const num = /^(?:#|.*\/pull\/)?(\d+)\/?$/.exec(String(reviewed.pr ?? "").trim())?.[1];
+  if (!/^[0-9a-f]{40}$/.test(sha) || !num) return false;
+  try {
+    const branch = taskBranch(opts.taskId);
+    const pull = `refs/pull/${num}/head`;
+    const out = await (opts.git ?? defaultGit)(
+      ["ls-remote", repositoryUrl, `refs/heads/${branch}`, pull],
+      groupDir,
+      groupDir,
+    );
+    const heads = new Map<string, string>();
+    for (const line of out.split("\n")) {
+      const [id, name] = line.split(/\s+/);
+      if (id && name) heads.set(name, id.toLowerCase());
+    }
+    return heads.get(`refs/heads/${branch}`) === sha && heads.get(pull) === sha;
+  } catch {
+    return false;
+  }
+}
+
 const z = (s: string) => s.split("\0").filter(Boolean);
 
 // The workspace's own git config is written by the worker, yet git runs on the host here:
@@ -384,6 +423,12 @@ export function fencePriorWorkspaces(opts: {
   prior: PriorWorkspace[] | null | undefined;
   /** A workspace already exists or was restored: an older server's silence then keeps the legacy reuse. */
   hasLocalWork?: boolean;
+  /**
+   * A review's branch and PR head are both published at the reviewed head
+   * (`reviewHeadPublished`): earlier attempts without a checkpoint report hold nothing.
+   * A saved checkpoint still blocks.
+   */
+  publishedHead?: boolean;
 }): { reason: WorkspaceFailureReason; error: string; pending?: true } | null {
   const refuse = (reason: WorkspaceFailureReason, error: string, pending?: true) => ({
     reason,
@@ -422,7 +467,9 @@ export function fencePriorWorkspaces(opts: {
         "must be reachable (ARGUS_CHECKPOINT_DIR) or the work published from there; " +
         "no empty workspace was created",
     );
-  const unproven = elsewhere.filter((p) => p.checkpoint_state !== "nothing_to_save");
+  const unproven = elsewhere.filter(
+    (p) => p.checkpoint_state !== "nothing_to_save" && !opts.publishedHead,
+  );
   if (unproven.length)
     return refuse(
       "env_workspace_prior_unverified",

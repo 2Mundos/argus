@@ -26,6 +26,7 @@ import {
   type PriorWorkspace,
   prepareTaskWorkspace,
   probeTaskBranch,
+  reviewHeadPublished,
   TASK_WORKSPACES_DIR,
   taskBranch,
   taskWorkspaceContainerPath,
@@ -615,6 +616,56 @@ describe("task branch probe and the WIP claim derived from it", () => {
     const none = await probeTaskBranch({ path: r.path, branch: r.branch });
     expect(none).toEqual({ exists: true, unpublished: [] });
     expect(branchWipClaim(r.branch, none).summary).toContain("no unpublished commits");
+  });
+});
+
+describe("a review's earlier attempt on another instance (published head)", () => {
+  const TASK = "3878b95f-7b15-4d4a-b95e-fdd8accd26dd";
+  const SHA = "a".repeat(40);
+  const ended: PriorWorkspace = {
+    attempt: 1,
+    owner_agent_id: "agent-a",
+    owner_node_id: "node-a",
+    owner_status: "ended",
+    checkpoint_state: null,
+  };
+  const remote = (branch: string, pull: string) =>
+    (async () => `${branch}\trefs/heads/${taskBranch(TASK)}\n${pull}\trefs/pull/492/head`) as never;
+  const proof = (git: never) =>
+    reviewHeadPublished({
+      groupDir: os.tmpdir(),
+      taskId: TASK,
+      repositoryUrl: REPO,
+      reviewed: { pr: 492, headSha: SHA },
+      git,
+    });
+  const fence = (publishedHead: boolean) =>
+    fencePriorWorkspaces({ attempt: 2, selfAgentId: "agent-b", prior: [ended], publishedHead });
+
+  it("no longer blocks when the branch and the PR head are both at the reviewed head", async () => {
+    expect(await proof(remote(SHA, SHA))).toBe(true);
+    expect(fence(true)).toBeNull();
+  });
+
+  it("still blocks when that is unproven", async () => {
+    expect(fence(false)?.reason).toBe("env_workspace_prior_unverified");
+    expect(await proof(remote("b".repeat(40), SHA))).toBe(false);
+    expect(await proof((async () => `${SHA}\trefs/pull/492/head`) as never)).toBe(false);
+    expect(
+      await proof((async () => {
+        throw new Error("unreachable");
+      }) as never),
+    ).toBe(false);
+  });
+
+  it("never excuses a saved checkpoint", () => {
+    const r = fencePriorWorkspaces({
+      attempt: 2,
+      selfAgentId: "agent-b",
+      prior: [{ ...ended, checkpoint_state: "saved" }],
+      publishedHead: true,
+    });
+    expect(r?.reason).toBe("env_workspace_prior_unavailable");
   });
 });
 

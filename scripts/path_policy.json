@@ -54,7 +54,7 @@
     ".github/": [".md", ".png", ".yaml", ".yml"],
     "apps/api/": [".bin", ".json", ".py", ".toml"],
     "apps/api/src/": [".json", ".md", ".py", ".sql"],
-    "apps/dashboard/": [".html", ".ico", ".json", ".png", ".ts", ".webmanifest"],
+    "apps/dashboard/": [".html", ".ico", ".js", ".json", ".png", ".ts", ".webmanifest"],
     "apps/dashboard/src/": [".css", ".ts", ".tsx"],
     "assets/": [".ico", ".png", ".svg", ".webmanifest"],
     "deploy/": [
