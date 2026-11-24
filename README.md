@@ -120,7 +120,9 @@ Qt downloads once into uv's cache. On GNOME, enable the AppIndicator extension
 if the desktop has no tray. Stats use the generated token automatically;
 Sign in for stats accepts an existing token for the current tray session.
 Quit Tray leaves Argus running; Down keeps the tray available to start it again.
-`argus tray` can also start it manually. Startup errors are recorded in
+`argus tray` can also start it manually. `argus tray --url https://host`
+monitors a remote Argus instead (`ARGUS_ADMIN_TOKEN` seeds stats for the
+session, else Sign in for stats). Startup errors are recorded in
 `~/.config/argus/tray.log` ([desktop tray](docs/specs/tray.spec.md)).
 
 On Windows, run the install line and `argus up` inside WSL 2 with Docker

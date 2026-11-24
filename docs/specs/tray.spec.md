@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-03
-updated: 2026-11-03
+updated: 2026-11-24
 ---
 
 # Desktop Tray
@@ -102,6 +102,35 @@ token lookups, including timeouts, preserve the service health and dashboard URL
 Failed refreshes clear old counts. Tokens never enter browser URLs, subprocess arguments,
 dialogs, logs or persistent tray files.
 
+## 3.4 Remote monitoring without a local install
+
+`argus tray --url https://host[:port]` (and the tray script's `--url`) monitors
+a remote Argus from the local desktop, for example a laptop watching
+`https://argus.ibotirama.dev.br`. The base URL is `scheme://host[:port]` with no
+path; anything else is refused with an actionable error. The token travels in
+an `Authorization` header only: it is seeded from `ARGUS_ADMIN_TOKEN` when set
+and can otherwise be entered with Sign in for stats, staying in memory for the
+tray session. It never enters command lines, URLs, dialogs, logs or persistent
+tray files.
+
+Health is anonymous (`GET /readyz`): 200 is Ready, any other status is
+Unhealthy, a failed request is Unreachable. Statistics come from
+`GET /api/system` with the token and render the same rows as the local tray
+(version when the token allows it, task and agent counts, open decisions,
+uptime); missing or rejected credentials leave statistics explicitly
+unavailable while health and Open Argus keep working. The version is unknown
+until the first authenticated refresh, so remote window and menu titles carry
+the remote host (`Argus host — Ready`) with the version added once known.
+
+Connections are direct with verified TLS for `https`: no proxies, no
+redirects. Remote trays run no launcher commands, so the Up, Down, Restart,
+Backup and Recent logs controls are absent and every other control works as in
+3.2 and 3.3. Each remote target keeps its own singleton lock, stop address and
+background log under `$ARGUS_HOME` (`tray-remote-<id>`), so one local and any
+number of remote trays can run side by side; `argus tray --url <same URL>
+--stop` stops exactly that target. Local behavior without `--url` is
+unchanged, including the lock, address and log names.
+
 # 4. Open Questions
 
 - Desktop login integration and packaged applications may be added separately
@@ -110,7 +139,10 @@ dialogs, logs or persistent tray files.
 # 5. Constraints
 
 - No API, MCP, schema, engine or database changes: this is a host launcher surface
-  using existing commands and the existing system-summary API model.
+  using existing commands and the existing system-summary API model. Remote
+  monitoring only reads the existing anonymous `/readyz` and the existing
+  token-authenticated `GET /api/system`; the token never enters a command
+  line, URL, dialog, log or persistent tray file.
 - Status reads have bounded network and subprocess timeouts. Only one refresh and
   one launcher command may be in flight; the GUI event loop remains responsive.
 - The tray uses the existing Argus brand geometry and a service-status badge.
@@ -119,9 +151,12 @@ dialogs, logs or persistent tray files.
 # 6. Implementation Consequences
 
 - `deploy/argus-tray.py` is an optional Python script with inline dependency metadata.
+  It accepts `--url` for remote monitoring (no `--launcher` needed) with
+  per-target locks, stop addresses and background logs.
 - `deploy/argus` starts the tray from `up`, with a `--no-tray` opt-out, and provides
-  `tray` (including its Windows/WSL bridge) and the private
-  `__tray-config` command;
+  `tray [--background|--stop] [--url BASE_URL]` (including its Windows/WSL
+  bridge) and the private `__tray-config` command; the remote form reuses the
+  newest cached tray companion and needs no local install.
   `deploy/Dockerfile.api` packages the companion beside the launcher.
 - The README documents invocation, prerequisites and menu behavior; the launcher
   spec describes this optional exception to its host dependency requirements.
@@ -135,6 +170,9 @@ dialogs, logs or persistent tray files.
   syntax, formatting and headless smoke checks with disposable launcher/API data,
   including automatic startup, headless/opt-out paths, background detachment,
   optional token lookup failures, stopped-container logs, and uninstall shutdown.
+  Remote URL parsing and the anonymous `/readyz` plus authenticated
+  `/api/system` reads were checked against a live remote host; remote trays
+  hide the launcher-backed controls and keep per-target locks and logs.
 - Not verified: real menu placement, browser launching and notifications in a
   Linux, macOS or Windows desktop session; the WSL-to-Windows process bridge and
   localhost forwarding on a real Windows machine; extraction from a published

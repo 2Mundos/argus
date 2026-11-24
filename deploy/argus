@@ -117,7 +117,9 @@ Usage: argus <command>
   backup             online backup of the database into the volume
   restore <name>     restore a backup and run the version it was taken under
   status             version, container state, readiness, backups
-  tray [--stop]      start or gracefully stop the desktop tray (needs uv)
+  tray [--background|--stop] [--url BASE_URL]
+                     start or gracefully stop the desktop tray (needs uv);
+                     with --url, monitor a remote Argus instead of the local install
   token              print the generated admin token, if there is one
   logs [-f]          container logs
   down               stop and remove the container (never the volume)
@@ -1051,17 +1053,33 @@ auto_start_tray() {
 }
 
 cmd_tray() {
-	if [ $# -gt 0 ]; then
-		[ $# -eq 1 ] || die "usage: argus tray [--background|--stop]"
-		case $1 in --background | --stop) ;; *) die "usage: argus tray [--background|--stop]" ;; esac
-	fi
+	mode=
+	url=
+	url_given=0
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--background | --stop)
+			[ -z "$mode" ] || die "usage: argus tray [--background|--stop] [--url BASE_URL]"
+			mode=$1
+			shift
+			;;
+		--url)
+			[ $# -ge 2 ] || die "usage: argus tray [--background|--stop] [--url BASE_URL]"
+			url=$2
+			url_given=1
+			shift 2
+			;;
+		--url=*) url=${1#--url=} && url_given=1 && shift ;;
+		*) die "usage: argus tray [--background|--stop] [--url BASE_URL]" ;;
+		esac
+	done
 	if [ -n "${WSL_DISTRO_NAME:-}" ]; then
 		command -v uv.exe >/dev/null || die "tray: install uv on Windows, then reopen the WSL terminal (https://docs.astral.sh/uv/getting-started/installation/)"
 		command -v wslpath >/dev/null || die "tray: wslpath is required for the native Windows tray"
 	else
 		case $(uname -s) in
 		Linux)
-			if [ "${1:-}" != --stop ]; then
+			if [ "$mode" != --stop ]; then
 				[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || die "tray: no desktop display; run this in your desktop session"
 			fi
 			;;
@@ -1069,6 +1087,37 @@ cmd_tray() {
 		*) die "tray: supported on Linux, macOS and Windows through WSL 2" ;;
 		esac
 		command -v uv >/dev/null || die "tray: install uv first (https://docs.astral.sh/uv/getting-started/installation/); terminal commands do not need it"
+	fi
+	if [ "$url_given" = 1 ]; then
+		# Remote monitoring needs no local install: health and stats come
+		# from the remote API, and the service controls stay hidden.
+		ensure_home
+		mkdir -p "$ARGUS_HOME/tray"
+		tray=
+		for f in "$ARGUS_HOME"/tray/v*.py; do
+			[ -s "$f" ] || continue
+			[ -n "$tray" ] && [ "$tray" -nt "$f" ] || tray=$f
+		done
+		if [ -z "$tray" ]; then
+			load_config
+			if [ "$HAVE_CONFIG" = 1 ] && valid_version "$ARGUS_VERSION"; then
+				tray=$ARGUS_HOME/tray/$ARGUS_VERSION.py
+				ensure_image "$(image)"
+				part=$tray.$$.tmp
+				if ! docker run --rm --entrypoint cat "$(image)" /app/bin/argus-tray.py >"$part"; then
+					rm -f "$part"
+					die "tray: this image has no desktop companion; run \`argus update\` first"
+				fi
+				mv "$part" "$tray"
+			else
+				die "tray: no cached desktop companion; run \`argus up\` once on this machine to cache it"
+			fi
+		fi
+		if [ -n "${WSL_DISTRO_NAME:-}" ]; then
+			exec uv.exe run --script "$(wslpath -a -w "$tray")" \
+				--home "$(wslpath -a -w "$ARGUS_HOME")" --url "$url" ${mode:+"$mode"}
+		fi
+		ARGUS_HOME=$ARGUS_HOME exec uv run --script "$tray" --home "$ARGUS_HOME" --url "$url" ${mode:+"$mode"}
 	fi
 	load_config
 	[ "$HAVE_CONFIG" = 1 ] || die "tray: run \`argus up\` in a terminal first"
@@ -1091,9 +1140,9 @@ cmd_tray() {
 		wsl_home=$(cd "$ARGUS_HOME" && pwd -P)
 		exec uv.exe run --script "$(wslpath -a -w "$tray")" \
 			--launcher "$launcher" --home "$(wslpath -a -w "$ARGUS_HOME")" \
-			--wsl-distro "$WSL_DISTRO_NAME" --wsl-user "$(id -un)" --wsl-home "$wsl_home" "$@"
+			--wsl-distro "$WSL_DISTRO_NAME" --wsl-user "$(id -un)" --wsl-home "$wsl_home" ${mode:+"$mode"}
 	fi
-	ARGUS_HOME=$ARGUS_HOME exec uv run --script "$tray" --launcher "$launcher" --home "$ARGUS_HOME" "$@"
+	ARGUS_HOME=$ARGUS_HOME exec uv run --script "$tray" --launcher "$launcher" --home "$ARGUS_HOME" ${mode:+"$mode"}
 }
 
 cmd_tray_config() {
