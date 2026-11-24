@@ -20,6 +20,7 @@ from contextvars import ContextVar
 from typing import Any
 
 import httpx2 as httpx
+from argus_core.accounts import GITHUB_HOST
 
 REQUEST_TIMEOUT_S = 10.0
 DEADLINE_S = 30.0
@@ -222,8 +223,16 @@ async def check(
     token: str,
     transport: httpx.AsyncBaseTransport | None = None,
     resolve: Resolver | None = None,
+    repository: tuple[str, str, str] | None = None,
 ) -> Result:
-    url = config["url"] if kind == "mcp" else config["server"].rstrip("/") + REVIEWS
+    """`repository` is the project's (host, owner, repo), for a forge only."""
+    if kind == "forge":
+        assert repository is not None
+        url = forge_url(*repository)
+    elif kind == "mcp":
+        url = config["url"]
+    else:
+        url = config["server"].rstrip("/") + REVIEWS
     target = httpx.URL(url)
     try:
         with _quiet_http():
@@ -244,13 +253,15 @@ async def check(
                     pinned = _Pinned(client, url, addresses[0])
                     if kind == "mcp":
                         return await _mcp(pinned, token)
+                    if kind == "forge":
+                        assert repository is not None
+                        return await _forge(pinned, config, access, token, repository)
                     return await _kubernetes(pinned, config["namespace"], access, token)
     except _InvalidReply:
-        return "failed", (
-            "invalid MCP response"
-            if kind == "mcp"
-            else "invalid Kubernetes authorization response"
-        )
+        return "failed", {
+            "mcp": "invalid MCP response",
+            "forge": "invalid forge response",
+        }.get(kind, "invalid Kubernetes authorization response")
     except _OAuthRequired:
         return "failed", MCP_OAUTH
     except _Refused as exc:
@@ -414,6 +425,61 @@ async def _mcp(pinned: _Pinned, token: str) -> Result:
     ):
         raise _InvalidReply
     return "ok", MCP_SUCCESS
+
+
+def forge_url(host: str, owner: str, repo: str) -> str:
+    """The REST address of a repository (GitHub repositories spec 3.3)."""
+    if host == GITHUB_HOST:
+        return f"https://api.{GITHUB_HOST}/repos/{owner}/{repo}"
+    return f"https://{host}/api/v1/repos/{owner}/{repo}"
+
+
+def forge_headers(host: str, username: str | None, token: str) -> dict[str, str]:
+    """Bearer for GitHub; Basic `username:token` for Gitea, as workers send."""
+    if host == GITHUB_HOST:
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+    basic = base64.b64encode(f"{username}:{token}".encode()).decode()
+    return {"Authorization": f"Basic {basic}", "Accept": "application/json"}
+
+
+async def _forge(
+    pinned: _Pinned,
+    config: dict[str, Any],
+    access: str,
+    token: str,
+    repository: tuple[str, str, str],
+) -> Result:
+    """One GET of the project's repository (forge integrations spec 3.3). Both
+    forges return `permissions` only to an authenticated caller, so its presence
+    is what proves the token was accepted; a public answer proves nothing."""
+    host, owner, repo = repository
+    headers = forge_headers(host, config.get("username"), token)
+    status, data, _, _ = await pinned.send("GET", headers)
+    if status == 404:
+        return "failed", "repository not found for this token"
+    if not 200 <= status < 300:
+        raise _Refused(status)
+    try:
+        parsed = json.loads(data)
+    except (ValueError, UnicodeError, RecursionError):
+        raise _InvalidReply from None
+    if not isinstance(parsed, dict):
+        raise _InvalidReply
+    full_name = parsed.get("full_name")
+    if not isinstance(full_name, str) or full_name.lower() != f"{owner}/{repo}":
+        return "failed", "the forge answered for another repository"
+    permissions = parsed.get("permissions")
+    if not isinstance(permissions, dict):
+        return "failed", "cannot prove the token was accepted"
+    if access == "read_write" and permissions.get("push") is not True:
+        return "failed", "token lacks push access"
+    if permissions.get("pull") is not True and permissions.get("push") is not True:
+        return "failed", "token lacks read access"
+    return "ok", f"{owner}/{repo} on {host}: {access.replace('_', ' ')} access"
 
 
 def _verify(config: dict[str, Any]) -> ssl.SSLContext | bool:

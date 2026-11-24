@@ -131,7 +131,7 @@ async def collect(
     for dep_id in deps:
         dep = await service.get_task(conn, dep_id)
         ref = await delivery.reference(conn, dep)
-        login = await checker.login(conn, ref.provider) if ref is not None else None
+        login = await checker.login(conn, ref) if ref is not None else None
         arts = await _collect_arts(conn, dep)
         snaps.append(_DepSnap(dep=dep, ref=ref, login=login, arts=arts))
     return Collected(

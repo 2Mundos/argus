@@ -139,9 +139,9 @@ afterEach(() => {
 });
 
 describe("accountProviders", () => {
-  it("dedupes providers from account_provider axes, skips local, adds gitea", () => {
+  it("dedupes providers from account_provider axes, skips local, offers no forge", () => {
     const opts = providerOptionsFromCatalog(catalog);
-    expect(opts.map((o) => o.id)).toEqual(["anthropic", "copilot", "gitea", "github", "openai"]);
+    expect(opts.map((o) => o.id)).toEqual(["anthropic", "copilot", "openai"]);
     expect(opts.some((o) => o.id === "codex" || o.id === "claude")).toBe(false);
   });
 
@@ -178,7 +178,7 @@ describe("Accounts", () => {
       "Google AI Studio": "Gemini API key",
       "Custom provider": "OpenRouter or any compatible API",
       "Local model": "Ollama, LM Studio, vLLM…",
-      Other: "Cursor, Copilot, Gitea, GitHub, raw JSON",
+      Other: "Cursor, Copilot, raw JSON",
     };
     for (const [title, hint] of Object.entries(hints)) {
       const tile = screen.getByRole("button", { name: title });
@@ -278,36 +278,6 @@ describe("Accounts", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(mock.postBody?.provider).toBe("my_vendor"));
-  });
-
-  it("submits a gitea account from username and token fields", async () => {
-    render(<Accounts />);
-    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
-    fireEvent.click(screen.getByRole("button", { name: "Other" }));
-    await screen.findByLabelText("Provider");
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "g1" } });
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "gitea" } });
-    expect(screen.queryByLabelText(/Credential \(JSON/)).toBeNull();
-    fireEvent.change(screen.getByLabelText("Gitea username"), { target: { value: "pedro" } });
-    fireEvent.change(screen.getByLabelText("Gitea token"), { target: { value: "tok" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(mock.postBody?.provider).toBe("gitea"));
-    expect(mock.postBody?.credential).toEqual({ username: "pedro", token: "tok" });
-  });
-
-  it("submits a github account from a single token field", async () => {
-    render(<Accounts />);
-    fireEvent.click(screen.getByRole("button", { name: "Add account" }));
-    fireEvent.click(screen.getByRole("button", { name: "Other" }));
-    await screen.findByLabelText("Provider");
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "gh" } });
-    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "github" } });
-    expect(screen.queryByLabelText(/Credential \(JSON/)).toBeNull();
-    expect(screen.queryByLabelText("Gitea username")).toBeNull();
-    fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "tok" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(mock.postBody?.provider).toBe("github"));
-    expect(mock.postBody?.credential).toEqual({ token: "tok" });
   });
 
   it("shows catalogue load error with retry", async () => {

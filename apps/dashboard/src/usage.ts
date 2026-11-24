@@ -10,9 +10,9 @@ export type QuotaStatusWindow = components["schemas"]["QuotaStatusWindow"];
 export type AccountCredit = components["schemas"]["AccountCredit"];
 export type QuotaRefresh = components["schemas"]["QuotaRefresh"];
 
-/** Accounts that hold repository leases, not model quota. */
+/** Moved forge accounts hold no model quota (forge integrations spec 3.6). */
 export function hasModelUsage(provider: string): boolean {
-  return provider !== "gitea";
+  return provider !== "gitea" && provider !== "github";
 }
 
 export type WindowId = "today" | "24h" | "7d" | "30d" | "all";

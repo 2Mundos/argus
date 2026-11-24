@@ -59,6 +59,7 @@ import {
   describeLogTail,
   executorFirst,
   type FailureKind,
+  type ForgeCredential,
   isGenericFailureNotice,
   LeaseApplyError,
   normalizeRepositoryUrl,
@@ -66,6 +67,7 @@ import {
   preferredExecutorForLease,
   providerForExecutor,
   releaseRepositoryLease,
+  repositoryLeaseFromForge,
   runtimeProviders,
   verifyRepositoryAssignment,
 } from "./argus-accounts.js";
@@ -3818,13 +3820,14 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
       if (activeAccountLeases.length === 0)
         throw new Error("cannot safely reconcile repository access without active base leases");
       const normalizedRepository = normalizeRepositoryUrl(repositoryUrl);
-      const { data } = await client.call("POST", "/accounts/lease", {
-        role: "repository",
-        runtime_providers: [normalizedRepository.provider],
-        task_id: task.id,
+      // The project's forge integration (forge integrations spec 3.4), held in the
+      // lease shape the OneCLI steps below already apply and release.
+      const { data } = await client.call("POST", `/tasks/${task.id}/repository/credential`, {
         attempt: task.attempt,
       });
-      const lease = data as AccountLease;
+      const lease = repositoryLeaseFromForge(data as ForgeCredential);
+      if (lease.provider !== normalizedRepository.provider)
+        throw new Error(`the forge credential is for ${lease.provider}, not this repository`);
       repositoryLeaseHeld = true;
       activeRepositoryLease = lease;
       activeRepositoryUrl = normalizedRepository.cloneUrl;
@@ -4707,7 +4710,6 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           }
           repositoryTarget = null;
         }
-        await client.call("POST", "/accounts/release?role=repository").catch(() => undefined);
       }
     }
   }

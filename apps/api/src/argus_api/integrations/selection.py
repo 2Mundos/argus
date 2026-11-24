@@ -38,6 +38,11 @@ async def check_selection(
         row = found.get(i)
         if row is None:
             problems.append(f"integrations: {i}: not an integration of {project}")
+        elif row["kind"] == "forge":
+            problems.append(
+                f"integrations: {i}: a forge integration is never selected; every"
+                " repository-backed task of the project gets it"
+            )
         elif row["state"] != "active":
             problems.append(f"integrations: {i}: revoked")
         elif (

@@ -93,7 +93,6 @@ def test_google_is_executor_only_with_agy_executor() -> None:
     runtime = ["google"]
     assert role_accepts("executor", "google", runtime)
     assert not role_accepts("engine", "google", runtime)
-    assert not role_accepts("repository", "google", runtime)
     assert EXECUTOR_PROVIDERS["agy"] == "google"
     assert "google" in EXECUTOR_ONLY
     assert "google" not in ENGINE_PROVIDERS

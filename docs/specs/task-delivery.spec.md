@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-24
-updated: 2026-11-20
+updated: 2026-11-24
 ---
 
 # Task delivery
@@ -95,11 +95,11 @@ failed.
 
 ## 3.2 Reading the forge (exact head)
 
-`PrChecker` reads with the registered repository account of the PR's provider
-(`gitea` or `github`; existing SOPS-backed credential; Basic for Gitea, Bearer for
-GitHub); no other credential path. Outside any write transaction, overall budget
-**8 s**, no redirects, concurrent reads of one PR share one in-flight fetch, a
-full projection is reused for **15 s**.
+`PrChecker` reads with the forge integration of the project whose repository the PR
+is in ([forge integrations](forge-integrations.spec.md) 3.5; SOPS-backed; Basic for
+Gitea, Bearer for GitHub); no other credential path. Outside any write transaction,
+overall budget **8 s**, no redirects, concurrent reads of one PR share one in-flight
+fetch, a full projection is reused for **15 s**.
 
 For one PR it may issue, in order, bounded GETs:
 

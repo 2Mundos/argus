@@ -54,5 +54,4 @@ def test_muse_is_harness_and_executor_on_its_own_provider() -> None:
     runtime = ["muse"]
     assert role_accepts("engine", "muse", runtime)
     assert role_accepts("executor", "muse", runtime)
-    assert not role_accepts("repository", "muse", runtime)
     assert ExecutorModel(executor="muse", model="muse-spark").provider == "muse"

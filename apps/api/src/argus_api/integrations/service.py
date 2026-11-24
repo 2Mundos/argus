@@ -18,6 +18,7 @@ from uuid import uuid4
 import aiosqlite
 import anyio
 import httpx2 as httpx
+from argus_core.accounts import GITHUB_HOST
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from argus_api.db import Database, Tx, ts
@@ -26,7 +27,7 @@ from argus_api.events import record
 from argus_api.integrations import checks
 from argus_api.secrets import SecretStore, SecretStoreError, ref_name
 
-Kind = Literal["mcp", "kubernetes"]
+Kind = Literal["mcp", "kubernetes", "forge"]
 Access = Literal["read_only", "read_write"]
 
 STORE_ENTRY_PREFIX = "integration-"
@@ -37,6 +38,7 @@ _MAX_URL = 2048
 _MAX_CA = 65536
 # MCP tool names (2025-11-25 server/tools): 1-128 of these characters, case-sensitive.
 _TOOL = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_HOST = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
 MAX_TOOLS = 128
 _TICK = timedelta(microseconds=1)
 
@@ -60,7 +62,9 @@ class IntegrationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Kind
     name: str
-    access: Access = "read_only"
+    # Omitted: `read_write` for a forge (most repository-backed tasks publish),
+    # `read_only` for the other kinds.
+    access: Access | None = None
     config: dict[str, Any]
     secret: SecretIn
     # When the upstream credential stops working (spec 3.1). Omitted: the token's
@@ -161,11 +165,14 @@ def check_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "mcp": {"url", "tools"},
         "kubernetes": {"server", "namespace", "ca_data"},
+        "forge": {"host", "username"},
     }[kind]
     if extra := sorted(set(config) - allowed):
         raise ValidationFailedError(
             f"unknown {kind} config keys: {', '.join(extra)}", code="config_invalid"
         )
+    if kind == "forge":
+        return _forge_config(config)
     if kind == "mcp":
         out = {"url": _https(config.get("url"), "url")}
         if config.get("tools") is not None:
@@ -192,6 +199,78 @@ def check_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
             )
         out["ca_data"] = str(ca)
     return out
+
+
+def _forge_config(config: dict[str, Any]) -> dict[str, Any]:
+    """`{host, username?}` (forge integrations spec 3.2): a Gitea host needs the
+    username its Basic authentication sends; github.com takes none."""
+    host = config.get("host")
+    host = host.strip().lower() if isinstance(host, str) else ""
+    if not _HOST.fullmatch(host) or checks.internal_address(host):
+        raise ValidationFailedError(
+            "host must be the forge's host name, as the repository URL spells it",
+            code="config_invalid",
+        )
+    username = config.get("username")
+    if host == GITHUB_HOST:
+        if username not in (None, ""):
+            raise ValidationFailedError(
+                "a github.com token takes no username", code="config_invalid"
+            )
+        return {"host": host}
+    if (
+        not isinstance(username, str)
+        or not username.strip()
+        or len(username) > 200
+        or any(c in username for c in ":\r\n")
+    ):
+        raise ValidationFailedError(
+            "a Gitea forge needs the username of its token (no colon or line break)",
+            code="config_invalid",
+        )
+    return {"host": host, "username": username.strip()}
+
+
+async def project_forge(
+    conn: aiosqlite.Connection, project: str
+) -> tuple[str, str, str] | None:
+    """The (host, owner, repo) of the project's repository, as a claim resolves it."""
+    from argus_api.tasks.delivery import parse_repository, project_repository_url
+
+    url = await project_repository_url(conn, project)
+    return parse_repository(url) if url else None
+
+
+async def _forge_target(
+    conn: aiosqlite.Connection, project: str, host: str
+) -> tuple[str, str, str]:
+    repository = await project_forge(conn, project)
+    if repository is None:
+        raise ValidationFailedError(
+            f"project {project} has no repository; set one before adding its forge",
+            code="project_repository_missing",
+        )
+    if repository[0] != host:
+        raise ValidationFailedError(
+            f"the repository of {project} is on {repository[0]}, not {host}",
+            code="forge_host_mismatch",
+        )
+    return repository
+
+
+async def _forge_free(conn: aiosqlite.Connection, project: str) -> None:
+    async with conn.execute(
+        "SELECT name FROM integrations WHERE project = ? AND kind = 'forge'"
+        " AND state = 'active'",
+        (project,),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is not None:
+        raise ConflictError(
+            f"{project} already has forge integration {row[0]}; rotate it, or revoke"
+            " it first",
+            code="forge_exists",
+        )
 
 
 def check_token(secret: SecretIn) -> str:
@@ -397,19 +476,26 @@ async def create(
     actor: str,
     *,
     store_available: bool = True,
+    migrated_from: str | None = None,
 ) -> Integration:
-    """Secret first, then the row; a failed row deletes the secret again."""
+    """Secret first, then the row; a failed row deletes the secret again.
+    `migrated_from` names the account a forge record was copied from (forge
+    integrations spec 3.6), for the audit event only."""
     if not _NAME.fullmatch(body.name):
         raise ValidationFailedError(
             "name must be lowercase letters, digits and dashes (max 63)",
             code="name_invalid",
         )
     config = check_config(body.kind, body.config)
+    access = body.access or ("read_write" if body.kind == "forge" else "read_only")
     token = check_token(body.secret)
     expires_at = expiry(body.expires_at, token, db.now())
     async with db.read() as conn:
         await _project(conn, project)
         await _name_free(conn, project, body.name)
+        if body.kind == "forge":
+            await _forge_free(conn, project)
+            await _forge_target(conn, project, config["host"])
     _available(store_available)
     integration_id = str(uuid4())
     secret = f"{STORE_ENTRY_PREFIX}{integration_id}"
@@ -420,6 +506,8 @@ async def create(
         async with db.write() as tx:
             await _project(tx.conn, project)
             await _name_free(tx.conn, project, body.name)
+            if body.kind == "forge":
+                await _forge_free(tx.conn, project)
             now = ts(tx.now)
             await tx.conn.execute(
                 "INSERT INTO integrations (id, project, kind, name, config, access,"
@@ -431,7 +519,7 @@ async def create(
                     body.kind,
                     body.name,
                     json.dumps(config),
-                    body.access,
+                    access,
                     f"sops:{secret}",
                     now,
                     actor,
@@ -449,8 +537,9 @@ async def create(
                     "project": project,
                     "kind": body.kind,
                     "name": body.name,
-                    "access": body.access,
+                    "access": access,
                     "expires_at": expires_at,
+                    **({"migrated_from": migrated_from} if migrated_from else {}),
                 },
             )
     except BaseException:
@@ -646,14 +735,22 @@ async def validate(
     name = ref_name(row["secret_ref"]) if row["secret_ref"] else None
     stored = _credential(store, name)
     token = check_token(SecretIn(token=stored["token"]))
-    status, detail = await checks.check(
-        row["kind"],
-        json.loads(row["config"]),
-        row["access"],
-        token,
-        transport,
-        resolve,
-    )
+    config = json.loads(row["config"])
+    repository = None
+    if row["kind"] == "forge":
+        async with db.read() as conn:
+            repository = await project_forge(conn, project)
+    if row["kind"] == "forge" and (
+        repository is None or repository[0] != config["host"]
+    ):
+        status, detail = (
+            "failed",
+            f"the project's repository is not on {config['host']}",
+        )
+    else:
+        status, detail = await checks.check(
+            row["kind"], config, row["access"], token, transport, resolve, repository
+        )
     async with db.write() as tx:
         current = await _row(tx.conn, project, integration_id)
         # The result is about the token and config that were checked: a rotation,
@@ -711,6 +808,12 @@ async def update(
         after = (
             before if body.config is None else check_config(row["kind"], body.config)
         )
+        if row["kind"] == "forge" and after["host"] != before["host"]:
+            raise ValidationFailedError(
+                "a forge integration keeps its host; revoke it and create one for"
+                f" {after['host']}",
+                code="config_invalid",
+            )
         access = body.access or row["access"]
         changes = {
             k: {"before": _shown(k, before.get(k)), "after": _shown(k, after.get(k))}

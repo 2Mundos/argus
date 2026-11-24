@@ -1,27 +1,23 @@
 ---
 status: implemented
 created: 2026-10-27
-updated: 2026-11-18
+updated: 2026-11-24
 ---
 
 # GitHub repositories
 
 # 1. Purpose and Scope
 
-Repository access is Gitea-only: the `repository` account role accepts only the
-`gitea` provider, the NanoClaw host injects Gitea-shaped credentials, workers have
-only `argus-gitea-api`, and Argus reads PR state from Gitea's REST v1. Argus itself now
-lives on GitHub (`2Mundos/argus`), so a worker on an Argus task cannot open a pull
-request. This spec adds GitHub as a second repository provider with the same
-model: an account in the registry, a task-scoped lease, credentials injected by the
-OneCLI proxy and never seen by the worker, and a credential-free helper,
-`argus-github-api`, with the full command matrix of the [Gitea
-helper](gitea-helper.spec.md).
+GitHub is the second repository provider beside Gitea, with the same model: the
+project's [forge integration](forge-integrations.spec.md), delivered per attempt,
+credentials injected by the OneCLI proxy and never seen by the worker, and a
+credential-free helper, `argus-github-api`, with the full command matrix of the
+[Gitea helper](gitea-helper.spec.md).
 
-In scope: the `github` account provider (dashboard, API, lease), provider choice per
-repository, OneCLI injection for github.com, `argus-github-api`, the task prompt, the
-host-side preflight and continuation observer, the `argus-delegate` CI probe, and
-delivery PR-state reads ([task delivery](task-delivery.spec.md)).
+In scope: the `github` forge credential, provider choice per repository, OneCLI
+injection for github.com, `argus-github-api`, the task prompt, the host-side
+preflight and continuation observer, the `argus-delegate` CI probe, and delivery
+PR-state reads ([task delivery](task-delivery.spec.md)).
 
 # 2. Non-Goals
 
@@ -32,7 +28,7 @@ delivery PR-state reads ([task delivery](task-delivery.spec.md)).
 - No `gh` CLI in agent images: it needs a token in its environment and reaches any
   endpoint.
 - No change to the Gitea path: `argus-gitea-api` keeps its commands, output and exit
-  codes; Gitea accounts, leases and injection are unchanged.
+  codes; Gitea credentials and injection are unchanged.
 - No approve, admin, token, secret, webhook or repository-settings command, as for
   Gitea. `merge` and `pr-review-request` exist only on `argus-github-api` (3.4).
 
@@ -43,21 +39,19 @@ delivery PR-state reads ([task delivery](task-delivery.spec.md)).
 A repository on host `github.com` is a `github` repository; every other host is
 `gitea`. The rule lives in one function per language (`repository_provider` in
 `argus_core.accounts`, `repositoryProvider` in `github-api.mjs`) and nothing else
-decides it. Core accepts both providers for the `repository` role and neither as a
-model account (`REPOSITORY_PROVIDERS`). The NanoClaw host asks for a repository lease
-with `runtime_providers` set to the one provider of the task's repository, so a
-GitHub task never receives a Gitea token and the reverse.
+decides it. A forge integration is bound to its repository's host ([forge
+integrations](forge-integrations.spec.md) 3.2), and the NanoClaw host refuses a
+credential whose provider is not its repository's, so a GitHub task never receives
+a Gitea token and the reverse.
 
-## 3.2 Account and credential
+## 3.2 Credential
 
-Provider `github`, kind `api_key`, credential `{"token": "<fine-grained PAT>"}`. The
-token is required, single-line, and stored in SOPS like every credential; there is no
-username (Git authenticates with a fixed one, 3.3). Rotation keeps the same shape. The
-operator creates the token for the bot or service identity, limited to the
-allowlisted repositories, with repository permissions: Contents read/write, Pull
+A `forge` integration on host `github.com`: the token only, single-line, in SOPS
+like every credential; there is no username (Git authenticates with a fixed one,
+3.3). The operator creates the token for the bot or service identity, limited to
+the project's repository, with repository permissions: Contents read/write, Pull
 requests read/write, Issues read/write, Commit statuses read, Checks read, Actions
-read, Metadata read. The dashboard's Add and Replace dialogs show one token field for
-`github`.
+read, Metadata read. The dashboard's forge form shows one token field for it.
 
 ## 3.3 Injection
 
@@ -193,8 +187,8 @@ The task prompt names the helper of the task's provider (`argus-github-api` or
 ## 3.6 Delivery reads
 
 `PrChecker` reads a GitHub PR from `https://api.github.com/repos/{owner}/{repo}/pulls/{n}`
-with `Authorization: Bearer` and the highest-priority enabled `github` account; Gitea
-PRs keep Basic auth and the `gitea` account. A GitHub PR URL is
+with `Authorization: Bearer` and the repository's forge integration ([forge
+integrations](forge-integrations.spec.md) 3.5); Gitea PRs keep Basic auth. A GitHub PR URL is
 `https://github.com/{owner}/{repo}/pull/{n}`. The rest of [task
 delivery](task-delivery.spec.md) (allowlist, timeout, coalescing, `unknown` on failure)
 holds.
@@ -220,18 +214,17 @@ holds.
 # 6. Implementation Consequences
 
 - `packages/core`: `REPOSITORY_PROVIDERS`, `repository_provider`, `role_accepts`.
-- `apps/api`: `github` credential validation and rotation, `PrChecker` per provider,
-  cost report excludes both repository providers.
-- `apps/dashboard`: `github` provider option and token-only form in Add and Replace.
+- `apps/api`: `PrChecker` per provider; the credential itself is a forge integration.
+- `apps/dashboard`: the forge form's token-only variant for github.com.
 - `integrations/nanoclaw`: `github-api.mjs` (+ `.d.mts`, tests),
   `normalizeRepositoryUrl` (provider, REST host and path), `applyRepositoryLease`
   (with the alias of 3.3), `verifiedCanonicalRepositoryUrl`,
-  repository lease request, preflight, observer, prompt, `argus-delegate` probe, install
+  repository credential request, preflight, observer, prompt, `argus-delegate` probe, install
   script, tools layer, engines patcher, Radar layer, CI tools-layer smoke.
 - Rollout is the Gitea helper's: rebuild the agent image or tools layer, canary
   `argus-github-api --help`, `repo-get`, `status --pr N` on one worker, then recreate the
-  rest. Register the `github` account and point the `argus` project's repository at
-  `https://github.com/2Mundos/argus` in the pool config.
+  rest. Point the `argus` project's repository at `https://github.com/2Mundos/argus`
+  and add its forge integration.
 
 ## Verification boundary
 
@@ -240,4 +233,4 @@ holds.
   - `pnpm test` runs `integrations/nanoclaw/github-api.test.mjs` among others.
   - `make test` runs the whole Python and Node suite.
 - Verified: fixture and fake-API level only: `github-api.test.mjs` with a mocked fetch, the installer pytest for the helper binaries, and API tests for repository validation and leasing.
-- Not verified: calls to the real GitHub API with a real token; the worker rollout in the spec (recreated instances, registered `github` account) on a real node; the dashboard form in a real browser; production.
+- Not verified: calls to the real GitHub API with a real token; the worker rollout in the spec (recreated instances, a `github.com` forge integration) on a real node; the dashboard form in a real browser; production.

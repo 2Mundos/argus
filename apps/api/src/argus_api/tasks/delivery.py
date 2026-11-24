@@ -2,7 +2,7 @@
 
 Read-only. References are taken only from structured artifacts and unambiguous
 text; a bare number needs the repository the project proves. The forge calls
-(Gitea, or GitHub for github.com) use the registered account of that provider,
+(Gitea, or GitHub for github.com) use the project's forge integration,
 stay outside write transactions, coalesce per PR, and never invent green on
 partial failure. Existing Delivery top-level fields are preserved; additive
 fields carry exact-head checks, mergeability, review evidence, checklist and
@@ -509,7 +509,7 @@ class PrChecker:
         hit = self._cache.get(ref)
         if hit and time.monotonic() - hit[0] < CACHE_S:
             return hit[1]
-        login = await self.login(conn, ref.provider)
+        login = await self.login(conn, ref)
         return await self.snapshot_resolved(ref, login)
 
     async def snapshot_resolved(
@@ -520,11 +520,16 @@ class PrChecker:
             return hit[1]
         flight = self._flight.get(ref)
         if flight is None:
-            flight = asyncio.create_task(self._fetch_all(ref, login))
+            flight = asyncio.create_task(self._fly(ref, login))
             self._flight[ref] = flight
             flight.add_done_callback(lambda _: self._flight.pop(ref, None))
+        return await asyncio.shield(flight)
+
+    async def _fly(self, ref: PrRef, login: tuple[str, str] | None) -> ForgeSnapshot:
+        """One read, cached before the flight ends: a caller that arrives after the
+        flight is gone finds the cache, never an empty slot that starts a second read."""
         try:
-            snap = await asyncio.shield(flight)
+            snap = await self._fetch_all(ref, login)
         except Exception:
             snap = ForgeSnapshot(pr_state=PrState.UNKNOWN, merged_at=None)
         self._cache[ref] = (time.monotonic(), snap)
@@ -545,19 +550,26 @@ class PrChecker:
         )
 
     async def login(
-        self, conn: aiosqlite.Connection, provider: str
+        self, conn: aiosqlite.Connection, ref: PrRef
     ) -> tuple[str, str] | None:
+        """(username, token) of the forge integration of a project whose repository
+        is `ref`'s, on `ref`'s host: a token never goes to another host or
+        repository (forge integrations spec 3.5). None reads as `unknown`."""
+        repo = (ref.host, ref.owner, ref.repo)
+        projects = {p for p, r in (await repositories(conn)).items() if r == repo}
         async with conn.execute(
-            "SELECT secret_ref FROM accounts WHERE provider = ? AND state != 'disabled'"
-            " ORDER BY priority DESC, name",
-            (provider,),
+            "SELECT project, config, secret_ref FROM integrations WHERE kind = 'forge'"
+            " AND state = 'active' AND validation != 'failed' ORDER BY project"
         ) as cur:
-            rows = await cur.fetchall()
-        for (secret_ref,) in rows:
+            rows = [r[1:] for r in await cur.fetchall() if r[0] in projects]
+        for config, secret_ref in rows:
+            config = json.loads(config)
+            if config.get("host") != ref.host:
+                continue
             name = ref_name(secret_ref)
             value = self.secrets.get(name) if name else None
             if value and isinstance(value.get("token"), str):
-                return str(value.get("username", "")), value["token"]
+                return str(config.get("username") or ""), value["token"]
         return None
 
     def _client(
@@ -673,7 +685,7 @@ class PrChecker:
         a PR is found however many others are newer. The caller filters by head. None
         when a page could not be read or LIST_PAGES pages did not reach `since`."""
         ref = PrRef(*repo, 0)
-        login = await self.login(conn, ref.provider)
+        login = await self.login(conn, ref)
         if login is None:
             return None
         base, headers, basic = self._client(ref, login)

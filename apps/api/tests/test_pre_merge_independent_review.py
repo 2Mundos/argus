@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx2 as httpx
 import pytest
-from api_support import FakeClock
+from api_support import FakeClock, add_forge
 from argus_api import main as _main  # noqa: F401 - loads packages in order
 from argus_api.accounts import service as accounts
 from argus_api.db import Database
@@ -176,16 +176,7 @@ def api_client(
             == 200
         )
         # Register github repo credential so PrChecker reads the mocked forge.
-        res = client.post(
-            "/api/accounts",
-            json={
-                "name": "gh-bot",
-                "provider": "github",
-                "priority": 10,
-                "credential": {"token": "ghp_fixture"},
-            },
-        )
-        assert res.status_code == 201, res.text
+        add_forge(client, "github.com", token="ghp_fixture")
         # Register two distinct model providers (anthropic implementer + openai reviewer).
         res = client.post(
             "/api/accounts",

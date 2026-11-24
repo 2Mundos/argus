@@ -48,6 +48,23 @@ function readiness(item: Connection): string | null {
   return null;
 }
 
+/**
+ * What repository access an attempt of `task` gets from its project's forge connection
+ * (forge integrations spec 3.4), or why it would block; null when nothing applies.
+ */
+function repositoryAccess(task: Task, items: Connection[] | undefined): string | null {
+  if (!items) return null;
+  const writes = task.required_capabilities.includes("repository:write");
+  const forge = items.find((item) => item.kind === "forge" && item.state === "active");
+  if (!forge) return writes ? "none: attempts block until an admin adds a forge connection" : null;
+  if (forge.expires_at && Date.parse(forge.expires_at) <= Date.now())
+    return `${forge.name}: expired, attempts block until it is rotated`;
+  if (forge.validation === "failed") return `${forge.name}: validation failed, attempts block`;
+  if (writes && forge.access === "read_only")
+    return `${forge.name}: read only, and this task writes; attempts block`;
+  return `${forge.name} (${writes ? "write" : "read"})`;
+}
+
 function scope(item: Connection): string {
   if (item.kind === "kubernetes") return `Kubernetes namespace ${String(item.config.namespace)}`;
   const tools = item.config.tools;
@@ -112,7 +129,7 @@ export function NewTaskIntegrations({
   onChange: (ids: string[]) => void;
 }) {
   const items = useProjectIntegrations(project);
-  const active = (items ?? []).filter((item) => item.state === "active");
+  const active = (items ?? []).filter((item) => item.state === "active" && item.kind !== "forge");
   if (active.length === 0) return null;
   return (
     <fieldset aria-label="Integrations">
@@ -135,9 +152,10 @@ export function TaskIntegrations({ task, onSaved }: { task: Task; onSaved: () =>
   const [error, setError] = useState<string>();
   const action = useAction();
   const listed = (items ?? []).filter(
-    (item) => item.state === "active" || selected.includes(item.id),
+    (item) => item.kind !== "forge" && (item.state === "active" || selected.includes(item.id)),
   );
-  if (listed.length === 0 && selected.length === 0) return null;
+  const repository = repositoryAccess(task, items);
+  if (listed.length === 0 && selected.length === 0 && !repository) return null;
   const editable = SELECTABLE.has(task.state) && !task.archived_at;
   const chosen = draft ?? selected;
 
@@ -162,6 +180,7 @@ export function TaskIntegrations({ task, onSaved }: { task: Task; onSaved: () =>
   return (
     <section aria-label="Integrations">
       <header className="task-section-label">Integrations</header>
+      {repository && <p>Repository access: {repository}</p>}
       <fieldset disabled={!editable || action.busy}>
         <Choices items={listed} chosen={chosen} onChange={setDraft} />
         {selected

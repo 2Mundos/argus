@@ -685,8 +685,7 @@
             "default": "engine",
             "enum": [
               "engine",
-              "executor",
-              "repository"
+              "executor"
             ],
             "title": "Role",
             "type": "string"
@@ -3049,8 +3048,7 @@
             "default": "engine",
             "enum": [
               "engine",
-              "executor",
-              "repository"
+              "executor"
             ],
             "title": "Role",
             "type": "string"
@@ -10548,8 +10546,7 @@
             "default": "engine",
             "enum": [
               "engine",
-              "executor",
-              "repository"
+              "executor"
             ],
             "title": "Role",
             "type": "string"
@@ -12767,7 +12764,8 @@
           "kind": {
             "enum": [
               "mcp",
-              "kubernetes"
+              "kubernetes",
+              "forge"
             ],
             "title": "Kind",
             "type": "string"
@@ -12911,13 +12909,19 @@
         "additionalProperties": false,
         "properties": {
           "access": {
-            "default": "read_only",
-            "enum": [
-              "read_only",
-              "read_write"
+            "anyOf": [
+              {
+                "enum": [
+                  "read_only",
+                  "read_write"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Access",
-            "type": "string"
+            "title": "Access"
           },
           "config": {
             "additionalProperties": true,
@@ -12939,7 +12943,8 @@
           "kind": {
             "enum": [
               "mcp",
-              "kubernetes"
+              "kubernetes",
+              "forge"
             ],
             "title": "Kind",
             "type": "string"
@@ -13776,8 +13781,7 @@
             "default": "engine",
             "enum": [
               "engine",
-              "executor",
-              "repository"
+              "executor"
             ],
             "title": "Role",
             "type": "string"
@@ -30729,8 +30733,7 @@
                 {
                   "enum": [
                     "engine",
-                    "executor",
-                    "repository"
+                    "executor"
                   ],
                   "type": "string"
                 },

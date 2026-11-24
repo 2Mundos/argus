@@ -20,6 +20,13 @@ function secretStore(system: SystemSummary | undefined): string {
 /** Never echo an API error body: even a rejected request may contain a credential. */
 function failure(error: unknown): string {
   if (error instanceof ApiError) {
+    switch (error.code) {
+      case "forge_exists":
+        return "This project already has an active forge connection. Rotate or revoke it instead.";
+      case "project_repository_missing":
+      case "forge_host_mismatch":
+        return "A forge connection needs the project's repository, on the same host. Set the repository first.";
+    }
     switch (error.status) {
       case 401:
       case 403:
@@ -50,6 +57,22 @@ function editFailure(error: unknown): string {
     }
   }
   return failure(error);
+}
+
+const KIND_LABEL: Record<Integration["kind"], string> = {
+  mcp: "MCP",
+  kubernetes: "Kubernetes",
+  forge: "Forge",
+};
+
+/** The forge host of a project's repository URL, or undefined. */
+function repositoryHost(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
 }
 
 function toolPolicy(connection: Integration): string | undefined {
@@ -88,8 +111,8 @@ export function Integrations() {
         title="Integrations"
         lead={
           <>
-            Manage project-scoped MCP servers and Kubernetes connections. Model providers and forge
-            tokens stay in <a href="#setup/accounts">Accounts</a>; typed{" "}
+            Manage project-scoped MCP servers, Kubernetes connections and forge (Gitea or GitHub)
+            tokens. Model providers stay in <a href="#setup/accounts">Accounts</a>; typed{" "}
             <a href="#setup/settings">Settings</a> never hold a secret.
           </>
         }
@@ -105,6 +128,12 @@ export function Integrations() {
           sees the token. Either ends when the attempt ends or the connection is revoked, edited,
           rotated or expires. That does not revoke the token; revoke it at the cluster or MCP server
           too.
+        </p>
+        <p>
+          A forge connection is different: it is the project's repository token, one per project,
+          and every attempt of the project's repository-backed tasks gets it without selecting it.
+          The worker's gateway adds it only to requests for the project's repository; the session
+          never sees it. Tasks that write to the repository need read and write access.
         </p>
         <p className="muted small">
           Encrypted secret store:{" "}
@@ -251,7 +280,10 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
   const [error, setError] = useState<string>();
   const action = useAction();
   const active = connection.state === "active";
-  const target = connection.config[connection.kind === "mcp" ? "url" : "server"];
+  const target =
+    connection.config[
+      connection.kind === "mcp" ? "url" : connection.kind === "forge" ? "host" : "server"
+    ];
   const namespace = connection.config.namespace;
   const policy = toolPolicy(connection);
 
@@ -284,7 +316,7 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
       <th scope="row">
         {connection.name}
         <div className="muted small">
-          {connection.kind === "mcp" ? "MCP" : "Kubernetes"} · {connection.project}
+          {KIND_LABEL[connection.kind]} · {connection.project}
         </div>
       </th>
       <td>
@@ -315,9 +347,11 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
           </div>
         )}
         <div className="muted small">
-          {connection.kind === "kubernetes"
-            ? "Delivered only to attempts of tasks that select it"
-            : "Not delivered to workers"}
+          {connection.kind === "forge"
+            ? "Delivered to every repository-backed attempt of the project"
+            : connection.kind === "kubernetes"
+              ? "Delivered only to attempts of tasks that select it"
+              : "Not delivered to workers"}
         </div>
       </td>
       <td>
@@ -507,6 +541,16 @@ function CredentialForm({
   const [error, setError] = useState<string>();
   const token = useRef<HTMLInputElement>(null);
   const action = useAction();
+  const { data: repository } = useLiveData(
+    (signal) =>
+      call(
+        api.GET("/api/projects/{slug}/repository", { params: { path: { slug: project } }, signal }),
+      ),
+    [project],
+    { accepts: (event) => event.subject_type === "project" },
+  );
+  const host = repositoryHost(repository?.repository_url);
+  const forgeBlocked = !integration && kind === "forge" && !host;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -522,11 +566,13 @@ function CredentialForm({
       ? {}
       : kind === "mcp"
         ? { url: field("url") }
-        : {
-            server: field("server"),
-            namespace: field("namespace"),
-            ...(field("ca_data") ? { ca_data: field("ca_data") } : {}),
-          };
+        : kind === "forge"
+          ? { host, ...(host === "github.com" ? {} : { username: field("username") }) }
+          : {
+              server: field("server"),
+              namespace: field("namespace"),
+              ...(field("ca_data") ? { ca_data: field("ca_data") } : {}),
+            };
     // Rotation sends only the secret; its target and access remain unchanged.
     void action.run(async () => {
       setError(undefined);
@@ -570,12 +616,16 @@ function CredentialForm({
               <select
                 value={kind}
                 onChange={(event) => {
-                  setKind(event.target.value as Integration["kind"]);
+                  const next = event.target.value as Integration["kind"];
+                  setKind(next);
+                  // Most repository-backed tasks publish: they need write access.
+                  setAccess(next === "forge" ? "read_write" : "read_only");
                   if (token.current) token.current.value = "";
                 }}
               >
                 <option value="mcp">MCP</option>
                 <option value="kubernetes">Kubernetes</option>
+                <option value="forge">Forge (repository access)</option>
               </select>
             </label>
             <label>
@@ -598,7 +648,40 @@ function CredentialForm({
                 <option value="read_write">Read and write</option>
               </select>
             </label>
-            {kind === "mcp" ? (
+            {kind === "forge" ? (
+              <>
+                <p>
+                  Repository:{" "}
+                  {repository?.repository_url ? (
+                    <strong>
+                      {repository.repository_url} ({host === "github.com" ? "GitHub" : "Gitea"})
+                    </strong>
+                  ) : (
+                    <span className="error">
+                      {repository?.detail ?? "loading…"}{" "}
+                      <a href={`#projects/${project}`}>Set the project's repository</a>
+                    </span>
+                  )}
+                </p>
+                {host && host !== "github.com" && (
+                  <label>
+                    Gitea username
+                    <input
+                      name="username"
+                      required
+                      maxLength={200}
+                      pattern="[^:]+"
+                      autoComplete="off"
+                    />
+                  </label>
+                )}
+                <p className="muted small">
+                  {host === "github.com"
+                    ? "A fine-grained personal access token limited to this repository: Contents, Pull requests and Issues read and write; Commit statuses, Checks and Actions read."
+                    : "A personal access token of the user above, with repository read and write scopes."}
+                </p>
+              </>
+            ) : kind === "mcp" ? (
               <label>
                 MCP server URL
                 <input
@@ -648,10 +731,12 @@ function CredentialForm({
                 </p>
               </>
             )}
-            <p className="muted small">
-              Use HTTPS without credentials, query parameters or fragments in the URL. MCP access is
-              an intent label; configure permissions at the service.
-            </p>
+            {kind !== "forge" && (
+              <p className="muted small">
+                Use HTTPS without credentials, query parameters or fragments in the URL. MCP access
+                is an intent label; configure permissions at the service.
+              </p>
+            )}
           </>
         )}
         <label>
@@ -668,8 +753,12 @@ function CredentialForm({
           />
         </label>
         <p className="muted small">
-          {kind === "kubernetes" ? "Service-account bearer token. " : "MCP bearer token. "}1–8192
-          printable characters without whitespace.
+          {kind === "kubernetes"
+            ? "Service-account bearer token. "
+            : kind === "forge"
+              ? "Forge token. "
+              : "MCP bearer token. "}
+          1–8192 printable characters without whitespace.
         </p>
         <label>
           Expires (optional, your local time)
@@ -693,7 +782,7 @@ function CredentialForm({
           type="submit"
           className="primary"
           pending={action.busy}
-          disabled={action.busy}
+          disabled={action.busy || forgeBlocked}
         >
           {integration ? "Rotate token" : "Save integration"}
         </ActionButton>
@@ -724,7 +813,10 @@ function EditForm({
     const field = (name: string) => (form.elements.namedItem(name) as HTMLInputElement).value;
     // The config is replaced whole, so every kept key is sent again.
     let next: IntegrationCreate["config"];
-    if (integration.kind === "mcp") {
+    if (integration.kind === "forge") {
+      const host = text("host");
+      next = { host, ...(host === "github.com" ? {} : { username: field("username") }) };
+    } else if (integration.kind === "mcp") {
       const tools = field("tools")
         .split("\n")
         .map((line) => line.trim())
@@ -776,7 +868,28 @@ function EditForm({
             <option value="read_write">Read and write</option>
           </select>
         </label>
-        {integration.kind === "mcp" ? (
+        {integration.kind === "forge" ? (
+          <>
+            <p>Host: {text("host")}</p>
+            {text("host") !== "github.com" && (
+              <label>
+                Gitea username
+                <input
+                  name="username"
+                  required
+                  maxLength={200}
+                  pattern="[^:]+"
+                  autoComplete="off"
+                  defaultValue={text("username")}
+                />
+              </label>
+            )}
+            <p className="muted small">
+              The host follows the project's repository. To move to another forge, revoke this
+              connection and add a new one.
+            </p>
+          </>
+        ) : integration.kind === "mcp" ? (
           <>
             <label>
               MCP server URL

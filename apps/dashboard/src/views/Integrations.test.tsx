@@ -64,6 +64,7 @@ let projects: { slug: string; name: string }[];
 let requests: { method: string; path: string; body?: Create }[];
 let patches: Update[];
 let intercept: ((request: Request) => Response | Promise<Response> | undefined) | undefined;
+let repositoryUrl: string | null;
 
 beforeEach(() => {
   items = [];
@@ -75,6 +76,7 @@ beforeEach(() => {
   requests = [];
   patches = [];
   intercept = undefined;
+  repositoryUrl = "https://git.example.test/team/argus";
   mock.fetch.mockReset().mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
     const body =
@@ -88,11 +90,22 @@ beforeEach(() => {
     if (path === "/api/system")
       return json({ readiness: { checks: { secrets: { status: "ok" } } } });
     if (path === "/api/projects") return json(projects);
+    if (path.endsWith("/repository"))
+      return json(
+        repositoryUrl
+          ? { status: "configured", repository_url: repositoryUrl, source: "record", detail: "" }
+          : { status: "unset", repository_url: null, source: null, detail: "No repository." },
+      );
     const project = path.split("/")[3];
     if (request.method === "GET" && path.endsWith("/integrations"))
       return json(items.filter((item) => item.project === project));
     if (request.method === "POST" && path.endsWith("/integrations") && body) {
-      const saved = connection({ ...body, id: "created", project });
+      const saved = connection({
+        ...body,
+        access: body.access ?? undefined,
+        id: "created",
+        project,
+      });
       items.push(saved);
       return json({ ...saved, secret: { token: TOKEN } }, 201);
     }
@@ -178,6 +191,42 @@ function noSecret() {
     expect((input as HTMLInputElement).value).toBe("");
 }
 
+describe("Forge connections", () => {
+  it("binds the token to the project's repository host, read and write by default", async () => {
+    mount();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add integration" }));
+    await user.selectOptions(screen.getByLabelText("Kind"), "forge");
+    expect(await screen.findByText(/git\.example\.test\/team\/argus \(Gitea\)/)).toBeTruthy();
+    expect((screen.getByLabelText("Access") as HTMLSelectElement).value).toBe("read_write");
+    await user.type(screen.getByLabelText("Name"), "forge");
+    await user.type(screen.getByLabelText("Gitea username"), "bot");
+    await user.type(screen.getByLabelText("Bearer token"), TOKEN);
+    await user.click(screen.getByRole("button", { name: "Save integration" }));
+    await waitFor(() => expect(requests.some((r) => r.method === "POST")).toBe(true));
+    expect(requests.find((r) => r.method === "POST")?.body).toEqual({
+      kind: "forge",
+      name: "forge",
+      access: "read_write",
+      config: { host: "git.example.test", username: "bot" },
+      secret: { token: TOKEN },
+    });
+  });
+
+  it("cannot be added to a project without a repository", async () => {
+    repositoryUrl = null;
+    mount();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add integration" }));
+    await user.selectOptions(screen.getByLabelText("Kind"), "forge");
+    expect(await screen.findByText(/No repository\./)).toBeTruthy();
+    expect(screen.queryByLabelText("Gitea username")).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "Save integration" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});
+
 describe("Integrations management", () => {
   it("loads only the selected project's connections and explains the delivery boundary", async () => {
     items = [
@@ -246,7 +295,11 @@ describe("Integrations management", () => {
             : { server: "https://service.example/api", namespace: "tools", ca_data: CA },
         secret: { token: TOKEN },
       });
-      const saved = connection({ ...posted?.body, project: "alpha" });
+      const saved = connection({
+        ...posted?.body,
+        access: posted?.body?.access ?? undefined,
+        project: "alpha",
+      });
       items = [saved];
       await act(async () => pending.resolve(json({ ...saved, secret: { token: TOKEN } }, 201)));
       await screen.findByRole("row", { name: new RegExp(saved.name) });

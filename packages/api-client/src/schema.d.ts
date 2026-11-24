@@ -4115,7 +4115,7 @@ export interface components {
              * @default engine
              * @enum {string}
              */
-            role?: "engine" | "executor" | "repository";
+            role?: "engine" | "executor";
             settings?: components["schemas"]["LeaseSettings"] | null;
         };
         /** AccountModel */
@@ -4858,7 +4858,7 @@ export interface components {
              * @default engine
              * @enum {string}
              */
-            role?: "engine" | "executor" | "repository";
+            role?: "engine" | "executor";
             /** Source */
             source?: ("structured" | "notice" | "log") | null;
             /** Task Id */
@@ -7778,7 +7778,7 @@ export interface components {
              * @default engine
              * @enum {string}
              */
-            role?: "engine" | "executor" | "repository";
+            role?: "engine" | "executor";
             /** Runtime Providers */
             runtime_providers: string[];
             /** Source */
@@ -8483,7 +8483,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "mcp" | "kubernetes";
+            kind: "mcp" | "kubernetes" | "forge";
             /** Name */
             name: string;
             /** Project */
@@ -8520,12 +8520,8 @@ export interface components {
         };
         /** IntegrationCreate */
         IntegrationCreate: {
-            /**
-             * Access
-             * @default read_only
-             * @enum {string}
-             */
-            access?: "read_only" | "read_write";
+            /** Access */
+            access?: ("read_only" | "read_write") | null;
             /** Config */
             config: {
                 [key: string]: unknown;
@@ -8536,7 +8532,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "mcp" | "kubernetes";
+            kind: "mcp" | "kubernetes" | "forge";
             /** Name */
             name: string;
             secret: components["schemas"]["SecretIn"];
@@ -8862,7 +8858,7 @@ export interface components {
              * @default engine
              * @enum {string}
              */
-            role?: "engine" | "executor" | "repository";
+            role?: "engine" | "executor";
             /** Runtime Providers */
             runtime_providers: string[];
             /** Task Id */
@@ -14761,7 +14757,7 @@ export interface operations {
     release_account_api_accounts_release_post: {
         parameters: {
             query?: {
-                role?: ("engine" | "executor" | "repository") | null;
+                role?: ("engine" | "executor") | null;
             };
             header?: never;
             path?: never;

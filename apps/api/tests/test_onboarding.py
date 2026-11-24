@@ -60,7 +60,6 @@ def test_harness_account_sets_account_fact(client: TestClient) -> None:
     assert created.status_code == 201, created.text
     assert client.get("/api/onboarding", headers=ADMIN).json()["account"] is True
 
-    # Repository accounts alone do not satisfy the account step.
     acc_id = created.json()["id"]
     deleted = client.delete(
         f"/api/accounts/{acc_id}",
@@ -68,16 +67,6 @@ def test_harness_account_sets_account_fact(client: TestClient) -> None:
         headers=ADMIN,
     )
     assert deleted.status_code == 204, deleted.text
-    gitea = client.post(
-        "/api/accounts",
-        json={
-            "name": "forge",
-            "provider": "gitea",
-            "credential": {"username": "argus-writer", "token": "tok"},
-        },
-        headers=ADMIN,
-    )
-    assert gitea.status_code == 201, gitea.text
     assert client.get("/api/onboarding", headers=ADMIN).json()["account"] is False
 
 

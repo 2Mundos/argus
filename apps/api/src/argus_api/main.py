@@ -50,6 +50,7 @@ from argus_api.fleet.reconciler import FleetSettings
 from argus_api.fleet.routes import router as fleet_router
 from argus_api.fleet.targets import InProcessTarget, TargetRegistry
 from argus_api.fleet.workspace_cleanup import WorkspaceCleaner
+from argus_api.integrations import forge_move
 from argus_api.integrations.routes import router as integrations_router
 from argus_api.kinds.routes import router as kinds_router
 from argus_api.knowledge.routes import router as knowledge_router
@@ -135,6 +136,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await accounts.reconcile_secrets(tx, secrets)
         async with db.write() as tx:
             await independent_review.backfill_manual_reviews(tx)
+        if secrets_error is None:
+            await forge_move.move_forge_accounts(db, secrets)
         if generated:
             log.warning(
                 "Created the initial admin token; read it from %s",

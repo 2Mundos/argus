@@ -186,9 +186,7 @@ async def test_gitea_and_executor_only_accounts_never_become_model_accounts(
     await add(db, store, "codex-1", "openai", priority=1)
     assert (await lease(db, store, A)).name == "codex-1"  # not gitea, not an engine
     executor = await lease_role(db, store, "executor", ["gitea", "cursor", "openai"])
-    repo = await lease_role(db, store, "repository", ["gitea"])
     assert executor.name == "cursor-1"
-    assert repo.name == "repo"
 
 
 async def test_runtime_providers_state_capability_not_preference(
@@ -610,24 +608,6 @@ async def test_executor_exhaustion_stays_in_its_role(db: Database, store) -> Non
     assert ("executor", c2) in await active(db)
 
 
-async def test_repository_lease_is_independent_and_released_without_exposing_secret(
-    db: Database, store
-) -> None:
-    engine_id = await add(db, store, "engine-account", "anthropic")
-    repo_id = await add(db, store, "repo-account", "gitea")
-    await lease_role(db, store, "engine", ["anthropic"])
-    repository = await lease_role(db, store, "repository", ["gitea"])
-    assert await active(db) == [("engine", engine_id), ("repository", repo_id)]
-    assert repository.role == "repository"
-    assert (
-        "key-repo-account"
-        not in (await get(db, repo_id, FakeClock())).model_dump_json()
-    )
-    async with db.write() as tx:
-        await accounts.release(tx, A, "released", "repository")
-    assert await active(db) == [("engine", engine_id)]
-
-
 async def test_agents_lease_independently_and_credentials_follow_the_lease(
     db: Database, store
 ) -> None:
@@ -794,92 +774,39 @@ def test_create_needs_exactly_one_secret_source(client: TestClient) -> None:
         assert client.post("/api/accounts", json=body, headers=ADMIN).status_code == 422
 
 
-def test_gitea_service_credential_is_sops_backed_and_leased_only_to_repository_role(
-    client: TestClient,
-) -> None:
-    token = "dummy-gitea-service-token"
-    created = client.post(
-        "/api/accounts",
-        json={
-            "name": "repository-writer",
-            "provider": "gitea",
-            "credential": {"username": "argus-writer", "token": token},
-        },
-        headers=ADMIN,
-    )
-    assert created.status_code == 201
-    assert created.json()["secret_ref"].startswith("sops:account-")
-    assert token not in created.text
-    assert token not in client.get("/api/accounts", headers=ADMIN).text
-    worker = register(client)
-    task = claimed_task(client, worker)
-    leased = client.post(
-        "/api/accounts/lease",
-        json=lease_payload(task, ["gitea"], role="repository"),
-        headers=worker,
-    )
-    assert leased.status_code == 200
-    assert leased.json()["role"] == "repository"
-    assert leased.json()["credential"] == {"username": "argus-writer", "token": token}
-
-
 @pytest.mark.parametrize(
-    "credential",
-    [None, {}, {"token": ""}, {"token": "a\nb"}, {"token": "t", "username": "u"}],
+    "body",
+    [
+        {"provider": "gitea", "credential": {"username": "u", "token": "dummy-tok"}},
+        {"provider": "github", "credential": {"token": "dummy-tok"}},
+    ],
 )
-def test_github_credential_is_a_single_token(client: TestClient, credential) -> None:
-    body = {"name": "gh", "provider": "github", "credential": credential}
-    assert client.post("/api/accounts", json=body, headers=ADMIN).status_code == 422
+def test_forge_tokens_are_integrations_not_accounts(client: TestClient, body) -> None:
+    res = client.post("/api/accounts", json={"name": "repo", **body}, headers=ADMIN)
+    assert res.status_code == 422
+    assert res.json()["detail"]["code"] == "forge_provider_moved"
+    assert "dummy-tok" not in res.text
 
 
-def test_github_token_is_leased_only_for_a_github_repository_lease(
-    client: TestClient,
-) -> None:
-    token = "dummy-github-fine-grained-token"
-    created = client.post(
-        "/api/accounts",
-        json={
-            "name": "gh-writer",
-            "provider": "github",
-            "credential": {"token": token},
-        },
+def test_a_moved_forge_account_is_never_rotated(client: TestClient) -> None:
+    async def moved() -> None:
+        async with app.state.db.write() as tx:
+            await tx.conn.execute(
+                "INSERT INTO accounts (id, name, provider, kind, secret_ref, priority,"
+                " state, disabled_reason, created_at, updated_at) VALUES ('moved',"
+                " 'moved', 'gitea', 'api_key', 'sops:account-moved', 0, 'disabled',"
+                " 'moved to forge integrations', ?, ?)",
+                (ts(tx.now), ts(tx.now)),
+            )
+
+    client.portal.call(moved)  # ty: ignore[possibly-missing-attribute]
+    res = client.put(
+        "/api/accounts/moved/credential",
+        json={"credential": {"username": "u", "token": "dummy-tok"}},
         headers=ADMIN,
     )
-    assert created.status_code == 201
-    assert token not in created.text
-    worker = register(client)
-    task = claimed_task(client, worker)
-    for runtime, role in ((["gitea"], "repository"), (["github"], "engine")):
-        refused = client.post(
-            "/api/accounts/lease",
-            json=lease_payload(task, runtime, role=role),
-            headers=worker,
-        )
-        assert refused.status_code != 200
-        assert token not in refused.text
-    leased = client.post(
-        "/api/accounts/lease",
-        json=lease_payload(task, ["github"], role="repository"),
-        headers=worker,
-    )
-    assert leased.status_code == 200
-    assert leased.json()["provider"] == "github"
-    assert leased.json()["credential"] == {"token": token}
-
-
-@pytest.mark.parametrize(
-    "credential", [{"token": "dummy"}, {"username": "bad:user", "token": "dummy"}]
-)
-def test_gitea_account_requires_valid_basic_auth_username(
-    client: TestClient, credential
-) -> None:
-    response = client.post(
-        "/api/accounts",
-        json={"name": "repo-writer", "provider": "gitea", "credential": credential},
-        headers=ADMIN,
-    )
-    assert response.status_code == 422
-    assert "dummy" not in response.text
+    assert res.status_code == 422
+    assert res.json()["detail"]["code"] == "forge_provider_moved"
 
 
 async def test_one_account_held_in_both_roles_exhausts_per_role(
@@ -1386,14 +1313,14 @@ async def test_claim_keeps_the_engine_lease_an_agent_already_holds(
 # -- credential write is bound to the live claim and the same document --------------------
 
 
-def _gitea(client: TestClient, name: str = "writer", priority: int = 0) -> dict:
+def _keyed(client: TestClient, name: str = "writer", priority: int = 0) -> dict:
     res = client.post(
         "/api/accounts",
         json={
             "name": name,
-            "provider": "gitea",
+            "provider": "acme",
             "priority": priority,
-            "credential": {"username": "argus-writer", "token": "tok-original"},
+            "credential": {"api_key": "tok-original"},
         },
         headers=ADMIN,
     )
@@ -1417,17 +1344,15 @@ def _secret(account) -> dict:
 def test_agent_credential_put_needs_a_live_claim_and_leaves_secret_unchanged(
     client: TestClient,
 ) -> None:
-    account = _gitea(client)
+    account = _keyed(client)
     worker = register(client)
     task = claimed_task(client, worker)
     leased = client.post(
-        "/api/accounts/lease",
-        json=lease_payload(task, ["gitea"], role="repository"),
-        headers=worker,
+        "/api/accounts/lease", json=lease_payload(task, ["acme"]), headers=worker
     )
     assert leased.status_code == 200
     original = _secret(account)
-    new = {"username": "argus-writer", "token": "tok-attacker"}
+    new = {"api_key": "tok-attacker"}
     # Lease alone, no task named.
     assert _put(client, account, worker, new).status_code == 422
     # Wrong attempt.
@@ -1452,24 +1377,21 @@ def test_agent_credential_put_needs_a_live_claim_and_leaves_secret_unchanged(
 def test_agent_credential_put_rejects_other_shape_kind_identity_and_accounts(
     client: TestClient,
 ) -> None:
-    account = _gitea(client, priority=5)
-    foreign = _gitea(client, "other-writer")
+    account = _keyed(client, priority=5)
+    foreign = _keyed(client, "other-writer")
     worker = register(client)
     task = claimed_task(client, worker)
     # No lease at all: a live claim is not enough.
-    new = {"username": "argus-writer", "token": "tok-attacker"}
+    new = {"api_key": "tok-attacker"}
     assert _put(client, account, worker, new, task).status_code == 403
     client.post(
-        "/api/accounts/lease",
-        json=lease_payload(task, ["gitea"], role="repository"),
-        headers=worker,
+        "/api/accounts/lease", json=lease_payload(task, ["acme"]), headers=worker
     )
     original = _secret(account)
-    # Extra field, changed username, a type change: all refused, secret kept.
+    # Extra field, a type change, another document: all refused, secret kept.
     for bad in (
         {**new, "extra": "x"},
-        {"username": "someone-else", "token": "tok-attacker"},
-        {"username": "argus-writer", "token": 5},
+        {"api_key": 5},
         {"token": "tok-attacker"},
     ):
         res = _put(client, account, worker, bad, task)
@@ -1477,7 +1399,7 @@ def test_agent_credential_put_rejects_other_shape_kind_identity_and_accounts(
         assert _secret(account) == original
     # An account the agent does not lease.
     assert _put(client, foreign, worker, new, task).status_code == 403
-    assert _secret(foreign)["token"] == "tok-original"
+    assert _secret(foreign)["api_key"] == "tok-original"
     # The same document, rotated, is accepted.
     assert _put(client, account, worker, new, task).status_code == 204
     assert _secret(account) == new

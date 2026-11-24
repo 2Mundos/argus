@@ -4,8 +4,6 @@ import {
   COPILOT_PROVIDER,
   CUSTOM_PROVIDER_PATTERN,
   copilotTokenNotice,
-  GITEA_PROVIDER,
-  GITHUB_PROVIDER,
   GOOGLE_PROVIDER,
   googleCredentialNotice,
   localBrokerNotice,
@@ -247,13 +245,10 @@ export function ReplaceCredential({
   onClose: () => void;
   onDone: (message: string) => void;
 }) {
-  const isGitea = account.provider === GITEA_PROVIDER;
-  const isGithub = account.provider === GITHUB_PROVIDER;
   const isCopilot = account.provider === COPILOT_PROVIDER;
   const isGoogle = account.provider === GOOGLE_PROVIDER;
   const isMuse = account.provider === MUSE_PROVIDER;
   const [text, setText] = useState("");
-  const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
   const [error, setError] = useState<string>();
   const action = useAction();
@@ -279,10 +274,6 @@ export function ReplaceCredential({
         return;
       }
       credential = { token: token.trim() };
-    } else if (isGitea) {
-      credential = { username: username.trim(), token };
-    } else if (isGithub) {
-      credential = { token };
     } else {
       try {
         const parsed: unknown = JSON.parse(text);
@@ -344,30 +335,6 @@ export function ReplaceCredential({
               spellCheck={false}
             />
           </label>
-        ) : isGitea || isGithub ? (
-          <div className="row">
-            {isGitea && (
-              <label>
-                Gitea username
-                <input
-                  aria-label="Gitea username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  autoComplete="off"
-                />
-              </label>
-            )}
-            <label>
-              {isGitea ? "Gitea" : "GitHub"} token
-              <input
-                type="password"
-                aria-label={isGitea ? "Gitea token" : "GitHub token"}
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                autoComplete="off"
-              />
-            </label>
-          </div>
         ) : (
           <>
             <label>
@@ -434,7 +401,6 @@ export function AddAccountForm({
     priority: 0,
     maxLeases: "",
     credential: '{\n  "api_key": ""\n}',
-    repoUsername: "",
     repoToken: "",
   });
   const [error, setError] = useState<string>();
@@ -451,8 +417,6 @@ export function AddAccountForm({
   const resolvedProvider =
     providerPick === PROVIDER_PICK_CUSTOM ? customProvider.trim() : providerPick;
   const authNotice = nativeAuthNotice(resolvedProvider);
-  const isGitea = resolvedProvider === GITEA_PROVIDER;
-  const isGithub = resolvedProvider === GITHUB_PROVIDER;
   const isCopilot = resolvedProvider === COPILOT_PROVIDER;
   const kind = isCopilot ? "subscription" : form.kind;
 
@@ -476,10 +440,6 @@ export function AddAccountForm({
         return;
       }
       credential = { token: form.repoToken.trim() };
-    } else if (isGitea) {
-      credential = { username: form.repoUsername.trim(), token: form.repoToken };
-    } else if (isGithub) {
-      credential = { token: form.repoToken };
     } else {
       try {
         credential = JSON.parse(form.credential);
@@ -613,32 +573,6 @@ export function AddAccountForm({
               required
             />
           </label>
-        ) : isGitea || isGithub ? (
-          <div className="row">
-            {isGitea && (
-              <label>
-                Gitea username
-                <input
-                  aria-label="Gitea username"
-                  value={form.repoUsername}
-                  onChange={(e) => set("repoUsername", e.target.value)}
-                  autoComplete="off"
-                  required
-                />
-              </label>
-            )}
-            <label>
-              {isGitea ? "Gitea" : "GitHub"} token (stored encrypted, never shown again)
-              <input
-                type="password"
-                aria-label={isGitea ? "Gitea token" : "GitHub token"}
-                value={form.repoToken}
-                onChange={(e) => set("repoToken", e.target.value)}
-                autoComplete="off"
-                required
-              />
-            </label>
-          </div>
         ) : (
           <label>
             Credential (JSON; stored encrypted, never shown again)

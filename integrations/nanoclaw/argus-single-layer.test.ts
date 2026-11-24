@@ -56,6 +56,22 @@ const tempDir = () => {
   return d;
 };
 
+/** A queued repository lease as the forge credential route answers it. */
+function forgeAnswer(l: any) {
+  return {
+    kind: "forge",
+    integration_id: l.account_id ?? l.lease_id,
+    name: l.name ?? "forge",
+    provider: l.provider,
+    host: "forge.test",
+    username: l.credential?.username ?? null,
+    access: "read_write",
+    token: l.credential?.token ?? l.credential?.access_token,
+    secret_version: 1,
+    config_version: 1,
+  };
+}
+
 describe("flag", () => {
   it.each([
     {},
@@ -342,6 +358,11 @@ function world(opts: { leases: AccountLease[]; task: object }) {
           ? [{ task_id: REPO_ID, attempt: 1, code: "not_claimed" }]
           : [],
       });
+    if (/^\/tasks\/[^/]+\/repository\/credential$/.test(p)) {
+      const i = leases.findIndex((l) => l.role === "repository");
+      if (i < 0) return json(409, { detail: { code: "forge_missing", message: "none" } });
+      return json(200, forgeAnswer(leases.splice(i, 1)[0]));
+    }
     if (p === "/accounts/lease") {
       const role = body?.role ?? "engine";
       const i = leases.findIndex((l) => (l.role ?? "engine") === role);

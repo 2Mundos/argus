@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-14
-updated: 2026-11-18
+updated: 2026-11-24
 ---
 
 # Worker Lifecycle and Task Coordination Spec
@@ -849,17 +849,18 @@ verified by the control plane. Non-code tasks need not carry PR metadata.
 
 ### Repository credentials and Gitea delivery
 
-Repository access is separate from engine and executor accounts. Pools configure
-a project-to-HTTPS `owner/repository` allowlist. For any task whose project has
-an entry in that map, NanoClaw requests a task-scoped Argus `repository` account
-lease, applies OneCLI secrets, and runs preflight before injection ([project code
+Repository access is separate from engine and executor accounts: it is the
+project's [forge integration](forge-integrations.spec.md). For any task whose
+project resolves a repository, NanoClaw fetches that credential for its attempt
+(`POST /tasks/{id}/repository/credential`), applies OneCLI secrets, and runs
+preflight before injection ([project code
 availability](project-code-availability.spec.md)). Preflight requires **write**
 when the task lists `repository:write`, otherwise **read**. Push, forge mutation,
-and checkpoints stay on `repository:write` only. The account provider is `gitea`,
-or `github` for a github.com repository ([GitHub repositories](github-repositories.spec.md)).
-After the task, NanoClaw unassigns both OneCLI repository secrets and releases the
-lease. Tasks on `global` or projects without a configured repository take no
-repository lease.
+and checkpoints stay on `repository:write` only. The provider is `gitea`, or
+`github` for a github.com repository ([GitHub repositories](github-repositories.spec.md)).
+After the task, NanoClaw unassigns both OneCLI repository secrets; there is no
+Argus lease to release. Tasks on `global` or projects without a configured
+repository fetch no repository credential.
 
 Before the task is injected, the host proves the credential works in an ephemeral,
 model-free preflight session of the same agent group, driver, image and gateway lease as a
@@ -881,17 +882,16 @@ This personal-PAT fallback is permitted by that operator decision; it is not a
 repo-scoped PAT and retains the user's Gitea account permissions. Do not imply
 that proxy path scoping narrows those upstream permissions.
 
-The operator registers the Gitea account through Argus's account registry
-(provider `gitea`, kind `api_key`, credential fields `username` and `token`).
-The username is required for Git smart-HTTP Basic authentication. The registry
-validates both fields, writes the credential to the SOPS-backed secret store,
-and keeps only the `sops:` reference in the database row. The dashboard's
-Add account dialog offers `gitea` with username and token fields (the token is a
-password input and is never shown again). Configure the
-matching project URL in the NanoClaw pool's `nanoclaw.repositories` map.
-A github.com repository instead uses a `github` account (a fine-grained token, no
-username), injected as Bearer on `api.github.com` and Basic on `github.com` Git; see
-[GitHub repositories](github-repositories.spec.md).
+The operator adds the project's Gitea token as its forge integration (Setup →
+Integrations, kind forge: the username and the token; [forge
+integrations](forge-integrations.spec.md) 3.2). The username is required for Git
+smart-HTTP Basic authentication. The token goes to the SOPS-backed secret store
+and the row keeps only the `sops:` reference; the token field is a password input
+and is never shown again. The project's repository (its record, else the
+NanoClaw pool's `nanoclaw.repositories` map) decides the host.
+A github.com repository instead uses a `github.com` forge integration (a
+fine-grained token, no username), injected as Bearer on `api.github.com` and Basic
+on `github.com` Git; see [GitHub repositories](github-repositories.spec.md).
 The NanoClaw host writes two `generic` secrets to OneCLI 1.42, both scoped to the exact Gitea host:
 the REST secret matches only `/api/v1/repos/{owner}/{repository}/*` and injects
 `Authorization: token <PAT>`; the Git smart-HTTP secret matches only

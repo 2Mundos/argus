@@ -16,6 +16,7 @@ from argus_api.deps import AdminDep, DbDep, SecretsDep, require
 from argus_api.integrations import delivery, service
 from argus_api.integrations.delivery import (
     DeliveryRequest,
+    ForgeCredential,
     IntegrationState,
     KubernetesCredential,
     McpCredential,
@@ -223,6 +224,32 @@ async def deliver_task_integration(
             tx,
             task_id,
             integration_id,
+            body,
+            caller.agent_id,
+            caller.actor,
+            secrets,
+            store_available=request.app.state.secrets_ok,
+        )
+
+
+@router.post("/tasks/{task_id}/repository/credential", include_in_schema=False)
+async def deliver_repository_credential(
+    task_id: str,
+    body: DeliveryRequest,
+    request: Request,
+    response: Response,
+    db: DbDep,
+    caller: WorkerDep,
+    secrets: SecretsDep,
+) -> ForgeCredential:
+    """The project's forge credential, to the worker holding this exact attempt
+    (forge integrations spec 3.4). Replaces the `repository` account lease."""
+    assert caller.agent_id is not None
+    response.headers["Cache-Control"] = "no-store"
+    async with db.write() as tx:
+        return await delivery.repository_credential(
+            tx,
+            task_id,
             body,
             caller.agent_id,
             caller.actor,
