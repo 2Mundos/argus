@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
 import {
   COMPACT_OUTPUT_MAX_BYTES,
+  compactResult,
   GiteaApi,
   preflightEvidence,
   RAW_OUTPUT_MAX_BYTES,
@@ -834,6 +835,24 @@ describe("compact output", () => {
     assert.equal(out.reactions, undefined);
     assert.equal(out.head.repo, undefined);
     assert.ok(r.out.length < 2000);
+  });
+
+  it("keeps issue identity fields instead of projecting an issue as a comment", () => {
+    const issue = {
+      id: 77,
+      number: 1043,
+      state: "open",
+      title: "Tracker",
+      body: "b",
+      user: { login: "alice" },
+    };
+    const out = compactResult(issue);
+    assert.equal(out.number, 1043);
+    assert.equal(out.state, "open");
+    assert.equal(out.title, "Tracker");
+    assert.equal(out.user, "alice");
+    const comment = compactResult({ id: 5, body: "hi", user: { login: "bob" } });
+    assert.deepEqual(Object.keys(comment).includes("author"), true);
   });
 
   it("keeps the forge payload with --raw", async () => {
