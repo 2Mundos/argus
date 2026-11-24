@@ -463,9 +463,20 @@ class InspectedInstance(Instance):
     runtime: InstanceRuntime
 
 
+class CapabilityDrift(BaseModel):
+    """An available account whose provider no live pool can serve: every execution
+    capability of that provider is on no pool that is wanted or running."""
+
+    provider: str
+    accounts: list[str]  # names of the available accounts of the provider
+    missing: list[str]  # capability ids, none of them on a live pool
+
+
 class PoolInspection(BaseModel):
     pool: Pool
     instances: list[InspectedInstance]  # live ones, newest first
+    # Fleet-wide, not about this pool alone: empty when nothing has drifted.
+    capability_drift: list[CapabilityDrift] = []
 
 
 class Check(BaseModel):

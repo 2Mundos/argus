@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-27
-updated: 2026-11-22
+updated: 2026-11-24
 ---
 
 # Task workspace: a stable per-task git workspace, checked before the model
@@ -255,6 +255,15 @@ published only if `git ls-remote origin refs/pull/<n>/head` shows the head itsel
 descendant this workspace holds. An unreachable forge, a different head or a commit
 beyond it (a reviewer's own) is no evidence and stays `unpublished_commits`, so the
 fence keeps refusing.
+
+A review whose earlier attempt ended on another instance needs no checkpoint either, when
+its head is published: on attempt > 1 the channel runs `git ls-remote` for the task
+branch and `refs/pull/<n>/head`, and if both equal the full `head_sha` of the input
+there is nothing the other instance can hold that the forge lacks, so unproven prior
+rows (`failed`, `running`, not reported) no longer block. A branch or PR head that is
+missing, differs, or cannot be read (unreachable forge, credentialed URL, bad input)
+proves nothing and the rows still block as `env_workspace_prior_unverified`; a `saved`
+row still gives `env_workspace_prior_unavailable`.
 
 # 4. Open Questions
 

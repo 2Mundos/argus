@@ -147,6 +147,50 @@ def test_blocked_task_without_decision_suggests_unblock(client: TestClient) -> N
     assert a["checklist"]["state"] in ("structured", "unstructured")
 
 
+def test_an_expired_login_names_the_account_and_the_operator_action(
+    client: TestClient,
+) -> None:
+    worker = register(client)
+    task = create(client)
+    claimed = client.post("/api/tasks/claim", json={}, headers=worker).json()
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    db = client.app.state.db  # ty: ignore[unresolved-attribute]
+
+    async def lease() -> None:
+        async with db.write() as tx:
+            await tx.conn.execute(
+                "INSERT INTO accounts (id, name, provider, kind, secret_ref, state,"
+                " created_at, updated_at) VALUES ('acc-1', 'work-claude', 'anthropic',"
+                " 'subscription', 'ref', 'available', ?, ?)",
+                (ts(tx.now), ts(tx.now)),
+            )
+            await tx.conn.execute(
+                "INSERT INTO account_leases (id, account_id, agent_id, providers,"
+                " leased_at, role) VALUES ('l-1', 'acc-1', ?, '[]', ?, 'engine')",
+                (agent_id, ts(tx.now)),
+            )
+
+    asyncio.run(lease())
+    res = client.post(
+        f"/api/tasks/{task['id']}/fail",
+        json={
+            "attempt": claimed["attempt"],
+            "error": "HTTP 401 token_expired",
+            "reason": "provider_failure",
+        },
+        headers=worker,
+    )
+    assert res.status_code == 200, res.text
+    after = ok(client.get(f"/api/tasks/{task['id']}"))
+    assert after["block_reason"] in ("awaiting_quota", "env_provider_auth")
+    assert after["failures"] == 0
+    nxt = row(actionable(client), task["id"])["actionable"]["next"]
+    assert nxt["action"] == "fix_account"
+    assert nxt["args"]["account"] == "work-claude"
+    assert "sign the account in again" in nxt["reason"]
+    assert "no attempt was spent" in nxt["reason"]
+
+
 def test_human_decisions_are_escalated_for_an_orchestrator(client: TestClient) -> None:
     approval = create(client, requires_approval=True)
     review = create(client, review="human")

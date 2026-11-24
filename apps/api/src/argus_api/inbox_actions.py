@@ -69,6 +69,7 @@ Action = Literal[
     "unblock_task",
     "set_project_repository",
     "raise_task_budget",
+    "fix_account",
     "retry_dependency",
     "inspect_stall",
     "reread",
@@ -196,6 +197,37 @@ class ActionableInboxPage(InboxPage):
     authority_note: str = AUTHORITY_NOTE
 
 
+# Blocks that wait on a model account, not on the task: the operator action each needs.
+_ACCOUNT_ACTIONS = {
+    "env_provider_auth": "sign the account in again (its login expired or was refused)",
+    "awaiting_quota": "sign the account in again or wait for its quota to reset, or add or enable another account",
+    "no_account": "sign the account in again or wait for its quota to reset, or add or enable another account",
+}
+
+
+async def _account_names(snap: Snapshot, tasks: dict[str, Task]) -> dict[str, str]:
+    """The account each account-blocked task last ran on (its newest attempt's agent's
+    newest engine lease), by task id; a task whose account is unknown is left out."""
+    names: dict[str, str] = {}
+    for task in tasks.values():
+        if (
+            task.state is not TaskState.BLOCKED
+            or task.block_reason not in _ACCOUNT_ACTIONS
+        ):
+            continue
+        async with snap.conn.execute(
+            "SELECT a.name FROM task_attempts t"
+            " JOIN account_leases l ON l.agent_id = t.agent_id AND l.role = 'engine'"
+            " JOIN accounts a ON a.id = l.account_id"
+            " WHERE t.task_id = ? ORDER BY t.id DESC, l.leased_at DESC LIMIT 1",
+            (task.id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is not None:
+            names[task.id] = row["name"]
+    return names
+
+
 _UNKNOWN = Evidence(value=None, source=None, observed_at=None, status="unknown")
 
 
@@ -234,6 +266,7 @@ async def actionable_inbox(
             if i.subject_type == "task"
         }
         graph = await _dependents(snap)
+        accounts = await _account_names(snap, tasks)
         refs = {}
         if forge:
             for task in tasks.values():
@@ -278,6 +311,7 @@ async def actionable_inbox(
             ref=refs.get(task.id) if task else None,
             live=read,
             changed=item.decision_id in changed,
+            account=accounts.get(item.subject_id),
         )
         items.append(
             ActionableInboxItem.model_validate(
@@ -329,6 +363,7 @@ def _project(
     ref: PrRef | None,
     live: Evidence,
     changed: bool,
+    account: str | None = None,
 ) -> Actionable:
     authority = _authority(decision, task, caller)
     return Actionable(
@@ -345,7 +380,7 @@ def _project(
         options=decision.options if decision else None,
         authority=authority,
         effects=_effects(decision) if decision else [],
-        next=_next(item, task, decision, authority, changed),
+        next=_next(item, task, decision, authority, changed, account),
         impact=_impact(item.subject_id, graph if task else {}),
         checklist=_checklist(task),
         wip=_wip(task, now),
@@ -447,6 +482,7 @@ def _next(
     decision: Decision | None,
     authority: Authority,
     changed: bool,
+    account: str | None = None,
 ) -> NextAction:
     if changed:
         return NextAction(
@@ -497,6 +533,17 @@ def _next(
                 args=args,
                 reason=f"{task.progress_message or 'the budget is spent'}: edit_task"
                 " with a higher budget_usd to continue it, or cancel_task",
+            )
+        if task.block_reason in _ACCOUNT_ACTIONS:
+            # One decision, naming the account and the operator action; no attempt was spent.
+            who = (
+                f"account {account}" if account else "the model account (not recorded)"
+            )
+            return NextAction(
+                action="fix_account",
+                args=args | ({"account": account} if account else {}),
+                reason=f"{who}: {_ACCOUNT_ACTIONS[task.block_reason]}; no attempt was"
+                " spent, then unblock_task",
             )
         return NextAction(
             action="unblock_task",

@@ -8,8 +8,10 @@ import aiosqlite
 from argus_core.agents import AgentRuntime
 from argus_core.auth import Scope
 from argus_core.decisions import Audience, DecisionKind
+from argus_core.execution_chains import EXECUTION_CAPABILITIES
 from argus_core.fleet import (
     REDACTED,
+    CapabilityDrift,
     Fact,
     FactSource,
     InspectedInstance,
@@ -435,7 +437,37 @@ async def inspect(conn: aiosqlite.Connection, name: str) -> PoolInspection:
         InspectedInstance(**i.model_dump(), runtime=_runtime(pool, i))
         for i in await list_instances(conn, name)
     ]
-    return PoolInspection(pool=redact(pool), instances=inspected)
+    return PoolInspection(
+        pool=redact(pool),
+        instances=inspected,
+        capability_drift=await capability_drift(conn),
+    )
+
+
+async def capability_drift(conn: aiosqlite.Connection) -> list[CapabilityDrift]:
+    """Providers with an available account but no live pool carrying any of their
+    execution capabilities: leases for them are granted and no worker can use them.
+    A pool is live when it is wanted (desired replicas) or has a live instance."""
+    served = {
+        c
+        for p in await list_pools(conn)
+        if p.desired_replicas > 0 or p.live_instances > 0
+        for c in p.capabilities
+    }
+    async with conn.execute(
+        "SELECT provider, name FROM accounts WHERE state = 'available'"
+        " ORDER BY provider, name"
+    ) as cur:
+        available = [(r["provider"], r["name"]) for r in await cur.fetchall()]
+    drift: list[CapabilityDrift] = []
+    for provider in sorted({p for p, _ in available}):
+        ids = sorted(c.id for c in EXECUTION_CAPABILITIES if c.provider == provider)
+        if ids and served.isdisjoint(ids):
+            names = [n for p, n in available if p == provider]
+            drift.append(
+                CapabilityDrift(provider=provider, accounts=names, missing=ids)
+            )
+    return drift
 
 
 def _runtime(pool: Pool, inst: Instance) -> InstanceRuntime:

@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-11
+updated: 2026-11-24
 ---
 
 # MCP operations
@@ -514,6 +514,12 @@ both.
   `capabilities`, `engine`, `executor`, `ready`) carries a `source`:
   `configured | requested | started | validated | unknown`. A fact without proof
   is `unknown`. Heartbeats prove a live process, not a working model (home spec).
+  The result also carries `capability_drift` (fleet-wide): each provider with an
+  `available` account for which no pool that is wanted (`desired_replicas` > 0) or
+  running carries any execution capability (`nanoclaw:{role}:{adapter}:{provider}`),
+  with the account names and the `missing` capability ids. Such an account can be
+  leased and no worker can use it; fix it by adding a capability to a pool or scaling a
+  pool that has it. Empty when nothing drifted.
   `image` is `requested` (what the instance was started with, recorded at start)
   or else the pool's `configured` image. `capabilities` are `validated` when
   active agents registered them, else `configured`. `ready` is `true`
