@@ -2189,7 +2189,14 @@ export function compactResult(value, depth = 0) {
   if (!isObject(value) || depth > 8) return value;
   if (isObject(value.head) && isObject(value.base) && typeof value.number === "number")
     return compactPullRequest(value);
-  if (typeof value.id === "number" && typeof value.body === "string" && isObject(value.user))
+  // Issues also carry id/body/user; only number-less, title-less objects are comments.
+  if (
+    typeof value.id === "number" &&
+    typeof value.body === "string" &&
+    isObject(value.user) &&
+    value.number === undefined &&
+    value.title === undefined
+  )
     return compactComment(value);
   const out = {};
   for (const [key, v] of Object.entries(value)) {
