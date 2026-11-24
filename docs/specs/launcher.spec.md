@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-03
-updated: 2026-11-11
+updated: 2026-11-24
 ---
 
 # Launcher
@@ -33,7 +33,7 @@ The commands:
 | `argus backup` | Writes an online SQLite backup into the volume (3.5) and prints its name. |
 | `argus restore <name>` | Stops the container, backs up the current database, restores that backup, starts the version it was taken under (3.5). |
 | `argus status` | Version, container state, `/readyz`, config path, the newest backups. |
-| `argus tray [--stop]` | Manually start or gracefully stop the desktop tray ([desktop tray](tray.spec.md)); normally started automatically by `up`, requires `uv` on the host. |
+| `argus tray [--background\|--stop] [--url BASE_URL]` | Manually start or gracefully stop the desktop tray ([desktop tray](tray.spec.md)); normally started automatically by `up`, requires `uv` on the host. With `--url`, monitor a remote Argus instead of the local install. |
 | `argus token` · `argus logs [-f]` · `argus down` | Print the admin token · container logs · stop and remove the container (never the volume). |
 | `argus unlock` | Removes a stale lock left by a command that died (3.7). |
 | `argus worker setup\|status\|remove` | Workers on this machine: published worker images, the OneCLI gateway, Docker access ([local workers](local-workers.spec.md)). The first `up` offers `setup`; these add or remove workers later. Mutating subcommands take the lock (3.7). |

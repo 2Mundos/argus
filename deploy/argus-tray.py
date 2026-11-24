@@ -12,12 +12,14 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
-from http.client import HTTPConnection, HTTPException
+from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from pathlib import Path
+from urllib.parse import urlparse
 
 from PySide6.QtCore import (
     QCoreApplication,
@@ -98,12 +100,70 @@ def get(port: int, path: str, token: str = "") -> tuple[int, bytes]:
         connection.close()
 
 
+def normalize_base_url(raw: str) -> str:
+    """Validate --url as scheme://host[:port] and return it without a path."""
+    parsed = urlparse(raw.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("expected --url like https://argus.example.com")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError("expected --url with no path, like https://host")
+    if parsed.username or parsed.password:
+        raise ValueError("pass the token via Sign in, not in --url")
+    host = parsed.hostname.lower()
+    port = parsed.port
+    default = 443 if parsed.scheme == "https" else 80
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("invalid port")
+    netloc = host if port in (None, default) else f"{host}:{port}"
+    return f"{parsed.scheme}://{netloc}"
+
+
+def remote_label(base_url: str) -> str:
+    return urlparse(base_url).netloc
+
+
+def remote_tag(base_url: str) -> str:
+    return hashlib.sha256(base_url.encode()).hexdigest()[:12]
+
+
+def get_url(base_url: str, path: str, token: str = "") -> tuple[int, bytes]:
+    # Direct connection: no proxies, no redirects, TLS verified for https.
+    parsed = urlparse(base_url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if parsed.scheme == "https":
+        connection: HTTPConnection = HTTPSConnection(
+            parsed.hostname or "", port, timeout=3, context=ssl.create_default_context()
+        )
+    else:
+        connection = HTTPConnection(parsed.hostname or "", port, timeout=3)
+    try:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        connection.request("GET", path, headers=headers)
+        response = connection.getresponse()
+        return response.status, response.read(1_048_576)
+    finally:
+        connection.close()
+
+
 @dataclass(frozen=True)
 class Snapshot:
     state: str
     version: str = ""
     url: str = ""
     lines: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Remote:
+    base_url: str
+
+    @property
+    def label(self) -> str:
+        return remote_label(self.base_url)
+
+    @property
+    def tag(self) -> str:
+        return remote_tag(self.base_url)
 
 
 @dataclass(frozen=True)
@@ -132,6 +192,37 @@ class Host:
                 *args,
             )
         return args
+
+
+class SystemUnavailable(Exception):
+    pass
+
+
+def require_system(status: int, body: bytes) -> dict:
+    if status != 200:
+        raise SystemUnavailable(
+            "Stats unavailable: sign in for stats"
+            if status in (401, 403)
+            else "Stats unavailable: API error"
+        )
+    data = json.loads(body)
+    if not isinstance(data, dict):
+        raise SystemUnavailable("Stats unavailable")
+    return data
+
+
+def system_lines(data: dict) -> tuple[str, ...]:
+    tasks, agents = data["tasks"], data["agents"]
+    minutes = int(data["uptime_s"]) // 60
+    hours, minutes = divmod(minutes, 60)
+    return (
+        f"Tasks: {tasks.get('claimed', 0)} running · "
+        f"{tasks.get('ready', 0)} ready · {tasks.get('blocked', 0)} blocked",
+        f"Agents: {agents.get('active', 0)} active · "
+        f"{agents.get('draining', 0)} draining",
+        f"Inbox: {data['decisions_open']} open",
+        f"Uptime: {hours}h {minutes}m",
+    )
 
 
 def snapshot(host: Host, token: str) -> Snapshot:
@@ -171,26 +262,34 @@ def snapshot(host: Host, token: str) -> Snapshot:
         return Snapshot(state, version, url, ("Stats unavailable: sign in for stats",))
     try:
         status, body = get(port, "/api/system", token)
-        if status != 200:
-            message = (
-                "Stats unavailable: sign in for stats"
-                if status in (401, 403)
-                else "Stats unavailable: API error"
-            )
-            return Snapshot(state, version, url, (message,))
-        data = json.loads(body)
-        tasks, agents = data["tasks"], data["agents"]
-        minutes = int(data["uptime_s"]) // 60
-        hours, minutes = divmod(minutes, 60)
-        lines = (
-            f"Tasks: {tasks.get('claimed', 0)} running · "
-            f"{tasks.get('ready', 0)} ready · {tasks.get('blocked', 0)} blocked",
-            f"Agents: {agents.get('active', 0)} active · "
-            f"{agents.get('draining', 0)} draining",
-            f"Inbox: {data['decisions_open']} open",
-            f"Uptime: {hours}h {minutes}m",
-        )
+        data = require_system(status, body)
+    except SystemUnavailable as exc:
+        return Snapshot(state, version, url, (str(exc),))
     except (OSError, HTTPException, ValueError, KeyError, TypeError, AttributeError):
+        return Snapshot(state, version, url, ("Stats unavailable",))
+    return Snapshot(state, version, url, system_lines(data))
+
+
+def snapshot_remote(remote: Remote, token: str) -> Snapshot:
+    url = remote.base_url + "/"
+    try:
+        status, _ = get_url(remote.base_url, "/readyz")
+        state = "Ready" if status == 200 else "Unhealthy"
+    except (OSError, HTTPException, ValueError):
+        return Snapshot("Unreachable", "", url)
+    if not token:
+        return Snapshot(state, "", url, ("Stats unavailable: sign in for stats",))
+    try:
+        status, body = get_url(remote.base_url, "/api/system", token)
+        data = require_system(status, body)
+    except SystemUnavailable as exc:
+        return Snapshot(state, "", url, (str(exc),))
+    except (OSError, HTTPException, ValueError, KeyError, TypeError, AttributeError):
+        return Snapshot(state, "", url, ("Stats unavailable",))
+    version = data["version"] if isinstance(data.get("version"), str) else ""
+    try:
+        lines = system_lines(data)
+    except (KeyError, TypeError, AttributeError, ValueError):
         lines = ("Stats unavailable",)
     return Snapshot(state, version, url, lines)
 
@@ -198,31 +297,41 @@ def snapshot(host: Host, token: str) -> Snapshot:
 class Refresh(QThread):
     result = Signal(object)
 
-    def __init__(self, host: Host, token: str) -> None:
+    def __init__(self, target: Host | Remote, token: str) -> None:
         super().__init__()
-        self.host, self.token = host, token
+        self.target, self.token = target, token
 
     def run(self) -> None:
         try:
-            result = snapshot(self.host, self.token)
+            if isinstance(self.target, Remote):
+                result = snapshot_remote(self.target, self.token)
+            else:
+                result = snapshot(self.target, self.token)
         except (OSError, subprocess.SubprocessError, ValueError):
             result = Snapshot("Status unavailable")
         self.result.emit(result)
 
 
 class Tray(QObject):
-    def __init__(self, app: QApplication, host: Host) -> None:
+    def __init__(
+        self, app: QApplication, target: Host | Remote, initial_token: str = ""
+    ) -> None:
         super().__init__(app)
-        self.app, self.host = app, host
+        self.app, self.target = app, target
+        self.remote = isinstance(target, Remote)
         self.current = Snapshot("Checking…")
-        self.token = ""
+        self.token = initial_token
         self.refresh_job: Refresh | None = None
         self.refresh_again = False
         self.command: QProcess | None = None
         self.output = bytearray()
         self.stopping = False
         self.menu = QMenu()
-        self.status = self.menu.addAction("Argus — Checking…")
+        if isinstance(target, Remote):
+            checking = f"Argus {target.label} — Checking…"
+        else:
+            checking = "Argus — Checking…"
+        self.status = self.menu.addAction(checking)
         self.status.setEnabled(False)
         self.stats = [self.menu.addAction("") for _ in range(4)]
         for row in self.stats:
@@ -232,21 +341,22 @@ class Tray(QObject):
         self.open_action = self.menu.addAction("Open Argus", self.open_argus)
         self.open_action.setEnabled(False)
         self.controls: dict[str, QAction] = {}
-        for label, args in (
-            ("Up", ("up", "--no-tray")),
-            ("Down", ("down",)),
-            ("Restart", ("up", "--no-tray")),
-            ("Backup", ("backup",)),
-            ("Recent logs…", ("logs", "--tail", "100")),
-        ):
-            action = self.menu.addAction(label)
-            action.triggered.connect(
-                lambda checked=False, label=label, args=args: self.run_command(
-                    label, args
+        if not self.remote:
+            for label, args in (
+                ("Up", ("up", "--no-tray")),
+                ("Down", ("down",)),
+                ("Restart", ("up", "--no-tray")),
+                ("Backup", ("backup",)),
+                ("Recent logs…", ("logs", "--tail", "100")),
+            ):
+                action = self.menu.addAction(label)
+                action.triggered.connect(
+                    lambda checked=False, label=label, args=args: self.run_command(
+                        label, args
+                    )
                 )
-            )
-            action.setEnabled(False)
-            self.controls[label] = action
+                action.setEnabled(False)
+                self.controls[label] = action
         self.menu.addSeparator()
         self.menu.addAction("Refresh", self.refresh)
         self.menu.addAction("Sign in for stats…", self.sign_in)
@@ -289,7 +399,7 @@ class Tray(QObject):
         if self.refresh_job:
             self.refresh_again = True
             return
-        self.refresh_job = Refresh(self.host, self.token)
+        self.refresh_job = Refresh(self.target, self.token)
         self.refresh_job.result.connect(self.render)
         self.refresh_job.finished.connect(self.refreshed)
         self.refresh_job.start()
@@ -303,12 +413,19 @@ class Tray(QObject):
             self.refresh_again = False
             self.refresh()
 
+    def title(self, current: Snapshot) -> str:
+        base = f"Argus {current.version} — {current.state}".replace("  ", " ")
+        if self.remote and isinstance(self.target, Remote):
+            base = f"Argus {self.target.label} {current.version} — {current.state}"
+            base = base.replace("  ", " ")
+        return base
+
     @Slot(object)
     def render(self, current: Snapshot) -> None:
         if self.command:
             return
         self.current = current
-        title = f"Argus {current.version} — {current.state}".replace("  ", " ")
+        title = self.title(current)
         self.status.setText(title)
         self.tray.setIcon(icon(current.state))
         self.tray.setToolTip("\n".join((title, *current.lines)))
@@ -316,11 +433,15 @@ class Tray(QObject):
         for index, row in enumerate(self.stats):
             row.setVisible(index < len(current.lines))
             row.setText(current.lines[index] if index < len(current.lines) else "")
-        available = bool(current.url) and current.state not in (
-            "Docker unavailable",
-            "Configuration unavailable",
-            "Status unavailable",
-        )
+        if self.remote:
+            unavailable = ("Unreachable", "Status unavailable")
+        else:
+            unavailable = (
+                "Docker unavailable",
+                "Configuration unavailable",
+                "Status unavailable",
+            )
+        available = bool(current.url) and current.state not in unavailable
         for label, action in self.controls.items():
             allowed = current.state == "Stopped" if label == "Up" else available
             if label in ("Down", "Restart", "Backup"):
@@ -328,7 +449,7 @@ class Tray(QObject):
             action.setEnabled(allowed and self.command is None)
 
     def run_command(self, label: str, args: tuple[str, ...]) -> None:
-        if self.command:
+        if self.command or not isinstance(self.target, Host):
             return
         self.command = QProcess(self.app)
         self.command.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
@@ -348,7 +469,7 @@ class Tray(QObject):
         for action in self.controls.values():
             action.setEnabled(False)
         self.status.setText(f"Argus — {label}…")
-        program, *arguments = self.host.command(*args)
+        program, *arguments = self.target.command(*args)
         self.command.start(program, arguments)
         self.command.closeWriteChannel()
 
@@ -405,15 +526,16 @@ class Tray(QObject):
         self.app.quit()
 
 
-def stop_address(home: Path) -> str:
-    return "argus-tray-" + hashlib.sha256(os.fsencode(str(home.resolve()))).hexdigest()
+def stop_address(home: Path, key: str = "") -> str:
+    material = str(home.resolve()) + key
+    return "argus-tray-" + hashlib.sha256(os.fsencode(material)).hexdigest()
 
 
-def stop_tray(home: Path) -> int:
+def stop_tray(home: Path, key: str, lockfile: Path) -> int:
     socket = QLocalSocket()
-    socket.connectToServer(stop_address(home))
+    socket.connectToServer(stop_address(home, key))
     if not socket.waitForConnected(3000):
-        lock = QLockFile(str(home / "tray.lock"))
+        lock = QLockFile(str(lockfile))
         lock.setStaleLockTime(0)
         if lock.tryLock(0):
             lock.unlock()
@@ -428,10 +550,10 @@ def stop_tray(home: Path) -> int:
     return 1
 
 
-def stop_server(tray: Tray, lock: QLockFile, home: Path) -> QLocalServer:
+def stop_server(tray: Tray, lock: QLockFile, home: Path, key: str = "") -> QLocalServer:
     server = QLocalServer(tray)
     server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
-    address = stop_address(home)
+    address = stop_address(home, key)
     # The singleton lock is held: a leftover socket can only belong to a dead tray.
     QLocalServer.removeServer(address)
     server.listen(address)
@@ -462,10 +584,22 @@ def stop_server(tray: Tray, lock: QLockFile, home: Path) -> QLocalServer:
     return server
 
 
+def default_home() -> Path:
+    configured = os.environ.get("ARGUS_HOME", "")
+    if configured:
+        return Path(configured)
+    return Path.home() / ".config" / "argus"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--launcher", required=True)
-    parser.add_argument("--home", type=Path, required=True)
+    parser.add_argument("--launcher", default="")
+    parser.add_argument("--home", type=Path, default=None)
+    parser.add_argument(
+        "--url",
+        default="",
+        help="monitor a remote Argus, e.g. https://argus.example.com",
+    )
     parser.add_argument("--wsl-distro", default="")
     parser.add_argument("--wsl-user", default="")
     parser.add_argument("--wsl-home", default="")
@@ -475,20 +609,42 @@ def main() -> int:
     args = parser.parse_args()
     if sys.platform not in ("linux", "darwin", "win32"):
         parser.error("the tray supports Linux, macOS and Windows through WSL 2")
-    if sys.platform == "win32" and not all(
-        (args.wsl_distro, args.wsl_user, args.wsl_home)
-    ):
-        parser.error("run `argus tray` inside your WSL 2 distribution")
-    host = Host(
-        args.launcher if args.wsl_distro else str(Path(args.launcher).resolve()),
-        args.wsl_home if args.wsl_distro else str(args.home.resolve()),
-        args.wsl_distro,
-        args.wsl_user,
-    )
-    os.environ["ARGUS_HOME"] = str(args.home.resolve())
+    base_url = ""
+    if args.url.strip():
+        try:
+            base_url = normalize_base_url(args.url)
+        except ValueError as exc:
+            parser.error(str(exc))
+    home = args.home or default_home()
+    if base_url:
+        target: Host | Remote = Remote(base_url)
+        key = "remote:" + base_url
+        tag = remote_tag(base_url)
+        lockfile = home / f"tray-remote-{tag}.lock"
+        logfile = home / f"tray-remote-{tag}.log"
+        # Tokens stay in memory: seed from the environment, top up with Sign in.
+        initial_token = os.environ.get("ARGUS_ADMIN_TOKEN", "").strip()
+    else:
+        if not args.launcher:
+            parser.error("give --url to monitor a remote Argus")
+        if sys.platform == "win32" and not all(
+            (args.wsl_distro, args.wsl_user, args.wsl_home)
+        ):
+            parser.error("run `argus tray` inside your WSL 2 distribution")
+        target = Host(
+            args.launcher if args.wsl_distro else str(Path(args.launcher).resolve()),
+            args.wsl_home if args.wsl_distro else str(home.resolve()),
+            args.wsl_distro,
+            args.wsl_user,
+        )
+        key = ""
+        lockfile = home / "tray.lock"
+        logfile = home / "tray.log"
+        initial_token = ""
+    os.environ["ARGUS_HOME"] = str(home.resolve())
     if args.stop:
         app = QCoreApplication(["argus-tray-stop"])
-        return stop_tray(args.home)
+        return stop_tray(home, key, lockfile)
     if args.background:
         # Detach on Windows as well as Unix; the WSL/uv bootstrap can then exit.
         arguments = [arg for arg in sys.argv[1:] if arg != "--background"]
@@ -496,7 +652,7 @@ def main() -> int:
             subprocess, "CREATE_NEW_PROCESS_GROUP", 0
         )
         try:
-            with (args.home / "tray.log").open("ab") as log:
+            with logfile.open("ab") as log:
                 subprocess.Popen(  # noqa: S603 -- our own interpreter and script
                     [sys.executable, str(Path(__file__).resolve()), *arguments],
                     stdin=subprocess.DEVNULL,
@@ -519,13 +675,13 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    lock = QLockFile(str(args.home / "tray.lock"))
+    lock = QLockFile(str(lockfile))
     lock.setStaleLockTime(0)
     if not lock.tryLock(0):
-        print("argus: a tray is already running for this config", file=sys.stderr)
+        print("argus: a tray is already running for this target", file=sys.stderr)
         return 1
-    tray = Tray(app, host)
-    server = stop_server(tray, lock, args.home)
+    tray = Tray(app, target, initial_token)
+    server = stop_server(tray, lock, home, key)
     app.setWindowIcon(icon("Ready"))
     try:
         if not server.isListening():
