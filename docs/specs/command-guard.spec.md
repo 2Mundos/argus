@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-01
-updated: 2026-11-16
+updated: 2026-11-24
 ---
 
 # Command guard
@@ -27,7 +27,8 @@ bypass. Background: draft (removed; in git history),
   string, scripts written then run, `find -delete`) is not detected.
 - Coverage of Cursor, opencode, the `local` executor, Copilot, or Codex run by
   `argus-delegate` (see Decisions). They run no verified native hook, so the guard must not be
-  described as covering them.
+  described as covering them. Claude Code run by `argus-delegate` is covered: it runs in
+  the agent image and reads the same managed settings (verified, section 6).
 - Helper-deletion rules (`gh repo delete`, `argus-gitea-api` / `argus-github-api`
   deletes): the helpers expose no repository delete command, so there is nothing
   to guard.
@@ -118,14 +119,20 @@ bypass. Background: draft (removed; in git history),
   into its `hooks.json` as a `PreToolUse` hook on `Bash` and trusts it through
   Codex's own hook trust before the first thread; a guard that is missing, disabled
   or untrusted refuses the query ([Codex hook trust](codex-hook-trust.spec.md)).
-  Codex run as a delegated executor (`argus-delegate`) is out of scope. Block events
+  Codex run as a delegated executor (`argus-delegate`) is out of scope: `codex exec`
+  does not read Claude's managed settings and the agent image has no Codex hook
+  configuration (no `~/.codex/hooks.json`, no `/etc/codex`), so it runs unguarded.
+  Live verification of a Codex turn is owned by [Codex hook trust](codex-hook-trust.spec.md)
+  (its open items), not by this spec. Block events
   are not posted for Codex: the detection reads Claude transcripts only.
 - **Visibility.** Each block is an informational, persistent
   `task.command_blocked` event (`tool`, `rule`, `reason`, `attempt`, `command`). It
   is not a failure class, not an inbox item, and changes no task state or progress.
   The hook stays side-effect free and only prints the deny decision. The NanoClaw
   channel tails the attempt's Claude transcript (`argus-command-blocked.ts`), pairs a
-  Bash `tool_result` with `is_error` whose text is the block message with its
+  Bash `tool_result` with `is_error` whose text is the block message (bare, or inside
+  the `<tool_use_error>PreToolUse:Bash hook error: …</tool_use_error>` wrapper Claude
+  Code writes) with its
   `tool_use` by id, maps the reason text to the closed rule id (a table a test keeps
   equal to `REASONS`) and posts `POST /api/tasks/{id}/command-blocked`
   `{attempt, tool_use_id, rule, command}` once per `tool_use_id`, with the host's
@@ -158,13 +165,12 @@ bypass. Background: draft (removed; in git history),
 
 ## Open items
 
-- Codex: that a live 0.162.1 turn calls the hook with tool name `Bash` and honours
-  the deny ([Codex hook trust](codex-hook-trust.spec.md) open items), and block
-  events for Codex.
-- Claude Code managed-settings path and precedence in the pinned Claude Code
-  version are not verified against a real image.
-- Claude Code and Codex run as executors by `argus-delegate` are covered only if
-  they pick up the managed settings (unverified).
+- The Docker path: `integrations/nanoclaw/scripts/claude-guard-live-probe.sh --image
+  <image>` (a throwaway `docker run --rm --pull=never --network=none` container) and
+  `sessionImageCommandGuardBlock` with its default reader (`readImageFile`), each
+  against the configured base image (NanoClaw's `CONTAINER_IMAGE`) and the project
+  image, on a host with a Docker daemon. The live probe has only run inside the
+  project image itself (section 6), where no Docker CLI or socket exists.
 
 # 5. Constraints
 
@@ -183,11 +189,23 @@ bypass. Background: draft (removed; in git history),
   `apps/api/src/argus_api/tasks/command_blocked.py`, migration
   `0077_task_command_blocks.sql`
 - `integrations/nanoclaw/tests/test_command_guard.py`
+- `integrations/nanoclaw/scripts/claude-guard-live-probe.sh` and
+  `fake-anthropic.mjs` (`FAKE_ANTHROPIC_BASH`): the live probe.
 - Codex: `integrations/nanoclaw/overlays/codex-hook-trust.ts` and
   `patch-codex-hook-trust.py` ([Codex hook trust](codex-hook-trust.spec.md)).
 
 ## Verification boundary
 
+- Live probe: `integrations/nanoclaw/scripts/claude-guard-live-probe.sh [--image IMAGE]
+  [--delegate]`. Claude Code as installed in the image runs one turn against
+  `fake-anthropic.mjs` (`FAKE_ANTHROPIC_BASH`: a benign marker write, then
+  `rm --no-preserve-root --version > <denied marker>`) in a fresh HOME with a dummy
+  key and the CLI's default permission mode, while user, project and local settings
+  set `disableAllHooks` and an empty `PreToolUse`. It passes when `PreToolUse:Bash`
+  hook events appear, the hook returns the Argus deny, the transcript carries an
+  `is_error` tool_result with the block message, the benign marker holds its text,
+  the denied marker is absent and the CLI exits 0. `--delegate` runs the command
+  line `argus-delegate` builds for its Claude executor (`buildCommand`).
 - Commands: `pytest integrations/nanoclaw/tests/test_command_guard.py`,
   `pytest integrations/nanoclaw/tests/test_commit_attribution.py`,
   `pytest integrations/nanoclaw/tests/test_tools_layer_permissions.py` (Docker
@@ -202,7 +220,17 @@ bypass. Background: draft (removed; in git history),
   `argus-single-layer.test.ts`); the pool-start check against a fake target
   (`apps/api/tests/test_launch.py`: missing, malformed, registered with the
   shipped settings, unverifiable, guard off).
-- Not verified: the image build, that Claude Code loads the managed settings and
-  honours the deny, that a real denial is written to the transcript in the shape
-  the detection expects (`tool_result` with `is_error`), a blocked `rm -rf ~` on a disposable worker, a
-  live Codex turn.
+- Verified live (2026-11-24) inside the project agent image
+  `argus-project-runtime:argus-b88b194735b6`, Claude Code 2.1.296, no Docker: the
+  probe passes plain (permission mode `auto`, the CLI default) and with `--delegate`
+  (`acceptEdits`, `--allowed-tools Bash,Edit,Write,Read,Glob,Grep`). Claude Code
+  reads `/etc/claude-code/managed-settings.json` (its settings watcher lists it after
+  the user, project and local files), and their `disableAllHooks` does not remove the
+  managed hook. The real denial is an `is_error` tool_result
+  `<tool_use_error>PreToolUse:Bash hook error: Blocked by Argus command guard: …
+  </tool_use_error>`; the detection reads that transcript line into one event
+  (`argus-command-blocked.test.ts` keeps the wrapper). `sessionImageCommandGuardBlock`
+  for that image returned null with an in-image file reader, and `env_guard_missing`
+  with the default reader (`spawn docker ENOENT`).
+- Not verified: the Docker path (Open items), the image build, a blocked `rm -rf ~`
+  on a disposable worker, a live Codex turn ([Codex hook trust](codex-hook-trust.spec.md)).

@@ -2,12 +2,62 @@
 // A local stand-in for the Anthropic Messages API (quota resume spike, no credentials).
 // Appends every request body to $FAKE_ANTHROPIC_LOG (one JSON line each) and answers
 // with fixed text, streamed as SSE when the request asks for it. Prints its port.
+// With $FAKE_ANTHROPIC_BASH (a JSON array of commands), a streamed request that offers
+// the Bash tool gets a Bash tool_use for the next command not yet answered by a
+// tool_result in the conversation (command guard live probe); then the fixed text.
 import { appendFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 const log = process.env.FAKE_ANTHROPIC_LOG;
 if (!log) throw new Error("FAKE_ANTHROPIC_LOG is required");
 const REPLY = "ACK from the fake API.";
+const BASH = JSON.parse(process.env.FAKE_ANTHROPIC_BASH || "[]");
+
+/** The next scripted Bash command for this request, or null for the fixed text. */
+function nextBash(parsed) {
+  if (!(parsed.tools ?? []).some((t) => t?.name === "Bash")) return null;
+  let answered = 0;
+  for (const m of parsed.messages ?? [])
+    if (Array.isArray(m.content))
+      answered += m.content.filter((b) => b?.type === "tool_result").length;
+  return answered < BASH.length ? { index: answered, command: BASH[answered] } : null;
+}
+
+function sseBash(res, model, step) {
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  send("message_start", {
+    type: "message_start",
+    message: {
+      id: `msg_fake_bash_${step.index}`,
+      type: "message",
+      role: "assistant",
+      model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+  });
+  send("content_block_start", {
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "tool_use", id: `toolu_fake_${step.index}`, name: "Bash", input: {} },
+  });
+  send("content_block_delta", {
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "input_json_delta", partial_json: JSON.stringify({ command: step.command }) },
+  });
+  send("content_block_stop", { type: "content_block_stop", index: 0 });
+  send("message_delta", {
+    type: "message_delta",
+    delta: { stop_reason: "tool_use", stop_sequence: null },
+    usage: { output_tokens: 5 },
+  });
+  send("message_stop", { type: "message_stop" });
+  res.end();
+}
 
 function sse(res, model) {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -71,6 +121,8 @@ const server = createServer((req, res) => {
     } catch {}
     appendFileSync(log, `${JSON.stringify(parsed)}\n`);
     const model = parsed.model ?? "claude-fake";
+    const step = parsed.stream ? nextBash(parsed) : null;
+    if (step) return sseBash(res, model, step);
     if (parsed.stream) return sse(res, model);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(

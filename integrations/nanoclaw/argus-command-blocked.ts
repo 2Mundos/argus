@@ -44,6 +44,8 @@ export const COMMAND_GUARD_REASONS: Readonly<Record<string, string>> = {
 
 const PREFIX = "Blocked by Argus command guard: ";
 const SUFFIX = ". Do not retry or work around this block.";
+// Claude Code (2.1.296, live probe) writes a hook denial into the transcript inside this.
+const HOOK_ERROR = ["<tool_use_error>PreToolUse:Bash hook error: ", "</tool_use_error>"] as const;
 const COMMAND_MAX = 16_000; // the server accepts this much and cuts to 200 after redacting
 const READ_MAX = 4 * 1024 * 1024; // per file per poll
 const PENDING_MAX = 500; // tool_use commands remembered
@@ -63,8 +65,11 @@ export interface CommandBlockedBody {
   command: string;
 }
 
-/** The rule id of a guard block message; null for any other text. */
+/** The rule id of a guard block message, bare or in Claude Code's hook-error wrapper. */
 export function ruleOfBlockText(text: string): string | null {
+  const [open, close] = HOOK_ERROR;
+  if (text.startsWith(open) && text.endsWith(close))
+    text = text.slice(open.length, text.length - close.length);
   if (!text.startsWith(PREFIX)) return null;
   const rest = text.slice(PREFIX.length);
   const end = rest.indexOf(SUFFIX);

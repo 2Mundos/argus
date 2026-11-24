@@ -76,6 +76,16 @@ describe("readTranscriptLine", () => {
     ).toEqual([{ attempt: 2, tool_use_id: "toolu_1", rule: "rm_root", command: "rm -rf /" }]);
   });
 
+  it("reads the hook-error wrapper Claude Code writes around a denial", () => {
+    // As written by Claude Code 2.1.296 (command guard spec 4, live probe).
+    const text = `<tool_use_error>PreToolUse:Bash hook error: ${blockText("no_preserve_root")}</tool_use_error>`;
+    expect(read([toolUse("a", "rm --no-preserve-root x"), toolResult("a", text)])[0]).toMatchObject(
+      { rule: "no_preserve_root" },
+    );
+    const other = `<tool_use_error>x ${blockText("rm_root")}</tool_use_error>`;
+    expect(read([toolUse("b", "x"), toolResult("b", other)])).toEqual([]);
+  });
+
   it("reads text blocks in the result content", () => {
     const content = [{ type: "text", text: blockText("dd_device") }];
     expect(read([toolUse("a", "dd of=/dev/sda"), toolResult("a", content)])[0]).toMatchObject({
