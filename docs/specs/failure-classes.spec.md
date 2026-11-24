@@ -187,6 +187,19 @@ reasons and adds `failure_class` to each failure row and a count per class.
   preparing, an operator requeue or release, and a review rejection. A retry of
   a failed task resets `failures` to 0 and `attempt` to 0, so the next claim is
   attempt 1. The two values are never compared with each other.
+- **Environment retry budget.** An `environment` block that an operator unblocks and
+  that repeats is capped: `RETRY_BUDGET` (`argus_core.tasks`) allows 5 environment
+  blocks since the task was created or last operator-`retry`ed. The block that would be
+  the 6th ends the task `failed` (terminal, no automatic way back to `ready`) with the
+  reason, `retry budget of 5 blocks spent` and the last error, and its event data keeps
+  `retry_class`. Operator `retry` resets the budget, as it resets attempt and failures.
+  The budget counts `env_*` blocks only; a quota pause (`awaiting_quota`) is admission
+  and never counts, and no block spends a failure.
+- **Login expiry and quota name the account.** The actionable inbox (`get_inbox
+  view=actionable`) gives a task blocked as `env_provider_auth`, `awaiting_quota` or
+  `no_account` one `next` hint `fix_account`, naming the leased account (or
+  `no account leased`) and the operator action (log in again, wait for the reset, add an
+  account), and says no attempt was spent; then `unblock_task`.
 - **OOM.** `env_oom` blocks after 2 consecutive OOM-killed sessions on one pool.
   Before that, an OOM-killed session is a `session` attempt as today, with the
   `oom_kill` fact recorded on the failure row. 3.2.1 defines it.
@@ -669,6 +682,10 @@ and whether the model's or the work's own output can forge it.
   is not served either. The organization rule and publish reads are not per-agent and need
   an org key. The public reference lists no request-log or audit read. The task did not
   scrape the database or try guessed endpoints.
+
+- `worker_fail` text that mentions a quota is still `worker_gave_up` and spends a failure
+  (3.5: text is never classified from a worker's own words). The probe is in
+  `test_blocker_classes.py`; a worker that hits a quota should report `provider_failure`.
 
 ## Questions
 

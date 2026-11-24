@@ -3469,6 +3469,36 @@
         "title": "BulkArchiveResult",
         "type": "object"
       },
+      "CapabilityDrift": {
+        "description": "An available account whose provider no live pool can serve: every execution\ncapability of that provider is on no pool that is wanted or running.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "accounts",
+          "missing"
+        ],
+        "title": "CapabilityDrift",
+        "type": "object"
+      },
       "ChangedFile": {
         "properties": {
           "added": {
@@ -15758,6 +15788,7 @@
               "unblock_task",
               "set_project_repository",
               "raise_task_budget",
+              "fix_account",
               "retry_dependency",
               "inspect_stall",
               "reread",
@@ -16842,6 +16873,14 @@
       },
       "PoolInspection": {
         "properties": {
+          "capability_drift": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CapabilityDrift"
+            },
+            "title": "Capability Drift",
+            "type": "array"
+          },
           "instances": {
             "items": {
               "$ref": "#/components/schemas/InspectedInstance"

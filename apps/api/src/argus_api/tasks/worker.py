@@ -11,6 +11,7 @@ from argus_core.quota import failure_class, sanitize_notice
 from argus_core.tasks import (
     ENV_OOM,
     ENV_PROVIDER_AUTH,
+    RETRY_BUDGET,
     Action,
     RetryClass,
     Review,
@@ -489,6 +490,20 @@ async def fail(
     return await get_task(tx.conn, task_id)
 
 
+async def env_blocks_spent(tx: Tx, task_id: str) -> int:
+    """Environment blocks the task has had since its last operator retry."""
+    async with tx.conn.execute(
+        "SELECT count(*) FROM events WHERE subject_type = 'task' AND subject_id = ?"
+        " AND kind = 'task.block' AND json_extract(data, '$.retry_class') = ?"
+        " AND id > coalesce((SELECT max(id) FROM events WHERE subject_type = 'task'"
+        "  AND subject_id = ? AND kind = 'task.retried'), 0)",
+        (task_id, RetryClass.ENVIRONMENT.value, task_id),
+    ) as cur:
+        row = await cur.fetchone()
+        assert row is not None  # count(*) always returns a row
+        return row[0]
+
+
 async def block(
     tx: Tx,
     agent_id: str,
@@ -498,6 +513,24 @@ async def block(
     error: str | None = None,
 ) -> Task:
     row = await _owned(tx, task_id, attempt, agent_id)
+    kind = retry_class(reason)
+    budget = RETRY_BUDGET.get(kind)
+    if budget is not None and await env_blocks_spent(tx, task_id) >= budget:
+        # The environment kept refusing: more unblocks would loop, so the task ends
+        # with the reason and only an operator retry reopens it (failure classes 3.2.2).
+        note = f"{reason}: retry budget of {budget} blocks spent" + (
+            f"; last error: {error}" if error else ""
+        )
+        await _apply(
+            tx,
+            row,
+            Action.FAIL,
+            f"agent:{agent_id}",
+            set_={"error": note[:500]},
+            data={"error": note[:500], "reason": reason, "retry_class": kind},
+            exhausted=True,
+        )
+        return await get_task(tx.conn, task_id)
     await _apply(
         tx,
         row,

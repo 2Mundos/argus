@@ -399,6 +399,12 @@ FAILURE_CLASS: dict[str, RetryClass] = {
 }
 
 
+# Blocks a class may spend before the task ends `failed` with the reason (failure classes
+# 3.2.2). Only the environment class is bounded this way: the other classes already
+# spend `max_attempts`, and admission pauses wait on an account, not on a loop.
+RETRY_BUDGET: dict[RetryClass, int] = {RetryClass.ENVIRONMENT: 5}
+
+
 def retry_class(reason: str | None) -> RetryClass:
     return FAILURE_CLASS.get(reason or "", RetryClass.TASK)
 
