@@ -269,6 +269,14 @@ why you are here.
 - [Pre-merge independent review workflow](specs/pre-merge-independent-review.spec.md) —
   non-circular pre-merge independent review gate bound to exact PR identity and full
   head SHA, cross-difficulty chain fallback, and idempotent settlement
+- [PR steward](specs/pr-steward.spec.md) — draft: an approved PR that fails CI,
+  conflicts or closes gets a bounded repair attempt or a decision, and every
+  automated push leaves an undo note on the PR
+- [Review policy](specs/review-policy.spec.md) — draft: review tiers (`skip`,
+  `standard`, `human`) by changed path, observed before enforced, with a review report
+- [Review finding verification](specs/review-finding-verification.spec.md) — draft:
+  structured findings, implementer disputes, repeats, and a verifier that starts in
+  observe mode
 - [Integrations](specs/integrations.spec.md) — the Setup tab for MCP connections and
   Kubernetes clusters, project-scoped and kept out of Settings and Accounts; the
   dashboard and API manage credentials securely; an admin opts a task into Kubernetes
