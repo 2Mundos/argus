@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-02
-updated: 2026-11-20
+updated: 2026-11-24
 ---
 
 # Task helpers (`argus-task`)
@@ -260,13 +260,23 @@ Unresolved review threads are not a reason: GitHub's REST API does not expose th
 resolution, and a blocking review already shows as `changes_requested`. It never merges
 or approves.
 
-`argus-task deliver [--title T] [--body-file F] [--base B]` pushes the current branch,
+`argus-task deliver [--title T] [--body-file F] [--base B] [--undo-note "<reason>"]` pushes the current branch,
 creates the PR or updates the open one for the branch, and prints `{url, number,
 head_sha, created}`. If the branch is behind its base it rebases first, only when the
 rebase applies cleanly; on a conflict it aborts the rebase it started, leaves the branch
 as it was, and exits 12 with `reasons: ["rebase_conflict"]` and the conflicting paths. It
 never force-pushes a branch it did not just rebase, and pushes with `--force-with-lease`
 when it did.
+
+`--undo-note` (one line, at most 200 characters) is for pushes nobody reviewed first: a
+PR repair or a reviewer fix ([PR steward](pr-steward.spec.md) 3.4). When the push moves
+the head of an existing open PR, `deliver` then posts one PR comment with the reason,
+the old and new head, and the command that restores the old head
+(`git revert --no-edit <old>..<new>` after a fast-forward, or a
+`git push --force-with-lease=<branch>:<new> origin <old>:refs/heads/<branch>` after a
+rebase). It posts nothing when the head did not move or no open PR existed. A failed
+comment shows as `undo_note: "failed"` in the output (`"posted"` otherwise) and never
+fails the delivery.
 
 Before any remote update, after any rebase, `deliver` runs the checks `.githooks/pre-push`
 runs for a developer push, on the exact commit it pushes: `make check-changed`, then

@@ -18,7 +18,7 @@ from argus_core.tasks import Review
 
 from argus_api.db import Database
 from argus_api.decisions import store as decisions
-from argus_api.tasks import delivery, merge_resume
+from argus_api.tasks import delivery, merge_resume, steward
 from argus_api.tasks import independent_review as indep
 from argus_api.tasks import service as tasks
 from argus_api.tasks.deliverable import ForgeRead
@@ -89,8 +89,18 @@ async def settle_task(db: Database, checker: delivery.PrChecker, task_id: str) -
             tx, row, forge, reviewed, ACTOR, reviewed_pr=reviewed_pr
         )
         if not settled:
-            # Still waiting on the exact approved head: hand the merge to the worker
-            # path once (pre-merge independent review spec 3.6).
+            # A closed or broken approved PR gets a repair or a decision (PR steward
+            # spec 3.1); a ready one hands the merge to the worker path once
+            # (pre-merge independent review spec 3.6).
+            if await steward.step(
+                tx,
+                await tasks.task_row(tx.conn, task_id),
+                forge,
+                reviewed_pr,
+                reviewed,
+                ACTOR,
+            ):
+                return False
             await merge_resume.resume_merge(
                 tx,
                 await tasks.task_row(tx.conn, task_id),

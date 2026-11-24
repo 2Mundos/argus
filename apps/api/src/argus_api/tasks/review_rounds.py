@@ -65,10 +65,26 @@ class ReviewRound(BaseModel):
     finished_at: datetime | None
 
 
+class StewardState(BaseModel):
+    """The newest PR steward event (PR steward spec 3.5): a repair requested, a repair
+    pushed, or the steward stopped with a decision."""
+
+    state: Literal["repair_requested", "repair_pushed", "stopped"]
+    classes: list[str] = []
+    failed_checks: list[str] = []
+    pr: str | None = None
+    head_sha: str | None = None
+    old_head_sha: str | None = None
+    new_head_sha: str | None = None
+    decision_id: str | None = None
+    at: datetime
+
+
 class ReviewRounds(BaseModel):
     task_id: str
     repeats: int = 0  # findings raised again, over all rounds
     rounds: list[ReviewRound]
+    steward: StewardState | None = None
 
 
 def _text(value: Any) -> str | None:
@@ -168,6 +184,38 @@ async def _by_child(
     return found
 
 
+_STEWARD_STATES = {
+    "review.steward_repair_requested": "repair_requested",
+    "review.steward_repair_pushed": "repair_pushed",
+    "review.steward_stopped": "stopped",
+}
+
+
+async def _steward(conn: aiosqlite.Connection, parent_id: str) -> StewardState | None:
+    marks = ",".join("?" * len(_STEWARD_STATES))
+    async with conn.execute(
+        f"SELECT kind, data, at FROM events WHERE subject_type = 'task'"  # noqa: S608
+        f" AND subject_id = ? AND kind IN ({marks}) ORDER BY id DESC LIMIT 1",
+        (parent_id, *_STEWARD_STATES),
+    ) as cur:
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    data = json.loads(row["data"]) if row["data"] else {}
+    classes = data.get("classes") or ([data["class"]] if data.get("class") else [])
+    return StewardState(
+        state=_STEWARD_STATES[row["kind"]],  # ty: ignore[invalid-argument-type]
+        classes=classes,
+        failed_checks=data.get("failed_checks") or [],
+        pr=data.get("pr"),
+        head_sha=data.get("head_sha"),
+        old_head_sha=data.get("old_head_sha"),
+        new_head_sha=data.get("new_head_sha"),
+        decision_id=data.get("decision_id"),
+        at=row["at"],
+    )
+
+
 async def _verifications(
     conn: aiosqlite.Connection, parent_id: str
 ) -> tuple[dict[str, aiosqlite.Row], dict[tuple[str, str], VerificationStatus]]:
@@ -221,6 +269,7 @@ def _annotate(
 
 
 async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRounds:
+    steward = await _steward(conn, parent_id)
     async with conn.execute(
         "SELECT id, state, result, created_at, updated_at, input FROM tasks"
         " WHERE parent_id = ? AND kind = ? ORDER BY rowid",
@@ -228,7 +277,7 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
     ) as cur:
         children = list(await cur.fetchall())
     if not children:
-        return ReviewRounds(task_id=parent_id, rounds=[])
+        return ReviewRounds(task_id=parent_id, rounds=[], steward=steward)
     ids = [c["id"] for c in children]
     voided = await _voided(conn, parent_id, children)
     runs = await _by_child(
@@ -301,6 +350,7 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
         task_id=parent_id,
         repeats=sum(r.repeats for r in rounds),
         rounds=rounds,
+        steward=steward,
     )
 
 

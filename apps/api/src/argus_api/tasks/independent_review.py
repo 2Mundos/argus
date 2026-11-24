@@ -1582,7 +1582,9 @@ async def spawn_reviewer(
             "If you find actionable problems you can safely fix, fix them on the PR's"
             " own branch: add tests, run the gates, and push one normal new commit"
             " (fast-forward only; never force-push, never rewrite history, never"
-            " touch another branch or merge). Then finish with verdict `fixed`,"
+            " touch another branch or merge). Push with `argus-task deliver --undo-note"
+            ' "<what you fixed>"` so the PR records how to undo it. Then finish with'
+            " verdict `fixed`,"
             " `head_sha` the head you reviewed, `fixed_head_sha` the full new head,"
             " `findings` what you fixed and `tests` what you ran. You cannot approve"
             " your own fix: Argus schedules a fresh review of the new head with"
@@ -1690,7 +1692,7 @@ async def on_parent_complete(
         )
         return False
     pr, head_sha = refs
-    from argus_api.tasks import merge_resume
+    from argus_api.tasks import merge_resume, steward
 
     approved_pr, approved_head = await reviewed_approval_of(tx.conn, row["id"])
     if (
@@ -1712,10 +1714,12 @@ async def on_parent_complete(
         )
         parent = await tasks_svc._row(tx.conn, row["id"])
         if not await settle_or_wait(tx, parent, forge, head_sha, actor, reviewed_pr=pr):
-            await merge_resume.open_unmerged_decision(
-                tx, await tasks_svc._row(tx.conn, row["id"]), forge, actor
-            )
+            parent = await tasks_svc._row(tx.conn, row["id"])
+            if not await steward.step(tx, parent, forge, pr, head_sha, actor):
+                await merge_resume.open_unmerged_decision(tx, parent, forge, actor)
         return True
+    # A steward repair that moved the head: note it, then review the new head below.
+    await steward.record_pushed(tx, row["id"], pr, head_sha, actor)
     # Persist the result, then force in_review without opening a human decision yet.
     await tasks_svc._apply(
         tx,

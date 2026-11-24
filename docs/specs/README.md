@@ -62,7 +62,7 @@ Every spec in this directory with its status, kept in sync by
 | [Path and type gate](path-gate.spec.md) | `implemented` |
 | [Pool delete](pool-delete.spec.md) | `implemented` |
 | [Pool editor](pool-editor.spec.md) | `implemented` |
-| [PR steward: keep an approved pull request moving](pr-steward.spec.md) | `draft` |
+| [PR steward: keep an approved pull request moving](pr-steward.spec.md) | `implemented` |
 | [Pre-merge independent review workflow](pre-merge-independent-review.spec.md) | `draft` |
 | [Progress milestones](progress-milestones.spec.md) | `implemented` |
 | [Project code availability](project-code-availability.spec.md) | `implemented` |

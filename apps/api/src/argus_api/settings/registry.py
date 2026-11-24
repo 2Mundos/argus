@@ -54,6 +54,7 @@ _REVIEW_SCHEMA: dict[str, Any] = {
         },
         "max_rounds": {"type": "integer", "minimum": 1, "maximum": 20},
         "max_reviewer_failures": {"type": "integer", "minimum": 0, "maximum": 20},
+        "max_repairs": {"type": "integer", "minimum": 0, "maximum": 3},
         "verify_findings": {"type": "string", "enum": ["off", "observe", "enforce"]},
     },
 }

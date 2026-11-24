@@ -20904,6 +20904,16 @@
             "title": "Rounds",
             "type": "array"
           },
+          "steward": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StewardState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "task_id": {
             "title": "Task Id",
             "type": "string"
@@ -23232,6 +23242,102 @@
           "attempt"
         ],
         "title": "SteerPage",
+        "type": "object"
+      },
+      "StewardState": {
+        "description": "The newest PR steward event (PR steward spec 3.5): a repair requested, a repair\npushed, or the steward stopped with a decision.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "classes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Classes",
+            "type": "array"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "failed_checks": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Checks",
+            "type": "array"
+          },
+          "head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Sha"
+          },
+          "new_head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Head Sha"
+          },
+          "old_head_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Head Sha"
+          },
+          "pr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr"
+          },
+          "state": {
+            "enum": [
+              "repair_requested",
+              "repair_pushed",
+              "stopped"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "at"
+        ],
+        "title": "StewardState",
         "type": "object"
       },
       "Stuck": {

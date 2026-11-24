@@ -220,6 +220,14 @@ still open it opens one orchestrator review decision (merge it and accept, or re
 try again). A rejected review, failed CI or a new approval cycle starts from the start.
 Review-disabled and non-code tasks never take this path.
 
+When the approved PR's checks fail, it stops being mergeable or it is closed, the sweep
+does not wait on it: the [PR steward](pr-steward.spec.md) opens a decision, or, with
+`review.independent.max_repairs` above 0, requeues the parent for one bounded repair
+attempt. A repair request counts like a resume in the idempotency rule above (one per
+approval, newer than the approval for the same PR and head). A repair that moves the
+head is reviewed again from the start and is not a review round; one that does not
+move it settles from the forge or opens the decision.
+
 ## 3.7 Reviewer fixes its findings
 
 An independent reviewer that finds actionable problems may fix them itself instead of
@@ -229,7 +237,10 @@ sending the parent back for a full attempt.
   `fix: {pr, base_head_sha, force_push: false}`. Its deliverable is a response with no
   merge grant, so it can push to the PR's own branch and nothing else: one normal
   fast-forward commit with tests, never a force-push, history rewrite, other branch or
-  merge (the kind schema rejects `force_push: true`; `force_push` stays `no`).
+  merge (the kind schema rejects `force_push: true`; `force_push` stays `no`). The
+  instructions tell it to push with `argus-task deliver --undo-note "<reason>"`, so the
+  PR records the old and new head and how to undo the push
+  ([PR steward](pr-steward.spec.md) 3.4).
 - Verdicts: `approve` (no findings, nothing changed), `request_changes` (cannot fix
   safely, nothing changed; the existing handoff to the implementer), `fixed` with
   `head_sha` (reviewed), `fixed_head_sha` (full 40-character new head), `findings` and

@@ -11442,6 +11442,7 @@ export interface components {
             repeats?: number;
             /** Rounds */
             rounds: components["schemas"]["ReviewRound"][];
+            steward?: components["schemas"]["StewardState"] | null;
             /** Task Id */
             task_id: string;
         };
@@ -12264,6 +12265,43 @@ export interface components {
             attempt: number;
             /** Items */
             items?: components["schemas"]["Steer"][];
+        };
+        /**
+         * StewardState
+         * @description The newest PR steward event (PR steward spec 3.5): a repair requested, a repair
+         *     pushed, or the steward stopped with a decision.
+         */
+        StewardState: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Classes
+             * @default []
+             */
+            classes?: string[];
+            /** Decision Id */
+            decision_id?: string | null;
+            /**
+             * Failed Checks
+             * @default []
+             */
+            failed_checks?: string[];
+            /** Head Sha */
+            head_sha?: string | null;
+            /** New Head Sha */
+            new_head_sha?: string | null;
+            /** Old Head Sha */
+            old_head_sha?: string | null;
+            /** Pr */
+            pr?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "repair_requested" | "repair_pushed" | "stopped";
         };
         /**
          * Stuck
