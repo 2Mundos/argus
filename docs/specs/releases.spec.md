@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-18
+updated: 2026-11-24
 ---
 
 # Releases
@@ -104,8 +104,10 @@ release page and 404s, and a tag-pinned link shows the spec as it shipped.
 The script refuses, before changing anything, when: the branch is not `main`;
 the worktree is dirty (except `--dry-run`); `HEAD` differs from `origin/main`
 after a fetch (a release is cut from what is published, nothing more and nothing
-stale); a merged release's notes are still untagged; the range is empty; the tag
-is already published; or the `release/vX.Y.Z` branch already exists.
+stale); a merged release newer than the newest published tag has notes that are
+still untagged (notes for an older version are history and never block); the
+range is empty; the tag is already published; or the `release/vX.Y.Z` branch
+already exists.
 
 `--tag` refuses when no merged notes are untagged, when several are (pass
 `--version`), or when the tag is already published. The workflow refuses a tag

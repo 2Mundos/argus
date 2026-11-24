@@ -193,6 +193,11 @@ def note_tag(path: str) -> str | None:
     return m[1].replace("-", ".") if m else None
 
 
+def as_version(tag: str) -> Version | None:
+    m = TAG.match(tag)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
 def notes_on_main(repo: Repo) -> list[str]:
     raw = repo.git("ls-tree", "--name-only", f"{REMOTE}/{BRANCH}", f"{NOTES_DIR}/")
     return sorted(n for n in raw.splitlines() if n.endswith(".ref.md"))
@@ -200,10 +205,20 @@ def notes_on_main(repo: Repo) -> list[str]:
 
 def untagged_notes(repo: Repo) -> list[tuple[str, str]]:
     published = published_tags(repo)
-    return [
+    pending = [
         (tag, path)
         for path in notes_on_main(repo)
         if (tag := note_tag(path)) and tag not in published
+    ]
+    newest = max(
+        (v for tag in published if (v := as_version(tag)) is not None), default=None
+    )
+    if newest is None:
+        return pending
+    return [
+        (tag, path)
+        for tag, path in pending
+        if (v := as_version(tag)) is not None and v > newest
     ]
 
 
