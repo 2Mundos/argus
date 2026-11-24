@@ -156,7 +156,8 @@ unchanged, including the lock, address and log names.
 - `deploy/argus` starts the tray from `up`, with a `--no-tray` opt-out, and provides
   `tray [--background|--stop] [--url BASE_URL]` (including its Windows/WSL
   bridge) and the private `__tray-config` command; the remote form reuses the
-  newest cached tray companion and needs no local install.
+  newest cached companion that supports `--url` and needs no local install,
+  and refuses with an actionable error when only older companions exist.
   `deploy/Dockerfile.api` packages the companion beside the launcher.
 - The README documents invocation, prerequisites and menu behavior; the launcher
   spec describes this optional exception to its host dependency requirements.
