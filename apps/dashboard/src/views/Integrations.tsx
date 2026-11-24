@@ -247,7 +247,7 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
     (saved.state !== "revoked" && item.updated_at > saved.updated_at)
       ? item
       : saved;
-  const [dialog, setDialog] = useState<"edit" | "rotate" | "revoke">();
+  const [dialog, setDialog] = useState<"edit" | "rotate" | "revoke" | "delete">();
   const [error, setError] = useState<string>();
   const action = useAction();
   const active = connection.state === "active";
@@ -366,10 +366,36 @@ function IntegrationRow({ item, onChanged }: { item: Integration; onChanged: () 
             </button>
           </div>
         )}
+        {!active && (
+          <div className="actions left">
+            <button
+              type="button"
+              className="danger"
+              disabled={action.busy}
+              aria-label={`Delete ${connection.name}`}
+              onClick={() => {
+                setError(undefined);
+                setDialog("delete");
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        )}
         {error && (
           <p className="error" role="alert">
             {error}
           </p>
+        )}
+        {!active && dialog === "delete" && (
+          <DeleteForm
+            integration={connection}
+            onCancel={() => setDialog(undefined)}
+            onDeleted={() => {
+              setDialog(undefined);
+              onChanged();
+            }}
+          />
         )}
         {active && dialog === "edit" && (
           <EditForm
@@ -831,6 +857,61 @@ function EditForm({
           disabled={action.busy}
         >
           Save changes
+        </ActionButton>
+      </div>
+    </FormDialog>
+  );
+}
+
+function DeleteForm({
+  integration,
+  onCancel,
+  onDeleted,
+}: {
+  integration: Integration;
+  onCancel: () => void;
+  onDeleted: () => void;
+}) {
+  const [error, setError] = useState<string>();
+  const action = useAction();
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void action.run(async () => {
+      setError(undefined);
+      try {
+        await call(
+          api.DELETE("/api/projects/{slug}/integrations/{integration_id}", {
+            params: { path: { slug: integration.project, integration_id: integration.id } },
+          }),
+        );
+        onDeleted();
+      } catch (error) {
+        setError(failure(error));
+      }
+    });
+  }
+  return (
+    <FormDialog
+      title={`Delete ${integration.name}`}
+      busy={action.busy}
+      onCancel={onCancel}
+      onSubmit={submit}
+    >
+      <p>
+        This permanently removes the revoked record of {integration.name} from {integration.project}
+        . Tasks that used it keep their history. This cannot be undone.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="actions">
+        <button type="button" disabled={action.busy} onClick={onCancel}>
+          Cancel
+        </button>
+        <ActionButton type="submit" className="danger" disabled={action.busy} pending={action.busy}>
+          Delete integration
         </ActionButton>
       </div>
     </FormDialog>

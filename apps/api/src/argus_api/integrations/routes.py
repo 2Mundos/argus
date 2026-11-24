@@ -150,6 +150,18 @@ async def revoke_integration(
     )
 
 
+@router.delete(
+    "/projects/{slug}/integrations/{integration_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_integration(
+    slug: str, integration_id: str, db: DbDep, caller: AdminDep
+) -> Response:
+    """Remove a revoked record; an active one is `409 integration_active`."""
+    await service.delete(db, slug, integration_id, caller.actor)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.put("/tasks/{task_id}/integrations")
 async def set_task_integrations(
     task_id: str, body: TaskIntegrations, db: DbDep, caller: AdminDep

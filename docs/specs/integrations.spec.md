@@ -135,6 +135,11 @@ Admin token only (`403` otherwise); a missing token is `401`.
 - `GET /api/projects/{slug}/integrations`, `POST` same path (create).
 - `GET /api/projects/{slug}/integrations/{id}`, and `POST …/{id}/validate`,
   `…/{id}/rotate` (`{secret, expires_at?}`), `…/{id}/revoke`.
+- `DELETE /api/projects/{slug}/integrations/{id}`: permanently removes a revoked
+  record (`204`). Only `state=revoked` with no secret reference qualifies; an active
+  one is `409 integration_active` and must be revoked first. It deletes the row and
+  the task opt-in links to it, never the tasks, which keep their history. An unknown
+  id, or one outside `{slug}`, is `404`.
 - `PATCH /api/projects/{slug}/integrations/{id}` (`{expected_version, config?,
   access?}`): corrects the non-secret fields of an active integration. It keeps the
   id, the credential and `secret_version`, and neither reads nor takes a secret.
@@ -153,7 +158,8 @@ secret: they say `has_secret`. Rotating or revoking a revoked integration is `40
 integration_revoked`. Every change records an event with subject `integration` and no
 secret: `integration.created`, `.validated` (`{status, detail}`), `.updated`
 (`{name, config_version, changes}`, each changed key with `before` and `after`; a
-CA bundle appears as a `sha256:` digest), `.rotated`, and `.revoked`. Opt-in and
+CA bundle appears as a `sha256:` digest), `.rotated`, `.revoked`, and `.deleted` (`{project, name}`, the integration id as
+subject and the acting admin as actor; no secret exists to include). Opt-in and
 delivery record task events (3.6).
 
 Two worker routes are left out of the generated API contract: only a NanoClaw
@@ -567,7 +573,8 @@ per line, empty for none) at the record's `version`, with no token field; it say
 that saving resets validation. A stale version, an invalid config and a revoked
 record get fixed messages. MCP rows show their tool policy: the allowlist size,
 "all tools", or "unknown coverage: unusable by workers". Pending actions are
-disabled. Revoked rows remain visible without these actions. Each row shows its
+disabled. Revoked rows remain visible without these actions and offer **Delete**, which asks for
+confirmation, then removes the record permanently. Each row shows its
 expiry; the add and rotate forms take an optional expiry in local time. The screen
 shows secret-store readiness and explains that connections reach only attempts of
 tasks that select them (Kubernetes: Claude-harness and Codex engines; MCP:

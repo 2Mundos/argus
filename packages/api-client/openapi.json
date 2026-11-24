@@ -36671,6 +36671,54 @@
       }
     },
     "/api/projects/{slug}/integrations/{integration_id}": {
+      "delete": {
+        "description": "Remove a revoked record; an active one is `409 integration_active`.",
+        "operationId": "delete_integration_api_projects__slug__integrations__integration_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "title": "Integration Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Integration",
+        "tags": [
+          "integrations"
+        ]
+      },
       "get": {
         "operationId": "get_integration_api_projects__slug__integrations__integration_id__get",
         "parameters": [
