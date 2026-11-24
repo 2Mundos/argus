@@ -23,7 +23,7 @@ Every spec in this directory with its status, kept in sync by
 | [Codex accounts: import, dedicated login, engine selection](codex-accounts.spec.md) | `implemented` |
 | [Codex hook trust](codex-hook-trust.spec.md) | `partial` |
 | [Codex worker sandbox profile (default on; profiles candidate)](codex-sandbox-profile.spec.md) | `partial` |
-| [Command guard](command-guard.spec.md) | `partial` |
+| [Command guard](command-guard.spec.md) | `implemented` |
 | [Copilot accounts: import, executor lease, delegated CLI](copilot-accounts.spec.md) | `implemented` |
 | [Cost view](cost-view.spec.md) | `implemented` |
 | [Cursor accounts: import, executor lease, delegated CLI](cursor-accounts.spec.md) | `implemented` |
