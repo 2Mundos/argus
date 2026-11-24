@@ -157,6 +157,19 @@ export function copilotAuthRejected(text) {
     .map((l) => l.trim());
   return lines.some((l) => COPILOT_AUTH_REJECTED.some((m) => l === m || l.startsWith(`${m} `)));
 }
+/**
+ * Exact text Muse 1.4.25 prints (stderr, exit 1) for a rejected META_API_KEY,
+ * observed with a deliberately invalid key.
+ */
+export const MUSE_AUTH_REJECTED =
+  "authentication failed: your API key from META_API_KEY was rejected";
+
+/** Did the Muse CLI reject its credential? Exact known text only; free text never counts. */
+export function museAuthRejected(text) {
+  return String(text ?? "")
+    .split("\n")
+    .some((l) => l.trim().includes(MUSE_AUTH_REJECTED));
+}
 const KILL_GRACE_MS = 5000;
 const TAIL_CHARS = 2000;
 const OUTPUT_SCAN_BYTES = 1_000_000;
@@ -2219,7 +2232,12 @@ async function runAttempt(
               !interrupted &&
               agyAuthRejected(`${stdoutText}\n${stderrText}`)
             ? { kind: "auth_rejected", detail: "Google Antigravity rejected the credential" }
-            : null;
+            : executor === "muse" &&
+                !timedOut &&
+                !interrupted &&
+                museAuthRejected(`${stdoutText}\n${stderrText}`)
+              ? { kind: "auth_rejected", detail: "Muse rejected the credential" }
+              : null;
   const dshBlocked = dsh?.auth && !timedOut && !interrupted;
   const exit = timedOut ? 124 : dshBlocked ? 78 : interrupted || jsonFail || code !== 0 ? 1 : 0;
   const taskId = taskIdEarly;

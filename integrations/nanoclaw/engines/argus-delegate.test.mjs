@@ -28,6 +28,7 @@ import {
   localHarnessRefusal,
   MUSE_SENTINEL_API_KEY,
   materializePrivateCursorConfig,
+  museAuthRejected,
   PROBE_EVIDENCE,
   parseAccountSettings,
   pinnedModel,
@@ -3522,4 +3523,15 @@ echo '{"type":"done"}'`,
   assert.equal(code, 0);
   assert.ok(fs.readFileSync(`${seen}.prompt`, "utf8").includes(prompt));
   assert.ok(!fs.readFileSync(`${seen}.argv`, "utf8").includes("xxxx"));
+});
+
+test("museAuthRejected matches the observed Muse 1.4.25 rejection text only", () => {
+  assert.equal(
+    museAuthRejected(
+      "failed to fetch model catalog: authentication failed: your API key from META_API_KEY was rejected \u2014 update or unset it\n",
+    ),
+    true,
+  );
+  assert.equal(museAuthRejected("model said: authentication failed"), false);
+  assert.equal(museAuthRejected(""), false);
 });
