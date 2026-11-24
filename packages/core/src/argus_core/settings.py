@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 SettingScope = Literal["global", "project"]
 SettingSource = Literal["project", "global", "default", "env", "file"]
 ReviewMode = Literal["off", "different_model", "different_provider"]
+VerifyFindings = Literal["off", "observe", "enforce"]
 
 
 class IndependentReviewSetting(BaseModel):
@@ -19,6 +20,9 @@ class IndependentReviewSetting(BaseModel):
     max_rounds: int = Field(default=3, ge=1, le=20)
     # Reviewer children that may fail without a verdict before an operator decides.
     max_reviewer_failures: int = Field(default=2, ge=0, le=20)
+    # A read-only verifier tries to refute each request_changes finding (review finding
+    # verification spec 3.4): `observe` only records, `enforce` holds the verdict.
+    verify_findings: VerifyFindings = "off"
 
 
 class SettingDefinition(BaseModel):

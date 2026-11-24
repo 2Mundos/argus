@@ -1,5 +1,5 @@
 ---
-status: draft
+status: implemented
 created: 2026-11-24
 updated: 2026-11-24
 ---
@@ -124,9 +124,8 @@ in `enforce`.
   verification status, and, per round, the verifier child. The dashboard Reviews tab
   shows them. `review_verification` children are hidden from the board like
   `code_review` children.
-- The review report (`GET /api/projects/{slug}/review-report`, created by this spec
-  or by [review policy](review-policy.spec.md), whichever is built first) gains a
-  `findings` section: findings by priority and verification status; disputes and how
+- `GET /api/projects/{slug}/review-report?days=30` (admin, at most 90 days, read-only;
+  shared with [review policy](review-policy.spec.md) 3.5) has a `findings` section: findings by priority and verification status; disputes and how
   the next round answered them; repeats; and, for refuted findings, whether a later
   round raised them again. That last number estimates how often a verifier would have
   dropped a real problem, and it is the evidence for moving from `observe` to
@@ -135,9 +134,13 @@ in `enforce`.
 # 4. Open Questions
 
 - When one task keeps producing new P2 edge cases, should rounds after the second send
-  back only P1 findings and turn P2 and P3 into follow-up tasks?
-- Should `observe` verify only P1 findings, to halve its cost?
-- In `enforce`, should a refuted P1 ever be dropped without a person seeing it?
+  back only P1 findings and turn P2 and P3 into follow-up tasks? (Not built.)
+- Should `observe` verify only P1 findings, to halve its cost? (Not built: `observe`
+  verifies every finding.)
+- In `enforce`, should a refuted P1 ever be dropped without a person seeing it? In a
+  mixed round a refuted finding is not deleted: it stays on the round with the
+  refutation, in the handoff and on the Reviews tab. Only an all-refuted round waits
+  for a person.
 
 # 5. Constraints
 
@@ -149,11 +152,12 @@ in `enforce`.
 
 # 6. Implementation Consequences
 
-- The next migration in `apps/api/src/argus_api/db/migrations/`: the `code_review`
+- Migration `0091_review_finding_verification.sql`: the `code_review`
   result schema (finding object, `repeat_of`) and the new `review_verification` kind.
 - `apps/api/src/argus_api/tasks/independent_review.py`: the reviewer's spec text, the
   `verify_findings` field, spawning and completing the verifier, holding the verdict
-  in `enforce`, and `_findings_text` with ids, responses and repeats.
+  in `enforce`, and `_findings_text` with ids, responses and repeats; `tasks/review_report.py` serves the
+  review report.
 - `apps/api/src/argus_api/tasks/review_rounds.py`, the API models and `make openapi`;
   dashboard `TaskReviews.tsx`; the board filter that hides review children.
 - `packages/core/src/argus_core/decisions.py` and `decisions/service.py`: gate
@@ -164,15 +168,17 @@ in `enforce`.
 
 ## Verification boundary
 
-- Commands (planned): `uv run pytest apps/api/tests/test_pre_merge_independent_review.py
-  apps/api/tests/test_review_fix.py apps/api/tests/test_review_rounds_api.py
-  apps/api/tests/test_settings.py`; `make openapi-check`.
-- Tests to write: the finding schema (a string finding and an empty field are 422);
-  `observe` applies the verdict unchanged; `enforce` sends only confirmed and unclear
-  findings; all refuted opens one decision and never approves; a failed verifier
-  leaves the verdict as it was; the verifier never uses the reviewer's or an author's
-  model; repeats and responses reach the next reviewer.
-- Verified: nothing yet (draft). The review counts come from a read-only query of the
+- Commands: `uv run pytest apps/api/tests/test_review_finding_verification.py
+  apps/api/tests/test_pre_merge_independent_review.py apps/api/tests/test_review_fix.py
+  apps/api/tests/test_review_rounds_api.py apps/api/tests/test_settings.py`;
+  `make openapi-check`.
+- Tests: `test_review_finding_verification.py` covers the finding schema (string
+  finding, empty field, bad evidence, duplicate ids are 422), `off`, `observe`,
+  `enforce` (held verdict, only unrefuted findings sent), all refuted (one decision,
+  never approves, `reject` and `accept_with_deviation`), an ended verifier, the
+  verifier's model, responses and repeats reaching the next reviewer, the review
+  report and the board filter.
+- Verified: the tests above. The review counts come from a read-only query of the
   preview database on 2026-11-23. "Specific and often reproduced" is a reading of the
   finding text, not a check against the code.
 - Not verified: how often a verifier refutes a real finding. `observe` exists to

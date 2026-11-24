@@ -43,6 +43,7 @@ function RoundPanel({ round }: { round: Round }) {
           {round.findings.map((f, i) => (
             <li key={i}>
               <span className="badge">{f.priority ?? "unranked"}</span>{" "}
+              {f.id && <code>{f.id}</code>} {f.title && <strong>{f.title}</strong>}{" "}
               {f.file && (
                 <code>
                   {f.file}
@@ -50,12 +51,45 @@ function RoundPanel({ round }: { round: Round }) {
                 </code>
               )}{" "}
               {f.description}
+              {f.evidence_kind && (
+                <span className="muted small"> · evidence: {f.evidence_kind}</span>
+              )}
+              {f.verification && <span className="badge"> {f.verification}</span>}
+              {f.response && (
+                <span className="muted small">
+                  {" "}
+                  · implementer: {f.response}
+                  {f.response_evidence ? ` (${f.response_evidence})` : ""}
+                </span>
+              )}
+              {f.repeat_of && (
+                <span className="muted small">
+                  {" "}
+                  · repeats <code>{f.repeat_of}</code>
+                  {f.repeat_response ? `, earlier ${f.repeat_response}` : ""}
+                </span>
+              )}
             </li>
           ))}
         </ul>
       )}
       <p className="small">
         <a href={`#tasks/${round.child_id}`}>Review task {shortId(round.child_id)}</a>
+        {round.verifier_child_id && (
+          <span>
+            {" · "}
+            <a href={`#tasks/${round.verifier_child_id}`}>
+              verifier {shortId(round.verifier_child_id)}
+            </a>{" "}
+            ({round.verifier_state})
+          </span>
+        )}
+        {round.repeats > 0 && (
+          <span>
+            {" · "}
+            {round.repeats} repeated {round.repeats === 1 ? "finding" : "findings"}
+          </span>
+        )}
         {round.artifact_ids.map((id) => (
           <span key={id}>
             {" · "}

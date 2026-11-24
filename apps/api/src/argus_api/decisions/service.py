@@ -7,6 +7,7 @@ from argus_core.auth import Scope
 from argus_core.decisions import (
     ACCEPT_WITH_DEVIATION,
     APPROVE_WITHOUT_REVIEW,
+    FINDINGS_REFUTED_GATE,
     GATE_DISABLED_GATE,
     NO_REVIEWER_GATE,
     RETRY_REVIEWER,
@@ -394,7 +395,29 @@ async def _apply_answer(
                 REVIEWER_FAILED_GATE,
                 GATE_DISABLED_GATE,
             )
-            if effect is Effect.REVIEW_ACCEPT_DEVIATION:
+            payload = decision.payload or {}
+            refuted_child = (
+                payload.get("review_child_id")
+                if payload.get("gate") == FINDINGS_REFUTED_GATE
+                else None
+            )
+            if refuted_child and effect is Effect.REVIEW_REJECT:
+                await independent_review.release_refuted(
+                    tx, task_id, refuted_child, caller.actor
+                )
+                return
+            if refuted_child and effect is Effect.REVIEW_ACCEPT_DEVIATION:
+                manual_fallback = True
+                await independent_review.waive_exhausted(
+                    tx,
+                    task_id,
+                    caller.actor,
+                    decision_id=decision.id,
+                    notes=body.text,
+                    child_id=refuted_child,
+                    reason=FINDINGS_REFUTED_GATE,
+                )
+            elif effect is Effect.REVIEW_ACCEPT_DEVIATION:
                 unresolved = await independent_review.exhausted_child_of(
                     tx.conn, decision
                 )

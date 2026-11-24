@@ -276,7 +276,7 @@ async def list_tasks(
     and spec (task discovery). `view=compact` returns only id, title, state, attempt,
     max_attempts, block_reason, progress_message, created_at and updated_at (no refs,
     models or `matches`): the cheapest way to scan many tasks. `hide_review_children=true`
-    leaves out `code_review` tasks that have a parent (their rounds are read with
+    leaves out `code_review` and `review_verification` tasks that have a parent (their rounds are read with
     `GET /tasks/{id}/reviews`) and adds `review_badge` to parents with rounds; it is
     off by default."""
     scope = worker_task_filter(caller)

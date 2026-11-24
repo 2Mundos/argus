@@ -93,7 +93,7 @@ def test_reviews_list_rounds_oldest_first(
     )
     assert one["head_sha"] == HEAD_1
     assert one["findings_by_priority"] == {"P2": 1, "P1": 1, "unranked": 1}
-    assert one["findings"][1] == {
+    assert {k: v for k, v in one["findings"][1].items() if v is not None} == {
         "priority": "P1",
         "file": "a.py",
         "lines": "7",
