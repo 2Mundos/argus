@@ -1,22 +1,43 @@
 ---
 status: partial
 created: 2026-11-23
-updated: 2026-11-23
+updated: 2026-11-24
 ---
 
 # Muse accounts: import, harness and executor lease, delegated CLI
 
 ## Open items
 
+Verified 2026-11-24 (worker container of the project runtime image, no Docker
+daemon, no leased Muse credential; see "Verification record"):
+
+- Closed: the pinned installer artifact and its SHA-256 (§4 record).
+- Closed: auth-rejection text and its classification in `argus-delegate muse`
+  (`auth_rejected`, exit 1, account exhausted through the host relay).
+
+Still open, each blocked on an operator action:
+
 - A worker loop on a leased Muse account in a real agent image, through a
-  real OneCLI gateway swap (fleet smoke, §6 acceptance).
+  real OneCLI gateway swap (fleet smoke, §6 acceptance). Blocked: the task
+  worker had no `META_API_KEY` sentinel, no OneCLI secret
+  `argus-<group>-muse-api` and no Docker; needs an operator-run worker (or a
+  worker started by Argus with a `muse` engine lease on account
+  `a2dcaf17-e52c-4c7a-8c94-3cf041b1acc7`).
 - An agent image build running `engines/install-muse.sh` and `smoke.sh`.
-- Narrowing the gateway secret from host-wide (`/*`) to exact API paths, and
-  recording auth-rejection text and rate-limit signals so a rejected or
-  exhausted Muse account rotates.
-- A usage parser and live-log events for Muse.
+  Blocked: no Docker in the worker. Needs `build-project-image.sh` or the
+  release build on the host, and `smoke.sh <image>` output attached.
+- A rate-limit signal from Muse (exact text) and the rotation of an exhausted
+  account on it. Needs a bounded real run that reaches the limit, or
+  operator-supplied provider text.
+- A usage parser and live-log events for Muse. Needs one real
+  `muse exec --json` stream from a leased account.
 - Shell commands in a delegated `muse exec`: it keeps its Bubblewrap sandbox,
-  which Docker's default profile denies in a worker container (§4).
+  which Docker's default profile denies in a worker container (§4). Not
+  measurable from here: the worker container also denies user namespaces
+  (`unshare -U true`: Operation not permitted) and has no `bwrap`; the denial
+  is recorded as a limitation, the sandbox is never disabled.
+- Narrowing the gateway secret from host-wide (`/*`) to exact API paths:
+  follow-up, see §4 "Gateway secret scope".
 
 Builds on [engines](engines.spec.md), the account pool in
 [worker lifecycle 3.9](worker-lifecycle.spec.md) and the executor pattern of
@@ -142,14 +163,45 @@ executor (`argus-delegate muse`):
   runtime test, so delegated Muse keeps its sandbox flags for now.
 - Whether a dedicated Argus-driven Muse login flow (like Codex/Claude) is
   worth adding once Muse harness runs are observed in production.
-- The CLI's exit codes and error text for auth rejection and rate limits;
-  until verified the delegate treats every non-zero exit as an ordinary
-  failure (no account exhaustion from delegate output).
+- The CLI's error text for rate limits. Auth rejection is known (exit 1,
+  text in the verification record); every other non-zero exit stays an
+  ordinary failure (no account exhaustion from delegate output).
+
+## Gateway secret scope
+
+The secret stays host-wide (`/*`) on `api.meta.ai`, the only host a real run
+contacted. Exact paths cannot be recorded without a request trace of a leased
+run through the gateway; narrowing is a follow-up that needs its own spec
+(`muse-gateway-secret-scope`): capture the paths of one bounded run, scope the
+secret to them, and verify a request outside the scope is refused.
 - The usage fields of a real `muse exec --json` stream: the record envelope
   is known from the echo provider, but usage figures and the live-log parser
   stay unverified until a real stream is recorded.
 - An agent image build running `install-muse.sh` and `smoke.sh` (the
   installer is verified below only for checksum pinning and script shape).
+
+## Verification record (2026-11-24)
+
+No secret value appears below.
+
+- Installer: the pinned artifact
+  (`channel=muse&version=1.4.25-R9361.1&file=muse-x86-linux`, 447 MB) was
+  downloaded and `sha256sum -c` against the pinned x86_64 digest printed
+  `OK`; the `muse` already in the project runtime image has the same digest
+  and `muse --version` prints `Muse Code 1.4.25 (1.4.25-R9361.1)`.
+- Auth rejection: `muse exec` with a deliberately invalid `META_API_KEY`
+  exits `1` and prints on stderr, exact text:
+  `failed to fetch model catalog: authentication failed: your API key from META_API_KEY was rejected — update or unset it`.
+  `argus-delegate muse` now classifies a run whose output carries
+  `authentication failed: your API key from META_API_KEY was rejected` as
+  `auth_rejected`, the same path Copilot and Antigravity use to exhaust the
+  executor account (`museAuthRejected`, unit-tested). The harness path (ACP
+  provider) and the end-to-end rotation are unverified.
+- Rate limit: no signal observed; no paid call was made.
+- Sandbox: `unshare -U true` fails with `Operation not permitted` and `bwrap`
+  is absent in the worker container, consistent with the denial this spec
+  already assumes; `muse exec` write mode therefore keeps its sandbox flags
+  and may fail here. Not a verified Muse run.
 
 # 5. Constraints
 
