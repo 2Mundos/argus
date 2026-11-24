@@ -165,12 +165,11 @@ bypass. Background: draft (removed; in git history),
 
 ## Open items
 
-- The Docker path: `integrations/nanoclaw/scripts/claude-guard-live-probe.sh --image
-  <image>` (a throwaway `docker run --rm --pull=never --network=none` container) and
-  `sessionImageCommandGuardBlock` with its default reader (`readImageFile`), each
-  against the configured base image (NanoClaw's `CONTAINER_IMAGE`) and the project
-  image, on a host with a Docker daemon. The live probe has only run inside the
-  project image itself (section 6), where no Docker CLI or socket exists.
+- `sessionImageCommandGuardBlock` with its default reader (`readImageFile`, a
+  throwaway `docker run --rm --pull=never --network=none --entrypoint cat`) against
+  the configured base image (NanoClaw's `CONTAINER_IMAGE`) and the project image, each
+  separately, on a host with a Docker daemon. A null result is a passed preflight (the
+  managed settings register the hook), not a hook run; the hook run is the live probe.
 
 # 5. Constraints
 
@@ -232,5 +231,24 @@ bypass. Background: draft (removed; in git history),
   (`argus-command-blocked.test.ts` keeps the wrapper). `sessionImageCommandGuardBlock`
   for that image returned null with an in-image file reader, and `env_guard_missing`
   with the default reader (`spawn docker ENOENT`).
-- Not verified: the Docker path (Open items), the image build, a blocked `rm -rf ~`
-  on a disposable worker, a live Codex turn ([Codex hook trust](codex-hook-trust.spec.md)).
+- Verified live (2026-11-24) through Docker on a host with a daemon, probe from
+  `e4ceea2f` in a detached worktree:
+  `claude-guard-live-probe.sh --image argus-nanoclaw-agent:f0fbec0-candidate` (base
+  image) and `--image argus-project-runtime:argus-b88b194735b6` (project image), each
+  a `docker run --rm --pull=never --network=none` container in the default permission
+  mode with no `--bare`, guard-off or bypass. Both exit 0 with all six checks passing
+  (`pretooluse_bash_hook_ran`, `argus_deny_reason`, `is_error_tool_result`,
+  `benign_marker`, `denied_marker_absent`, `cli_exit_0`) and the denial `Blocked by
+  Argus command guard: --no-preserve-root disables the safety check of rm. Do not
+  retry or work around this block.` Both images were built from `f0fbec0`; the changes
+  after it touch only the host-side detection (`argus-command-blocked.ts`, installed
+  into the NanoClaw host by `install.sh`) and the probe, which is mounted into the
+  container, so the in-image hook, guard and managed settings are the ones under test
+  and no image rebuild is needed for the coverage claim.
+- Executors under `argus-delegate`: Claude verified (the `--delegate` probe above runs
+  `buildCommand("claude", …)` and the managed hook denies). Codex not covered and not
+  claimed: `codex exec` reads no Claude managed settings and the image has no Codex
+  hook configuration (Non-Goals, Decisions).
+- Not verified: `sessionImageCommandGuardBlock` through Docker (Open items), the image
+  build, a blocked `rm -rf ~` on a disposable worker, a live Codex turn ([Codex hook
+  trust](codex-hook-trust.spec.md)).
