@@ -48,6 +48,10 @@ GATE_DISABLED_GATE = "gate_disabled"
 # newest review still requesting changes. Its payload is
 # `{"gate": "rounds_exhausted", "child_id": ..., "rounds": N}`.
 ROUNDS_EXHAUSTED_GATE = "rounds_exhausted"
+# The review decision opened after an approval of a head the review policy sorts as
+# `human`: its payload is `{"gate": "policy_human", "rules", "pr", "head_sha"}`
+# (review policy spec 3.4).
+POLICY_HUMAN_GATE = "policy_human"
 
 
 class DecisionState(StrEnum):

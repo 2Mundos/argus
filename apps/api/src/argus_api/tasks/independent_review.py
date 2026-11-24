@@ -20,6 +20,7 @@ from argus_core.continuation import ArtifactKind
 from argus_core.decisions import (
     GATE_DISABLED_GATE,
     NO_REVIEWER_GATE,
+    POLICY_HUMAN_GATE,
     REVIEW_FAILED_GATE,
     REVIEW_FAILED_OPTIONS,
     REVIEW_OPTIONS,
@@ -58,7 +59,7 @@ from argus_api.decisions import store as decisions
 from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.events import record
 from argus_api.tasks import continuation as cont
-from argus_api.tasks import deliverable, delivery
+from argus_api.tasks import deliverable, delivery, review_policy
 from argus_api.tasks import execution_routes as routes
 
 NO_INDEPENDENT_REVIEWER = "no_independent_reviewer"
@@ -344,6 +345,7 @@ def forge_verdict(
 
 _APPROVAL_LIFECYCLE_EVENTS = (
     PASSED_EVENT,
+    review_policy.SKIPPED_EVENT,
     FIX_PUSHED_EVENT,
     "review.independent_void",
     "review.independent_changes_requested",
@@ -375,9 +377,9 @@ async def reviewed_approval_of(
     """(pr, head_sha) of the active independent approval, else (None, None).
 
     A newer void, change request, retry/request, waiver, or child failure supersedes
-    earlier approvals."""
+    earlier approvals. A `review.policy_skipped` of a head counts as its approval."""
     kind, data = await _latest_approval_event(conn, parent_id)
-    if kind != PASSED_EVENT:
+    if kind not in (PASSED_EVENT, review_policy.SKIPPED_EVENT):
         return None, None
     pr = data.get("pr")
     head = data.get("head_sha")
@@ -434,7 +436,7 @@ async def merge_gate_status(
         return False, "independent_review_pending"
     if not pr or not head_sha or not _FULL_SHA.fullmatch(head_sha.strip().lower()):
         return False, NO_REVIEW_HEAD
-    if kind != PASSED_EVENT:
+    if kind not in (PASSED_EVENT, review_policy.SKIPPED_EVENT):
         return False, "independent_review_required"
     approved_pr = data.get("pr") if isinstance(data.get("pr"), str) else None
     approved_sha = (
@@ -444,6 +446,8 @@ async def merge_gate_status(
         return False, "independent_review_pr_mismatch"
     if not _same_sha(approved_sha, head_sha):
         return False, "independent_review_head_mismatch"
+    if kind == review_policy.SKIPPED_EVENT:
+        return True, None  # the policy waived the reviewer for exactly this head
     child_id = data.get("child_id") if isinstance(data.get("child_id"), str) else None
     if not child_id:
         return False, "independent_review_same_model"
@@ -560,6 +564,7 @@ async def settle_or_wait(
             setting=setting,
             policy=policy,
             actor=actor,
+            forge=forge,
         )
         return False
     async with tx.conn.execute(
@@ -614,8 +619,11 @@ async def completion_forge_read(
             if verdict == "approve" and not await settles_alone(conn, parent):
                 return None
             task = await tasks_svc.get_task(conn, parent["id"])
-            return deliverable.ForgeRead(
-                await delivery.delivery_of(conn, checker, task)
+            return await review_policy.with_files(
+                conn,
+                checker,
+                task,
+                deliverable.ForgeRead(await delivery.delivery_of(conn, checker, task)),
             )
         setting = await settings_svc.get_review(
             conn, policy_path or model_policy_path, row["project"]
@@ -625,7 +633,12 @@ async def completion_forge_read(
         task = (await tasks_svc.get_task(conn, task_id)).model_copy(
             update={"result": result}
         )
-        return deliverable.ForgeRead(await delivery.delivery_of(conn, checker, task))
+        return await review_policy.with_files(
+            conn,
+            checker,
+            task,
+            deliverable.ForgeRead(await delivery.delivery_of(conn, checker, task)),
+        )
 
 
 async def authors(
@@ -1192,9 +1205,14 @@ async def spawn_reviewer(
     exclude_alternatives: set[str] | None = None,
     none_eligible: str = NO_INDEPENDENT_REVIEWER,
     replace_child_id: str | None = None,
+    forge: deliverable.ForgeRead | None = None,
 ) -> str | None:
     """Create a code_review child, or set block_reason when none is eligible
     (`none_eligible`: the reason when no alternative remains).
+
+    With `review.policy` enforced, a head the policy sorts as `skip` gets no reviewer:
+    its `review.policy_skipped` stands as the approval of that head. `forge` carries
+    the changed paths read before the write; without them the tier is the default.
 
     Idempotent for an already-active reviewer targeting the same (pr, head_sha).
     Supersedes and cancels any older active reviewer targeting a stale PR or head.
@@ -1231,6 +1249,12 @@ async def spawn_reviewer(
         )
         if same_head and same_pr:
             return str(active["id"])
+    tier = await review_policy.decide(
+        tx, parent, pr=pr, head=sha, forge=forge, actor=actor
+    )
+    if tier is not None and tier.skip:
+        await _policy_skip(tx, parent, active_children, tier, pr, sha, forge, actor)
+        return None
     author_models, author_providers = await authors(tx.conn, parent["id"])
     fix_models, _ = await fixers(tx.conn, parent["id"])
     author_models |= fix_models
@@ -1364,6 +1388,121 @@ async def spawn_reviewer(
     return child.id
 
 
+async def _after_approval(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    forge: deliverable.ForgeRead | None,
+    reviewed: str | None,
+    reviewed_pr: str | None,
+    actor: str,
+) -> None:
+    """What follows an approval of `reviewed` (a reviewer's, or a policy skip): a
+    `human` head under enforced policy goes to a person; otherwise the parent settles
+    on the forge's word, or the regular review decision opens."""
+    from argus_api.tasks import service as tasks_svc
+
+    parent_id = parent["id"]
+    if parent["block_reason"] in (NO_INDEPENDENT_REVIEWER, REVIEW_FAILED):
+        await tx.conn.execute(
+            "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent_id,)
+        )
+    review = Review(parent["review"])
+    have = cont.load(parent)
+    open_items = (
+        [i.id for i in have.checklist if i.status.value != "done"]
+        if have.checklist
+        else []
+    )
+    if human := await review_policy.human_gate(tx.conn, parent, reviewed_pr, reviewed):
+        # The person merges on the forge and accepts, or rejects; Argus starts no
+        # merge continuation for this head (review policy spec 3.4).
+        if not await decisions.open_ids(
+            tx.conn, "task", parent_id, (DecisionKind.REVIEW,)
+        ):
+            await decisions.open_decision(
+                tx,
+                subject_type="task",
+                subject_id=parent_id,
+                kind=DecisionKind.REVIEW,
+                question=(
+                    f"The review policy asks a person to decide {parent['title']!r}"
+                    f" ({', '.join(human.rules) or 'default'}). Merge it on the forge"
+                    " and accept, or reject."
+                ),
+                options=list(REVIEW_OPTIONS),
+                audience=Audience.HUMAN,
+                requested_by=actor,
+                payload={
+                    "gate": POLICY_HUMAN_GATE,
+                    "rules": human.rules,
+                    "pr": reviewed_pr,
+                    "head_sha": reviewed,
+                },
+            )
+        return
+    # A PR that must still turn green or merge is closed by the forge's word
+    # (task deliverable spec 3.5), never by this approval: without a manual review
+    # to ask for, the parent settles once the forge read confirms it.
+    forge_gated = Deliverable(parent["deliverable"]) in FORGE_DELIVERABLES
+    if await settles_alone(tx.conn, parent) and not await decisions.open_ids(
+        tx.conn, "task", parent_id, (DecisionKind.REVIEW,)
+    ):
+        await settle_or_wait(
+            tx, parent, forge, reviewed, actor, reviewed_pr=reviewed_pr
+        )
+    elif review is not Review.NONE or open_items or forge_gated:
+        await decisions.open_decision(
+            tx,
+            subject_type="task",
+            subject_id=parent_id,
+            kind=DecisionKind.REVIEW,
+            question=(
+                f"Review the result of {parent['title']!r}"
+                f" (attempt {parent['attempt']})."
+            ),
+            options=list(REVIEW_OPTIONS),
+            audience=Audience.HUMAN
+            if review is Review.HUMAN
+            else Audience.ORCHESTRATOR,
+            requested_by=actor,
+        )
+    else:
+        await tasks_svc._apply(
+            tx, parent, Action.ACCEPT, actor, data={"notes": "independent review"}
+        )
+
+
+async def _policy_skip(
+    tx: Tx,
+    parent: aiosqlite.Row,
+    active_children: list[aiosqlite.Row],
+    tier: review_policy.Decision,
+    pr: str | None,
+    sha: str,
+    forge: deliverable.ForgeRead | None,
+    actor: str,
+) -> None:
+    """Enforced `skip`: no reviewer for this head. Older active reviewers are
+    superseded, and the skip stands as the approval of exactly this (pr, head)."""
+    from argus_api.tasks import manage
+
+    for stale in active_children:
+        await manage.cancel(tx, stale["id"], actor)
+    await record(
+        tx,
+        actor,
+        "task",
+        parent["id"],
+        review_policy.SKIPPED_EVENT,
+        {"pr": pr, "head_sha": sha, "rules": tier.rules},
+    )
+    from argus_api.tasks import service as tasks_svc
+
+    await _after_approval(
+        tx, await tasks_svc._row(tx.conn, parent["id"]), forge, sha, pr, actor
+    )
+
+
 async def on_parent_complete(
     tx: Tx,
     row: aiosqlite.Row,
@@ -1445,6 +1584,7 @@ async def on_parent_complete(
         setting=setting,
         policy=policy,
         actor=actor,
+        forge=forge,
     )
     return True
 
@@ -1699,6 +1839,7 @@ async def _on_fix_pushed(
         setting=setting,
         policy=policy,
         actor=actor,
+        forge=forge,
         replace_child_id=child["id"],
     )
 
@@ -1768,6 +1909,7 @@ async def on_review_child_complete(
             setting=setting,
             policy=policy,
             actor=actor,
+            forge=forge,
             exclude_models=author_models | child_models,
             exclude_accounts=await _accounts(tx.conn, child["id"]),
             replace_child_id=child["id"],
@@ -1798,6 +1940,7 @@ async def on_review_child_complete(
             setting=setting,
             policy=policy,
             actor=actor,
+            forge=forge,
             exclude_alternatives={child_facts["alternative"]}
             if child_facts["alternative"]
             else None,
@@ -1866,6 +2009,7 @@ async def on_review_child_complete(
                 setting=setting,
                 policy=policy,
                 actor=actor,
+                forge=forge,
                 replace_child_id=child["id"],
             )
             return
@@ -1891,6 +2035,7 @@ async def on_review_child_complete(
                 setting=setting,
                 policy=policy,
                 actor=actor,
+                forge=forge,
                 replace_child_id=child["id"],
             )
             return
@@ -1917,6 +2062,7 @@ async def on_review_child_complete(
                 setting=setting,
                 policy=policy,
                 actor=actor,
+                forge=forge,
                 replace_child_id=child["id"],
             )
             return
@@ -1943,6 +2089,7 @@ async def on_review_child_complete(
                 setting=setting,
                 policy=policy,
                 actor=actor,
+                forge=forge,
                 replace_child_id=child["id"],
             )
             return
@@ -1950,15 +2097,8 @@ async def on_review_child_complete(
             await tx.conn.execute(
                 "UPDATE tasks SET block_reason = NULL WHERE id = ?", (parent_id,)
             )
-        review = Review(parent["review"])
         reviewed = (head_sha or expected_sha or "").lower() or None
         reviewed_pr = expected_pr or parent_pr or forge_pr
-        have = cont.load(parent)
-        open_items = (
-            [i.id for i in have.checklist if i.status.value != "done"]
-            if have.checklist
-            else []
-        )
         await record(
             tx,
             actor,
@@ -1972,36 +2112,7 @@ async def on_review_child_complete(
                 **({"pr": reviewed_pr} if reviewed_pr else {}),
             },
         )
-        # A PR that must still turn green or merge is closed by the forge's word
-        # (task deliverable spec 3.5), never by this approval: without a manual review
-        # to ask for, the parent settles once the forge read confirms it.
-        forge_gated = Deliverable(parent["deliverable"]) in FORGE_DELIVERABLES
-        if await settles_alone(tx.conn, parent) and not await decisions.open_ids(
-            tx.conn, "task", parent_id, (DecisionKind.REVIEW,)
-        ):
-            await settle_or_wait(
-                tx, parent, forge, reviewed, actor, reviewed_pr=reviewed_pr
-            )
-        elif review is not Review.NONE or open_items or forge_gated:
-            await decisions.open_decision(
-                tx,
-                subject_type="task",
-                subject_id=parent_id,
-                kind=DecisionKind.REVIEW,
-                question=(
-                    f"Review the result of {parent['title']!r}"
-                    f" (attempt {parent['attempt']})."
-                ),
-                options=list(REVIEW_OPTIONS),
-                audience=Audience.HUMAN
-                if review is Review.HUMAN
-                else Audience.ORCHESTRATOR,
-                requested_by=actor,
-            )
-        else:
-            await tasks_svc._apply(
-                tx, parent, Action.ACCEPT, actor, data={"notes": "independent review"}
-            )
+        await _after_approval(tx, parent, forge, reviewed, reviewed_pr, actor)
         return
 
     if verdict != "request_changes":

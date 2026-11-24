@@ -11474,6 +11474,65 @@
         "title": "HarnessModel",
         "type": "object"
       },
+      "HeadPolicy": {
+        "description": "What the policy chose for one reviewed head (the task's Reviews section).",
+        "properties": {
+          "files": {
+            "title": "Files",
+            "type": "integer"
+          },
+          "head_sha": {
+            "title": "Head Sha",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "pr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr"
+          },
+          "rules": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rules",
+            "type": "array"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "boolean"
+          },
+          "tier": {
+            "enum": [
+              "skip",
+              "standard",
+              "human"
+            ],
+            "title": "Tier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pr",
+          "head_sha",
+          "mode",
+          "tier",
+          "rules",
+          "files",
+          "skipped"
+        ],
+        "title": "HeadPolicy",
+        "type": "object"
+      },
       "HeartbeatRequest": {
         "properties": {
           "leases": {
@@ -16356,6 +16415,35 @@
         "title": "PendingItem",
         "type": "object"
       },
+      "PolicyReport": {
+        "properties": {
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "skipped_with_findings": {
+            "items": {
+              "$ref": "#/components/schemas/SkipFinding"
+            },
+            "title": "Skipped With Findings",
+            "type": "array"
+          },
+          "tiers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TierReport"
+            },
+            "title": "Tiers",
+            "type": "object"
+          }
+        },
+        "required": [
+          "days",
+          "tiers",
+          "skipped_with_findings"
+        ],
+        "title": "PolicyReport",
+        "type": "object"
+      },
       "Pool": {
         "properties": {
           "agents_per_instance": {
@@ -20490,6 +20578,18 @@
         "title": "ReviewFinding",
         "type": "object"
       },
+      "ReviewReport": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/PolicyReport"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "title": "ReviewReport",
+        "type": "object"
+      },
       "ReviewRound": {
         "properties": {
           "artifact_ids": {
@@ -20610,6 +20710,14 @@
       },
       "ReviewRounds": {
         "properties": {
+          "policy": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/HeadPolicy"
+            },
+            "title": "Policy",
+            "type": "array"
+          },
           "rounds": {
             "items": {
               "$ref": "#/components/schemas/ReviewRound"
@@ -22728,6 +22836,49 @@
           "harness"
         ],
         "title": "SingleAlternative",
+        "type": "object"
+      },
+      "SkipFinding": {
+        "properties": {
+          "findings": {
+            "title": "Findings",
+            "type": "integer"
+          },
+          "head_sha": {
+            "title": "Head Sha",
+            "type": "string"
+          },
+          "pr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr"
+          },
+          "rules": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rules",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "pr",
+          "head_sha",
+          "rules",
+          "findings"
+        ],
+        "title": "SkipFinding",
         "type": "object"
       },
       "SkippedAlternative": {
@@ -27500,6 +27651,51 @@
           "ref"
         ],
         "title": "Text",
+        "type": "object"
+      },
+      "TierReport": {
+        "properties": {
+          "cancelled": {
+            "default": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "findings_by_priority": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Findings By Priority",
+            "type": "object"
+          },
+          "heads": {
+            "default": 0,
+            "title": "Heads",
+            "type": "integer"
+          },
+          "rejected": {
+            "default": 0,
+            "title": "Rejected",
+            "type": "integer"
+          },
+          "succeeded": {
+            "default": 0,
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "tasks": {
+            "default": 0,
+            "title": "Tasks",
+            "type": "integer"
+          },
+          "verdicts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Verdicts",
+            "type": "object"
+          }
+        },
+        "title": "TierReport",
         "type": "object"
       },
       "TitleSource": {
@@ -37125,6 +37321,66 @@
         "summary": "Set Project Repository",
         "tags": [
           "knowledge"
+        ]
+      }
+    },
+    "/api/projects/{slug}/review-report": {
+      "get": {
+        "description": "How the `review.policy` tiers fared in the last `days` (review policy spec 3.5).",
+        "operationId": "get_review_report_api_projects__slug__review_report_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Review Report",
+        "tags": [
+          "settings"
         ]
       }
     },

@@ -86,25 +86,41 @@ export function TaskReviews({ taskId }: { taskId: string }) {
   const rounds = data?.rounds ?? [];
   const selected =
     rounds.find((r) => picked?.taskId === taskId && r.round === picked.round) ?? rounds.at(-1);
-  if (!selected) return null;
+  const heads = data?.policy ?? [];
+  if (!selected && heads.length === 0) return null;
   return (
     <section aria-label="Reviews">
       <header className="task-section-label">Reviews</header>
-      <div role="tablist" aria-label="Review rounds">
-        {rounds.map((r) => (
-          <button
-            key={r.child_id}
-            type="button"
-            role="tab"
-            aria-selected={r === selected}
-            className={r === selected ? "primary" : undefined}
-            onClick={() => setPicked({ taskId, round: r.round })}
-          >
-            Round {r.round} · {verdictText(r.verdict, r.state)}
-          </button>
-        ))}
-      </div>
-      <RoundPanel round={selected} />
+      {heads.length > 0 && (
+        <ul className="plain small" aria-label="Review policy">
+          {heads.map((h) => (
+            <li key={`${h.pr}-${h.head_sha}`}>
+              <code>{h.head_sha.slice(0, 12)}</code> · policy <strong>{h.tier}</strong>
+              {h.mode === "observe" ? " (observed)" : h.skipped ? " (reviewer skipped)" : ""}
+              {h.rules.length > 0 && <> · {h.rules.join(", ")}</>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {selected && (
+        <>
+          <div role="tablist" aria-label="Review rounds">
+            {rounds.map((r) => (
+              <button
+                key={r.child_id}
+                type="button"
+                role="tab"
+                aria-selected={r === selected}
+                className={r === selected ? "primary" : undefined}
+                onClick={() => setPicked({ taskId, round: r.round })}
+              >
+                Round {r.round} · {verdictText(r.verdict, r.state)}
+              </button>
+            ))}
+          </div>
+          <RoundPanel round={selected} />
+        </>
+      )}
     </section>
   );
 }

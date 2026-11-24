@@ -1,7 +1,7 @@
 ---
 status: draft
 created: 2026-11-21
-updated: 2026-11-22
+updated: 2026-11-24
 ---
 
 # Pre-merge independent review workflow
@@ -64,8 +64,10 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   alongside `child_id` and `verdict`.
 - `reviewed_approval_of` reads the newest review gate lifecycle event on the
   parent (`passed`, `void`, `changes_requested`, `requested`, `waived`,
-  `child_failed`) and returns `(pr, head_sha)` only when that newest event is
-  `review.independent_passed`. A void, new round, or `request_changes` invalidates
+  `child_failed`, and `review.policy_skipped`) and returns `(pr, head_sha)` only when
+  that newest event is `review.independent_passed` or `review.policy_skipped`: an
+  enforced policy `skip` ([review policy](review-policy.spec.md) 3.4) is the approval
+  of exactly that PR and head, with no reviewing child. A void, new round, or `request_changes` invalidates
   earlier approvals.
 - `on_review_child_complete` compares the child's reported `head_sha` against the
   child's assigned `head_sha`, the parent's current delivery refs, and the live
@@ -99,7 +101,8 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
 - `independent_review.merge_gate_status` evaluates whether a merge is permitted
   for `(parent, pr, head_sha)`: it allows merge only when `review.independent` is
   `off`, explicitly waived, or the latest review event is an independent approval
-  whose child's recorded executions pass `child_models_clean` and whose `pr` and
+  whose child's recorded executions pass `child_models_clean` (a policy `skip` has no
+  child and needs no such proof) and whose `pr` and
   exact 40-character `head_sha` match the target PR and head with no active
   reviewer or blocking gate reason.
 - `ClaimedTask` carries `independent_review_required`,
@@ -180,14 +183,18 @@ transaction, forge read just before it) requeues an approved `pr_merged` parent
 and records `review.merge_resumed {pr, head_sha}`. All of these must hold, re-read
 inside the transaction:
 
-- the newest review gate event is `review.independent_passed` for exactly the live PR
-  and head, and `merge_gate_status` allows it; no active reviewer, no open review
+- the newest review gate event is `review.independent_passed` or
+  `review.policy_skipped` for exactly the live PR and head, and `merge_gate_status` allows it; no active reviewer, no open review
   decision;
 - the forge shows the PR `open`, fresh, on the approved head, with exact-head checks
   green, mergeable and the forge review policy met (`readiness.pr_gate`);
 - the task's own grant allows merge (`decide_merge`: `delivery.auto_merge` or
   `input.delivery.allow_merge`, and `repository:write`), read live, so a revoked grant
   resumes nothing.
+
+A head the enforced policy puts in the `human` tier is never resumed: after the
+approval the parent opens one review decision with payload `{gate: "policy_human",
+rules, pr, head_sha}` and a person merges and accepts, or rejects.
 
 When only the grant is missing, the parent keeps waiting and records
 `review.merge_resume_blocked {reason}` once (`merge_not_authorized` or

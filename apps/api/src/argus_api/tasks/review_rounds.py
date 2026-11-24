@@ -13,6 +13,7 @@ import aiosqlite
 from argus_core.tasks import TaskState
 from pydantic import BaseModel
 
+from argus_api.tasks import review_policy
 from argus_api.tasks.independent_review import CODE_REVIEW_KIND
 
 Verdict = Literal["approve", "request_changes", "void"]
@@ -45,6 +46,7 @@ class ReviewRound(BaseModel):
 class ReviewRounds(BaseModel):
     task_id: str
     rounds: list[ReviewRound]
+    policy: list[review_policy.HeadPolicy] = []  # review policy spec 3.5
 
 
 def _text(value: Any) -> str | None:
@@ -145,8 +147,9 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
         (parent_id, CODE_REVIEW_KIND),
     ) as cur:
         children = list(await cur.fetchall())
+    policy = await review_policy.heads_of(conn, parent_id)
     if not children:
-        return ReviewRounds(task_id=parent_id, rounds=[])
+        return ReviewRounds(task_id=parent_id, rounds=[], policy=policy)
     ids = [c["id"] for c in children]
     voided = await _voided(conn, parent_id, children)
     runs = await _by_child(
@@ -203,7 +206,7 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
                 finished_at=child["updated_at"] if ended else None,
             )
         )
-    return ReviewRounds(task_id=parent_id, rounds=rounds)
+    return ReviewRounds(task_id=parent_id, rounds=rounds, policy=policy)
 
 
 class ReviewBadge(BaseModel):

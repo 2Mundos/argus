@@ -1,5 +1,5 @@
 ---
-status: draft
+status: implemented
 created: 2026-11-24
 updated: 2026-11-24
 ---
@@ -171,20 +171,25 @@ the rules that set it, in both modes.
   approval fields (`ClaimedTask`) read a skip like an approval.
 - `packages/core/src/argus_core/decisions.py`: gate `policy_human`.
 - The report route, API models and `make openapi`; dashboard Settings and Reviews.
-- When built, update [settings](settings.spec.md) and [pre-merge independent
-  review](pre-merge-independent-review.spec.md) 3.2, 3.3 and 3.6.
+- [Settings](settings.spec.md) 3.5a and [pre-merge independent
+  review](pre-merge-independent-review.spec.md) 3.2, 3.3 and 3.6 describe the key and
+  the skip approval.
+- `review_rounds.py`: `ReviewRounds.policy` carries each head's tier for the Reviews
+  section; the Settings page shows the report (`views/ReviewPolicy.tsx`).
 
 ## Verification boundary
 
-- Commands (planned): `uv run pytest apps/api/tests/test_settings.py
+- Commands: `uv run pytest apps/api/tests/test_settings.py
   apps/api/tests/test_pre_merge_independent_review.py
   apps/api/tests/test_review_settle.py apps/api/tests/test_task_delivery.py`;
   `make openapi-check`.
-- Tests to write: glob semantics (`*`, `**`, `?`, renames); strictest tier wins;
+- Tests (`apps/api/tests/test_review_policy.py`, `test_task_delivery.py`,
+  `test_settings.py`): glob semantics (`*`, `**`, `?`, renames); strictest tier wins;
   unknown and empty lists take `default`; `default` refuses `skip`; observe changes
   nothing; a `skip` allows the merge of exactly its head and is voided by a new head;
   `human` never starts the merge continuation.
-- Verified: nothing yet (draft). The commit split comes from `git log` on `main` with
-  a rough path match, not from per-PR file lists.
-- Not verified: the forge files endpoint on Gitea and GitHub for renames and large
-  PRs.
+- Verified: the suites above, with the forge files endpoint mocked for renames, paging
+  to exactly 300 files, more than 300, a moved head and a failed read.
+- Not verified: the files endpoint against a live GitHub or Gitea. A task whose PR the
+  worker did not report (found by search) has no forge reference, so its list is
+  unknown and `default` applies; it is never skipped.

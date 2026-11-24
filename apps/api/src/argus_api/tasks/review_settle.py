@@ -18,7 +18,7 @@ from argus_core.tasks import Review
 
 from argus_api.db import Database
 from argus_api.decisions import store as decisions
-from argus_api.tasks import delivery, merge_resume
+from argus_api.tasks import delivery, merge_resume, review_policy
 from argus_api.tasks import independent_review as indep
 from argus_api.tasks import service as tasks
 from argus_api.tasks.deliverable import ForgeRead
@@ -49,7 +49,12 @@ async def settle_task(db: Database, checker: delivery.PrChecker, task_id: str) -
         forge = None
         if await indep.awaits_settlement(conn, row):
             task = await tasks.get_task(conn, task_id)
-            forge = ForgeRead(await delivery.delivery_of(conn, checker, task))
+            forge = await review_policy.with_files(
+                conn,
+                checker,
+                task,
+                ForgeRead(await delivery.delivery_of(conn, checker, task)),
+            )
     async with db.write() as tx:
         row = await tasks.task_row(tx.conn, task_id)
         if row["state"] != "in_review" or row["block_reason"] != indep.AWAITING_FORGE:

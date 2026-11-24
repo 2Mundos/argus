@@ -21,7 +21,7 @@ from argus_api.db import Tx
 from argus_api.decisions import store as decisions
 from argus_api.events import record
 from argus_api.settings import service as settings_svc
-from argus_api.tasks import deliverable, readiness
+from argus_api.tasks import deliverable, readiness, review_policy
 from argus_api.tasks import independent_review as indep
 
 RESUMED_EVENT = "review.merge_resumed"
@@ -48,7 +48,9 @@ async def resumed_for_approval(
 ) -> bool:
     """True when the current approval of exactly (pr, head) already earned its one
     merge attempt: a resume event newer than the approval, for the same PR and head."""
-    passed, _ = await _newest_id(conn, task_id, indep.PASSED_EVENT)
+    passed = 0
+    for kind in (indep.PASSED_EVENT, review_policy.SKIPPED_EVENT):
+        passed = max(passed, (await _newest_id(conn, task_id, kind))[0])
     resumed, data = await _newest_id(conn, task_id, RESUMED_EVENT)
     return (
         resumed > passed > 0
@@ -101,6 +103,8 @@ async def resume_merge(
         or not indep._same_sha(head.sha, reviewed_head)
     ):
         return False  # moved, replaced, closed, merged or unread: settle decides
+    if await review_policy.human_gate(tx.conn, parent, reviewed_pr, reviewed_head):
+        return False  # a person merges this head (review policy spec 3.4)
     if await resumed_for_approval(tx.conn, task_id, reviewed_pr, reviewed_head):
         return False  # one attempt per approval; a retry is an explicit decision
     forge_policy = readiness.forge_review_policy(
