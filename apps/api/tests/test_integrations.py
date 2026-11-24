@@ -1718,3 +1718,58 @@ async def test_cancellation_finishes_sops_edit_before_database_outcome(
             f"integration.{'rotated' if action == 'rotate' else 'revoked'}",
         ]
     )
+
+
+def test_delete_removes_only_a_revoked_integration(
+    client: TestClient, tmp_path: Path
+) -> None:
+    item = mcp(client)
+    path = f"/api/projects/alpha/integrations/{item['id']}"
+    active = client.delete(path)
+    assert active.status_code == 409
+    assert active.json()["detail"]["code"] == "integration_active"
+    assert client.get(path).status_code == 200
+    assert act(client, item, "revoke").status_code == 200
+    assert (
+        client.delete(f"/api/projects/beta/integrations/{item['id']}").status_code
+        == 404
+    )
+    gone = client.delete(path)
+    assert gone.status_code == 204 and not gone.content
+    assert client.get(path).status_code == 404
+    assert client.delete(path).status_code == 404
+    assert client.get("/api/integrations").json() == []
+    events = client.get("/api/events", params={"limit": 500}).json()
+    deleted = [
+        e for e in json.loads(json.dumps(events)) if e["kind"] == "integration.deleted"
+    ]
+    assert len(deleted) == 1
+    assert deleted[0]["subject_id"] == item["id"] and deleted[0]["actor"]
+    assert deleted[0]["data"] == {"project": "alpha", "name": item["name"]}
+    no_secret_anywhere(client, tmp_path, SECRET)
+
+
+def test_delete_is_admin_only(client: TestClient) -> None:
+    item = mcp(client)
+    assert act(client, item, "revoke").status_code == 200
+    path = f"/api/projects/alpha/integrations/{item['id']}"
+    for role in ("worker", "orchestrator"):
+        assert client.delete(path, headers=register(client, role)).status_code == 403
+    assert client.delete(path, headers={"Authorization": ""}).status_code == 401
+    assert client.get(path).status_code == 200
+
+
+def test_delete_keeps_task_history(client: TestClient) -> None:
+    item = mcp(client, access="read_write")
+    task = client.post("/api/tasks", json={"project": "alpha", "title": "t"}).json()
+    sel = client.put(
+        f"/api/tasks/{task['id']}/integrations",
+        json={"expected_version": task["version"], "integrations": [item["id"]]},
+    )
+    assert sel.status_code == 200, sel.text
+    assert act(client, item, "revoke").status_code == 200
+    assert (
+        client.delete(f"/api/projects/alpha/integrations/{item['id']}").status_code
+        == 204
+    )
+    assert client.get(f"/api/tasks/{task['id']}").status_code == 200

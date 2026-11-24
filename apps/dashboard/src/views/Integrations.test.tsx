@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { components } from "@argus/api-client";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveProvider } from "../live";
@@ -135,6 +135,10 @@ beforeEach(() => {
                 ? "all"
                 : "unknown",
       });
+    }
+    if (request.method === "DELETE") {
+      items.splice(items.indexOf(item), 1);
+      return new Response(null, { status: 204 });
     }
     if (path.endsWith("/revoke"))
       Object.assign(item, { state: "revoked", has_secret: false, revoked_at: timestamp });
@@ -325,7 +329,11 @@ describe("Integrations management", () => {
       await user.click(screen.getByRole("button", { name: "Revoke integration" }));
       await row().findByText("revoked");
       expect(row().getByText("Secret absent")).toBeTruthy();
-      expect(row().queryAllByRole("button")).toHaveLength(0);
+      expect(
+        row()
+          .queryAllByRole("button")
+          .map((b) => b.getAttribute("aria-label")),
+      ).toEqual(["Delete docs"]);
       expect(requests.filter((r) => r.method === "POST").map((r) => r.path)).toEqual([
         "/api/projects/beta/integrations/mcp-1/validate",
         "/api/projects/beta/integrations/mcp-1/rotate",
@@ -444,7 +452,34 @@ describe("Integrations management", () => {
     await act(async () => staleList.resolve(json([connection()])));
     expect(row().getByText("revoked")).toBeTruthy();
     expect(row().getByText("Secret absent")).toBeTruthy();
-    expect(row().queryAllByRole("button")).toHaveLength(0);
+    expect(
+      row()
+        .queryAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Delete docs"]);
+  });
+
+  it("deletes a revoked connection only after confirmation", async () => {
+    items = [connection({ state: "revoked", has_secret: false })];
+    mount();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Delete docs" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Delete docs" }));
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    expect(requests.some((r) => r.method === "DELETE")).toBe(false);
+    await user.click(row().getByRole("button", { name: "Delete docs" }));
+    await user.click(screen.getByRole("button", { name: "Delete integration" }));
+    await waitFor(() => expect(screen.queryByRole("row", { name: /docs/ })).toBeNull());
+    expect(requests.filter((r) => r.method === "DELETE").map((r) => r.path)).toEqual([
+      "/api/projects/alpha/integrations/mcp-1",
+    ]);
+  });
+
+  it("offers no Delete on an active connection", async () => {
+    items = [connection()];
+    mount();
+    await screen.findByRole("button", { name: "Revoke docs" });
+    expect(screen.queryByRole("button", { name: "Delete docs" })).toBeNull();
   });
 
   it("supports keyboard cancellation and discards an unfinished token", async () => {

@@ -599,6 +599,33 @@ async def revoke(
     )
 
 
+class IntegrationActiveError(ConflictError):
+    code = "integration_active"
+
+
+async def delete(db: Database, project: str, integration_id: str, actor: str) -> None:
+    """Remove a revoked record (spec 3.4). It holds no secret; only an id and name
+    go into the event. Tasks keep their history: only the opt-in links go."""
+    async with db.write() as tx:
+        row = await _row(tx.conn, project, integration_id)
+        if row["state"] != "revoked" or row["secret_ref"] is not None:
+            raise IntegrationActiveError(
+                f"integration {row['name']} must be revoked before it is deleted"
+            )
+        await tx.conn.execute(
+            "DELETE FROM task_integrations WHERE integration_id = ?", (row["id"],)
+        )
+        await tx.conn.execute("DELETE FROM integrations WHERE id = ?", (row["id"],))
+        await record(
+            tx,
+            actor,
+            "integration",
+            row["id"],
+            "integration.deleted",
+            {"project": row["project"], "name": row["name"]},
+        )
+
+
 async def validate(
     db: Database,
     store: SecretStore,

@@ -2250,7 +2250,11 @@ export interface paths {
         get: operations["get_integration_api_projects__slug__integrations__integration_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Integration
+         * @description Remove a revoked record; an active one is `409 integration_active`.
+         */
+        delete: operations["delete_integration_api_projects__slug__integrations__integration_id__delete"];
         options?: never;
         head?: never;
         /**
@@ -18231,6 +18235,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Integration"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_integration_api_projects__slug__integrations__integration_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                integration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
