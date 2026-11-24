@@ -13,7 +13,9 @@ daemon, no leased Muse credential; see "Verification record"):
 
 - Closed: the pinned installer artifact and its SHA-256 (§4 record).
 - Closed: auth-rejection text and its classification in `argus-delegate muse`
-  (`auth_rejected`, exit 1, account exhausted through the host relay).
+  (`auth_rejected`, exit 1; unit-tested on the delegate output only).
+- Open: that the host relay exhausts the account and rotates on it, and the
+  ACP harness path, are unverified end to end (see the list below).
 
 Still open, each blocked on an operator action:
 
@@ -163,6 +165,11 @@ executor (`argus-delegate muse`):
   runtime test, so delegated Muse keeps its sandbox flags for now.
 - Whether a dedicated Argus-driven Muse login flow (like Codex/Claude) is
   worth adding once Muse harness runs are observed in production.
+- The usage fields of a real `muse exec --json` stream: the record envelope
+  is known from the echo provider, but usage figures and the live-log parser
+  stay unverified until a real stream is recorded.
+- An agent image build running `install-muse.sh` and `smoke.sh` (the
+  installer is verified below only for checksum pinning and script shape).
 - The CLI's error text for rate limits. Auth rejection is known (exit 1,
   text in the verification record); every other non-zero exit stays an
   ordinary failure (no account exhaustion from delegate output).
@@ -174,11 +181,7 @@ contacted. Exact paths cannot be recorded without a request trace of a leased
 run through the gateway; narrowing is a follow-up that needs its own spec
 (`muse-gateway-secret-scope`): capture the paths of one bounded run, scope the
 secret to them, and verify a request outside the scope is refused.
-- The usage fields of a real `muse exec --json` stream: the record envelope
-  is known from the echo provider, but usage figures and the live-log parser
-  stay unverified until a real stream is recorded.
-- An agent image build running `install-muse.sh` and `smoke.sh` (the
-  installer is verified below only for checksum pinning and script shape).
+
 
 ## Verification record (2026-11-24)
 
