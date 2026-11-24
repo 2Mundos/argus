@@ -161,7 +161,8 @@ export function copilotAuthRejected(text) {
  * Exact text Muse 1.4.25 prints (stderr, exit 1) for a rejected META_API_KEY,
  * observed with a deliberately invalid key.
  */
-export const MUSE_AUTH_REJECTED = "authentication failed: your API key from META_API_KEY was rejected";
+export const MUSE_AUTH_REJECTED =
+  "authentication failed: your API key from META_API_KEY was rejected";
 
 /** Did the Muse CLI reject its credential? Exact known text only; free text never counts. */
 export function museAuthRejected(text) {
