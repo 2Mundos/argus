@@ -105,6 +105,13 @@ repository whose host is not `github.com` (`policy_denied`). It is `github-api.m
 `GitHubApi` subclass of `GiteaApi` that overrides the endpoint layer and imports the
 shared plumbing from `gitea-api.mjs`; both files are installed side by side.
 
+Output is bounded, since a reviewer's context is finite. By default a response is a
+compact projection (pull requests and comments keep identity, state, refs, head SHA,
+author, labels and short text; other objects drop URL-valued and `_links` noise) and the
+JSON is capped at 16 KiB. `--raw` prints the full response, capped at 256 KiB. Over the
+cap the output is still valid JSON: `{truncated: true, original_bytes, limit_bytes,
+note, preview}`. `repo-preflight` and `--format text` are not projected.
+
 Where GitHub differs, the helper adapts and the difference is visible in `--help`:
 
 | Area | GitHub behaviour |

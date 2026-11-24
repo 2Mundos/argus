@@ -1384,6 +1384,7 @@ const GLOBAL_OPTIONS = {
   "timeout-ms": "int",
   format: "string",
   json: "bool",
+  raw: "bool",
   help: "bool",
 };
 const PAGE = { page: "int", limit: "int", all: "bool", "max-items": "int", "max-pages": "int" };
@@ -1695,6 +1696,7 @@ const COMMANDS = {
     run: (api) => api.getRepository(),
   },
   "repo-preflight": {
+    verbatim: true,
     summary: "prove this session is authenticated with read or write access to the repository",
     options: { "result-file": "string", access: "string" },
     run: (api, o) => repoPreflight(api, o["result-file"], o.access === "read" ? "read" : "write"),
@@ -2068,7 +2070,10 @@ token, secret or repository-delete command, and no arbitrary-HTTP command.
 Commands:
 ${lines.join("\n")}
 
-Global options: --repository URL, --timeout-ms N, --format json|text (default json), --help.
+Global options: --repository URL, --timeout-ms N, --format json|text (default json), --raw, --help.
+Output is a compact projection by default (PR: number, state, head/base sha, mergeable, title,
+url, labels, body truncated; comments: id, author, truncated body; links/reactions dropped) capped at
+16 KiB; --raw returns the forge payload, capped at 256 KiB. A cap hit prints {"truncated":true,...}.
 Lists: --page N, --limit N (1..50), --all [--max-items N (default 1000)] [--max-pages N (default 50)].
 Bodies: --body TEXT | --body-file PATH | --body-stdin (at most 256 KiB, kept verbatim).
 Options accept --name value or --name=value. number = per-repository issue/PR index;
@@ -2127,6 +2132,88 @@ function toText(result) {
       .map(([k, v]) => `${k}: ${v}`)
       .join("\n");
   return String(result);
+}
+
+// Default output is a compact projection capped at COMPACT_OUTPUT_MAX_BYTES; --raw keeps the
+// forge payload but is still capped at RAW_OUTPUT_MAX_BYTES, so one call cannot flood a model's
+// context (observed: raw PR JSON overflowed a reviewer's prompt).
+export const COMPACT_OUTPUT_MAX_BYTES = 16 * 1024;
+export const RAW_OUTPUT_MAX_BYTES = 256 * 1024;
+const TEXT_FIELD_MAX = 1000;
+const NOISE_KEYS = new Set(["_links", "reactions", "performed_via_github_app", "node_id"]);
+
+const clip = (text, max = TEXT_FIELD_MAX) =>
+  typeof text === "string" && text.length > max
+    ? `${text.slice(0, max)}...[truncated ${text.length - max} chars]`
+    : text;
+const loginOf = (user) => (user && typeof user === "object" ? (user.login ?? null) : user);
+const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+function compactPullRequest(pr) {
+  return {
+    number: pr.number,
+    state: pr.state,
+    title: clip(pr.title, 300),
+    html_url: pr.html_url,
+    draft: pr.draft,
+    merged: pr.merged,
+    mergeable: pr.mergeable,
+    mergeable_state: pr.mergeable_state,
+    merge_commit_sha: pr.merge_commit_sha,
+    head: { sha: pr.head?.sha, ref: pr.head?.ref },
+    base: { sha: pr.base?.sha, ref: pr.base?.ref },
+    user: loginOf(pr.user),
+    labels: Array.isArray(pr.labels) ? pr.labels.map((l) => l?.name ?? l?.id) : undefined,
+    requested_reviewers: Array.isArray(pr.requested_reviewers)
+      ? pr.requested_reviewers.map(loginOf)
+      : undefined,
+    body: clip(pr.body),
+  };
+}
+
+function compactComment(c) {
+  return {
+    id: c.id,
+    html_url: c.html_url,
+    author: loginOf(c.user),
+    created_at: c.created_at,
+    updated_at: c.updated_at,
+    body: clip(c.body),
+  };
+}
+
+/** The compact form of a forge result: known shapes are projected, the rest is de-noised. */
+export function compactResult(value, depth = 0) {
+  if (Array.isArray(value)) return value.map((v) => compactResult(v, depth + 1));
+  if (typeof value === "string") return clip(value);
+  if (!isObject(value) || depth > 8) return value;
+  if (isObject(value.head) && isObject(value.base) && typeof value.number === "number")
+    return compactPullRequest(value);
+  if (typeof value.id === "number" && typeof value.body === "string" && isObject(value.user))
+    return compactComment(value);
+  const out = {};
+  for (const [key, v] of Object.entries(value)) {
+    if (NOISE_KEYS.has(key)) continue;
+    if (key.endsWith("_url") && key !== "html_url") continue;
+    if ((key === "user" || key === "owner" || key === "author") && isObject(v))
+      out[key] = loginOf(v);
+    else out[key] = compactResult(v, depth + 1);
+  }
+  return out;
+}
+
+/** Serialize `result`, replacing it with a valid-JSON truncation marker above `max` bytes. */
+export function boundedJson(result, max) {
+  const text = JSON.stringify(result);
+  if (Buffer.byteLength(text) <= max) return text;
+  const preview = text.slice(0, Math.max(0, max - 512));
+  return JSON.stringify({
+    truncated: true,
+    original_bytes: Buffer.byteLength(text),
+    limit_bytes: max,
+    note: "output truncated; narrow the query (--limit, --number) or use --raw for the full payload (capped)",
+    preview,
+  });
 }
 
 /** Error JSON for stderr: code/status/method/path and a sanitized message only. */
@@ -2228,7 +2315,11 @@ export async function main(argv, env = process.env, io = {}, cli = GITEA_CLI) {
     };
     const result = await definition.run(api, options, ctx);
     if (result && typeof result.text === "string" && definition.raw) stdout.write(result.text);
-    else stdout.write(`${format === "text" ? toText(result) : JSON.stringify(result)}\n`);
+    else {
+      const shown = options.raw || definition.verbatim ? result : compactResult(result);
+      const max = options.raw ? RAW_OUTPUT_MAX_BYTES : COMPACT_OUTPUT_MAX_BYTES;
+      stdout.write(`${format === "text" ? toText(shown) : boundedJson(shown, max)}\n`);
+    }
     return 0;
   } catch (error) {
     stderr.write(`${JSON.stringify({ error: errorPayload(error) })}\n`);

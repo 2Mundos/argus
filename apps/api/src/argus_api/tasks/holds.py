@@ -46,6 +46,16 @@ async def block_switch_failed(
     return await get_task(tx.conn, task_id)
 
 
+async def _model_ran(conn: aiosqlite.Connection, task_id: str, attempt: int) -> bool:
+    """Whether a model execution of this attempt started (a `selected` row has not)."""
+    async with conn.execute(
+        "SELECT 1 FROM model_executions WHERE task_id = ? AND attempt = ?"
+        " AND state IN ('running', 'succeeded') LIMIT 1",
+        (task_id, attempt),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
 async def pause_for_quota(
     tx: Tx,
     agent_id: str,
@@ -60,8 +70,13 @@ async def pause_for_quota(
     (or, with `wait`, `blocked` as `awaiting_quota` because no account is left)
     with `failures` and `attempt` untouched, so `max_attempts` is not consumed.
     Fenced like `fail`, which it replaces for this case. `reason` `auth_expired`
-    is the same pause for an expired login (failure classes 3.6)."""
+    is the same pause for an expired login (failure classes 3.6); when the login was
+    rejected before any model ran, the claim is voided too: the attempt number is handed
+    back, so the rejection spends nothing (not even an attempt of a reviewer)."""
     row = await _owned(tx, task_id, attempt, agent_id, allow_expired=True)
+    void_claim = reason == "auth_expired" and not await _model_ran(
+        tx.conn, task_id, attempt
+    )
     outcome = "waiting for quota" if wait else "requeued"
     await _apply(
         tx,
@@ -77,6 +92,7 @@ async def pause_for_quota(
             **({"block_reason": AWAITING_QUOTA} if wait else {}),
         },
         data={"reason": reason, "error": note[:500]},
+        voided=void_claim,
     )
     return await get_task(tx.conn, task_id)
 

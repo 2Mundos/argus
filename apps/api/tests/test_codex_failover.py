@@ -331,8 +331,8 @@ async def test_expired_login_blocks_the_account_and_the_next_claim_uses_another(
     await add(db, store, "codex-b", priority=90)
     task = await started(db, store)
     after = await fail(db, store, task, TAIL, reason)
-    # Not the task's fault: requeued, nothing counted.
-    assert (after.state, after.attempt, after.failures) == (S.READY, 1, 0)
+    # Not the task's fault, and no model ran: requeued, the attempt handed back.
+    assert (after.state, after.attempt, after.failures) == (S.READY, 0, 0)
     assert after.failover is not None
     assert after.failover.reason_code == "auth_expired"
     assert await block_of(db, clock, a) == "auth_rejected"
@@ -341,8 +341,25 @@ async def test_expired_login_blocks_the_account_and_the_next_claim_uses_another(
     assert "sk-secret" not in json.dumps(await events(db, "account.auth_rejected"))
     assert "sk-secret" not in json.dumps(event)
     nxt = await claim(db)
-    assert (nxt.attempt, nxt.failures) == (2, 0)
+    assert (nxt.attempt, nxt.failures) == (1, 0)
     assert (await lease(db, store, nxt)).name == "codex-b"
+
+
+async def test_expired_login_after_a_model_ran_keeps_the_attempt(
+    db: Database, store: MemorySecretStore
+) -> None:
+    await add(db, store, "codex-a", priority=100)
+    await add(db, store, "codex-b", priority=90)
+    task = await started(db, store)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "INSERT INTO model_executions (id, task_id, key, attempt, layer, state,"
+            " provider, configured_model, recorded_at, updated_at)"
+            " VALUES ('x', ?, 'k', ?, 'harness', 'running', 'openai', 'gpt-5.5', ?, ?)",
+            (task.id, task.attempt, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+        )
+    after = await fail(db, store, task, TAIL)
+    assert (after.state, after.attempt, after.failures) == (S.READY, 1, 0)
 
 
 async def test_expired_login_on_the_only_account_waits_instead_of_failing(
