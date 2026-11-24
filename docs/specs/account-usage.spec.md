@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-18
+updated: 2026-11-24
 ---
 
 # Account usage
@@ -359,8 +359,8 @@ account lease and must preserve the document structure and JSON value types.
     outcome and code: a skip or failure is never shown as an update, and a
     failure says the last good figures are kept.
 - Charts are hand-written SVG with no new dependency.
-- Usage is hidden for `gitea` accounts, which hold repository leases, not
-  model quota.
+- Usage is hidden for moved `gitea` and `github` accounts ([forge
+  integrations](forge-integrations.spec.md) 3.6), which hold no model quota.
 
 ## 3.7 Metrics
 

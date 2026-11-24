@@ -2,15 +2,18 @@
 parser, exact-head forge reads, REST and MCP. The forge is a mock transport."""
 
 import asyncio
-from collections.abc import Generator
+import json
+from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
+import aiosqlite
 import httpx2 as httpx
 import pytest
-from argus_api.db import Database
+from api_support import add_forge, insert_project
+from argus_api.db import Database, ts
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
 from argus_api.tasks import delivery
@@ -427,31 +430,36 @@ def test_combine_checks_priority() -> None:
 # -- forge check ----------------------------------------------------------------
 
 
-class Conn:
-    """An accounts query that returns one gitea secret reference."""
+async def _forge(db: Database, project: str, host: str, owner: str, repo: str) -> None:
+    """A project whose repository is host/owner/repo, with its forge integration."""
+    await insert_project(db, project)
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE projects SET repository_url = ? WHERE slug = ?",
+            (f"https://{host}/{owner}/{repo}", project),
+        )
+        config = {"host": host, **({} if host == "github.com" else {"username": "bot"})}
+        await tx.conn.execute(
+            "INSERT INTO integrations (id, project, kind, name, config, access,"
+            " secret_ref, state, created_at, created_by, updated_at)"
+            " VALUES (?, ?, 'forge', 'forge', ?, 'read_write', 'sops:g', 'active',"
+            " ?, 'test', ?)",
+            (f"f-{project}", project, json.dumps(config), ts(tx.now), ts(tx.now)),
+        )
 
-    def __init__(self, rows):
-        self.rows = rows
 
-    def execute(self, *_):
-        rows = self.rows
-
-        class Cur:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_):
-                return None
-
-            async def fetchall(self):
-                return rows
-
-        return Cur()
+@pytest.fixture
+async def conn(db: Database) -> AsyncGenerator[aiosqlite.Connection]:
+    """Two projects with forge integrations: REF's Gitea repository and a GitHub one."""
+    await _forge(db, "repo", HOST, OWNER, REPO)
+    await _forge(db, "gh", "github.com", "2mundos", "argus")
+    async with db.read() as c:
+        yield c
 
 
 class Secrets:
     def get(self, name):
-        return {"username": "bot", "token": "dummy-token"} if name == "g" else None
+        return {"token": "dummy-token", "version": 1} if name == "g" else None
 
 
 REF = PrRef(HOST, OWNER, REPO, 12)
@@ -459,9 +467,6 @@ REF = PrRef(HOST, OWNER, REPO, 12)
 
 def checker(handler) -> PrChecker:
     return PrChecker(Secrets(), httpx.MockTransport(handler))  # ty: ignore[invalid-argument-type]
-
-
-CONN = Conn([("sops:g",)])
 
 
 def forge_router(routes: dict[str, object]):
@@ -505,7 +510,7 @@ def open_pr(**extra):
         ({"state": "weird"}, PrState.UNKNOWN),
     ],
 )
-async def test_states_are_read_with_the_repository_credential(body, want) -> None:
+async def test_states_are_read_with_the_repository_credential(body, want, conn) -> None:
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -514,7 +519,7 @@ async def test_states_are_read_with_the_repository_credential(body, want) -> Non
             return httpx.Response(200, json=body)
         return httpx.Response(404, json={})
 
-    state, merged_at, _ = await checker(handler).check(CONN, REF)  # ty: ignore[invalid-argument-type]
+    state, merged_at, _ = await checker(handler).check(conn, REF)  # ty: ignore[invalid-argument-type]
     assert state is want
     assert (merged_at is not None) == (want is PrState.MERGED)
     pr_reqs = [r for r in seen if r.url.path.endswith("/pulls/12")]
@@ -525,7 +530,7 @@ async def test_states_are_read_with_the_repository_credential(body, want) -> Non
     assert req.headers["authorization"].startswith("Basic ")
 
 
-async def test_exact_head_statuses_and_required_gates_unknown_on_403() -> None:
+async def test_exact_head_statuses_and_required_gates_unknown_on_403(conn) -> None:
     routes = {
         "/pulls/12": open_pr(),
         f"/commits/{HEAD}/statuses": [
@@ -535,7 +540,7 @@ async def test_exact_head_statuses_and_required_gates_unknown_on_403() -> None:
         "/branch_protections/main": httpx.Response(403, json={"message": "no"}),
         "/pulls/12/reviews": [],
     }
-    snap = await checker(forge_router(routes)).snapshot(CONN, REF)  # ty: ignore[invalid-argument-type]
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
     assert snap.pr_state is PrState.OPEN
     assert snap.head_sha == HEAD
     assert snap.mergeable is True
@@ -548,24 +553,24 @@ async def test_exact_head_statuses_and_required_gates_unknown_on_403() -> None:
     assert snap.forge_review_count == 0
 
 
-async def test_required_gates_empty_only_when_forge_says_so() -> None:
+async def test_required_gates_empty_only_when_forge_says_so(conn) -> None:
     routes = {
         "/pulls/12": open_pr(),
         f"/commits/{HEAD}/statuses": [],
         "/branch_protections/main": {"status_check_contexts": []},
         "/pulls/12/reviews": [],
     }
-    snap = await checker(forge_router(routes)).snapshot(CONN, REF)  # ty: ignore[invalid-argument-type]
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
     assert snap.required_contexts == []
 
 
-async def test_status_failure_is_partial_not_green() -> None:
+async def test_status_failure_is_partial_not_green(conn) -> None:
     routes = {
         "/pulls/12": open_pr(),
         f"/commits/{HEAD}/statuses": httpx.Response(500, json={}),
         "/pulls/12/reviews": httpx.Response(500, json={}),
     }
-    snap = await checker(forge_router(routes)).snapshot(CONN, REF)  # ty: ignore[invalid-argument-type]
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
     assert snap.pr_state is PrState.OPEN
     assert snap.checks == []
     assert snap.checks_combined is CheckState.UNKNOWN
@@ -573,12 +578,7 @@ async def test_status_failure_is_partial_not_green() -> None:
     assert "reviews" in snap.partial
 
 
-async def test_github_pr_reads_check_runs_and_bearer() -> None:
-    class ByProvider(Conn):
-        def execute(self, sql, params):
-            self.rows = [("sops:g",)] if params == ("github",) else []
-            return super().execute()
-
+async def test_github_pr_reads_check_runs_and_bearer(conn) -> None:
     head = "cccccccccccccccccccccccccccccccccccccccc"
     seen = []
 
@@ -622,7 +622,7 @@ async def test_github_pr_reads_check_runs_and_bearer() -> None:
 
     ref = PrRef("github.com", "2mundos", "argus", 3)
     assert ref.url == "https://github.com/2mundos/argus/pull/3"
-    snap = await checker(handler).snapshot(ByProvider([]), ref)  # ty: ignore[invalid-argument-type]
+    snap = await checker(handler).snapshot(conn, ref)  # ty: ignore[invalid-argument-type]
     assert snap.pr_state is PrState.OPEN
     assert any(c.name == "build" and c.state is CheckState.SKIPPED for c in snap.checks)
     assert snap.required_contexts == ["build"]
@@ -641,23 +641,34 @@ async def test_github_pull_url_is_a_reference() -> None:
 
 
 @pytest.mark.parametrize("status", [401, 403, 404, 500])
-async def test_http_failure_is_unknown_never_open(status) -> None:
+async def test_http_failure_is_unknown_never_open(status, conn) -> None:
     c = checker(lambda r: httpx.Response(status, json={"state": "open"}))
-    assert (await c.check(CONN, REF))[0] is PrState.UNKNOWN  # ty: ignore[invalid-argument-type]
+    assert (await c.check(conn, REF))[0] is PrState.UNKNOWN  # ty: ignore[invalid-argument-type]
 
 
-async def test_network_error_and_missing_credential_are_unknown() -> None:
+async def test_network_error_and_missing_credential_are_unknown(
+    conn, db: Database
+) -> None:
     def boom(request):
         raise httpx.ConnectError("down")
 
-    assert (await checker(boom).check(CONN, REF))[0] is PrState.UNKNOWN  # ty: ignore[invalid-argument-type]
+    assert (await checker(boom).check(conn, REF))[0] is PrState.UNKNOWN  # ty: ignore[invalid-argument-type]
     called = []
     c = checker(lambda r: called.append(r) or httpx.Response(200, json={}))
-    assert (await c.check(Conn([]), REF))[0] is PrState.UNKNOWN  # ty: ignore[invalid-argument-type]
-    assert called == []  # no credential: no request
+    # A repository no project names, the same one on another host, and a forge
+    # integration whose validation failed: no credential, so no request.
+    for ref in (
+        PrRef(HOST, OWNER, "elsewhere", 12),
+        PrRef("other.example.test", OWNER, REPO, 12),
+    ):
+        assert (await c.check(conn, ref))[0] is PrState.UNKNOWN  # ty: ignore[invalid-argument-type]
+    async with db.write() as tx:
+        await tx.conn.execute("UPDATE integrations SET validation = 'failed'")
+    assert (await c.check(conn, REF))[0] is PrState.UNKNOWN  # ty: ignore[invalid-argument-type]
+    assert called == []
 
 
-async def test_concurrent_checks_share_one_flight_and_are_cached() -> None:
+async def test_concurrent_checks_share_one_flight_and_are_cached(conn) -> None:
     calls = []
     gate = asyncio.Event()
 
@@ -675,14 +686,14 @@ async def test_concurrent_checks_share_one_flight_and_are_cached() -> None:
         return httpx.Response(404, json={})
 
     c = checker(handler)
-    pending = asyncio.gather(*(c.check(CONN, REF) for _ in range(5)))  # ty: ignore[invalid-argument-type]
+    pending = asyncio.gather(*(c.check(conn, REF) for _ in range(5)))  # ty: ignore[invalid-argument-type]
     await asyncio.sleep(0)
     gate.set()
     out = await pending
     assert {o[0] for o in out} == {PrState.OPEN}
     pr_calls = [p for p in calls if p.endswith("/pulls/12")]
     assert len(pr_calls) == 1
-    await c.check(CONN, REF)  # ty: ignore[invalid-argument-type]
+    await c.check(conn, REF)  # ty: ignore[invalid-argument-type]
     assert len([p for p in calls if p.endswith("/pulls/12")]) == 1  # cached
 
 
@@ -721,15 +732,7 @@ def setup_repository(client: TestClient) -> None:
         },
     )
     assert res.status_code in (200, 201), res.text
-    res = client.post(
-        "/api/accounts",
-        json={
-            "name": "repo",
-            "provider": "gitea",
-            "credential": {"username": "bot", "token": "dummy-token"},
-        },
-    )
-    assert res.status_code == 201, res.text
+    add_forge(client, HOST)
 
 
 def review_task(client: TestClient, summary: str, **extra) -> str:

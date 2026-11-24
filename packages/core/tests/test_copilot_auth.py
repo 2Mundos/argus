@@ -40,7 +40,6 @@ def test_copilot_is_executor_only() -> None:
     runtime = ["copilot"]
     assert role_accepts("executor", "copilot", runtime)
     assert not role_accepts("engine", "copilot", runtime)
-    assert not role_accepts("repository", "copilot", runtime)
 
 
 def test_copilot_is_an_executor_only_provider_with_its_own_executor() -> None:

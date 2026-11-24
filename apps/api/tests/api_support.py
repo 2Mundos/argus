@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from argus_api.db import Database, ts
 from argus_core.tasks import TaskResult
+from fastapi.testclient import TestClient
 
 DONE = TaskResult(summary="done")
 
@@ -251,3 +252,31 @@ def count_passes(stats) -> Callable[[int], None]:
             finished.wait_for(lambda: count >= goal)
 
     return wait
+
+
+def add_forge(
+    client: TestClient,
+    host: str,
+    project: str = "demo",
+    *,
+    username: str = "bot",
+    token: str = "dummy-token",
+    access: str = "read_write",
+) -> dict:
+    """The project's forge integration (forge integrations spec 3.2); the project
+    must already resolve a repository on `host`."""
+    config = (
+        {"host": host} if host == "github.com" else {"host": host, "username": username}
+    )
+    res = client.post(
+        f"/api/projects/{project}/integrations",
+        json={
+            "kind": "forge",
+            "name": "forge",
+            "access": access,
+            "config": config,
+            "secret": {"token": token},
+        },
+    )
+    assert res.status_code == 201, res.text
+    return res.json()

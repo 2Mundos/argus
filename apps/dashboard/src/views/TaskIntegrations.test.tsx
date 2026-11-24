@@ -39,9 +39,11 @@ const mcp = (id: string, name: string, tools: string[] | null, tool_policy: stri
   tool_policy,
 });
 let puts: unknown[];
+let forgeAccess: string;
 
 beforeEach(() => {
   puts = [];
+  forgeAccess = "read_write";
   mock.fetch.mockReset().mockImplementation(async (request: Request) => {
     const path = new URL(request.url).pathname;
     if (path === "/api/projects/alpha/integrations")
@@ -53,6 +55,13 @@ beforeEach(() => {
         { ...kube("k5", "stale"), expires_at: "2020-01-01T00:00:00Z" },
         mcp("m1", "docs", ["search", "fetch"], "allowlist"),
         mcp("m2", "wiki", null, "unknown"),
+        {
+          ...kube("f1", "forge"),
+          kind: "forge",
+          access: forgeAccess,
+          validation: "unchecked",
+          config: { host: "git.example.test", username: "bot" },
+        },
       ]);
     if (request.method === "PUT" && path === "/api/tasks/t1/integrations") {
       puts.push(await request.json());
@@ -72,6 +81,7 @@ function mount(overrides: Partial<Task>, onSaved = vi.fn()) {
     version: "v1",
     archived_at: null,
     integrations: ["k1"],
+    required_capabilities: [],
     ...overrides,
   } as Task;
   render(
@@ -123,6 +133,22 @@ describe("TaskIntegrations", () => {
   });
 });
 
+describe("repository access", () => {
+  it("shows the project's forge, never as a choice, and why a write task would block", async () => {
+    mount({});
+    expect(await screen.findByText("Repository access: forge (read)")).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /forge/ })).toBeNull();
+    cleanup();
+    forgeAccess = "read_only";
+    mount({ required_capabilities: ["repository:write"] });
+    expect(
+      await screen.findByText(
+        "Repository access: forge: read only, and this task writes; attempts block",
+      ),
+    ).toBeTruthy();
+  });
+});
+
 describe("NewTaskIntegrations", () => {
   it("offers the project's active connections, none chosen by default", async () => {
     const onChange = vi.fn();
@@ -135,6 +161,7 @@ describe("NewTaskIntegrations", () => {
     expect(prod.checked).toBe(false);
     expect(screen.queryByText(/gone/)).toBeNull();
     expect(screen.getByRole("checkbox", { name: /docs/ })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /forge/ })).toBeNull();
     await userEvent.setup().click(prod);
     expect(onChange).toHaveBeenCalledWith(["k2"]);
   });

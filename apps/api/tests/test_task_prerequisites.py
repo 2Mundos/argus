@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx2 as httpx
 import pytest
+from api_support import add_forge
 from argus_api.main import app
 from argus_api.secrets import MemorySecretStore
 from fastapi.testclient import TestClient
@@ -51,15 +52,7 @@ def setup_repository(client: TestClient) -> None:
         },
     )
     assert res.status_code in (200, 201), res.text
-    res = client.post(
-        "/api/accounts",
-        json={
-            "name": "repo",
-            "provider": "gitea",
-            "credential": {"username": "bot", "token": "dummy-token"},
-        },
-    )
-    assert res.status_code == 201, res.text
+    add_forge(client, HOST)
 
 
 def worker_headers(client: TestClient) -> dict[str, str]:

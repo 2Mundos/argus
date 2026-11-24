@@ -278,26 +278,15 @@ describe("account row actions", () => {
     expect(screen.queryByLabelText("New credential")).toBeNull();
   });
 
-  it("uses username and token fields to replace a gitea credential", async () => {
-    mock.list = [account({ provider: "gitea" })];
+  it.each(["gitea", "github"])("offers only Delete on a moved %s account", async (provider) => {
+    mock.list = [account({ provider, state: "disabled" })];
     render(<Accounts />);
-    fireEvent.click(await screen.findByRole("button", { name: "Replace credential of work" }));
-    expect((screen.getByLabelText("Gitea token") as HTMLInputElement).value).toBe("");
-    fireEvent.change(screen.getByLabelText("Gitea username"), { target: { value: "pedro" } });
-    fireEvent.change(screen.getByLabelText("Gitea token"), { target: { value: "tok" } });
-    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
-    await waitFor(() =>
-      expect(mock.puts[0]?.credential).toEqual({ username: "pedro", token: "tok" }),
+    expect(await screen.findByRole("button", { name: "Delete work" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Replace credential of work" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Enable work" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit work" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Integrations" }).getAttribute("href")).toBe(
+      "#setup/integrations",
     );
-  });
-
-  it("uses a single token field to replace a github credential", async () => {
-    mock.list = [account({ provider: "github" })];
-    render(<Accounts />);
-    fireEvent.click(await screen.findByRole("button", { name: "Replace credential of work" }));
-    expect(screen.queryByLabelText("Gitea username")).toBeNull();
-    fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "tok" } });
-    fireEvent.click(screen.getByRole("button", { name: "Replace credential" }));
-    await waitFor(() => expect(mock.puts[0]?.credential).toEqual({ token: "tok" }));
   });
 });

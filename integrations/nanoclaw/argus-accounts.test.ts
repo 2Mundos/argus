@@ -88,6 +88,22 @@ vi.mock("../container-runner.js", () => ({
   },
 }));
 
+/** A queued repository lease as the forge credential route answers it. */
+function forgeAnswer(l: any) {
+  return {
+    kind: "forge",
+    integration_id: l.account_id ?? l.lease_id,
+    name: l.name ?? "forge",
+    provider: l.provider,
+    host: "forge.test",
+    username: l.credential?.username ?? null,
+    access: "read_write",
+    token: l.credential?.token ?? l.credential?.access_token,
+    secret_version: 1,
+    config_version: 1,
+  };
+}
+
 describe("assertOneCliUrl", () => {
   const userNet = { dockerNetwork: "onecli-control" };
 
@@ -402,6 +418,13 @@ function world(opts: {
         rejected: opts.rejectHeartbeat ? [{ task_id: claimedId }] : [],
       });
     if (path === "/agents/me/leave") return json(200, {});
+    if (/^\/tasks\/[^/]+\/repository\/credential$/.test(path)) {
+      const index = leases.findIndex((l) => l !== "no_account" && l.role === "repository");
+      const next = index < 0 ? undefined : leases.splice(index, 1)[0];
+      if (next === undefined || next === "no_account")
+        return json(409, { detail: { code: "forge_missing", message: "no forge integration" } });
+      return json(200, forgeAnswer(next));
+    }
     if (path === "/accounts/lease") {
       // The first queued item for this role (a bare "no_account" serves any role).
       const role = body?.role ?? "engine";
@@ -532,8 +555,32 @@ async function heartbeats(w: ReturnType<typeof world>, n = 2): Promise<void> {
 
 const FAST_HEARTBEAT = { heartbeatMs: 50 };
 
-const isRepositoryRelease = (c: Call) =>
-  c.path === "/accounts/release" && c.search === "?role=repository";
+/**
+ * How many times the repository secrets were unassigned from the agent: a OneCLI
+ * assignment that names none of them after one that did. Release no longer calls
+ * Argus (forge integrations spec 3.4); OneCLI is where access ends.
+ */
+const repositoryReleases = (w: {
+  calls: Call[];
+  onecli: { secrets: Array<{ id: string; name: string }> };
+}) => {
+  const repo = new Set(
+    w.onecli.secrets.filter((s) => s.name.includes("-repository-")).map((s) => s.id),
+  );
+  let held = false;
+  let released = 0;
+  for (const c of w.calls) {
+    if (c.who !== "onecli" || c.method !== "PUT" || !/^\/agents\/[^/]+\/secrets$/.test(c.path))
+      continue;
+    const has = (c.body?.secretIds as string[]).some((id) => repo.has(id));
+    if (has) held = true;
+    else if (held) {
+      released++;
+      held = false;
+    }
+  }
+  return released;
+};
 
 const live: Array<{ teardown: () => Promise<void> }> = [];
 afterEach(async () => {
@@ -2056,7 +2103,9 @@ describe("task-scoped repository auth", () => {
           task_id: REPO_ID,
           attempt: 1,
         },
-        { role: "repository", runtime_providers: ["gitea"], task_id: REPO_ID, attempt: 1 },
+      ]);
+      expect(w.calls.filter((c) => c.path === `/tasks/${REPO_ID}/repository/credential`)).toEqual([
+        expect.objectContaining({ body: { attempt: 1 } }),
       ]);
       await h.adapter.deliver("local", h.thread(), {
         kind: "chat",
@@ -2075,8 +2124,8 @@ describe("task-scoped repository auth", () => {
       });
       const completed = w.calls.find((c) => c.path === `/tasks/${REPO_ID}/complete`)!;
       expect(completed.body.result.data.delivery.head_sha).toBe("head-1");
-      await until(() => w.calls.some((c) => isRepositoryRelease(c)));
-      expect(w.calls.filter((c) => isRepositoryRelease(c))).toHaveLength(1);
+      await until(() => repositoryReleases(w) > 0);
+      expect(repositoryReleases(w)).toBe(1);
     },
   );
 
@@ -2086,9 +2135,7 @@ describe("task-scoped repository auth", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    expect(
-      w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "repository"),
-    ).toHaveLength(0);
+    expect(w.calls.filter((c) => c.path.endsWith("/repository/credential"))).toHaveLength(0);
     expect(h.inbound[0].content.text).not.toContain("Repository (allowlisted)");
   });
 
@@ -2112,7 +2159,7 @@ describe("task-scoped repository auth", () => {
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
     await h.adapter.deliver("local", h.thread(), { kind: "chat", content: { text: reply } });
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(w.calls.some((call) => call.path === endpoint)).toBe(true);
   });
 
@@ -2134,7 +2181,7 @@ describe("task-scoped repository auth", () => {
     live.push(h.adapter);
     await h.adapter.setup(h.setup);
     await until(() => h.inbound.length > 0);
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
   });
 
   it("stops the session when Argus releases the claim, and reports nothing", async () => {
@@ -2195,6 +2242,36 @@ describe("task-scoped repository auth", () => {
       tasks: [claimed],
     });
 
+  it.each([
+    ["no forge integration", undefined, /no forge integration/],
+    ["a forge of the other provider", "github", /the forge credential is for github/],
+  ])("blocks as unavailable, before any model work, with %s", async (_, provider, error) => {
+    const w = world({
+      leases: [
+        lease("engine", "dummy-engine-key"),
+        ...(provider
+          ? [
+              lease("repo", "dummy-forge-token", {
+                provider,
+                role: "repository",
+                credential: { token: "dummy-forge-token" },
+              }),
+            ]
+          : []),
+      ],
+      tasks: [repoTask()],
+    });
+    const h = harness(w, true, { repositories: { global: "https://git.example.test/org/repo" } });
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
+    const block = w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body;
+    expect(block).toMatchObject({ reason: "env_repository_unavailable", error });
+    expect(JSON.stringify(block)).not.toContain("dummy-forge-token");
+    expect(w.onecli.secrets.some((s) => s.name.includes("-repository-"))).toBe(false);
+    expect(h.inbound).toHaveLength(0);
+  });
+
   it("blocks a task whose project has no repository before any model work", async () => {
     const w = repoWorld();
     const h = harness(w, true, { repositories: {} });
@@ -2227,7 +2304,7 @@ describe("task-scoped repository auth", () => {
       reason: "env_repository_unreachable",
       error: "repository preflight session_failure: Gitea API GET failed with HTTP 502",
     });
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
   });
@@ -2277,7 +2354,7 @@ describe("task-scoped repository auth", () => {
           String(c.body?.name).includes("repository"),
       );
     const repositoryLeases = (w: ReturnType<typeof world>) =>
-      w.calls.filter((c) => c.path === "/accounts/lease" && c.body?.role === "repository");
+      w.calls.filter((c) => c.path.endsWith("/repository/credential"));
     const blocked = (w: ReturnType<typeof world>) =>
       w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)?.body;
     const hostEnv = process.env.ARGUS_REPOSITORIES_JSON;
@@ -2434,7 +2511,7 @@ describe("task-scoped repository auth", () => {
       reason: "env_repository_unreachable",
       error: "repository preflight session_failure: no repository preflight session is configured",
     });
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
   });
@@ -2462,7 +2539,7 @@ describe("task-scoped repository auth", () => {
       error: expect.stringMatching(/^repository preflight assignment_missing: /),
     });
     expect(probeRepository).not.toHaveBeenCalled();
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(h.inbound).toHaveLength(0);
   });
 
@@ -2523,7 +2600,7 @@ describe("task-scoped repository auth", () => {
     expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "env_repository_unreachable",
     });
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
   });
@@ -2652,7 +2729,7 @@ describe("task-scoped repository auth", () => {
     await h.adapter.setup(h.setup);
     await until(pastBounds, 8000, "the backstop mark");
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`)).toBe(false);
-    expect(w.calls.some((call) => isRepositoryRelease(call))).toBe(false);
+    expect(repositoryReleases(w)).toBe(0);
     finishTeardown();
     await until(() => w.calls.some((call) => call.path === `/tasks/${REPO_ID}/block`));
     marked.mockRestore();
@@ -2780,7 +2857,7 @@ describe("task-scoped repository auth", () => {
       reason: "env_workspace_invalid",
       error: "the workspace is not a git repository",
     });
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
     expect(readFileSync(path.join(ws, "notes.txt"), "utf8")).toBe("work in progress");
@@ -2907,7 +2984,7 @@ describe("task-scoped repository auth", () => {
     expect(w.calls.find((call) => call.path === `/tasks/${REPO_ID}/block`)!.body).toMatchObject({
       reason: "env_workspace_unconfigured",
     });
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(h.inbound).toHaveLength(0);
   });
@@ -2985,7 +3062,7 @@ describe("task-scoped repository auth", () => {
     expect(block.error).toContain(artifact);
     expect(block.error).not.toContain("SECRET");
     expect(block.error).not.toContain(h.groupDir);
-    await until(() => w.calls.some((call) => isRepositoryRelease(call)));
+    await until(() => repositoryReleases(w) > 0);
     expect(w.calls.some((call) => call.path.includes("/content"))).toBe(false);
     expect(w.calls.some((call) => call.path === `/tasks/${REPO_ID}/fail`)).toBe(false);
     expect(existsSync(path.join(h.groupDir, "task-workspaces"))).toBe(false);

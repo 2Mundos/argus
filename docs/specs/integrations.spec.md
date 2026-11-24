@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-11-12
-updated: 2026-11-21
+updated: 2026-11-24
 ---
 
 # Integrations: MCP connections and Kubernetes clusters
@@ -11,17 +11,21 @@ updated: 2026-11-21
 An **integration** is an outside-service connection managed by an admin for one
 project. Credentials are saved and validated; a connection reaches a task worker
 only when that task opts in (3.6): a Kubernetes one as a per-attempt kubeconfig, an
-MCP one as a per-attempt server URL on a broker that holds the token. Two kinds:
+MCP one as a per-attempt server URL on a broker that holds the token. Three kinds:
 
 - **`mcp`**: a remote MCP server over HTTPS with a bearer token.
 - **`kubernetes`**: a service-account token with a configured target namespace of
   one cluster and intended access, defaulting to read-only. Validation rejects
   sampled broad permissions; it does not prove the token's grants are confined
   to that namespace.
+- **`forge`**: the project's Gitea or GitHub token, the one kind no task selects:
+  every repository-backed attempt of the project gets it. Its record, validation
+  and delivery are [forge integrations](forge-integrations.spec.md); the rest of
+  this spec applies where that one does not say otherwise.
 
 They are managed in **Setup → Integrations** (`#setup/integrations`) and the REST API,
-apart from provider [Accounts](claude-accounts.spec.md) (model and forge credentials
-agents lease) and typed [Settings](settings.spec.md) (which never hold a secret).
+apart from provider [Accounts](claude-accounts.spec.md) (model credentials agents
+lease) and typed [Settings](settings.spec.md) (which never hold a secret).
 
 # 2. Non-Goals
 
@@ -255,7 +259,9 @@ Rotation and a config edit reset validation to `unchecked`.
 ## 3.6 Worker delivery
 
 **Opt-in.** A task selects Kubernetes and MCP integrations of its own project by id
-(at most 8); selection is the only grant. Nothing is injected implicitly. Capabilities, titles, pool labels and the project
+(at most 8); selection is the only grant. A forge id is not a selection (`422
+integration_invalid`): its grant is the project's repository ([forge
+integrations](forge-integrations.spec.md) 3.4). Nothing is injected implicitly. Capabilities, titles, pool labels and the project
 itself never give a task a credential. `POST /api/tasks` takes the same list as
 `integrations`, from an admin token only (`403 integration_admin_only`), with the
 same checks. The admin-only `PUT` (3.4) checks the task's
@@ -557,7 +563,9 @@ The table shows name, kind, target, intended access, state, secret presence,
 validation status, detail and time. **Add integration** opens a form for name,
 kind, intended access, target and a bearer token. MCP accepts an HTTPS server URL;
 Kubernetes accepts an HTTPS API server URL, namespace and optional base64 PEM CA
-bundle. It accepts service-account bearer tokens, not kubeconfig uploads.
+bundle. It accepts service-account bearer tokens, not kubeconfig uploads. The
+forge form, and the task view's repository access line, are [forge
+integrations](forge-integrations.spec.md) 3.7.
 
 The token is a write-only password field: it is cleared immediately on submit,
 including a failed save or rotation, and is never put in browser storage, errors or
@@ -584,8 +592,8 @@ session never sees the token; that removing access in Argus does not revoke the
 token; and that OAuth is unavailable. It links to Accounts, Settings and worker pools without
 claiming that pools grant tasks access to these connections.
 
-A task's detail view lists the project's active integrations of both kinds (and any
-already selected) as checkboxes and saves the selection at the task's `version`. It
+A task's detail view lists the project's active MCP and Kubernetes integrations (and
+any already selected) as checkboxes and saves the selection at the task's `version`. It
 is read-only while an attempt runs or after the task ends; errors are fixed messages.
 Each choice shows its scope (the Kubernetes namespace, or the MCP tools, "all tools"
 or none), access and expiry, or why an attempt would block (revoked, expired, not

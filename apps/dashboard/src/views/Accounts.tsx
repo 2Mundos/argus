@@ -4,8 +4,7 @@ import { AuthFacts } from "../AuthFacts";
 import {
   COPILOT_PROVIDER,
   CUSTOM_PROVIDER_PATTERN,
-  GITEA_PROVIDER,
-  GITHUB_PROVIDER,
+  FORGE_PROVIDERS,
   localBrokerNotice,
   nativeAuthNotice,
   PROVIDER_PICK_CUSTOM,
@@ -51,7 +50,7 @@ const ACCOUNT_TYPES: { id: AccountType; title: string; hint: string }[] = [
   { id: "google", title: "Google AI Studio", hint: "Gemini API key" },
   { id: "custom", title: "Custom provider", hint: "OpenRouter or any compatible API" },
   { id: "local", title: "Local model", hint: "Ollama, LM Studio, vLLM…" },
-  { id: "other", title: "Other", hint: "Cursor, Copilot, Gitea, GitHub, raw JSON" },
+  { id: "other", title: "Other", hint: "Cursor, Copilot, raw JSON" },
 ];
 
 /** Wizard step 1: choose the kind of account, then hand off to its own dialog. */
@@ -209,6 +208,7 @@ export function Accounts() {
           {(accounts ?? []).map((a) => {
             const series = week?.accounts.find((u) => u.account_id === a.id);
             const model = hasModelUsage(a.provider);
+            const moved = FORGE_PROVIDERS.has(a.provider);
             return (
               <tr key={a.id}>
                 <td data-label="Account">
@@ -234,6 +234,12 @@ export function Accounts() {
                     </span>
                   )}
                   {a.disabled_reason && <span className="muted small"> {a.disabled_reason}</span>}
+                  {moved && (
+                    <div className="small">
+                      Moved: forge tokens live in <a href="#setup/integrations">Integrations</a>,
+                      one per project. Delete this account once its projects have one.
+                    </div>
+                  )}
                   {(a.local?.warnings ?? []).length > 0 && (
                     <span className="small error" title={(a.local?.warnings ?? []).join("\n")}>
                       {" "}
@@ -304,51 +310,55 @@ export function Accounts() {
                 </td>
                 <td>
                   <div className="account-actions">
-                    <button
-                      type="button"
-                      className="link"
-                      aria-label={`Edit ${a.name}`}
-                      onClick={() => setEditing(a)}
-                    >
-                      Edit
-                    </button>
-                    {a.provider === "local" && (
-                      <button
-                        type="button"
-                        className="link"
-                        aria-label={`Local endpoints of ${a.name}`}
-                        onClick={() => setEndpoints(a)}
-                      >
-                        Endpoints
-                      </button>
-                    )}
-                    <ActionButton
-                      className="link"
-                      aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
-                      pending={action.is(`toggle:${a.id}`)}
-                      disabled={action.busy}
-                      action={() => toggle(a)}
-                    >
-                      {a.state === "disabled" ? "Enable" : "Disable"}
-                    </ActionButton>
-                    {a.provider === "anthropic" ? (
-                      <button
-                        type="button"
-                        className="link"
-                        aria-label={`Renew credential of ${a.name}`}
-                        onClick={() => setClaude({ renew: a })}
-                      >
-                        Renew credential
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="link"
-                        aria-label={`Replace credential of ${a.name}`}
-                        onClick={() => setReplacing(a)}
-                      >
-                        Replace credential
-                      </button>
+                    {!moved && (
+                      <>
+                        <button
+                          type="button"
+                          className="link"
+                          aria-label={`Edit ${a.name}`}
+                          onClick={() => setEditing(a)}
+                        >
+                          Edit
+                        </button>
+                        {a.provider === "local" && (
+                          <button
+                            type="button"
+                            className="link"
+                            aria-label={`Local endpoints of ${a.name}`}
+                            onClick={() => setEndpoints(a)}
+                          >
+                            Endpoints
+                          </button>
+                        )}
+                        <ActionButton
+                          className="link"
+                          aria-label={`${a.state === "disabled" ? "Enable" : "Disable"} ${a.name}`}
+                          pending={action.is(`toggle:${a.id}`)}
+                          disabled={action.busy}
+                          action={() => toggle(a)}
+                        >
+                          {a.state === "disabled" ? "Enable" : "Disable"}
+                        </ActionButton>
+                        {a.provider === "anthropic" ? (
+                          <button
+                            type="button"
+                            className="link"
+                            aria-label={`Renew credential of ${a.name}`}
+                            onClick={() => setClaude({ renew: a })}
+                          >
+                            Renew credential
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="link"
+                            aria-label={`Replace credential of ${a.name}`}
+                            onClick={() => setReplacing(a)}
+                          >
+                            Replace credential
+                          </button>
+                        )}
+                      </>
                     )}
                     <button
                       type="button"

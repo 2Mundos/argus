@@ -16,6 +16,7 @@ from argus_core import (
 )
 from argus_core.accounts import (
     LOCAL_PROVIDER,
+    REPOSITORY_PROVIDERS,
     Account,
     AccountCreate,
     AccountLease,
@@ -106,40 +107,6 @@ def check_credential(provider: str, credential: dict | None) -> tuple[str, str] 
             if problem := local_credential_problem(credential):
                 raise ValidationFailedError(f"invalid local credential: {problem}")
             return "api_key", "endpoint"
-        elif provider == "gitea":
-            token = credential.get("token")
-            username = credential.get("username")
-            if (
-                not isinstance(token, str)
-                or not token.strip()
-                or "\r" in token
-                or "\n" in token
-            ):
-                raise ValidationFailedError(
-                    "invalid gitea credential: required field token"
-                )
-            if (
-                not isinstance(username, str)
-                or not username.strip()
-                or any(char in username for char in (":", "\r", "\n"))
-            ):
-                raise ValidationFailedError(
-                    "invalid gitea credential: required valid field username"
-                )
-            return "api_key", "token"
-        elif provider == "github":
-            token = credential.get("token")
-            if (
-                set(credential) != {"token"}
-                or not isinstance(token, str)
-                or not token.strip()
-                or "\r" in token
-                or "\n" in token
-            ):
-                raise ValidationFailedError(
-                    "invalid github credential: required field token, and no other field"
-                )
-            return "api_key", "token"
         else:
             if not credential:
                 raise ValidationFailedError(
@@ -248,13 +215,11 @@ async def create_account(
     """Register an account. A `credential` is written to the SOPS file first
     (as `account-<id>`); the registry row only ever holds the reference."""
     account_id = str(uuid4())
-    if body.provider == "gitea" and body.credential is None:
+    if body.provider in REPOSITORY_PROVIDERS:
         raise ValidationFailedError(
-            "invalid gitea credential: username and token must be validated at registration"
-        )
-    if body.provider == "github" and body.credential is None:
-        raise ValidationFailedError(
-            "invalid github credential: the token must be validated at registration"
+            f"{body.provider} tokens are project integrations now: add one in Setup →"
+            " Integrations (kind forge)",
+            code="forge_provider_moved",
         )
     if body.provider == copilot_auth.PROVIDER and body.credential is None:
         raise ValidationFailedError(
@@ -868,6 +833,12 @@ async def update_credential(
     async with db.read() as conn:
         name = await service.secret_name_for_update(conn, account_id, caller.agent_id)
         account = await service.get_account(conn, account_id, utcnow())
+    if account.provider in REPOSITORY_PROVIDERS:
+        raise ValidationFailedError(
+            f"{account.provider} tokens are project integrations now; this moved"
+            " account can only be deleted",
+            code="forge_provider_moved",
+        )
     if caller.agent_id is not None and account.provider == copilot_auth.PROVIDER:
         raise ForbiddenError("a copilot credential is replaced by an admin only")
     if caller.agent_id is not None and account.provider == google_auth.PROVIDER:
@@ -886,10 +857,6 @@ async def update_credential(
             raise ValidationFailedError(
                 "an agent may rotate only the same credential document shape"
             )
-        if account.provider == "gitea" and prior.get("username") != body.credential.get(
-            "username"
-        ):
-            raise ValidationFailedError("gitea username cannot change during rotation")
         if checked is not None and checked[0] != account.kind:
             raise ValidationFailedError(
                 "credential kind cannot change during agent rotation"

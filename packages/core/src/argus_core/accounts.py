@@ -11,11 +11,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from argus_core.custom_accounts import PROVIDER as CUSTOM_PROVIDER
 from argus_core.custom_accounts import CustomConfig, LeaseSettings
 
-LeaseRole = Literal["engine", "executor", "repository"]
+LeaseRole = Literal["engine", "executor"]
 
-# Technical facts, not operator policy (account selection spec 3): the account
-# providers of repository access, and the one provider that only a delegated CLI
-# (never a NanoClaw harness) can run on.
+# Technical facts, not operator policy (account selection spec 3): the forge
+# providers, which are integrations, not accounts (forge integrations spec 3.1;
+# an account of one is a moved one, kept disabled), and the providers that only a
+# delegated CLI (never a NanoClaw harness) can run on.
 GITHUB_HOST = "github.com"
 REPOSITORY_PROVIDERS = frozenset({"gitea", "github"})
 EXECUTOR_ONLY = frozenset({"cursor", "copilot", "google"})
@@ -26,7 +27,7 @@ LOCAL_PROVIDER = "local"
 # is both harness and OpenCode executor (local harness spec).
 ENGINE_ONLY: frozenset[str] = frozenset()
 # Account providers a harness (the `engine` role) can run on: what a task may be
-# restricted to. Never the repository provider or the executor-only ones.
+# restricted to. Never a forge provider or the executor-only ones.
 ENGINE_PROVIDERS = frozenset(
     {"anthropic", "openai", "muse", CUSTOM_PROVIDER, LOCAL_PROVIDER}
 )
@@ -35,15 +36,13 @@ ENGINE_PROVIDERS = frozenset(
 def role_accepts(
     role: LeaseRole, provider: str, runtime_providers: list[str] | None = None
 ) -> bool:
-    """May an account of `provider` be leased for `role`? Repository accounts serve
-    only the repository role and never become model accounts; a harness cannot run
-    on an executor-only provider, and an engine-only one runs no delegated CLI.
+    """May an account of `provider` be leased for `role`? A forge account is never
+    leased (forge integrations spec 3.1); a harness cannot run on an executor-only
+    provider, and an engine-only one runs no delegated CLI.
     `runtime_providers` is what the leasing runtime reports it can technically
     apply. Credential-bearing leases require an explicit non-empty provider list."""
     if runtime_providers is None or provider not in runtime_providers:
         return False
-    if role == "repository":
-        return provider in REPOSITORY_PROVIDERS
     if provider in REPOSITORY_PROVIDERS:
         return False
     if role == "engine" and provider in EXECUTOR_ONLY:

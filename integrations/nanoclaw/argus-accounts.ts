@@ -29,12 +29,45 @@ export interface AccountLease {
   provider: string;
   kind: string;
   credential: Record<string, unknown>;
-  /** `engine` (default): the harness's account; `executor`: a delegated CLI's. */
+  /**
+   * `engine` (default): the harness's account; `executor`: a delegated CLI's;
+   * `repository`: the project's forge integration, held in this shape for OneCLI.
+   */
   role?: "engine" | "executor" | "repository";
   /** Custom accounts: where and how to call for this role (no secret). */
   settings?: CustomLeaseSettings | null;
   /** Internal orchestrator: the `orchestrator.model` harness model, on its provider. */
   model?: string | null;
+}
+
+/** `POST /tasks/{id}/repository/credential`: the project's forge integration. */
+export interface ForgeCredential {
+  kind: "forge";
+  integration_id: string;
+  name: string;
+  provider: "gitea" | "github";
+  host: string;
+  username: string | null;
+  access: "read_only" | "read_write";
+  token: string;
+  secret_version: number;
+  config_version: number;
+}
+
+/** The forge credential in the lease shape `applyRepositoryLease` applies. */
+export function repositoryLeaseFromForge(cred: ForgeCredential): AccountLease {
+  return {
+    lease_id: cred.integration_id,
+    account_id: cred.integration_id,
+    name: cred.name,
+    provider: cred.provider,
+    kind: "api_key",
+    credential: {
+      token: cred.token,
+      ...(cred.username ? { username: cred.username } : {}),
+    },
+    role: "repository",
+  };
 }
 
 /** How a provider's account becomes a OneCLI secret. */

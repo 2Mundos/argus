@@ -1,5 +1,5 @@
 ---
-status: draft
+status: implemented
 created: 2026-11-24
 updated: 2026-11-24
 ---
@@ -47,12 +47,13 @@ from the account pool.
 ## 3.1 Accounts are inference only
 
 `gitea` and `github` stop being account providers. `POST /api/accounts` with
-either is `422 forge_provider_moved`, whose message points to Setup →
-Integrations. The lease role `repository` is removed (`LeaseRole` is `engine` |
-`executor`); `role_accepts`, task routing, the cost report and the dashboard's
-usage view lose their repository exceptions. The provider of a forge host is
-still decided only by `repository_provider` (`github.com` is `github`, every
-other host `gitea`), now called by the integration code.
+either, and replacing the credential of a moved one (3.6), is `422
+forge_provider_moved`, whose message points to Setup → Integrations. The lease
+role `repository` is removed (`LeaseRole` is `engine` | `executor`) and no forge
+account is ever leased. The only exceptions left are the ones that keep moved
+accounts out of model capacity: task routing, the cost report and the dashboard's
+usage view skip them. The provider of a forge host is still decided only by
+`repository_provider` (`github.com` is `github`, every other host `gitea`).
 
 ## 3.2 The `forge` record
 
@@ -148,11 +149,13 @@ does not revoke the token upstream.
 ## 3.5 PR reads by Argus
 
 The PR checker of [task delivery](task-delivery.spec.md) and task prerequisites
-read a PR with the active, not `failed`, forge integration of the project the
-read is for, when its `host` is the PR's host; otherwise with that of a project
-whose repository is the PR's repository; otherwise with none, which reads as
-`unknown` like any other failed read. A token never goes to another host. This
-replaces "the highest-priority enabled account of the provider".
+read a PR with the active, not `failed`, forge integration of a project whose
+repository is the PR's repository and whose `host` is the PR's host (the first
+such project by slug, when several share one); otherwise with none, which reads
+as `unknown` like any other failed read. A token never goes to another host or
+repository. This replaces "the highest-priority enabled account of the
+provider". A read is cached before its flight ends, so a caller arriving as it
+finishes reuses it instead of starting another.
 
 ## 3.6 Migration
 
@@ -167,19 +170,24 @@ loads, and creates `forge` integration `forge` for that host, with the account's
 `username` (Gitea), `access` `read_write` and validation `unchecked`; the event
 `integration.created` carries `migrated_from` (the account id). A project with no
 matching account gets nothing and its tasks block as in 3.4 until an admin adds
-one. Re-running skips projects already done.
+one. Every Gitea project gets the best Gitea token, whatever its host, as the
+account pool gave it before; validating each record shows where it does not
+fit. Re-running skips projects already done. It runs only when the secret store
+loaded; otherwise at the next start.
 
-The step then disables every `gitea` and `github` account. They are not deleted:
-the Accounts screen lists them under **Moved to Integrations** with only Delete,
-and a downgrade can re-enable them by hand. Deleting one is the admin's call.
+The step then disables every `gitea` and `github` account (reason `moved to forge
+integrations`) and releases any `repository` lease still open. The accounts are
+not deleted: the Accounts screen marks them as moved, with a link to
+Integrations and only Delete, and a downgrade can re-enable them by hand.
+Deleting one is the admin's call.
 
 ## 3.7 Dashboard
 
 **Setup → Integrations.** Add integration offers kind **Forge (repository
 access)**. The form shows the project's repository and its provider, read-only,
 takes the username for a Gitea host and the token, and offers intended access.
-It is unavailable, with a link to the project's settings, for a project without
-a repository, and replaced by the existing record's actions when one is active.
+It cannot be saved for a project without a repository, and links to the project
+to set one; a second active one is refused with a fixed message.
 The table's target column shows the repository. The screen's explanation says a
 forge integration reaches every repository-backed attempt of the project without
 selection, unlike MCP and Kubernetes ones. The token field follows integrations
@@ -191,7 +199,7 @@ detail shows the repository access the task gets: the integration's name and
 task, revoked, expired, validation failed).
 
 **Accounts** drops the `gitea` and `github` options, their forms and the "Other"
-tab's mention of them, and shows the moved accounts of 3.6.
+tile's mention of them, and shows the moved accounts of 3.6.
 
 # 4. Open Questions
 
@@ -233,14 +241,12 @@ tab's mention of them, and shows the moved accounts of 3.6.
   `accountProviders.ts` and `usage.ts` without forge exceptions.
 - `integrations/nanoclaw`: `argus-accounts.ts` and `argus.ts` request the
   repository credential from the new route; the reconciled lease set.
-- Specs updated when this is built: [integrations](integrations.spec.md) (three
-  kinds, the selection exception, dashboard), [GitHub
-  repositories](github-repositories.spec.md) 3.2 and 3.6, [worker
-  lifecycle](worker-lifecycle.spec.md) repository credentials, [account
+- Specs that follow it: [integrations](integrations.spec.md) (three kinds, the
+  selection exception), [GitHub repositories](github-repositories.spec.md),
+  [worker lifecycle](worker-lifecycle.spec.md) repository credentials, [account
   selection](account-selection.spec.md) eligibility, [project code
   availability](project-code-availability.spec.md) and [failure
-  classes](failure-classes.spec.md) (lease wording), [cost
-  view](cost-view.spec.md).
+  classes](failure-classes.spec.md) (credential wording).
 - Rollout: deploy the API and the NanoClaw channel together (an old channel asks
   for a `repository` lease that no longer exists and blocks with
   `env_repository_unavailable`); check Integrations for every repository-backed
@@ -248,8 +254,16 @@ tab's mention of them, and shows the moved accounts of 3.6.
 
 ## Verification boundary
 
-- Commands (planned): `make check`; `uv run pytest -q apps/api/tests` for the API
-  cases of section 5; `pnpm test` for the channel and dashboard.
-- Verified: nothing yet; this is a draft.
-- Not verified: a real Gitea or GitHub token, the migration on the preview
-  install's data, a worker attempt through the new route on a real node.
+- Commands:
+  - `uv run pytest -q apps/api/tests/test_forge_integrations.py apps/api/tests/test_task_delivery.py apps/api/tests/test_accounts.py`
+  - `pnpm --filter dashboard exec vitest run src/views/Integrations.test.tsx src/views/TaskIntegrations.test.tsx src/views/Accounts.test.tsx src/views/AccountActions.test.tsx`
+  - `integrations/nanoclaw/provision.sh check` (the channel's vitest list, including
+    `argus-accounts.test.ts`).
+- Verified: create rules, validation against a fake forge, delivery binding and
+  refusals, forge ids refused as selections, PR reads not crossing hosts, the
+  start-up move (copy, re-run, unmatched project, accounts disabled, leases
+  released), the account refusals, the channel's route call and its blocks, and
+  the dashboard forms, all with fakes.
+- Not verified: a real Gitea or GitHub token, the start-up move on the preview
+  install's data, a worker attempt through the new route on a real node, the
+  dashboard in a real browser.

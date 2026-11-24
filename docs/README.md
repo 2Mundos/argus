@@ -151,8 +151,8 @@ why you are here.
   live status bar (expandable recent-event feed)
 - [Gitea helper for workers](specs/gitea-helper.spec.md) — `argus-gitea-api`
   command matrix, exit codes, security model, and the review-findings gate
-- [GitHub repositories](specs/github-repositories.spec.md) — `github` repository
-  accounts, OneCLI injection for github.com, and `argus-github-api`
+- [GitHub repositories](specs/github-repositories.spec.md) — github.com forge
+  credentials, OneCLI injection for github.com, and `argus-github-api`
 - [Progress milestones](specs/progress-milestones.spec.md) — structured progress
   signals (commit, PR, CI, gate) on task cards and a no-signal indicator
 - [Task helpers](specs/task-helpers.spec.md) — `argus-task`: token-free waits on CI
@@ -273,10 +273,9 @@ why you are here.
   Kubernetes clusters, project-scoped and kept out of Settings and Accounts; the
   dashboard and API manage credentials securely; an admin opts a task into Kubernetes
   integrations and its Claude worker gets a per-attempt kubeconfig, other engines fail closed
-- [Forge integrations](specs/forge-integrations.spec.md) — draft: Gitea and GitHub
-  tokens move from Accounts to a per-project `forge` integration bound to the
-  repository's host, delivered to every repository-backed attempt; Accounts become
-  inference-only
+- [Forge integrations](specs/forge-integrations.spec.md) — Gitea and GitHub tokens
+  are a per-project `forge` integration bound to the repository's host, delivered to
+  every repository-backed attempt; Accounts are inference-only
 - [Routines](specs/routines.spec.md) — cron-scheduled task templates per project;
   run findings become deduplicated tasks, approval-gated by default
 - [Internal orchestrator](specs/internal-orchestrator.spec.md) — Argus hosts its own

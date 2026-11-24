@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 import aiosqlite
+from argus_core.accounts import GITHUB_HOST
 from argus_core.tasks import Task, TaskState
 from pydantic import BaseModel, Field
 
@@ -24,6 +25,7 @@ from argus_api.integrations.service import (
     IntegrationChangedError,
     IntegrationRevokedError,
     ToolPolicy,
+    project_forge,
     tool_policy,
 )
 from argus_api.secrets import SecretStore, SecretStoreError, ref_name
@@ -39,6 +41,7 @@ from argus_api.tasks import service as tasks
 KUBERNETES_ENGINES = frozenset({"anthropic", "local", "custom", "openai"})
 MCP_ENGINES = frozenset({"anthropic", "local", "custom", "openai"})
 EXECUTOR_PROVIDERS = frozenset({"anthropic"})
+REPOSITORY_WRITE = "repository:write"
 
 Readiness = Literal[
     "ready",
@@ -65,6 +68,18 @@ class EngineUnsupportedError(ConflictError):
 
 class IntegrationToolsUnknownError(ConflictError):
     code = "integration_tools_unknown"
+
+
+class ProjectRepositoryMissingError(ConflictError):
+    code = "project_repository_missing"
+
+
+class ForgeMissingError(ConflictError):
+    code = "forge_missing"
+
+
+class ForgeReadOnlyError(ConflictError):
+    code = "forge_read_only"
 
 
 class DeliveryRequest(BaseModel):
@@ -125,6 +140,23 @@ class McpCredential(BaseModel):
     # The allowlist (`allowlist`), or null with `all`; `unknown` is never delivered.
     tools: list[str] | None
     tool_policy: Literal["allowlist", "all"]
+    access: Literal["read_only", "read_write"]
+    token: str
+    secret_version: int
+    config_version: int
+    expires_at: datetime | None
+
+
+class ForgeCredential(BaseModel):
+    """The project's repository credential for one attempt (forge integrations
+    spec 3.4). Only the channel's OneCLI step sees it; never the session."""
+
+    kind: Literal["forge"] = "forge"
+    integration_id: str
+    name: str
+    provider: Literal["gitea", "github"]
+    host: str
+    username: str | None
     access: Literal["read_only", "read_write"]
     token: str
     secret_version: int
@@ -197,7 +229,11 @@ def _readiness(
         return "expired"
     if _policy(row) == "unknown":
         return "tools_unknown"
-    if row["validation"] != "ok":
+    # A forge record is delivered unchecked: every attempt's repository preflight
+    # proves access, and a migrated record must not block work (forge spec 3.4).
+    if row["validation"] != "ok" and not (
+        row["kind"] == "forge" and row["validation"] == "unchecked"
+    ):
         return "unvalidated"
     if not store_available:
         return "store_unavailable"
@@ -326,30 +362,10 @@ async def deliver(
         )
     row = rows[0]
     await _engine_supported(tx, agent_id, row["kind"])
-    readiness = _readiness(row, ts(tx.now), store, store_available, exact_version=True)
     name = row["name"]
-    if readiness == "revoked":
-        raise IntegrationRevokedError(f"integration {name} is revoked")
-    if readiness == "expired":
-        raise IntegrationExpiredError(
-            f"integration {name} expired at {row['expires_at']}; rotate it"
-        )
-    if readiness == "tools_unknown":
-        raise IntegrationToolsUnknownError(
-            f"integration {name} is read-only without a tool allowlist; an admin"
-            " must add one before workers can use it"
-        )
-    if readiness == "unvalidated":
-        raise IntegrationUnvalidatedError(
-            f"integration {name} is {row['validation']}; validate it before use"
-        )
-    if readiness == "secret_missing":
-        raise SecretStoreError(
-            f"integration {name} has no stored credential; rotate it",
-            code="integration_secret_missing",
-        )
-    if readiness == "store_unavailable":
-        raise SecretStoreError("integration credential store unavailable")
+    _refuse(
+        row, _readiness(row, ts(tx.now), store, store_available, exact_version=True)
+    )
     if body.secret_version not in (None, row["secret_version"]):
         raise IntegrationChangedError(
             f"integration {name} is at version {row['secret_version']}; read the"
@@ -394,6 +410,107 @@ async def deliver(
         server=config["server"],
         namespace=config["namespace"],
         ca_data=config.get("ca_data"),
+        access=row["access"],
+        token=stored["token"],
+        secret_version=row["secret_version"],
+        config_version=row["config_version"],
+        expires_at=row["expires_at"],
+    )
+
+
+def _refuse(row: aiosqlite.Row, readiness: Readiness) -> None:
+    """Raise the delivery error of a readiness other than `ready`."""
+    name = row["name"]
+    if readiness == "revoked":
+        raise IntegrationRevokedError(f"integration {name} is revoked")
+    if readiness == "expired":
+        raise IntegrationExpiredError(
+            f"integration {name} expired at {row['expires_at']}; rotate it"
+        )
+    if readiness == "tools_unknown":
+        raise IntegrationToolsUnknownError(
+            f"integration {name} is read-only without a tool allowlist; an admin"
+            " must add one before workers can use it"
+        )
+    if readiness == "unvalidated":
+        raise IntegrationUnvalidatedError(
+            f"integration {name} is {row['validation']}; validate it before use"
+        )
+    if readiness == "secret_missing":
+        raise SecretStoreError(
+            f"integration {name} has no stored credential; rotate it",
+            code="integration_secret_missing",
+        )
+    if readiness == "store_unavailable":
+        raise SecretStoreError("integration credential store unavailable")
+
+
+async def repository_credential(
+    tx: Tx,
+    task_id: str,
+    body: DeliveryRequest,
+    agent_id: str,
+    actor: str,
+    store: SecretStore,
+    *,
+    store_available: bool,
+) -> ForgeCredential:
+    """The project's forge credential for the attempt `agent_id` holds (forge
+    integrations spec 3.4): no selection, the project's repository is the grant.
+    Inside the write, so it serializes with rotate and revoke."""
+    await _held(tx, task_id, body.attempt, agent_id)
+    task = await tasks.get_task(tx.conn, task_id)
+    repository = await project_forge(tx.conn, task.project)
+    if repository is None:
+        raise ProjectRepositoryMissingError(f"project {task.project} has no repository")
+    host = repository[0]
+    async with tx.conn.execute(
+        "SELECT * FROM integrations WHERE project = ? AND kind = 'forge'"
+        " AND state = 'active'",
+        (task.project,),
+    ) as cur:
+        row = await cur.fetchone()
+    config = json.loads(row["config"]) if row else {}
+    if row is None or config.get("host") != host:
+        raise ForgeMissingError(
+            f"no forge integration for {host} in project {task.project}; an admin"
+            " adds one in Setup → Integrations"
+        )
+    if REPOSITORY_WRITE in task.required_capabilities and row["access"] != "read_write":
+        raise ForgeReadOnlyError(
+            f"forge integration {row['name']} is read-only and this task writes to"
+            " the repository"
+        )
+    _refuse(
+        row, _readiness(row, ts(tx.now), store, store_available, exact_version=True)
+    )
+    if body.secret_version not in (None, row["secret_version"]):
+        raise IntegrationChangedError(
+            f"integration {row['name']} is at version {row['secret_version']}"
+        )
+    ref = ref_name(row["secret_ref"])
+    stored = store.get(ref) if ref else None
+    assert stored is not None  # _readiness checked it, in this same transaction
+    await record(
+        tx,
+        actor,
+        "task",
+        task_id,
+        "task.integration_delivered",
+        {
+            "attempt": body.attempt,
+            "integration_id": row["id"],
+            "name": row["name"],
+            "secret_version": row["secret_version"],
+            "config_version": row["config_version"],
+        },
+    )
+    return ForgeCredential(
+        integration_id=row["id"],
+        name=row["name"],
+        provider="github" if host == GITHUB_HOST else "gitea",
+        host=host,
+        username=config.get("username"),
         access=row["access"],
         token=stored["token"],
         secret_version=row["secret_version"],

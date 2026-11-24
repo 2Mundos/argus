@@ -9,9 +9,11 @@ type AccountProviderOption = {
   authMethods: string[];
 };
 
-/** Not engines: service credentials workers use for repository access. */
-export const GITEA_PROVIDER = "gitea";
-export const GITHUB_PROVIDER = "github";
+/**
+ * Forge tokens are project integrations, not accounts (forge integrations spec 3.1);
+ * an account of one of these was moved and is kept disabled until deleted.
+ */
+export const FORGE_PROVIDERS: ReadonlySet<string> = new Set(["gitea", "github"]);
 /** Executor-only subscription account: a token the operator already owns. */
 export const COPILOT_PROVIDER = "copilot";
 /** Executor-only Google Antigravity account: Gemini API key or imported OAuth login. */
@@ -36,20 +38,6 @@ export function providerOptionsFromCatalog(catalog: EngineCatalog): AccountProvi
       id,
       label: `${id} (${e.axes.model_provider}) — ${auth}`,
       authMethods: e.auth_methods,
-    });
-  }
-  if (!seen.has(GITEA_PROVIDER)) {
-    out.push({
-      id: GITEA_PROVIDER,
-      label: "gitea (repository access) — username + personal access token",
-      authMethods: ["personal-access-token"],
-    });
-  }
-  if (!seen.has(GITHUB_PROVIDER)) {
-    out.push({
-      id: GITHUB_PROVIDER,
-      label: "github (repository access) — fine-grained personal access token",
-      authMethods: ["personal-access-token"],
     });
   }
   if (!seen.has(COPILOT_PROVIDER)) {
@@ -83,20 +71,6 @@ export function nativeAuthNotice(providerId: string): string | undefined {
       "This JSON account is for Argus task leasing. Use “Add Claude account” to import a " +
       "credential or sign in with a dedicated login, and “Renew credential” on an existing " +
       "account. A Claude Code login inside a worker is separate."
-    );
-  }
-  if (providerId === GITEA_PROVIDER) {
-    return (
-      "A Gitea account is a username and personal access token for repository access. " +
-      "It is leased only to the repository role and injected by the proxy, never given to the model."
-    );
-  }
-  if (providerId === GITHUB_PROVIDER) {
-    return (
-      "A GitHub account is a fine-grained personal access token limited to the allowlisted " +
-      "repositories (contents, pull requests and issues read/write; commit statuses, checks " +
-      "and actions read). It is used for github.com repositories, leased only to the " +
-      "repository role and injected by the proxy, never given to the model."
     );
   }
   if (providerId === COPILOT_PROVIDER) return copilotTokenNotice();

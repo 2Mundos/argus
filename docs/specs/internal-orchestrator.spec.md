@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-30
-updated: 2026-11-05
+updated: 2026-11-24
 ---
 
 # Internal Orchestrator
@@ -357,7 +357,7 @@ Getting a first account, worker and orchestrator is the
   "Live" or "ready": no API exposes the daily budget spend against its cap, so the
   header says the budget is unknown, and it shows harness account capacity only
   from the engine catalog (`leasable`; `busy` means at `max_leases`; executor-only
-  and repository accounts do not count; missing data is unknown, not free).
+  and moved forge accounts do not count; missing data is unknown, not free).
   Showing a verified ready/capped state needs a readiness signal from the API and
   is separate work.
 - Replies render as Markdown; task, decision and agent ids render as the existing

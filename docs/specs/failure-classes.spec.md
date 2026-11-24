@@ -1,7 +1,7 @@
 ---
 status: partial
 created: 2026-10-24
-updated: 2026-11-21
+updated: 2026-11-24
 ---
 
 # Failure classes
@@ -261,7 +261,8 @@ reasons and adds `failure_class` to each failure row and a count per class.
 
 ## 3.3 Channel preflight
 
-After the account and repository lease, and before injection, the
+After the account lease and the repository credential ([forge
+integrations](forge-integrations.spec.md) 3.4), and before injection, the
 channel runs these checks in order. The first one that fails calls
 `POST /tasks/{id}/block` with its reason and a short `error`, then finishes the
 task. No model session starts and no attempt is spent.
@@ -269,7 +270,7 @@ task. No model session starts and no attempt is spent.
 | Check | Reason |
 | --- | --- |
 | The task's project has no repository URL in the pool map but the task needs write or a configured project checkout | `env_repository_unconfigured` |
-| The repository lease is taken and applied, and its OneCLI assignments are confirmed for the preflight's agent (3.3.1) | `env_repository_unavailable` |
+| The project's forge credential is delivered and applied (the channel's repository lease), and its OneCLI assignments are confirmed for the preflight's agent (3.3.1) | `env_repository_unavailable` |
 | A preflight session (3.3.1) proves read or write access for exactly this repository (see [project code availability](project-code-availability.spec.md)), within its deadline, and is torn down | `env_repository_unreachable` |
 | The leased executor has a credential and an installed CLI in a preflight session, and its provider does not answer 401 or 403 to a model-list request (3.3.1, "Executor probe"), for a task that delegates to a probed executor | `env_executor_auth` |
 | The task workspace has a place: the agent group dir is known and the task has a repository URL | `env_workspace_unconfigured` |

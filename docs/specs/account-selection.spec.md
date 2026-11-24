@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-20
-updated: 2026-11-18
+updated: 2026-11-24
 ---
 
 # Global account selection
@@ -43,9 +43,9 @@ isolation or sandbox/TLS restrictions.
   prefers `local` and falls back to the cloud in the same call
   ([task difficulty](task-difficulty.spec.md)).
   Slot accounting stays atomic in the one write transaction.
-- **Eligibility is technical, never preference.** `gitea` accounts serve only the
-  `repository` role (scoped by the pool's `repositories`) and never become model
-  accounts; executor-only providers (`cursor`) cannot be a harness (`engine`
+- **Eligibility is technical, never preference.** Forge (`gitea`, `github`)
+  tokens are not accounts ([forge integrations](forge-integrations.spec.md)); a
+  moved one is never leased; executor-only providers (`cursor`) cannot be a harness (`engine`
   role). The lease request may carry `runtime_providers`: what the leasing
   runtime can technically apply (for NanoClaw, the providers with a vault
   mapping; engines exclude executor-only ones). It is required and non-empty
@@ -285,7 +285,7 @@ isolation or sandbox/TLS restrictions.
     reader of "is any engine account usable": the claim gate, `awaiting_quota`,
     `refill_at`, `release_waiting_tasks`, the overview and the engine catalog
     (`usable`) all agree. An account whose provider is executor-only (Cursor) or
-    the repository provider is not engine capacity, so a usable executor never
+    a moved forge provider is not engine capacity, so a usable executor never
     hides an exhausted engine pool. An account with a lease block
     ([account usage](account-usage.spec.md) 3.3) is in neither count, ranking nor
     claim gate, like a disabled one.
