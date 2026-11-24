@@ -72,6 +72,7 @@ from argus_api.tasks import independent_review, review_settle
 from argus_api.tasks.delivery import PrChecker
 from argus_api.tasks.draft_routes import router as task_drafts_router
 from argus_api.tasks.graph import router as task_graph_router
+from argus_api.tasks.review_report import router as review_report_router
 from argus_api.tasks.routes import router as tasks_router
 
 log = logging.getLogger("argus")
@@ -343,6 +344,7 @@ app = FastAPI(
 api = APIRouter(prefix="/api")
 for router in (
     tasks_router,
+    review_report_router,
     task_drafts_router,
     task_graph_router,
     model_trace_router,

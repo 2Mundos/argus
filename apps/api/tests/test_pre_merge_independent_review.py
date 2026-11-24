@@ -467,7 +467,16 @@ def test_pre_merge_e2e_open_ci_review_changes_re_review_authorized_merge_settle(
                 "summary": "Found P2 issue",
                 "data": {
                     "verdict": "request_changes",
-                    "findings": ["P2: fix boundary check"],
+                    "findings": [
+                        {
+                            "id": "f1",
+                            "priority": "P2",
+                            "file": "a.py",
+                            "title": "fix boundary check",
+                            "description": "off by one",
+                            "evidence": {"kind": "reading", "detail": "a.py:3"},
+                        }
+                    ],
                     "head_sha": HEAD_1,
                 },
             },
@@ -477,7 +486,7 @@ def test_pre_merge_e2e_open_ci_review_changes_re_review_authorized_merge_settle(
     assert r1_done.status_code == 200, r1_done.text
     parent_after_r1 = api_client.get(f"/api/tasks/{parent_id}").json()
     assert parent_after_r1["state"] == "ready"
-    assert "P2: fix boundary check" in parent_after_r1["spec"]
+    assert "fix boundary check" in parent_after_r1["spec"]
     assert parent_after_r1["merge"]["may_merge"] is False
 
     # Attempt 2 (correction -> pushes HEAD_2 to PR #450, CI passes on HEAD_2).

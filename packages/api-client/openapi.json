@@ -8416,6 +8416,33 @@
         "title": "DiskGuardRootOut",
         "type": "object"
       },
+      "DisputeOutcomes": {
+        "description": "What the next round did with each finding the implementer disputed.",
+        "properties": {
+          "disputed": {
+            "default": 0,
+            "title": "Disputed",
+            "type": "integer"
+          },
+          "dropped": {
+            "default": 0,
+            "title": "Dropped",
+            "type": "integer"
+          },
+          "no_next_round": {
+            "default": 0,
+            "title": "No Next Round",
+            "type": "integer"
+          },
+          "raised_again": {
+            "default": 0,
+            "title": "Raised Again",
+            "type": "integer"
+          }
+        },
+        "title": "DisputeOutcomes",
+        "type": "object"
+      },
       "DockerOptions-Input": {
         "properties": {
           "extra_hosts": {
@@ -11242,6 +11269,76 @@
           "checkpoint"
         ],
         "title": "Finalization",
+        "type": "object"
+      },
+      "FindingsReport": {
+        "properties": {
+          "by_priority": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "By Priority",
+            "type": "object"
+          },
+          "by_priority_verification": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "default": {},
+            "title": "By Priority Verification",
+            "type": "object"
+          },
+          "by_verification": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "By Verification",
+            "type": "object"
+          },
+          "disputes": {
+            "$ref": "#/components/schemas/DisputeOutcomes",
+            "default": {
+              "disputed": 0,
+              "dropped": 0,
+              "no_next_round": 0,
+              "raised_again": 0
+            }
+          },
+          "refuted": {
+            "$ref": "#/components/schemas/RefutedOutcomes",
+            "default": {
+              "raised_again_later": 0,
+              "refuted": 0
+            }
+          },
+          "repeats": {
+            "default": 0,
+            "title": "Repeats",
+            "type": "integer"
+          },
+          "repeats_by_task": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TaskRepeats"
+            },
+            "title": "Repeats By Task",
+            "type": "array"
+          },
+          "responses": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Responses",
+            "type": "object"
+          }
+        },
+        "title": "FindingsReport",
         "type": "object"
       },
       "FleetCapabilities": {
@@ -19946,6 +20043,22 @@
         "title": "RecycleRequest",
         "type": "object"
       },
+      "RefutedOutcomes": {
+        "properties": {
+          "raised_again_later": {
+            "default": 0,
+            "title": "Raised Again Later",
+            "type": "integer"
+          },
+          "refuted": {
+            "default": 0,
+            "title": "Refuted",
+            "type": "integer"
+          }
+        },
+        "title": "RefutedOutcomes",
+        "type": "object"
+      },
       "Registration": {
         "properties": {
           "agent": {
@@ -20450,6 +20563,22 @@
             "title": "Description",
             "type": "string"
           },
+          "evidence_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "test",
+                  "reproduction",
+                  "reading"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Kind"
+          },
           "file": {
             "anyOf": [
               {
@@ -20460,6 +20589,17 @@
               }
             ],
             "title": "File"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
           },
           "lines": {
             "anyOf": [
@@ -20482,12 +20622,126 @@
               }
             ],
             "title": "Priority"
+          },
+          "repeat_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repeat Of"
+          },
+          "repeat_response": {
+            "anyOf": [
+              {
+                "enum": [
+                  "fixed",
+                  "disputed",
+                  "unanswered"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repeat Response"
+          },
+          "repeat_round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repeat Round"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "enum": [
+                  "fixed",
+                  "disputed",
+                  "unanswered"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response"
+          },
+          "response_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Evidence"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "enum": [
+                  "confirmed",
+                  "refuted",
+                  "unclear"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification"
           }
         },
         "required": [
           "description"
         ],
         "title": "ReviewFinding",
+        "type": "object"
+      },
+      "ReviewReport": {
+        "properties": {
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "findings": {
+            "$ref": "#/components/schemas/FindingsReport"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "days",
+          "findings"
+        ],
+        "title": "ReviewReport",
         "type": "object"
       },
       "ReviewRound": {
@@ -20545,6 +20799,10 @@
             ],
             "title": "Head Sha"
           },
+          "repeats": {
+            "title": "Repeats",
+            "type": "integer"
+          },
           "reviewer_model": {
             "anyOf": [
               {
@@ -20589,6 +20847,27 @@
               }
             ],
             "title": "Verdict"
+          },
+          "verifier_child_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verifier Child Id"
+          },
+          "verifier_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskState"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -20601,6 +20880,9 @@
           "findings_by_priority",
           "reviewer_provider",
           "reviewer_model",
+          "repeats",
+          "verifier_child_id",
+          "verifier_state",
           "artifact_ids",
           "created_at",
           "finished_at"
@@ -20610,6 +20892,11 @@
       },
       "ReviewRounds": {
         "properties": {
+          "repeats": {
+            "default": 0,
+            "title": "Repeats",
+            "type": "integer"
+          },
           "rounds": {
             "items": {
               "$ref": "#/components/schemas/ReviewRound"
@@ -26778,6 +27065,24 @@
           "complexity"
         ],
         "title": "TaskRead",
+        "type": "object"
+      },
+      "TaskRepeats": {
+        "properties": {
+          "repeats": {
+            "title": "Repeats",
+            "type": "integer"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "repeats"
+        ],
+        "title": "TaskRepeats",
         "type": "object"
       },
       "TaskResult-Input": {
@@ -37128,6 +37433,66 @@
         ]
       }
     },
+    "/api/projects/{slug}/review-report": {
+      "get": {
+        "description": "How a project's independent-review findings fared in the last `days` days\n(default 30, at most 90): findings by priority and verification status, disputes\nand how the next round answered them, repeats, and refuted findings a later round\nraised again. Admin only; read-only.",
+        "operationId": "get_review_report_api_projects__slug__review_report_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Review Report",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/api/projects/{slug}/routines": {
       "get": {
         "operationId": "list_routines_api_projects__slug__routines_get",
@@ -38714,7 +39079,7 @@
     },
     "/api/tasks": {
       "get": {
-        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased. Optional `q` is literal substring search over title\nand spec (task discovery). `view=compact` returns only id, title, state, attempt,\nmax_attempts, block_reason, progress_message, created_at and updated_at (no refs,\nmodels or `matches`): the cheapest way to scan many tasks. `hide_review_children=true`\nleaves out `code_review` tasks that have a parent (their rounds are read with\n`GET /tasks/{id}/reviews`) and adds `review_badge` to parents with rounds; it is\noff by default.",
+        "description": "Tasks newest first, in pages (max 100). `assignee` is the agent holding a\ntask now (claimed tasks only). `ids` (comma-separated, max 50) is a batch read\ninstead: no other filter, no paging, unknown ids in `missing`. Archived tasks\nare left out unless `archived=true`, which lists only those. Workers only see\ntasks they have leased. Optional `q` is literal substring search over title\nand spec (task discovery). `view=compact` returns only id, title, state, attempt,\nmax_attempts, block_reason, progress_message, created_at and updated_at (no refs,\nmodels or `matches`): the cheapest way to scan many tasks. `hide_review_children=true`\nleaves out `code_review` and `review_verification` tasks that have a parent (their rounds are read with\n`GET /tasks/{id}/reviews`) and adds `review_badge` to parents with rounds; it is\noff by default.",
         "operationId": "list_tasks_api_tasks_get",
         "parameters": [
           {

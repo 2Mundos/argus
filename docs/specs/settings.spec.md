@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-22
+updated: 2026-11-24
 ---
 
 # Settings
@@ -105,10 +105,12 @@ Key `review.independent`, scopes `global` and `project`, value:
 
 ```json
 { "mode": "off" | "different_model" | "different_provider", "max_rounds": 3,
-  "max_reviewer_failures": 2 }
+  "max_reviewer_failures": 2, "verify_findings": "off" | "observe" | "enforce" }
 ```
 
-Default `{"mode": "off", "max_rounds": 3, "max_reviewer_failures": 2}`. Dashboard label: **Require review by a
+Default `{"mode": "off", "max_rounds": 3, "max_reviewer_failures": 2,
+"verify_findings": "off"}`; `verify_findings` is read from the value when set and is
+`off` otherwise ([review finding verification](review-finding-verification.spec.md) 3.4). Dashboard label: **Require review by a
 different model**, with `different_provider` shown as "…from a different provider".
 
 - **Applies to** tasks that deliver code: completion carries a PR or commit
