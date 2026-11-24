@@ -934,3 +934,47 @@ def test_settings_schemas_stay_in_sync_with_model_policy_and_difficulty_executor
     assert proj_models.json()["value"]["implementation"]["agy"] == [
         "gemini-4-neon-high"
     ]
+
+
+def test_review_policy_project_wins_and_the_report_is_admin_only(
+    client: TestClient,
+) -> None:
+    client.put(
+        "/api/projects/demo", json={"name": "Demo", "description": "d"}, headers=ADMIN
+    )
+    rule = {"name": "docs", "tier": "skip", "paths": ["docs/**"]}
+    base = {"mode": "observe", "default": "standard", "rules": [rule]}
+    assert (
+        client.put(
+            "/api/settings/review.policy", json={"value": base}, headers=ADMIN
+        ).status_code
+        == 200
+    )
+    got = client.put(
+        "/api/projects/demo/settings/review.policy",
+        json={"value": {**base, "mode": "enforce"}},
+        headers=ADMIN,
+    )
+    assert (got.json()["source"], got.json()["value"]["mode"]) == ("project", "enforce")
+    bad = client.put(
+        "/api/settings/review.policy",
+        json={"value": {**base, "default": "skip"}},
+        headers=ADMIN,
+    )
+    assert bad.status_code == 422
+    assert "default" in str(bad.json())
+
+    report = client.get("/api/projects/demo/review-report", headers=ADMIN)
+    assert report.status_code == 200
+    assert report.json()["policy"]["days"] == 30
+    assert set(report.json()["policy"]["tiers"]) == {"skip", "standard", "human"}
+    assert (
+        client.get(
+            "/api/projects/demo/review-report?days=91", headers=ADMIN
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get("/api/projects/nope/review-report", headers=ADMIN).status_code == 404
+    )
+    assert client.get("/api/projects/demo/review-report").status_code in (401, 403)

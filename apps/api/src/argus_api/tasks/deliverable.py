@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import aiosqlite
 from argus_core.continuation import (
@@ -32,6 +33,9 @@ from argus_api.errors import ConflictError, ValidationFailedError
 from argus_api.events import record
 from argus_api.tasks import continuation as cont
 
+if TYPE_CHECKING:
+    from argus_api.tasks.delivery import ChangedFiles
+
 REPOSITORY_WRITE = "repository:write"
 # Also what an explicit binding (pr_binding.bind) records, so each sees the other's.
 BOUND_EVENT = "task.pr_reconciled"
@@ -47,6 +51,9 @@ class ForgeRead:
     when the task names no unambiguous PR."""
 
     delivery: Delivery | None
+    # The PR's changed paths at the delivery's head, read only while `review.policy`
+    # is on (review policy spec 3.2); None when not read.
+    files: ChangedFiles | None = None
 
 
 @dataclass(frozen=True)

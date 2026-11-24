@@ -59,6 +59,35 @@ _REVIEW_SCHEMA: dict[str, Any] = {
     },
 }
 
+_POLICY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["mode", "default", "rules"],
+    "properties": {
+        "mode": {"type": "string", "enum": ["off", "observe", "enforce"]},
+        "default": {"type": "string", "enum": ["standard", "human"]},
+        "rules": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "tier", "paths"],
+                "properties": {
+                    "name": {"type": "string", "pattern": "^[a-z0-9-]{1,40}$"},
+                    "tier": {"enum": ["skip", "standard", "human"]},
+                    "paths": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                    },
+                },
+            },
+        },
+    },
+}
+
 _DIFFICULTY_EXECUTORS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -133,6 +162,17 @@ REGISTRY: dict[str, SettingDefinition] = {
         default=REVIEW_DEFAULT,
         scopes=["global", "project"],
         description="Require review by a different model before a code task succeeds.",
+    ),
+    "review.policy": SettingDefinition(
+        key="review.policy",
+        schema=_POLICY_SCHEMA,
+        default={"mode": "off", "default": "standard", "rules": []},
+        scopes=["global", "project"],
+        description=(
+            "Path-based review tiers (skip, standard, human) for delivered heads."
+            " observe records the tier and changes nothing; enforce applies it."
+            " Applies only while review.independent is on."
+        ),
     ),
     "task_default_budget_usd": SettingDefinition(
         key="task_default_budget_usd",

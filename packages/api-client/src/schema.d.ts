@@ -2358,10 +2358,8 @@ export interface paths {
         };
         /**
          * Get Review Report
-         * @description How a project's independent-review findings fared in the last `days` days
-         *     (default 30, at most 90): findings by priority and verification status, disputes
-         *     and how the next round answered them, repeats, and refuted findings a later round
-         *     raised again. Admin only; read-only.
+         * @description How a project's independent-review findings and `review.policy` tiers fared in
+         *     the last `days` days (default 30, at most 90). Admin only; read-only.
          */
         get: operations["get_review_report_api_projects__slug__review_report_get"];
         put?: never;
@@ -8175,6 +8173,29 @@ export interface components {
             /** Model */
             model: string;
         };
+        /**
+         * HeadPolicy
+         * @description What the policy chose for one reviewed head (the task's Reviews section).
+         */
+        HeadPolicy: {
+            /** Files */
+            files: number;
+            /** Head Sha */
+            head_sha: string;
+            /** Mode */
+            mode: string;
+            /** Pr */
+            pr: string | null;
+            /** Rules */
+            rules: string[];
+            /** Skipped */
+            skipped: boolean;
+            /**
+             * Tier
+             * @enum {string}
+             */
+            tier: "skip" | "standard" | "human";
+        };
         /** HeartbeatRequest */
         HeartbeatRequest: {
             /**
@@ -9910,6 +9931,17 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** PolicyReport */
+        PolicyReport: {
+            /** Days */
+            days: number;
+            /** Skipped With Findings */
+            skipped_with_findings: components["schemas"]["SkipFinding"][];
+            /** Tiers */
+            tiers: {
+                [key: string]: components["schemas"]["TierReport"];
+            };
+        };
         /** Pool */
         Pool: {
             /**
@@ -11394,6 +11426,7 @@ export interface components {
             /** Days */
             days: number;
             findings: components["schemas"]["FindingsReport"];
+            policy: components["schemas"]["PolicyReport"];
             /** Project */
             project: string;
         };
@@ -11435,6 +11468,11 @@ export interface components {
         };
         /** ReviewRounds */
         ReviewRounds: {
+            /**
+             * Policy
+             * @default []
+             */
+            policy?: components["schemas"]["HeadPolicy"][];
             /**
              * Repeats
              * @default 0
@@ -12180,6 +12218,19 @@ export interface components {
              * @constant
              */
             runtime: "nanoclaw";
+        };
+        /** SkipFinding */
+        SkipFinding: {
+            /** Findings */
+            findings: number;
+            /** Head Sha */
+            head_sha: string;
+            /** Pr */
+            pr: string | null;
+            /** Rules */
+            rules: string[];
+            /** Task Id */
+            task_id: string;
         };
         /** SkippedAlternative */
         SkippedAlternative: {
@@ -13681,6 +13732,42 @@ export interface components {
             text: string;
             /** Truncated */
             truncated: boolean;
+        };
+        /** TierReport */
+        TierReport: {
+            /**
+             * Cancelled
+             * @default 0
+             */
+            cancelled?: number;
+            /** Findings By Priority */
+            findings_by_priority?: {
+                [key: string]: number;
+            };
+            /**
+             * Heads
+             * @default 0
+             */
+            heads?: number;
+            /**
+             * Rejected
+             * @default 0
+             */
+            rejected?: number;
+            /**
+             * Succeeded
+             * @default 0
+             */
+            succeeded?: number;
+            /**
+             * Tasks
+             * @default 0
+             */
+            tasks?: number;
+            /** Verdicts */
+            verdicts?: {
+                [key: string]: number;
+            };
         };
         /**
          * TitleSource

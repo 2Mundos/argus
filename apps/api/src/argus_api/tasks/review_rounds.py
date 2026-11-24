@@ -13,6 +13,7 @@ import aiosqlite
 from argus_core.tasks import TaskState
 from pydantic import BaseModel
 
+from argus_api.tasks import review_policy
 from argus_api.tasks.independent_review import (
     CODE_REVIEW_KIND,
     VERIFICATION_KIND,
@@ -84,6 +85,7 @@ class ReviewRounds(BaseModel):
     task_id: str
     repeats: int = 0  # findings raised again, over all rounds
     rounds: list[ReviewRound]
+    policy: list[review_policy.HeadPolicy] = []  # review policy spec 3.5
     steward: StewardState | None = None
 
 
@@ -276,8 +278,11 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
         (parent_id, CODE_REVIEW_KIND),
     ) as cur:
         children = list(await cur.fetchall())
+    policy = await review_policy.heads_of(conn, parent_id)
     if not children:
-        return ReviewRounds(task_id=parent_id, rounds=[], steward=steward)
+        return ReviewRounds(
+            task_id=parent_id, rounds=[], policy=policy, steward=steward
+        )
     ids = [c["id"] for c in children]
     voided = await _voided(conn, parent_id, children)
     runs = await _by_child(
@@ -350,6 +355,7 @@ async def review_rounds(conn: aiosqlite.Connection, parent_id: str) -> ReviewRou
         task_id=parent_id,
         repeats=sum(r.repeats for r in rounds),
         rounds=rounds,
+        policy=policy,
         steward=steward,
     )
 

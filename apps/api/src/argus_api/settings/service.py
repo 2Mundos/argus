@@ -11,11 +11,13 @@ from argus_core.difficulty import as_jsonable, parse_difficulty_executors
 from argus_core.execution_chains import ExecutionChains
 from argus_core.settings import (
     IndependentReviewSetting,
+    ReviewPolicySetting,
     SettingDefinition,
     SettingsResponse,
     SettingValue,
 )
 from jsonschema import Draft202012Validator
+from pydantic import ValidationError
 
 from argus_api import model_policy
 from argus_api.config import is_dsh_enabled
@@ -35,6 +37,7 @@ COMMAND_GUARD_KEY = "command_guard.enabled"
 AUTO_MERGE_KEY = "delivery.auto_merge"
 FORGE_AGENTIC_KEY = "review.forge_agentic"
 ACCEPTANCE_KEY = "review.acceptance"
+POLICY_KEY = "review.policy"
 CHAIN_KEYS = frozenset({"execution.chains"})
 
 
@@ -73,6 +76,17 @@ def _normalize(key: str, value: Any) -> Any:
             raise ValidationFailedError(str(exc)) from exc
     if key == REVIEW_KEY:
         return IndependentReviewSetting.model_validate(value).model_dump()
+    if key == POLICY_KEY:
+        try:
+            return ReviewPolicySetting.model_validate(value).model_dump()
+        except ValidationError as exc:
+            raise ValidationFailedError(
+                f"invalid value for {key}",
+                details=[
+                    f"{'/'.join(map(str, e['loc'])) or '<root>'}: {e['msg']}"
+                    for e in exc.errors()
+                ],
+            ) from exc
     if key == DIFFICULTY_EXECUTORS_KEY:
         try:
             return as_jsonable(parse_difficulty_executors(value))
@@ -279,6 +293,15 @@ async def get_review(
 ) -> IndependentReviewSetting:
     setting = await _setting(conn, path, project, REVIEW_KEY)
     return effective_review(setting.value)
+
+
+async def get_review_policy(
+    conn: aiosqlite.Connection, project: str
+) -> ReviewPolicySetting:
+    """`review.policy` for a project: its override, else global, else off."""
+    return ReviewPolicySetting.model_validate(
+        (await _setting(conn, Path(), project, POLICY_KEY)).value
+    )
 
 
 async def effective_model_policy(

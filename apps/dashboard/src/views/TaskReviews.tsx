@@ -154,11 +154,23 @@ export function TaskReviews({ taskId }: { taskId: string }) {
   const rounds = data?.rounds ?? [];
   const selected =
     rounds.find((r) => picked?.taskId === taskId && r.round === picked.round) ?? rounds.at(-1);
+  const heads = data?.policy ?? [];
   const steward = data?.steward;
-  if (!selected && !steward) return null;
+  if (!selected && heads.length === 0 && !steward) return null;
   return (
     <section aria-label="Reviews">
       <header className="task-section-label">Reviews</header>
+      {heads.length > 0 && (
+        <ul className="plain small" aria-label="Review policy">
+          {heads.map((h) => (
+            <li key={`${h.pr}-${h.head_sha}`}>
+              <code>{h.head_sha.slice(0, 12)}</code> · policy <strong>{h.tier}</strong>
+              {h.mode === "observe" ? " (observed)" : h.skipped ? " (reviewer skipped)" : ""}
+              {h.rules.length > 0 && <> · {h.rules.join(", ")}</>}
+            </li>
+          ))}
+        </ul>
+      )}
       {steward && <StewardLine steward={steward} />}
       {selected && (
         <>

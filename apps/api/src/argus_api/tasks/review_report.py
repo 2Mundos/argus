@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from argus_api.db import ts
 from argus_api.deps import AdminDep, DbDep
 from argus_api.knowledge import service as knowledge
+from argus_api.tasks import review_policy
 from argus_api.tasks.independent_review import (
     CODE_REVIEW_KIND,
     RESPONDED_EVENT,
@@ -62,6 +63,7 @@ class ReviewReport(BaseModel):
     project: str
     days: int
     findings: FindingsReport
+    policy: review_policy.PolicyReport
 
 
 def _bump(counts: dict[str, int], key: str) -> None:
@@ -180,10 +182,8 @@ async def get_review_report(
     _: AdminDep,
     days: Annotated[int, Query(ge=1, le=MAX_DAYS)] = 30,
 ) -> ReviewReport:
-    """How a project's independent-review findings fared in the last `days` days
-    (default 30, at most 90): findings by priority and verification status, disputes
-    and how the next round answered them, repeats, and refuted findings a later round
-    raised again. Admin only; read-only."""
+    """How a project's independent-review findings and `review.policy` tiers fared in
+    the last `days` days (default 30, at most 90). Admin only; read-only."""
     async with db.snapshot() as snap:
         await knowledge.get_project(snap.conn, slug)  # 404 for an unknown project
         since = ts(snap.now - timedelta(days=days))
@@ -191,4 +191,5 @@ async def get_review_report(
             project=slug,
             days=days,
             findings=await findings_report(snap.conn, slug, since),
+            policy=await review_policy.policy_report(snap.conn, slug, since, days),
         )

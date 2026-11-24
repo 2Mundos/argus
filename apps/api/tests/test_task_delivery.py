@@ -1111,3 +1111,49 @@ def test_inbox_does_not_embed_delivery(client) -> None:
     for row in inbox["items"]:
         assert "checks_combined" not in row
         assert "pr_state" not in row
+
+
+# -- changed files (review policy spec 3.2) --------------------------------------
+
+
+def _files_forge(pages: list[list[dict]], head: str = HEAD):
+    """A forge whose PR files come in `pages` of 100 and whose head is `head`."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls/12/files"):
+            n = int(request.url.params["page"])
+            return httpx.Response(200, json=pages[n - 1] if n <= len(pages) else [])
+        if request.url.path.endswith("/pulls/12"):
+            return httpx.Response(200, json=open_pr(head={"sha": head, "ref": "f"}))
+        return httpx.Response(404, json={})
+
+    return handler
+
+
+def _page(n: int, start: int = 0) -> list[dict]:
+    return [{"filename": f"src/f{start + i}.py"} for i in range(n)]
+
+
+async def test_changed_files_include_both_paths_of_a_rename(conn) -> None:
+    pages = [[{"filename": "new/a.py", "previous_filename": "old/a.py"}, *_page(1)]]
+    got = await checker(_files_forge(pages)).changed_files(conn, REF, HEAD)
+    assert got.paths == ("new/a.py", "old/a.py", "src/f0.py")
+
+
+async def test_changed_files_page_through_exactly_the_cap(conn) -> None:
+    pages = [_page(100, 0), _page(100, 100), _page(100, 200)]
+    got = await checker(_files_forge(pages)).changed_files(conn, REF, HEAD)
+    assert got.paths is not None
+    assert len(got.paths) == 300
+
+
+@pytest.mark.parametrize("why", ["too_many", "head_moved", "failed_read"])
+async def test_changed_files_are_unknown_when_not_trustworthy(conn, why) -> None:
+    pages = [_page(100, 0), _page(100, 100), _page(100, 200), _page(1, 300)]
+    handler = _files_forge(pages)
+    if why == "head_moved":
+        handler = _files_forge(pages[:1], head="e" * 40)
+    if why == "failed_read":
+        handler = forge_router({})
+    got = await checker(handler).changed_files(conn, REF, HEAD)
+    assert got.paths is None

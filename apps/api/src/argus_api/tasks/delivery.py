@@ -61,6 +61,8 @@ REVIEW_CAP = 20
 LIST_CAP = 50  # PRs per page of the list that finds a task's own (Gitea's default max)
 LIST_PAGES = 10  # pages read at most; a list longer than that is not read in full
 DESC_CAP = 200
+FILES_PAGE = 100  # changed files per page of the PR files read
+FILES_CAP = 300  # more changed files than this and the list is unknown
 PENDING_IDS_CAP = 20
 
 _URL = re.compile(
@@ -118,6 +120,17 @@ class ForgeSnapshot:
     forge_reviews_for_head: int | None = None
     partial: list[str] = field(default_factory=list)
     checked_at: datetime = field(default_factory=utcnow)
+
+
+@dataclass(frozen=True)
+class ChangedFiles:
+    """The forge's changed paths of one PR at one head (review policy spec 3.2).
+    `paths` is None when unknown: the read failed or was partial, the PR has more
+    than FILES_CAP files, or the head the forge reports is not `head_sha`. A renamed
+    file contributes its new and its previous path."""
+
+    head_sha: str | None
+    paths: tuple[str, ...] | None
 
 
 @dataclass(frozen=True)
@@ -548,6 +561,70 @@ class PrChecker:
         return PrObservation(
             snap.pr_state, snap.merged_at, snap.checked_at, snap.base_ref, snap.head_sha
         )
+
+    async def changed_files(
+        self, conn: aiosqlite.Connection, ref: PrRef, head_sha: str
+    ) -> ChangedFiles:
+        """The PR's changed paths, read from the forge outside any write. Unknown
+        (never a guess) on any failure or when the forge's head is not `head_sha`."""
+        head = head_sha.lower()
+        unknown = ChangedFiles(head, None)
+        login = await self.login(conn, ref)
+        if login is None:
+            return unknown
+        base, headers, basic = self._client(ref, login)
+        deadline = time.monotonic() + OVERALL_BUDGET_S
+        github = ref.provider == "github"
+        paths: list[str] = []
+        files = 0
+        try:
+            async with httpx.AsyncClient(
+                transport=self.transport, timeout=TIMEOUT_S, follow_redirects=False
+            ) as client:
+                for page in range(1, FILES_CAP // FILES_PAGE + 2):
+                    query = (
+                        f"per_page={FILES_PAGE}&page={page}"
+                        if github
+                        else f"limit={FILES_PAGE}&page={page}"
+                    )
+                    res = await self._get(
+                        client,
+                        f"{base}/pulls/{ref.number}/files?{query}",
+                        headers,
+                        basic,
+                        deadline,
+                    )
+                    if res is None or res.status_code != 200:
+                        return unknown
+                    items = res.json()
+                    if not isinstance(items, list):
+                        return unknown
+                    files += len(items)
+                    if files > FILES_CAP:
+                        return unknown
+                    for item in items:
+                        if not isinstance(item, dict) or not isinstance(
+                            item.get("filename"), str
+                        ):
+                            return unknown
+                        paths.append(item["filename"])
+                        previous = item.get("previous_filename")
+                        if isinstance(previous, str) and previous:
+                            paths.append(previous)
+                    if len(items) < FILES_PAGE:
+                        break
+                # The head is read after the files: a push in between is a mismatch.
+                res = await self._get(
+                    client, f"{base}/pulls/{ref.number}", headers, basic, deadline
+                )
+                if res is None or res.status_code != 200:
+                    return unknown
+                snap = self._parse_pr(res.json(), utcnow(), github)
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+            return unknown
+        if not snap.head_sha or snap.head_sha.lower() != head:
+            return unknown
+        return ChangedFiles(head, tuple(dict.fromkeys(paths)))
 
     async def login(
         self, conn: aiosqlite.Connection, ref: PrRef

@@ -99,6 +99,22 @@ and a one-line description shown in the dashboard. The registry is served by
   response says so: it is the operator lock.
 - Task pins ([task models](task-models.spec.md)) still beat any chain.
 
+## 3.5a Review policy
+
+Key `review.policy`, scopes `global` and `project` (project wins), admin only:
+
+```json
+{ "mode": "off" | "observe" | "enforce", "default": "standard" | "human",
+  "rules": [{ "name": "docs", "tier": "skip" | "standard" | "human",
+              "paths": ["docs/**"] }] }
+```
+
+Default `{"mode": "off", "default": "standard", "rules": []}`. At most 50 rules, rule
+names unique (1 to 40 of `[a-z0-9-]`), 1 to 50 repo-relative POSIX globs each; a
+malformed value is a 422 naming the field. `default` is never `skip`. Semantics:
+[review policy](review-policy.spec.md). The forge agentic-review policy
+(`review.forge_agentic`) is unchanged.
+
 ## 3.5 Independent code review
 
 Key `review.independent`, scopes `global` and `project`, value:

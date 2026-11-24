@@ -23,6 +23,7 @@ import { ExecutionChains } from "./ExecutionChains";
 import { GitIdentityEditor } from "./GitIdentityEditor";
 import { ModelPreferences, ModelPreferencesEditor } from "./ModelPreferences";
 import { OrchestratorModelPicker } from "./OrchestratorModel";
+import { ReviewPolicySection } from "./ReviewPolicy";
 import { TaskDefaultsEditor } from "./TaskDefaultsEditor";
 
 /** `#setup/settings/<slug>` scopes the page to a project; the scope stays in the URL. */
@@ -60,6 +61,7 @@ export function Settings({
   const autoMerge = byKey.get("delivery.auto_merge");
   const acceptance = byKey.get("review.acceptance");
   const forgeAgentic = byKey.get("review.forge_agentic");
+  const reviewPolicy = byKey.get("review.policy");
   const orchestratorEnabled = byKey.get("orchestrator.enabled");
   const orchestratorRuntime = byKey.get("orchestrator.runtime");
   const orchestratorModel = byKey.get("orchestrator.model");
@@ -187,6 +189,13 @@ export function Settings({
             <IndependentReviewSection
               project={project}
               setting={review}
+              onChanged={() => reload()}
+            />
+          </div>
+          <div className="card">
+            <ReviewPolicySection
+              project={project}
+              setting={reviewPolicy}
               onChanged={() => reload()}
             />
           </div>
