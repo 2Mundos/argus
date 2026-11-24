@@ -1253,6 +1253,75 @@ async def test_retry_reviewer_spawns_a_new_child(db, fleet):
     assert len(await open_decisions(db, parent.id)) == 1
 
 
+async def child_input(db, child_id):
+    async with (
+        db.read() as conn,
+        conn.execute("SELECT input FROM tasks WHERE id = ?", (child_id,)) as cur,
+    ):
+        return json.loads((await cur.fetchone())[0])
+
+
+async def test_respawned_reviewer_follows_the_parents_follow_up_pr(db, fleet):
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+
+    old_pr, old_sha = "https://github.com/o/r/pull/492", "7" * 40
+    new_pr, new_sha = "https://github.com/o/r/pull/500", "9" * 40
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
+    await review_setting(db)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    async with db.write() as tx:
+        first = await review.spawn_reviewer(
+            tx,
+            await tasks.task_row(tx.conn, parent.id),
+            pr=old_pr,
+            head_sha=old_sha,
+            setting=IndependentReviewSetting(mode="different_model"),
+            policy={},
+            actor="system",
+        )
+        # The fix landed in a follow-up PR the parent's result now names.
+        await tx.conn.execute(
+            "UPDATE tasks SET result = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {"summary": ".", "data": {"pr": new_pr, "head_sha": new_sha}}
+                ),
+                parent.id,
+            ),
+        )
+    await cancel_child(db, first)
+    second = await latest_child(db, parent.id)
+    assert second != first
+    got = await child_input(db, second)
+    assert got["pr"] == new_pr and got["head_sha"] == new_sha
+
+
+async def test_respawned_reviewer_keeps_the_ended_childs_target_without_a_newer_pr(
+    db, fleet
+):
+    from argus_api.tasks import independent_review as review
+    from argus_core.settings import IndependentReviewSetting
+
+    pr, sha = "https://github.com/o/r/pull/492", "7" * 40
+    await review_policy(db, [CODEX_ALT, DEEPSEEK_ALT])
+    await review_setting(db)
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    async with db.write() as tx:
+        first = await review.spawn_reviewer(
+            tx,
+            await tasks.task_row(tx.conn, parent.id),
+            pr=pr,
+            head_sha=sha,
+            setting=IndependentReviewSetting(mode="different_model"),
+            policy={},
+            actor="system",
+        )
+    await cancel_child(db, first)
+    got = await child_input(db, await latest_child(db, parent.id))
+    assert got["pr"] == pr and got["head_sha"] == sha
+
+
 async def test_approve_without_review_completes_the_parent_with_audit(db, fleet):
     parent, _ = await exhausted_parent(db, fleet)
     [decision] = await open_decisions(db, parent.id)

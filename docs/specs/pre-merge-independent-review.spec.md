@@ -169,6 +169,15 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   offering `retry_reviewer`, `approve_without_review`, and `cancel`.
 - `retry_reviewer` resolves `(pr, head_sha)` from the parent's delivery record or
   fresh forge read even when no prior `code_review` child was created.
+- The head a reviewer targets follows the parent's newest delivery. When a fix round
+  lands in a follow-up PR (the original already merged), the PR the worker reported
+  in this attempt (`result.data.pr`, a `pr_opened` progress, or the newest PR
+  artifact, including one bound by `reconcile_task_pr`) wins over the older PR, and
+  the forge head of the merged older PR is not used for it. When a reviewer ends
+  without a verdict (`failed`, `cancelled`) or an operator retries, the next reviewer
+  takes the parent's current delivery when it names a different PR with a head; the
+  ended child's `(pr, head_sha)` is only the fallback when the parent has no
+  different delivery. Exact-head voiding (3.2) and author exclusion are unchanged.
 
 ## 3.5 Idempotency and concurrency
 
