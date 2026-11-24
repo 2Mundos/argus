@@ -60,7 +60,9 @@ function fakeArgus(
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
   const fetchImpl = (async (url: string, init: RequestInit) => {
     const path = new URL(url).pathname.replace(/^\/api/, "");
-    const body = init.body ? JSON.parse(init.body as string) : undefined;
+    // Artifact uploads send raw bytes, not JSON.
+    const isBytes = path.endsWith("/artifacts") && init.method === "POST";
+    const body = !isBytes && init.body ? JSON.parse(init.body as string) : undefined;
     calls.push({ path, body });
     if (opts.routes?.[path]) return opts.routes[path]!();
     if (path === "/agents/register")
@@ -83,7 +85,7 @@ function fakeArgus(
         ),
       );
     }
-    if (/\/artifacts/.test(path)) return json(201, { data: { id: "art-1" } });
+    if (/\/artifacts/.test(path)) return json(201, { id: "art-1" });
     return json(200, {});
   }) as unknown as typeof fetch;
   return { calls, fetchImpl };
