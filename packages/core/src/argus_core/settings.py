@@ -19,6 +19,8 @@ class IndependentReviewSetting(BaseModel):
     max_rounds: int = Field(default=3, ge=1, le=20)
     # Reviewer children that may fail without a verdict before an operator decides.
     max_reviewer_failures: int = Field(default=2, ge=0, le=20)
+    # Repair attempts for an approved PR that breaks (PR steward spec 3.2); 0 is off.
+    max_repairs: int = Field(default=0, ge=0, le=3)
 
 
 class SettingDefinition(BaseModel):

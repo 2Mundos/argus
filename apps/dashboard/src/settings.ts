@@ -26,6 +26,7 @@ export type IndependentReview = {
   mode: ReviewMode;
   max_rounds: number;
   max_reviewer_failures?: number;
+  max_repairs?: number;
 };
 
 export type DifficultyLevel = "trivial" | "simple" | "standard" | "hard";

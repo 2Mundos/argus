@@ -5,6 +5,7 @@ import { shortId } from "../format";
 import { useLiveData } from "../live";
 
 type Round = components["schemas"]["ReviewRound"];
+type Steward = NonNullable<components["schemas"]["ReviewRounds"]["steward"]>;
 
 const VERDICT_TEXT = {
   approve: "approved",
@@ -73,6 +74,39 @@ function RoundPanel({ round }: { round: Round }) {
   );
 }
 
+const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 12) : "unknown");
+
+/** The newest PR steward state, shown between review rounds (PR steward spec 3.5). */
+export function StewardLine({ steward }: { steward: Steward }) {
+  const classes = (steward.classes ?? []).join(" + ");
+  const failed = steward.failed_checks ?? [];
+  if (steward.state === "repair_pushed")
+    return (
+      <p className="small" aria-label="PR steward">
+        Repair pushed: head <code>{short(steward.old_head_sha)}</code> →{" "}
+        <code>{short(steward.new_head_sha)}</code>
+      </p>
+    );
+  if (steward.state === "stopped")
+    return (
+      <p className="small" aria-label="PR steward">
+        PR steward stopped: {classes}
+        {steward.decision_id && (
+          <>
+            {" · "}
+            <a href="#inbox">decision</a>
+          </>
+        )}
+      </p>
+    );
+  return (
+    <p className="small" aria-label="PR steward">
+      Repair requested: {classes}
+      {failed.length > 0 && <> ({failed.join(", ")})</>}
+    </p>
+  );
+}
+
 /** One tab per independent review round of the task, the newest selected by default. */
 export function TaskReviews({ taskId }: { taskId: string }) {
   const { data } = useLiveData(
@@ -86,25 +120,31 @@ export function TaskReviews({ taskId }: { taskId: string }) {
   const rounds = data?.rounds ?? [];
   const selected =
     rounds.find((r) => picked?.taskId === taskId && r.round === picked.round) ?? rounds.at(-1);
-  if (!selected) return null;
+  const steward = data?.steward;
+  if (!selected && !steward) return null;
   return (
     <section aria-label="Reviews">
       <header className="task-section-label">Reviews</header>
-      <div role="tablist" aria-label="Review rounds">
-        {rounds.map((r) => (
-          <button
-            key={r.child_id}
-            type="button"
-            role="tab"
-            aria-selected={r === selected}
-            className={r === selected ? "primary" : undefined}
-            onClick={() => setPicked({ taskId, round: r.round })}
-          >
-            Round {r.round} · {verdictText(r.verdict, r.state)}
-          </button>
-        ))}
-      </div>
-      <RoundPanel round={selected} />
+      {steward && <StewardLine steward={steward} />}
+      {selected && (
+        <>
+          <div role="tablist" aria-label="Review rounds">
+            {rounds.map((r) => (
+              <button
+                key={r.child_id}
+                type="button"
+                role="tab"
+                aria-selected={r === selected}
+                className={r === selected ? "primary" : undefined}
+                onClick={() => setPicked({ taskId, round: r.round })}
+              >
+                Round {r.round} · {verdictText(r.verdict, r.state)}
+              </button>
+            ))}
+          </div>
+          <RoundPanel round={selected} />
+        </>
+      )}
     </section>
   );
 }

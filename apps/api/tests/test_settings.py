@@ -50,6 +50,7 @@ def test_registry_lists_phase1_keys(client: TestClient) -> None:
         "mode": "off",
         "max_rounds": 3,
         "max_reviewer_failures": 2,
+        "max_repairs": 0,
     }
     assert "schema" in review
     assert set(review["scopes"]) == {"global", "project"}
@@ -161,6 +162,25 @@ def test_unknown_key_and_bad_value_are_422(client: TestClient) -> None:
         headers=ADMIN,
     )
     assert res.status_code == 422
+    for repairs in (-1, 4):
+        res = client.put(
+            "/api/settings/review.independent",
+            json={
+                "value": {
+                    "mode": "different_model",
+                    "max_rounds": 3,
+                    "max_repairs": repairs,
+                }
+            },
+            headers=ADMIN,
+        )
+        assert res.status_code == 422, repairs
+    res = client.put(
+        "/api/settings/review.independent",
+        json={"value": {"mode": "different_model", "max_rounds": 3, "max_repairs": 3}},
+        headers=ADMIN,
+    )
+    assert res.status_code == 200, res.text
 
 
 def test_command_guard_enabled_setting(client: TestClient) -> None:

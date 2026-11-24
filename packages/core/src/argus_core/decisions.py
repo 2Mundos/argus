@@ -48,6 +48,10 @@ GATE_DISABLED_GATE = "gate_disabled"
 # newest review still requesting changes. Its payload is
 # `{"gate": "rounds_exhausted", "child_id": ..., "rounds": N}`.
 ROUNDS_EXHAUSTED_GATE = "rounds_exhausted"
+# The review decision opened when the approved PR is closed or cannot become ready
+# without a change (PR steward spec 3.3). Its payload is `{"gate": "pr_not_ready",
+# "class", "pr", "head_sha", "failed_checks"}`.
+PR_NOT_READY_GATE = "pr_not_ready"
 
 
 class DecisionState(StrEnum):

@@ -269,7 +269,7 @@ why you are here.
 - [Pre-merge independent review workflow](specs/pre-merge-independent-review.spec.md) —
   non-circular pre-merge independent review gate bound to exact PR identity and full
   head SHA, cross-difficulty chain fallback, and idempotent settlement
-- [PR steward](specs/pr-steward.spec.md) — draft: an approved PR that fails CI,
+- [PR steward](specs/pr-steward.spec.md) — an approved PR that fails CI,
   conflicts or closes gets a bounded repair attempt or a decision, and every
   automated push leaves an undo note on the PR
 - [Review policy](specs/review-policy.spec.md) — draft: review tiers (`skip`,

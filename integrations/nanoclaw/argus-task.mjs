@@ -1322,8 +1322,45 @@ function prePushChecks(git, cwd, ctx, notApplicable = []) {
   return null;
 }
 
+/** One line, at most 200 characters (PR steward spec 3.4). */
+function undoNoteText(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || text.length > 200 || /[\r\n]/.test(text))
+    throw usage("--undo-note must be one non-empty line of at most 200 characters");
+  return text;
+}
+
+/** Comment how to restore the old head after a push moved an open PR; never fails delivery. */
+async function postUndoNote(api, number, reason, branch, oldHead, newHead, rebased) {
+  const restore = rebased
+    ? `git push --force-with-lease=${branch}:${newHead} origin ${oldHead}:refs/heads/${branch}`
+    : `git revert --no-edit ${oldHead}..${newHead}`;
+  const how = rebased
+    ? "Restore the old head (the branch was rebased and pushed with lease):"
+    : "Undo this push (fast-forward), then push:";
+  const text = [
+    `Automated push to \`${branch}\`: ${reason}`,
+    "",
+    `Old head: \`${oldHead}\``,
+    `New head: \`${newHead}\``,
+    "",
+    how,
+    "",
+    "```",
+    restore,
+    "```",
+  ].join("\n");
+  try {
+    await api.createComment(number, text);
+    return "posted";
+  } catch {
+    return "failed";
+  }
+}
+
 async function deliver(api, o, ctx) {
   const { git, cwd } = ctx;
+  const undoNote = o["undo-note"] === undefined ? undefined : undoNoteText(o["undo-note"]);
   // Before the branch check: a rebase in progress detaches HEAD, and we must not touch it.
   const pending = operationInProgress(git, cwd);
   if (pending)
@@ -1439,6 +1476,8 @@ async function deliver(api, o, ctx) {
       },
     };
   const refspec = `HEAD:refs/heads/${branch}`;
+  // The head the open PR had before this push; only read when an undo note may be needed.
+  const before = undoNote === undefined ? undefined : await api.findOpenPullRequest(branch, base);
   gitStep(
     git,
     ["push", "--quiet", ...(rebased ? ["--force-with-lease"] : []), "origin", refspec],
@@ -1446,7 +1485,7 @@ async function deliver(api, o, ctx) {
   );
   const head = gitStep(git, ["rev-parse", "HEAD"], cwd);
   const body = o["body-file"] === undefined ? undefined : readFileSync(o["body-file"], "utf8");
-  const existing = await api.findOpenPullRequest(branch, base);
+  const existing = before ?? (await api.findOpenPullRequest(branch, base));
   let pr = existing;
   if (existing) {
     const update = {};
@@ -1457,6 +1496,11 @@ async function deliver(api, o, ctx) {
     const title = o.title ?? gitStep(git, ["log", "-1", "--format=%s"], cwd);
     pr = await api.createPullRequest({ title, head: branch, base, body: body ?? "" });
   }
+  const oldHead = before?.head?.sha;
+  const undo =
+    undoNote !== undefined && oldHead && oldHead !== head
+      ? await postUndoNote(api, before.number, undoNote, branch, oldHead, head, rebased)
+      : undefined;
   return {
     code: EXIT.ok,
     result: {
@@ -1467,6 +1511,7 @@ async function deliver(api, o, ctx) {
       base,
       created: !existing,
       rebased,
+      ...(undo ? { undo_note: undo } : {}),
       ...(notApplicable.length ? { checks_not_applicable: notApplicable } : {}),
       sync: rebased
         ? `rebased the branch onto origin/${base}`
@@ -1926,8 +1971,8 @@ const COMMANDS = {
   },
   deliver: {
     summary:
-      "the one delivery step after you commit: fetch the base, rebase onto it when behind, run the pre-push checks, push, create or update the PR; exits 12 on a rebase conflict or failed check. Every error carries an `action`",
-    options: { title: "string", "body-file": "string", base: "string" },
+      'the one delivery step after you commit: fetch the base, rebase onto it when behind, run the pre-push checks, push, create or update the PR (--undo-note "<reason>" leaves an undo comment when the push moves an open PR\'s head); exits 12 on a rebase conflict or failed check. Every error carries an `action`',
+    options: { title: "string", "body-file": "string", base: "string", "undo-note": "string" },
     noPr: true,
     run: deliver,
   },
