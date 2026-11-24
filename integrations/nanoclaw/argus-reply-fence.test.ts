@@ -282,6 +282,51 @@ describe("a rejected COMPLETE nudges the worker", () => {
   });
 });
 
+describe("a COMPLETE whose result.data fails the kind's schema", () => {
+  const field = "findings/0: 'description' is a required property";
+  async function schemaRejected() {
+    const fake = fakeArgus([A], {
+      routes: {
+        "/tasks/task-a/complete": () =>
+          new Response(
+            JSON.stringify({
+              detail: {
+                code: "validation_failed",
+                message: "result.data does not match its kind's schema",
+                details: [field],
+              },
+            }),
+            { status: 422 },
+          ),
+      },
+    });
+    const h = harness(fake);
+    live.push(h.adapter);
+    await h.adapter.setup(h.setup);
+    await until(() => h.inbound.length === 1);
+    return { fake, h };
+  }
+
+  it("shows the worker the fields, keeps the result, and allows one corrected delivery", async () => {
+    const { fake, h } = await schemaRejected();
+    await h.adapter.deliver("local", h.thread(), reply('COMPLETE: {"summary":"verdict"}'));
+    const nudge = h.inbound.at(-1).content.text as string;
+    expect(nudge).toContain(field);
+    expect(nudge).toContain("artifact art-1");
+    expect(paths(fake)).toContain("/tasks/task-a/artifacts");
+    expect(paths(fake)).not.toContain("/tasks/task-a/fail");
+  });
+
+  it("fails the attempt with the details when the second delivery is rejected too", async () => {
+    const { fake, h } = await schemaRejected();
+    await h.adapter.deliver("local", h.thread(), reply('COMPLETE: {"summary":"verdict"}'));
+    await h.adapter.deliver("local", h.thread(), reply('COMPLETE: {"summary":"verdict"}'));
+    const fail = fake.calls.find((c) => c.path === "/tasks/task-a/fail")!;
+    expect(fail.body.reason).toBe("channel_error");
+    expect(fail.body.details).toEqual([field]);
+  });
+});
+
 describe("a task switch by release", () => {
   it("fences the next claim after Argus ended the previous one", async () => {
     let lost: string | null = null;

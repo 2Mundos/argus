@@ -29,7 +29,7 @@ from argus_api.events import record
 from argus_api.kinds import service as kinds
 from argus_api.tasks import continuation as cont
 from argus_api.tasks import cost as task_cost
-from argus_api.tasks import deliverable
+from argus_api.tasks import deliverable, log
 from argus_api.tasks.engine import can_serve, manages_accounts
 from argus_api.tasks.exits import (
     EXIT_ERROR_MAX,
@@ -337,6 +337,7 @@ async def fail(
     reason: str = "worker_fail",
     *,
     oom_kill: bool = False,
+    details: list[str] | None = None,
 ) -> Task:
     """Fail the attempt with the worker's own text.
 
@@ -469,6 +470,15 @@ async def fail(
         if kind is RetryClass.TRANSIENT and retries
         else {}
     )
+    rejected: dict[str, Any] = {}
+    if details:
+        # The reply was refused with reasons: keep them where the next attempt and
+        # the orchestrator read them (event, error text, log).
+        rejected = {"details": details}
+        error += "\n" + "\n".join(f"- {d}" for d in details)
+        await log.record(
+            tx, task_id, attempt, row, [f"[reply rejected] {d}" for d in details]
+        )
     await _apply(
         tx,
         row,
@@ -483,6 +493,7 @@ async def fail(
         | backoff
         | harder.get("set", {}),
         data={"error": error, "reason": reason, "retry_class": kind}
+        | rejected
         | backoff
         | harder.get("data", {}),
         counts_failure=not quota,

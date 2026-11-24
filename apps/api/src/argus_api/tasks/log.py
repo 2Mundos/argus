@@ -163,6 +163,26 @@ async def admit(
     return row
 
 
+async def record(
+    tx: Tx, task_id: str, attempt: int, row: aiosqlite.Row, lines: list[str]
+) -> None:
+    """Store lines the API itself writes for the attempt (no lease or rate check)."""
+    kept = clean(lines, ())
+    if not kept:
+        return
+    first = row["log_seq"] + 1
+    at = ts(tx.now)
+    await tx.conn.executemany(
+        "INSERT INTO task_log (task_id, attempt, seq, source, at, line)"
+        " VALUES (?, ?, ?, 'worker', ?, ?)",
+        [(task_id, attempt, first + i, at, line) for i, line in enumerate(kept)],
+    )
+    await tx.conn.execute(
+        "UPDATE tasks SET log_seq = ?, output_at = ? WHERE id = ?",
+        (first + len(kept) - 1, at, task_id),
+    )
+
+
 async def append(
     tx: Tx,
     agent_id: str,

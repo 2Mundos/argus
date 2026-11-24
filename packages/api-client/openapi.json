@@ -10775,6 +10775,15 @@
             "title": "Attempt",
             "type": "integer"
           },
+          "details": {
+            "items": {
+              "maxLength": 300,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Details",
+            "type": "array"
+          },
           "error": {
             "minLength": 1,
             "title": "Error",
