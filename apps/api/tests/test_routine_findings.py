@@ -373,8 +373,19 @@ async def test_result_without_findings_files_nothing(
     routine = await _routine(db)
     run_id = await _run(db, routine)
     await _complete(db, run_id, None)
-    await _complete(db, await _run(db, routine), {"other": 1})
+    other_id = await _run(db, routine)
+    await _complete(db, other_id, {"other": 1})
     assert await _finding_tasks(db) == []
+    # An empty list is a report; a missing one is recorded for each run.
+    empty_id = await _run(db, routine)
+    await _complete(db, empty_id, {"findings": []})
+    assert [
+        d["task_id"]
+        for _, d in await _events(db, "routine", routine.id, "routine.findings_missing")
+    ] == [run_id, other_id]
+    off = await _routine(db, findings="off", slug="quiet")
+    await _complete(db, await _run(db, off), None)
+    assert await _events(db, "routine", off.id, "routine.findings_missing") == []
     assert await _events(db, "routine", routine.id, "routine.findings_skipped") == []
     assert (await _task(db, run_id)).state is TaskState.SUCCEEDED
 

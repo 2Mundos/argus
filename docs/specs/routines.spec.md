@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-14
+updated: 2026-11-24
 ---
 
 # Routines
@@ -96,6 +96,15 @@ A run reports findings in its result data:
   - `auto`: tasks go straight to `ready`. Setting `auto` is admin only.
 - At most `max_findings` per run (template field, default 10); the rest are counted
   in `routine.findings_truncated`.
+- **Worker contract.** The NanoClaw channel injects this contract into the guidance of
+  every task whose `input.routine` is set: the findings travel in the `data` object of
+  the `COMPLETE` JSON (`{"summary", "checklist", "data": {"findings": [...]}}`),
+  `data.findings` is always present (an empty list when nothing changed), and the
+  entry fields, `max_findings` and the dedup rule are stated. Findings only in the
+  summary or in an attached file are not filed. A `COMPLETE` body that starts with `{`
+  may be followed by a closing `</message>` tag; one that starts with `{` but is not
+  valid JSON is not sent: the worker gets a corrective message instead of the raw text
+  becoming the summary.
 
 As shipped (migration `0063_routine_findings.sql` indexes the `(routine, key)`
 lookup on `tasks.input`):
@@ -118,6 +127,10 @@ lookup on `tasks.input`):
   [{index, error}]}` on the routine (`index` null when `findings` is not a list),
   with the error location and message but not the value. A malformed result never
   fails the completion.
+- A succeeded run of a routine whose mode is not `off` without `result.data.findings`
+  (no `data`, no `findings`, or `null`) records `routine.findings_missing {task_id}` on
+  the routine, so the Routines page and the orchestrator can see the worker did not
+  follow the contract. An empty list is a report and records nothing.
 - Dedup counts only finding tasks Argus created (`created_by: system`), so a task
   an agent creates with `input.routine_finding` suppresses nothing. "Closed" is the
   terminal task's last transition (`updated_at`), compared with `tx.now -

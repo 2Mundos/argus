@@ -1029,14 +1029,18 @@ function checklistReports(value: unknown): ChecklistReport[] {
 /** Review keys a worker may leave at the top level of a COMPLETE (independent review 3.5). */
 const REVIEW_ENVELOPE_KEYS = ["verdict", "findings", "head_sha"] as const;
 
-function completionPayload(text: string): {
+export function completionPayload(text: string): {
   summary: string;
   data?: Record<string, unknown>;
   envelope?: Record<string, unknown>;
   checklist?: ChecklistReport[];
+  /** The body starts with `{` but is not JSON: the worker is corrected, nothing is stored. */
+  malformed?: true;
 } {
+  // A worker may close the NanoClaw envelope after the JSON object; only that tag is tolerated.
+  const body = /^\s*\{/.test(text) ? text.replace(/\s*<\/message>\s*$/i, "") : text;
   try {
-    const value: unknown = JSON.parse(text);
+    const value: unknown = JSON.parse(body);
     if (value && typeof value === "object" && !Array.isArray(value)) {
       const record = value as Record<string, unknown>;
       if (typeof record.summary === "string") {
@@ -1057,7 +1061,8 @@ function completionPayload(text: string): {
       }
     }
   } catch {
-    // Plain-text completions retain their established behavior.
+    // Plain-text completions retain their established behavior, a broken JSON object does not.
+    if (/^\s*\{/.test(text)) return { summary: text, malformed: true };
   }
   return { summary: text };
 }
@@ -1392,8 +1397,18 @@ export const OPERATING_RULES = [
   '  effective_contract, effective_contract wins. A bare answer without options (for example "B") authorizes nothing.',
   '- To finish: send `COMPLETE:` with a JSON object `{"summary": "...", "checklist": [{"id": "<checklist id>", "status": "done|pending|verification_missing", "evidence": "..."}]}`',
   "  covering every checklist id. Only evidenced items count as done; a result with open items goes to review, not to success.",
+  '  The object may also carry `"data": {...}`, structured output for Argus (for example `data.pr_body`); it is stored on the result, never read from the summary or from attached files.',
   "  Send it with the send_message tool to the `argus` destination: on a task run the runner delivers only explicit tool sends, so a `COMPLETE:` written as plain reply text is recorded in the run log and never reaches Argus.",
   '  If you forget, the runner nudges you to call send_message; a `<message to="argus">...</message>` block is dropped on a task run. No `argus-task` subcommand completes a task (`argus-task attach` only stores a file as an artifact).',
+];
+
+/** Findings contract for a routine run (routines spec 3.3); injected when `input.routine` is set. */
+export const ROUTINE_FINDINGS_RULES = [
+  "Routine run (findings contract, docs/specs/routines.spec.md 3.3 in the Argus repository, not in the project's): this task is a run of a routine.",
+  '- Put findings in the COMPLETE object as `"data": {"findings": [...]}`. `data.findings` is always present: an empty list when nothing changed.',
+  '- Each entry is `{"key": "<stable fingerprint, 1-200 chars>", "title": "...", "spec": "...", "acceptance": ["<criterion>", ...], "priority": <integer>}`; `acceptance` is a list of strings and `priority` an integer (not "P2").',
+  "- Argus files at most `max_findings` entries per run (the routine's template, default 10; the rest are dropped). Dedup is by `key`: a finding with the same key as an open or recently closed finding task of this routine is not filed again, so keep the key stable across runs (for example the error class plus the normalized top frame).",
+  "- Findings only in the summary or in an attached file are not filed.",
 ];
 
 /** What Argus checks before it accepts COMPLETE, from authenticated task metadata (task deliverable spec 3.4). */
@@ -1587,6 +1602,7 @@ export function renderTask(
     "(see the operating rules). A directive must be the first thing in your reply. `COMPLETE:` is the reply text itself, not a command;",
     'the channel also accepts it as exactly `<message to="argus">COMPLETE: ...</message>` with nothing else in the reply.',
     ...ATTACH_GUIDANCE,
+    ...(task.input?.routine ? ["", ...ROUTINE_FINDINGS_RULES] : []),
   ];
   const lines = [
     `[Argus task] Task: ${task.id} · Project: ${task.project} · Attempt: ${task.attempt}`,
@@ -5877,6 +5893,18 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           await handleFailure(task, text, (content as Record<string, unknown>).providerFailure);
         } else if (d.kind === "complete") {
           const result = completionPayload(d.text);
+          if (result.malformed) {
+            log.warn("Argus channel rejected a COMPLETE with an unparseable JSON object", {
+              task: task.id,
+            });
+            resends += 1;
+            await injectTask(
+              task.id,
+              task.attempt,
+              '[Argus] Your COMPLETE was not sent: it starts with `{` but is not valid JSON. Send `COMPLETE:` followed by one JSON object `{"summary": "...", "checklist": [...], "data": {...}}` and nothing else (a closing `</message>` is tolerated).',
+            );
+            return undefined;
+          }
           // Advisory only: the PR body is not held locally, so the worker may report it as data.pr_body.
           const claim = currentClaim?.id === task.id ? currentClaim : null;
           const advisory = claim

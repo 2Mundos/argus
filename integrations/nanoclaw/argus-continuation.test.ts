@@ -14,10 +14,12 @@ import type { ChannelSetup } from "./adapter.js";
 import {
   type ArgusConfig,
   type ArgusTask,
+  completionPayload,
   createArgusAdapter,
   OPERATING_RULES,
   parseFramedUntrustedTaskData,
   parseReply,
+  ROUTINE_FINDINGS_RULES,
   renderTask,
   splitSpec,
   UNTRUSTED_TASK_DATA_RULES,
@@ -113,6 +115,29 @@ describe("renderTask: effective contract versus history", () => {
     expect(rules).toContain("does not imply Production access");
     expect(rules).toContain("Tests that run offline without the resource are not proof");
     expect(rules).toContain('start with "ASSIST:"');
+  });
+
+  it("a routine run gets the findings contract, other tasks only the generic data object", () => {
+    const t = fixture("ca2-resume");
+    const plain = trusted(renderTask(t, new Map()));
+    expect(plain).toContain('"data": {...}');
+    expect(plain).not.toContain("data.findings");
+    const run = trusted(renderTask({ ...t, input: { routine: "rt_1" } } as ArgusTask, new Map()));
+    for (const line of ROUTINE_FINDINGS_RULES) expect(run).toContain(line);
+    expect(run).toContain("always present: an empty list when nothing changed");
+    expect(run).toContain("are not filed");
+  });
+
+  it("completionPayload: tolerates a closing message tag, corrects a broken object", () => {
+    const obj = '{"summary": "ok", "data": {"findings": []}}';
+    expect(completionPayload(`${obj}\n</message>`)).toEqual({
+      summary: "ok",
+      data: { findings: [] },
+    });
+    expect(completionPayload(`${obj}</message> extra`).malformed).toBe(true);
+    const broken = completionPayload('{"summary": "ok", "data": {');
+    expect(broken.malformed).toBe(true);
+    expect(completionPayload("all done")).toEqual({ summary: "all done" });
   });
 
   it("an older server without a contract is told to check for existing work, not to implement blindly", () => {
