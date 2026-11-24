@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from api_support import FakeTarget, count_passes
 from argus_api.main import app
+from argus_api.runtime.service import RuntimeManager
 from fastapi.testclient import TestClient
 from test_mcp import rpc, tool
 
@@ -15,6 +16,10 @@ ADMIN_TOKEN = "test-admin-token-" + "l" * 32
 ADMIN = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 POOL = {"image": "worker:1", "max_replicas": 2, "capabilities": ["python"]}
 FIRST = {"expected_desired_replicas": 0}  # launch precondition for a fresh pool
+
+
+async def _builder_idle(self: RuntimeManager, interval_s: float = 2.0) -> None:
+    """Stands in for `RuntimeManager.run`: no builder pass runs during the test."""
 
 
 @pytest.fixture
@@ -53,6 +58,9 @@ def client(
             monkeypatch.delenv(name)
     for name, value in extra_env.items():
         monkeypatch.setenv(name, value)
+    # The runtime builder would take the `preparing` builds these tests seed and move
+    # them on (or fail them without Docker) between two requests.
+    monkeypatch.setattr(RuntimeManager, "run", _builder_idle)
     with TestClient(app) as c:
         # Never the machine's real Docker: every docker target is the fake.
         app.state.targets.override("docker", None, target)
