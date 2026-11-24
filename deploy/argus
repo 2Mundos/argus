@@ -1095,7 +1095,9 @@ cmd_tray() {
 		mkdir -p "$ARGUS_HOME/tray"
 		tray=
 		for f in "$ARGUS_HOME"/tray/v*.py; do
+			# Cached companions predate --url unless they define the flag.
 			[ -s "$f" ] || continue
+			grep -q '"--url"' "$f" 2>/dev/null || continue
 			[ -n "$tray" ] && [ "$tray" -nt "$f" ] || tray=$f
 		done
 		if [ -z "$tray" ]; then
@@ -1112,6 +1114,7 @@ cmd_tray() {
 			else
 				die "tray: no cached desktop companion; run \`argus up\` once on this machine to cache it"
 			fi
+			grep -q '"--url"' "$tray" 2>/dev/null || die "tray: this install predates remote monitoring; run \`argus update\` once a release with tray --url ships, or run the tray from a checkout (uv run --script deploy/argus-tray.py --url BASE_URL)"
 		fi
 		if [ -n "${WSL_DISTRO_NAME:-}" ]; then
 			exec uv.exe run --script "$(wslpath -a -w "$tray")" \
