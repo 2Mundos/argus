@@ -163,12 +163,19 @@ export function copilotAuthRejected(text) {
  */
 export const MUSE_AUTH_REJECTED =
   "authentication failed: your API key from META_API_KEY was rejected";
+/** The CLI emits that text as one diagnostic line; only a line starting here is it. */
+const MUSE_AUTH_REJECTED_LINE = `failed to fetch model catalog: ${MUSE_AUTH_REJECTED}`;
 
-/** Did the Muse CLI reject its credential? Exact known text only; free text never counts. */
+/**
+ * Did the Muse CLI reject its credential? The exact known line only, from its start:
+ * free text never counts. `muse exec --json` echoes the task prompt on stdout and the
+ * model's own words arrive there too, so a substring match anywhere on a line would
+ * exhaust a healthy account whenever a task merely quotes this text.
+ */
 export function museAuthRejected(text) {
   return String(text ?? "")
     .split("\n")
-    .some((l) => l.trim().includes(MUSE_AUTH_REJECTED));
+    .some((l) => l.trim().startsWith(MUSE_AUTH_REJECTED_LINE));
 }
 const KILL_GRACE_MS = 5000;
 const TAIL_CHARS = 2000;

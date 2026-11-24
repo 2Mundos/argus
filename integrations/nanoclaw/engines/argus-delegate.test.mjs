@@ -3525,13 +3525,113 @@ echo '{"type":"done"}'`,
   assert.ok(!fs.readFileSync(`${seen}.argv`, "utf8").includes("xxxx"));
 });
 
-test("museAuthRejected matches the observed Muse 1.4.25 rejection text only", () => {
+test("museAuthRejected matches the observed Muse 1.4.25 rejection line only", () => {
   assert.equal(
     museAuthRejected(
       "failed to fetch model catalog: authentication failed: your API key from META_API_KEY was rejected \u2014 update or unset it\n",
     ),
     true,
   );
+  assert.equal(
+    museAuthRejected(
+      "noise\n  failed to fetch model catalog: authentication failed: your API key from META_API_KEY was rejected\n",
+    ),
+    true,
+  );
   assert.equal(museAuthRejected("model said: authentication failed"), false);
+  // A real `muse exec --json` line repeats the task prompt on stdout (turn.input.user)
+  // and the model's own words arrive there: a quoted phrase must not exhaust an account.
+  assert.equal(
+    museAuthRejected(
+      JSON.stringify({
+        payload_type: "turn.input.user",
+        payload: {
+          prompt: "explain: authentication failed: your API key from META_API_KEY was rejected",
+        },
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    museAuthRejected("note: failed to fetch model catalog: authentication failed: x"),
+    false,
+  );
   assert.equal(museAuthRejected(""), false);
+});
+
+test("muse: a quoted rejection phrase in the prompt stays an ordinary failure, never exhaustion", async (t) => {
+  const s = sandbox(t);
+  // The CLI echoes the prompt in its stdout JSONL before failing for another reason.
+  s.fake(
+    "muse",
+    `if [ "$1" = "--version" ]; then echo "Muse Code 1.4.25 (1.4.25-R9361.1)"; exit 0; fi
+cat >/dev/null
+printf '%s\\n' '{"payload_type":"turn.input.user","payload":{"prompt":"say: authentication failed: your API key from META_API_KEY was rejected"}}'
+echo "muse: workspace tool failed: no such file" >&2
+exit 1`,
+  );
+  const { code, report } = await run(["muse", "--cwd", s.work, "--model", "muse-spark-1.3"], {
+    env: { ...s.env, META_API_KEY: MUSE_SENTINEL_API_KEY },
+  });
+  assert.equal(code, 1);
+  assert.equal(report.executor_error, undefined);
+  const relay = path.join(s.dir, "argus-usage.jsonl");
+  const kinds = fs.existsSync(relay)
+    ? fs
+        .readFileSync(relay, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l).kind)
+    : [];
+  assert.equal(kinds.includes("auth_rejected"), false);
+});
+
+test("muse: the exact rejection line is auth_rejected and queued for the host; no text crosses", async (t) => {
+  const s = sandbox(t);
+  s.fake(
+    "muse",
+    `if [ "$1" = "--version" ]; then echo "Muse Code 1.4.25 (1.4.25-R9361.1)"; exit 0; fi
+cat >/dev/null
+printf '%s\\n' 'failed to fetch model catalog: authentication failed: your API key from META_API_KEY was rejected \xe2\x80\x94 update or unset it' >&2
+exit 1`,
+  );
+  const policy = path.join(s.dir, "argus-model-policy.json");
+  fs.writeFileSync(
+    policy,
+    JSON.stringify(
+      policySnapshot(
+        { harness: { codex: ["luna"] }, implementation: {} },
+        { task_id: "t1", attempt: 1, executor_account_id: "acc-muse" },
+      ),
+    ),
+  );
+  const { code, report } = await run(["muse", "--cwd", s.work, "--model", "muse-spark-1.3"], {
+    env: {
+      ...s.env,
+      ARGUS_MODEL_POLICY_FILE: policy,
+      META_API_KEY: MUSE_SENTINEL_API_KEY,
+    },
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(report.executor_error, {
+    kind: "auth_rejected",
+    detail: "Muse rejected the credential",
+  });
+  const records = fs
+    .readFileSync(path.join(s.dir, "argus-usage.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    records.find((r) => r.kind === "auth_rejected"),
+    {
+      v: 1,
+      kind: "auth_rejected",
+      role: "executor",
+      task_id: "t1",
+      attempt: 1,
+      account_id: "acc-muse",
+    },
+  );
+  assert.equal(JSON.stringify(report).includes(MUSE_SENTINEL_API_KEY), false);
 });
