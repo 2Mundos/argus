@@ -37,6 +37,7 @@ Every spec in this directory with its status, kept in sync by
 | [Execution chains](execution-chains.spec.md) | `implemented` |
 | [Failure classes](failure-classes.spec.md) | `partial` |
 | [Fleet health](fleet-health.spec.md) | `implemented` |
+| [Forge integrations: repository credentials per project](forge-integrations.spec.md) | `draft` |
 | [Gitea helper for workers (`argus-gitea-api`)](gitea-helper.spec.md) | `implemented` |
 | [GitHub repositories](github-repositories.spec.md) | `implemented` |
 | [Google (Antigravity) accounts: import, executor lease, delegated CLI](google-accounts.spec.md) | `implemented` |
