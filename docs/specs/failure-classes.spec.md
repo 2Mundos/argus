@@ -38,6 +38,10 @@ This spec:
   quotes Argus's `(422 deliverable_missing)` refusal marks a task as eligible for
   the delivery reconciliation ([deliverable](task-deliverable.spec.md) 3.8). It
   changes no class and no action.
+- A `channel_error` fail may carry `details` (the bounded 422 `validation_failed`
+  reasons of a refused reply, at most 20 of 300 characters): they are appended to
+  `error`, kept in the `task.fail` event data and written to the task log, with no
+  effect on the class ([pre-merge review](pre-merge-independent-review.spec.md) 3.7).
 - No new service; one nullable column, and two counters for OOM (3.2.1).
 
 # 3. Decisions Made

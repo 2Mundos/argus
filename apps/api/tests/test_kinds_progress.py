@@ -410,3 +410,40 @@ async def test_retry_clears_the_milestone(db: Database) -> None:
     async with db.write() as tx:
         after = await tasks.retry(tx, task.id, "user:me")
     assert (after.progress_kind, after.progress_data) == (None, None)
+
+
+async def test_a_rejected_reply_keeps_its_details_on_the_failed_attempt(
+    db: Database,
+) -> None:
+    bad = {
+        "verdict": "request_changes",
+        "head_sha": "abcdef1",
+        "findings": [{"priority": "P2", "title": "no description"}],
+    }
+    with pytest.raises(ValidationFailedError) as err:
+        await complete_review(db, TaskResult(summary="ok", data=bad))
+    path = next(d for d in err.value.details if "description" in d)
+    assert path.startswith("findings/0:")
+    async with db.read() as conn, conn.execute("SELECT id, attempt FROM tasks") as cur:
+        row = await cur.fetchone()
+    async with db.write() as tx:
+        failed = await tasks.fail(
+            tx,
+            A,
+            row["id"],
+            row["attempt"],
+            "The worker's reply could not be delivered (422 validation_failed)",
+            "channel_error",
+            details=err.value.details,
+        )
+    assert failed.error is not None
+    assert path in failed.error
+    async with db.read() as conn:
+        async with conn.execute(
+            "SELECT data FROM events WHERE kind = 'task.fail'"
+        ) as cur:
+            (data,) = await cur.fetchone()
+        async with conn.execute("SELECT line FROM task_log") as cur:
+            lines = [r["line"] for r in await cur.fetchall()]
+    assert path in json.loads(data)["details"]
+    assert f"[reply rejected] {path}" in lines

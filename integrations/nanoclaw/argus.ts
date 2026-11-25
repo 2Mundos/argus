@@ -1692,6 +1692,8 @@ export class ArgusError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** The server's bounded per-field reasons for a 422 (`detail.details`). */
+    readonly details: string[] = [],
   ) {
     super(message);
   }
@@ -1702,6 +1704,16 @@ export class ArgusError extends Error {
       this.status >= 400 && this.status < 500 && ![401, 408, 409, 425, 429].includes(this.status)
     );
   }
+}
+
+/** `detail.details` of a domain error: at most 20 strings of 300 characters. */
+export function errorDetails(data: unknown): string[] {
+  const details = (data as { detail?: { details?: unknown } } | null)?.detail?.details;
+  if (!Array.isArray(details)) return [];
+  return details
+    .filter((d): d is string => typeof d === "string")
+    .slice(0, 20)
+    .map((d) => d.slice(0, 300));
 }
 
 /**
@@ -1761,7 +1773,7 @@ class ArgusClient {
     }
     if (res.status >= 400) {
       const { code, message } = describeError(data, res.statusText, text);
-      throw new ArgusError(res.status, code, message);
+      throw new ArgusError(res.status, code, message, errorDetails(data));
     }
     return { status: res.status, data };
   }
@@ -5497,6 +5509,30 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
     completedAttempt = `${t.id}:${t.attempt}`;
   }
 
+  const schemaRejected = new Set<string>();
+
+  /** Keep a reply the API refused (bounded) so an orchestrator can still read the verdict. */
+  async function storeRejectedResult(
+    t: { id: string; attempt: number },
+    text: string,
+  ): Promise<string | null> {
+    try {
+      const bytes = new TextEncoder().encode(text.slice(0, 64 * 1024));
+      const sha = createHash("sha256").update(bytes).digest("hex");
+      const id = await ensureArtifact(
+        t,
+        `rejected-result-attempt-${t.attempt}.txt`,
+        bytes,
+        sha,
+        "text/plain; charset=utf-8",
+      );
+      return id || null;
+    } catch (err) {
+      log.warn("Could not store the rejected result", { task: t.id, err: String(err) });
+      return null;
+    }
+  }
+
   async function reportHarness(
     task: { id: string; attempt: number },
     state: "running" | "succeeded" | "failed",
@@ -6006,6 +6042,29 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             task.attempt,
             `[Argus] Your COMPLETE was rejected: ${err.message}. Report the missing evidence, then complete again in this attempt. For an existing or merged PR, name its URL in a progress message or COMPLETE; do not create a replacement PR.`,
           );
+        } else if (
+          err instanceof ArgusError &&
+          err.status === 422 &&
+          err.code === "validation_failed" &&
+          err.details.length > 0 &&
+          d.kind === "complete" &&
+          !schemaRejected.has(`${task.id}:${task.attempt}`)
+        ) {
+          // The reply's result.data does not match the kind's schema (only that rejection carries
+          // `detail.details`; request-validation 422s are permanent). Keep what the
+          // worker produced, show it which fields are wrong, and let it deliver once more.
+          schemaRejected.add(`${task.id}:${task.attempt}`);
+          const kept = await storeRejectedResult(task, d.text);
+          resends += 1;
+          await injectTask(
+            task.id,
+            task.attempt,
+            `[Argus] Your COMPLETE was rejected (422 validation_failed): ${err.message}.${
+              err.details.length ? `\n${err.details.map((x) => `- ${x}`).join("\n")}` : ""
+            }\nFix exactly these fields and send the COMPLETE again in this attempt; do not resend the same shape.${
+              kept ? ` Your rejected result is kept as artifact ${kept}.` : ""
+            }`,
+          );
         } else if (err instanceof ArgusError && err.code === "checklist_mismatch") {
           resends += 1;
           await injectTask(
@@ -6041,6 +6100,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
                 2000,
               ),
             reason: "channel_error",
+            ...(err.details.length ? { details: err.details } : {}),
           });
           finishTask();
         } else {

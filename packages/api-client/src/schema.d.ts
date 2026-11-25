@@ -7896,6 +7896,8 @@ export interface components {
         FailRequest: {
             /** Attempt */
             attempt: number;
+            /** Details */
+            details?: string[];
             /** Error */
             error: string;
             native_session?: components["schemas"]["NativeSessionReport"] | null;

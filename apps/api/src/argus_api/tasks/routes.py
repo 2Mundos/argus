@@ -166,6 +166,11 @@ class FailRequest(BaseModel):
     """The channel's evidence that the `session_lost` session was OOM-killed:
     Docker's `OOMKilled` with exit 137 on the container it saw (failure classes
     3.2.1). Only valid with `session_lost`."""
+    details: list[Annotated[str, Field(max_length=300)]] = Field(
+        default_factory=list, max_length=20
+    )
+    """Why the API rejected the worker's reply (the `details` of a 422): kept in the
+    `task.fail` event, the error text and the task log."""
 
 
 class DependenciesRequest(BaseModel):
@@ -779,6 +784,7 @@ async def fail_task(
             timedelta(minutes=settings.account_cooldown_minutes),
             oom_kill=body.oom_kill,
             native_session=body.native_session,
+            details=body.details,
         )
 
 

@@ -283,6 +283,16 @@ sending the parent back for a full attempt.
 - A head change during review or merge is handled as before: the approval is void
   (`head_mismatch`) and the merge fence (3.3) refuses any other head.
 
+A reviewer's reply whose `result.data` fails the kind's schema (a finding without
+`description`, say) is never lost: the API's 422 `validation_failed` carries a bounded
+`details` list (`<path>: <message>`, at most 20 of 300 characters). The channel stores the
+raw rejected reply as the artifact `rejected-result-attempt-N.txt` (at most 64 KiB), shows
+the reviewer the fields in its session and lets it deliver once more in the same attempt.
+A second rejection fails the attempt as `channel_error` with the `details` on
+`POST /tasks/{id}/fail`: they land in the error text, the `task.fail` event data
+(`details`) and the task log (`[reply rejected] …`), so the next attempt and the
+orchestrator see which field was wrong.
+
 ## 3.8 Review rounds on the dashboard
 
 Each review round stays a `code_review` child task; the board does not show them. The

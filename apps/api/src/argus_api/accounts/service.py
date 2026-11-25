@@ -934,6 +934,7 @@ async def fail_task(
     *,
     oom_kill: bool = False,
     native_session: NativeSessionReport | None = None,
+    details: list[str] | None = None,
 ) -> Task:
     """`POST /tasks/{id}/fail`. A `provider_failure` whose error is a known quota
     notice of the provider the agent's engine account belongs to is not a task
@@ -976,7 +977,14 @@ async def fail_task(
     )
     if held is None or hit is None:
         task = await tasks.fail(
-            tx, agent_id, task_id, attempt, error, reason, oom_kill=oom_kill
+            tx,
+            agent_id,
+            task_id,
+            attempt,
+            error,
+            reason,
+            oom_kill=oom_kill,
+            details=details,
         )
         # A confirmed container exit can resume the same conversation next time
         # (quota resume spec 3.2); a stall or `agent_ended` cannot name one.
