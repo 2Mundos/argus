@@ -29,7 +29,7 @@ from argus_api.events import record
 from argus_api.kinds import service as kinds
 from argus_api.tasks import continuation as cont
 from argus_api.tasks import cost as task_cost
-from argus_api.tasks import deliverable
+from argus_api.tasks import deliverable, log
 from argus_api.tasks.engine import can_serve, manages_accounts
 from argus_api.tasks.exits import (
     EXIT_ERROR_MAX,
@@ -473,10 +473,8 @@ async def fail(
     rejected: dict[str, Any] = {}
     if details:
         # The reply was refused with reasons: keep them where the next attempt and
-        # the orchestrator read them (event, error text, log). Imported here because
-        # `tasks.log` imports `tasks.service`, which imports this module.
-        from argus_api.tasks import log
-
+        # the orchestrator read them (event, error text, log). No import here: `log`
+        # takes `check_lease` from `leases`, so it does not re-enter this module.
         rejected = {"details": details}
         error += "\n" + "\n".join(f"- {d}" for d in details)
         await log.record(
