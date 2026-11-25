@@ -335,24 +335,34 @@ function DecisionCard(props: {
   const [error, setError] = useState<string>();
   const action = useAction();
 
-  async function answer(choice?: string) {
-    await action.run(async () => {
-      setError(undefined);
-      try {
-        await call(
-          api.POST("/api/decisions/{decision_id}/answer", {
-            params: { path: { decision_id: decision.id } },
-            body: {
-              choice: choice ?? null,
-              text,
-              save_to_knowledge: saveTo === null ? null : saveTo === "" ? {} : { page_id: saveTo },
-            },
-          }),
-        );
-      } catch (err) {
-        setError((err as Error).message);
-      }
-    }, choice ?? "answer");
+  const canPromote =
+    decision.kind === "approval" &&
+    Array.isArray(decision.payload?.promote) &&
+    decision.payload.promote.includes("pr");
+
+  async function answer(choice?: string, promote?: "pr") {
+    await action.run(
+      async () => {
+        setError(undefined);
+        try {
+          await call(
+            api.POST("/api/decisions/{decision_id}/answer", {
+              params: { path: { decision_id: decision.id } },
+              body: {
+                choice: choice ?? null,
+                text,
+                promote: promote ?? null,
+                save_to_knowledge:
+                  saveTo === null ? null : saveTo === "" ? {} : { page_id: saveTo },
+              },
+            }),
+          );
+        } catch (err) {
+          setError((err as Error).message);
+        }
+      },
+      promote ? "approve-pr" : (choice ?? "answer"),
+    );
   }
 
   const textLabel =
@@ -420,7 +430,7 @@ function DecisionCard(props: {
               className={option === "reject" ? "danger" : "primary"}
               action={() => answer(option)}
             >
-              {option}
+              {canPromote && option === "approve" ? "approve as investigation" : option}
             </ActionButton>
           ))
         ) : (
@@ -432,6 +442,17 @@ function DecisionCard(props: {
             action={() => answer()}
           >
             Send answer
+          </ActionButton>
+        )}
+        {canPromote && (
+          <ActionButton
+            type="button"
+            pending={action.is("approve-pr")}
+            disabled={action.busy}
+            className="primary"
+            action={() => answer("approve", "pr")}
+          >
+            approve with PR
           </ActionButton>
         )}
       </div>

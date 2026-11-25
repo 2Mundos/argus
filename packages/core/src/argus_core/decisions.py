@@ -96,6 +96,9 @@ class DecisionAnswer(BaseModel):
     save_to_knowledge: SaveToKnowledge | None = None  # questions only
     # Retrying with the same id, choice and text replays the stored answer.
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # `approve` of a routine finding task only, by an admin: also make the task a
+    # pull request deliverable with repository write (routines spec 3.3).
+    promote: Literal["pr"] | None = None
 
 
 # The typed `resource` of an assistance question that only asks for a pull request to

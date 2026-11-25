@@ -1904,6 +1904,7 @@ async def preview_decision(
     choice: str | None = None,
     text: str = "",
     request_id: str | None = None,
+    promote: Literal["pr"] | None = None,
 ) -> dict:
     """See what answering would do, before you answer: whether you may, whether the
     choice is valid, the task transition and side effects, and stored observations
@@ -1914,7 +1915,12 @@ async def preview_decision(
         ctx,
         "GET",
         f"/decisions/{decision_id}/preview",
-        params={"choice": choice, "text": text, "request_id": request_id},
+        params={
+            "choice": choice,
+            "text": text,
+            "request_id": request_id,
+            "promote": promote,
+        },
     )
 
 
@@ -1925,18 +1931,26 @@ async def answer_decision(
     choice: str | None = None,
     text: str = "",
     request_id: str | None = None,
+    promote: Literal["pr"] | None = None,
 ) -> dict:
     """Answer an open decision addressed to you: one of its options as `choice`
     (e.g. approve/reject, accept/reject), and/or a text answer or notes. A review
     accept is 409 acceptance_unmet while criteria lack evidence; the owner-authorized
     `accept_with_deviation` succeeds anyway and needs text naming the deviation and
     who authorized it (unmet items stay verification_missing). Pass a
-    fresh `request_id` so a retry returns the stored answer (`replayed`), not 409."""
+    fresh `request_id` so a retry returns the stored answer (`replayed`), not 409.
+    `promote="pr"` with `approve` (admin only; the decision payload lists it) makes a
+    routine finding task a pr_open deliverable with repository:write."""
     return await _call(
         ctx,
         "POST",
         f"/decisions/{decision_id}/answer",
-        json={"choice": choice, "text": text, "request_id": request_id},
+        json={
+            "choice": choice,
+            "text": text,
+            "request_id": request_id,
+            "promote": promote,
+        },
     )
 
 
@@ -1945,6 +1959,7 @@ class Answer(BaseModel):
     choice: str | None = None
     text: str = ""
     request_id: str | None = None
+    promote: Literal["pr"] | None = None
 
 
 @tool(MANAGERS)

@@ -37,6 +37,7 @@ from argus_api.errors import (
 from argus_api.events import record
 from argus_api.fleet import service as fleet
 from argus_api.knowledge import service as knowledge
+from argus_api.routines import findings
 from argus_api.routines import service as routines
 from argus_api.tasks import deliverable, delivery, independent_review
 from argus_api.tasks import service as tasks
@@ -134,7 +135,11 @@ async def answer(
 ) -> AnsweredDecision:
     decision = await store.get(tx.conn, decision_id)
     if decision.state is not DecisionState.OPEN:
-        if body.request_id is not None and same_answer(decision, body, caller):
+        if (
+            body.request_id is not None
+            and same_answer(decision, body, caller)
+            and bool(body.promote) == await was_promoted(tx.conn, decision)
+        ):
             return AnsweredDecision(**decision.model_dump(), replayed=True)
         raise ConflictError(
             f"decision {decision_id} is {decision.state}", code="decision_not_open"
@@ -238,6 +243,18 @@ async def answer_many(
                 )
             )
     return outcomes
+
+
+async def was_promoted(conn, decision: Decision) -> bool:
+    """Whether answering this decision promoted its task to a PR deliverable. The
+    audit event is the record: the answer row does not carry `promote`, so a replay
+    that disagrees about it is a different answer, not a retry."""
+    async with conn.execute(
+        "SELECT 1 FROM events WHERE kind = 'task.promoted'"
+        " AND json_extract(data, '$.decision_id') = ?",
+        (decision.id,),
+    ) as cur:
+        return await cur.fetchone() is not None
 
 
 def same_answer(decision: Decision, body: DecisionAnswer, caller: Identity) -> bool:
@@ -370,6 +387,10 @@ async def _apply_answer(
         case Effect.ACCOUNT_MARK_AVAILABLE:
             await accounts.mark_available(tx, decision.subject_id, caller.actor)
         case Effect.TASK_APPROVE:
+            if body.promote:
+                await findings.promote_to_pr(
+                    tx, task_id, decision.id, caller.actor, caller.scope
+                )
             await tasks.approve(tx, task_id, caller.actor)
         case Effect.TASK_CANCEL:
             await tasks.cancel(tx, task_id, caller.actor)
@@ -462,6 +483,13 @@ def check_answer(decision: Decision, body: DecisionAnswer) -> None:
         )
     if options is None and not body.text:
         raise ValidationFailedError("this question needs a text answer")
+    if body.promote and not (
+        decision.kind is DecisionKind.APPROVAL and body.choice == "approve"
+    ):
+        raise ValidationFailedError(
+            "promote applies only to approving a task approval decision",
+            code="promote_not_approval",
+        )
     deviation = (
         decision.kind is DecisionKind.REVIEW and body.choice == ACCEPT_WITH_DEVIATION
     )

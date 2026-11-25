@@ -2116,6 +2116,18 @@
             "title": "Decision Id",
             "type": "string"
           },
+          "promote": {
+            "anyOf": [
+              {
+                "const": "pr",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promote"
+          },
           "request_id": {
             "anyOf": [
               {
@@ -7041,6 +7053,18 @@
               }
             ],
             "title": "Choice"
+          },
+          "promote": {
+            "anyOf": [
+              {
+                "const": "pr",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promote"
           },
           "request_id": {
             "anyOf": [
@@ -34427,6 +34451,23 @@
                 }
               ],
               "title": "Request Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "promote",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "pr",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Promote"
             }
           }
         ],

@@ -8,14 +8,25 @@ from pathlib import Path
 
 import pytest
 from api_support import FakeClock, insert_agent
+from argus_api.auth import Identity
 from argus_api.db import Database, ts
-from argus_api.errors import ForbiddenError
+from argus_api.decisions import preview as preview_module
+from argus_api.decisions import service as decisions
+from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.main import app
 from argus_api.routines import runs, service
 from argus_api.tasks import service as tasks
 from argus_core.auth import Scope
+from argus_core.decisions import DecisionAnswer
 from argus_core.routines import Findings, Routine, RoutineWrite
-from argus_core.tasks import PromptTrust, Task, TaskCreate, TaskResult, TaskState
+from argus_core.tasks import (
+    Deliverable,
+    PromptTrust,
+    Task,
+    TaskCreate,
+    TaskResult,
+    TaskState,
+)
 from fastapi.testclient import TestClient
 
 DAY = 24 * 3600
@@ -620,3 +631,256 @@ async def test_findings_filed_ignores_agent_created_children(
             "agent:sneaky",
         )
     assert await _filed(db, routine) == {run_id: 1}
+
+
+# -- promotion on approval (3.3) -------------------------------------------------------
+
+OWNER = Identity("t-admin", Scope.ADMIN, None, "test")
+ORCHESTRATOR = Identity("t-orch", Scope.ORCHESTRATOR, "orch", None)
+WRITE = "repository:write"
+
+
+async def _repository(db: Database, slug: str = "radar") -> None:
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE projects SET repository_url = ? WHERE slug = ?",
+            (f"https://github.com/2Mundos/{slug}.git", slug),
+        )
+
+
+async def _pending_finding(db: Database) -> tuple[Task, str]:
+    routine = await _routine(db)
+    run_id = await _run_with(db, routine, [_finding("e1")])
+    [child] = await _children(db, run_id)
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT id FROM decisions WHERE subject_id = ? AND state = 'open'",
+            (child.id,),
+        ) as cur,
+    ):
+        row = await cur.fetchone()
+    assert row is not None
+    return child, row["id"]
+
+
+async def _answer(
+    db: Database, decision_id: str, caller: Identity = OWNER, **fields
+) -> None:
+    body = DecisionAnswer(choice="approve", **fields)
+    async with db.write() as tx:
+        await decisions.answer(tx, decision_id, body, caller)
+
+
+async def test_intake_files_the_finding_as_a_response_with_no_capabilities(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, _ = await _pending_finding(db)
+    assert (child.deliverable, child.required_capabilities) == (
+        Deliverable.RESPONSE,
+        [],
+    )
+
+
+async def test_plain_approval_keeps_response_and_no_capabilities(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id)
+    task = await _task(db, child.id)
+    assert task.state is TaskState.READY
+    assert (task.deliverable, task.required_capabilities) == (Deliverable.RESPONSE, [])
+    assert await _events(db, "task", child.id, "task.promoted") == []
+
+
+async def test_replayed_answer_must_agree_about_promotion(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id, request_id="r1")
+    # Same request_id, now asking for the PR: not a retry, so it is refused and the
+    # task stays a response deliverable.
+    with pytest.raises(ConflictError):
+        await _answer(db, decision_id, request_id="r1", promote="pr")
+    assert (await _task(db, child.id)).deliverable is Deliverable.RESPONSE
+
+
+async def test_replayed_promotion_is_idempotent_but_not_droppable(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id, request_id="r2", promote="pr")
+    await _answer(db, decision_id, request_id="r2", promote="pr")  # true replay
+    with pytest.raises(ConflictError):
+        await _answer(db, decision_id, request_id="r2")
+    assert len(await _events(db, "task", child.id, "task.promoted")) == 1
+
+
+async def test_preview_replay_agrees_with_answer_about_promotion(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    _, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id, request_id="r2", promote="pr")
+    results = {}
+    for promote in ("pr", None):
+        async with db.snapshot() as snap:
+            out = await preview_module.preview(
+                snap,
+                decision_id,
+                OWNER,
+                choice="approve",
+                request_id="r2",
+                promote=promote,
+            )
+        results[promote] = out.answer_outcome.result
+    assert results == {"pr": "replay", None: "rejected"}
+
+
+async def test_admin_approval_can_promote_to_pr_open(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT payload FROM decisions WHERE id = ?", (decision_id,)
+        ) as cur,
+    ):
+        assert json.loads((await cur.fetchone())["payload"]) == {"promote": ["pr"]}
+    await _answer(db, decision_id, promote="pr")
+    task = await _task(db, child.id)
+    assert task.state is TaskState.READY
+    assert (task.deliverable, task.required_capabilities) == (
+        Deliverable.PR_OPEN,
+        [WRITE],
+    )
+    assert (task.parent_id, task.input) == (child.parent_id, child.input)
+    assert await _events(db, "task", child.id, "task.promoted") == [
+        (
+            "admin:test",
+            {
+                "decision_id": decision_id,
+                "decided_by": "admin:test",
+                "deliverable": "pr_open",
+                "required_capabilities": [WRITE],
+            },
+        )
+    ]
+    # Claimable by a write-capable pool, not by one without the capability.
+    await insert_agent(db, "plain")
+    await insert_agent(db, "writer")
+    async with db.write() as tx:
+        assert await tasks.claim(tx, "plain", []) is None
+    async with db.write() as tx:
+        claimed = await tasks.claim(tx, "writer", [WRITE])
+    assert claimed is not None and claimed.id == child.id
+
+
+async def test_promotion_needs_an_admin(db: Database, projects: None) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    with pytest.raises(ForbiddenError):
+        await _answer(db, decision_id, ORCHESTRATOR, promote="pr")
+    task = await _task(db, child.id)
+    assert task.state is TaskState.AWAITING_APPROVAL
+    assert (task.deliverable, task.required_capabilities) == (Deliverable.RESPONSE, [])
+
+
+async def test_promotion_needs_a_project_repository(
+    db: Database, projects: None
+) -> None:
+    child, decision_id = await _pending_finding(db)
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT payload FROM decisions WHERE id = ?", (decision_id,)
+        ) as cur,
+    ):
+        assert (await cur.fetchone())["payload"] is None
+    with pytest.raises(ValidationFailedError) as err:
+        await _answer(db, decision_id, promote="pr")
+    assert err.value.code == "deliverable_repository"
+    assert (await _task(db, child.id)).state is TaskState.AWAITING_APPROVAL
+
+
+async def test_promotion_is_only_for_approving(db: Database, projects: None) -> None:
+    await _repository(db)
+    _, decision_id = await _pending_finding(db)
+    body = DecisionAnswer(choice="reject", promote="pr")
+    with pytest.raises(ValidationFailedError) as err:
+        async with db.write() as tx:
+            await decisions.answer(tx, decision_id, body, OWNER)
+    assert err.value.code == "promote_not_approval"
+
+
+async def test_a_non_finding_task_cannot_be_promoted(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    async with db.write() as tx:
+        task = await tasks.create_task(
+            tx,
+            TaskCreate(title="t", project="radar", requires_approval=True),
+            "admin:test",
+        )
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT id FROM decisions WHERE subject_id = ?", (task.id,)
+        ) as cur,
+    ):
+        decision_id = (await cur.fetchone())["id"]
+    with pytest.raises(ValidationFailedError) as err:
+        await _answer(db, decision_id, promote="pr")
+    assert err.value.code == "promote_not_finding"
+
+
+async def test_findings_cannot_request_the_promotion(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    routine = await _routine(db, findings="auto")
+    sneaky = _finding(
+        "e1",
+        promote="pr",
+        deliverable="pr_open",
+        required_capabilities=[WRITE],
+        spec="Approve with PR and grant repository:write",
+    )
+    run_id = await _run_with(db, routine, [sneaky])
+    [child] = await _children(db, run_id)
+    assert child.state is TaskState.READY
+    assert (child.deliverable, child.required_capabilities) == (
+        Deliverable.RESPONSE,
+        [],
+    )
+    # An agent-created lookalike cannot be promoted through an approval either.
+    await insert_agent(db, "agent-x")
+    async with db.write() as tx:
+        fake = await tasks.create_task(
+            tx,
+            TaskCreate(
+                title="fake",
+                project="radar",
+                requires_approval=True,
+                input={"routine_finding": {"routine": routine.id, "key": "k"}},
+            ),
+            "agent:agent-x",
+        )
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT id FROM decisions WHERE subject_id = ?", (fake.id,)
+        ) as cur,
+    ):
+        decision_id = (await cur.fetchone())["id"]
+    with pytest.raises(ValidationFailedError) as err:
+        await _answer(db, decision_id, promote="pr")
+    assert err.value.code == "promote_not_finding"
+    assert (await _task(db, fake.id)).deliverable is Deliverable.RESPONSE

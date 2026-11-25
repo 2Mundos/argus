@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from argus_core.decisions import (
     Ask,
@@ -121,6 +121,7 @@ async def preview_decision(
     choice: str | None = None,
     text: Annotated[str, Query(max_length=10_000)] = "",
     request_id: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    promote: Literal["pr"] | None = None,
 ) -> preview_module.DecisionPreview:
     """What answering would do, read-only and advisory (it authorizes and executes
     nothing). Takes the answer's `choice`, `text` and `request_id`; reports the
@@ -129,7 +130,13 @@ async def preview_decision(
     `snapshot.decision_version` to see staleness."""
     async with db.snapshot() as snap:
         return await preview_module.preview(
-            snap, decision_id, caller, choice=choice, text=text, request_id=request_id
+            snap,
+            decision_id,
+            caller,
+            choice=choice,
+            text=text,
+            request_id=request_id,
+            promote=promote,
         )
 
 
