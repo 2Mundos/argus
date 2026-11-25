@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 # Routines
@@ -94,6 +94,21 @@ A run reports findings in its result data:
   - `approval` (default): tasks start in `awaiting_approval`, as worker children do
     today ([prompt-data isolation](prompt-data-isolation.spec.md)).
   - `auto`: tasks go straight to `ready`. Setting `auto` is admin only.
+- **Promotion.** A finding task is a `response` deliverable with no capabilities, so a
+  worker cannot push a fix. The human approval is the trust point: an admin answering
+  the task's open `approval` decision with `approve` and `promote: "pr"` (dashboard
+  "approve with PR"; `answer_decision`'s `promote`) also sets `deliverable: pr_open`
+  and `required_capabilities: ["repository:write"]` in the same action, before the
+  task becomes claimable. Plain `approve` ("approve as investigation") keeps today's
+  behaviour, which stays the default. Nothing a run writes can request it: the entry
+  fields in the next list are ignored beyond those five, `auto` tasks never go through
+  an approval and are never promoted, and the answer is refused (`403` for a
+  non-admin, `422 promote_not_finding` for a task not filed by intake or no longer
+  awaiting approval, `422 deliverable_repository` for a project with no repository,
+  `422 promote_not_approval` on any other decision or choice). The change is recorded
+  as `task.promoted {decision_id, decided_by, deliverable, required_capabilities}`
+  by the decider. Intake marks the decision `payload.promote = ["pr"]` when the
+  project has a repository, so the UI offers the choice only where it can succeed.
 - At most `max_findings` per run (template field, default 10); the rest are counted
   in `routine.findings_truncated`.
 - **Worker contract.** The NanoClaw channel injects this contract into the guidance of

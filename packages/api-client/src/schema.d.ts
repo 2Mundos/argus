@@ -4574,6 +4574,8 @@ export interface components {
             choice?: string | null;
             /** Decision Id */
             decision_id: string;
+            /** Promote */
+            promote?: "pr" | null;
             /** Request Id */
             request_id?: string | null;
             save_to_knowledge?: components["schemas"]["SaveToKnowledge"] | null;
@@ -6269,6 +6271,8 @@ export interface components {
         DecisionAnswer: {
             /** Choice */
             choice?: string | null;
+            /** Promote */
+            promote?: "pr" | null;
             /** Request Id */
             request_id?: string | null;
             save_to_knowledge?: components["schemas"]["SaveToKnowledge"] | null;
