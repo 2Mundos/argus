@@ -361,6 +361,11 @@ function WorkspaceCleanup() {
           <p className="muted small">
             approx. {bytes(data.bytes_estimated)} estimated · {bytes(data.bytes_freed)} freed
           </p>
+          <p className="muted small">
+            held: {bytes(data.archive_bytes ?? 0)} in archives
+            {data.archive_over_cap && " (over cap)"} · {bytes(data.blocked_bytes)} in blocked
+            directories
+          </p>
           <ActionButton type="button" pending={action.busy} action={() => void dryRun()}>
             Dry run now
           </ActionButton>

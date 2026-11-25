@@ -96,6 +96,18 @@ PROBED = frozenset(
         "db_error",
     }
 )
+# Blockers an operator must fix; past the attempt budget they stop retrying.
+TERMINAL = frozenset({"git_error", "unsupported_repo", "container_mount"})
+ACTIONS = {
+    "git_error": "run git fsck in the repository and repair it, or archive and"
+    " remove it by hand",
+    "shallow": "run git fetch --unshallow in the repository, or archive and remove it by hand",
+    "gitdir_missing": "repair or delete the worktree .git file that points to a"
+    " missing git directory",
+    "unsupported_repo": "fix the repository layout named in the error, or archive and"
+    " remove it by hand",
+    "container_mount": "remove the container that mounts it with docker rm",
+}
 S = WorkspaceCleanupStatus
 
 
@@ -194,6 +206,43 @@ def check_archive_root(archive: str | None, roots: list[str]) -> str | None:
     if any(_within(archive, r) or _within(r, archive) for r in roots):
         return "archive_root_invalid"
     return None
+
+
+def _tree_bytes(path: str | Path) -> int:
+    """Apparent bytes of the regular files under path; never follows symlinks."""
+    total = 0
+    stack = [os.fspath(path)]
+    while stack:
+        with os.scandir(stack.pop()) as it:
+            for e in it:
+                st = e.stat(follow_symlinks=False)
+                if stat.S_ISDIR(st.st_mode):
+                    stack.append(e.path)
+                elif stat.S_ISREG(st.st_mode):
+                    total += st.st_size
+    return total
+
+
+def _archive_runs(archive: str) -> list[tuple[float, str, str, int]]:
+    """(mtime, instance id, run id, bytes) of every archive under the root."""
+    out = []
+    for iid, is_dir in _list_dir(archive):
+        if not is_dir or not UUID_RE.match(iid):
+            continue
+        for rid, run_dir in _list_dir(os.path.join(archive, iid)):
+            if run_dir:
+                path = os.path.join(archive, iid, rid)
+                out.append((os.lstat(path).st_mtime, iid, rid, _tree_bytes(path)))
+    return out
+
+
+def _decision(path: str, reason: str, error: str | None, attempts: int) -> str:
+    action = ACTIONS.get(error or "") or ACTIONS.get(reason) or ""
+    detail = f" ({error})" if error else ""
+    return (
+        f"{path}: blocked by {reason}{detail} after {attempts} attempts; "
+        f"{action}, then run a manual cleanup"
+    )
 
 
 def free_bytes(path: str) -> int | None:
@@ -436,6 +485,7 @@ class RunState:
     scanned: int = 0
     bytes_estimated: int = 0
     bytes_freed: int = 0
+    archive_bytes: int | None = None
     skipped: list[str] = field(default_factory=list)
 
 
@@ -447,6 +497,7 @@ class Outcome:
     bytes_freed: int | None = None
     archive_path: str | None = None
     error: str | None = None
+    decision: str | None = None
 
 
 class WorkspaceCleaner:
@@ -568,6 +619,7 @@ class WorkspaceCleaner:
                 async with asyncio.timeout(s.workspace_cleanup_run_timeout_s):
                     roots, candidates = await self._plan(run)
                     free_before = self._free(roots)
+                    await self._enforce_archive_cap(run)
                     for cand in candidates:
                         try:
                             await self._process(run, cand)
@@ -591,6 +643,11 @@ class WorkspaceCleaner:
                 )
                 status, error = "failed", wa.sanitize(exc)
             free_after = self._free(roots)
+            if run.archive_bytes is not None:
+                with contextlib.suppress(OSError):
+                    run.archive_bytes = await asyncio.to_thread(
+                        _tree_bytes, str(s.workspace_cleanup_archive_root)
+                    )
         finally:
             self.busy = False
             self._idle.set()
@@ -599,7 +656,8 @@ class WorkspaceCleaner:
                 "UPDATE workspace_cleanup_runs SET status = ?, finished_at = ?,"
                 " low_disk = ?, scanned = ?, eligible = ?, preserved = ?, blocked = ?,"
                 " cleaned = ?, failed = ?, bytes_estimated = ?, bytes_freed = ?,"
-                " free_before = ?, free_after = ?, skipped = ?, error = ? WHERE id = ?",
+                " free_before = ?, free_after = ?, archive_bytes = ?, skipped = ?, error = ?"
+                " WHERE id = ?",
                 (
                     status,
                     ts(tx.now),
@@ -614,6 +672,7 @@ class WorkspaceCleaner:
                     run.bytes_freed,
                     free_before,
                     free_after,
+                    run.archive_bytes,
                     json.dumps(run.skipped),
                     error,
                     run.id,
@@ -664,7 +723,8 @@ class WorkspaceCleaner:
                 instances = {r["id"]: dict(r) for r in await cur.fetchall()}
             async with conn.execute(
                 "SELECT root, name, status, reason, attempts, attempted_at,"
-                " lock_run_id, lock_expires_at FROM workspace_cleanup"
+                " lock_run_id, lock_expires_at, terminal, error"
+                " FROM workspace_cleanup"
             ) as cur:
                 audit = {(r["root"], r["name"]): dict(r) for r in await cur.fetchall()}
         by_name = {p.name: p for p in pools}
@@ -768,6 +828,8 @@ class WorkspaceCleaner:
                     reason = "too_recent"
                 if reason or inst is None or pool is None:
                     outcome = Outcome(S.PRESERVED, reason or "unknown_instance")
+                    if outcome.reason == "unknown_instance":
+                        outcome = await self._orphan(root, name, inst)
                     pool_name = inst["pool"] if inst else None
                     rows.append(
                         (root, name, name if inst else None, pool_name, outcome)
@@ -778,12 +840,22 @@ class WorkspaceCleaner:
                 if (
                     run.trigger != "manual"
                     and prev is not None
+                    and (prev["terminal"] or self._exhausted(prev))
+                ):
+                    await self._keep_terminal(run, cand, prev)
+                    continue
+                if (
+                    run.trigger != "manual"
+                    and prev is not None
                     and prev["status"] != S.CLEANED
                     and prev["attempts"] >= s.workspace_cleanup_max_attempts
                 ):
                     capped.append((prev, cand))
                     continue
                 candidates.append((inst["terminated_at"], cand))
+            if not run.dry_run:
+                present = {n.removeprefix(TOMBSTONE) for n, _ in entries}
+                await self._drop_stale(root, present, audit)
         for root, name, instance_id, pool_name, outcome in rows:
             prev = audit.get((root, name))
             if (
@@ -806,6 +878,136 @@ class WorkspaceCleaner:
                 run.counts[S(prev["status"])] += 1
                 await self._touch(run, cand.root, cand.name)
         return roots, chosen[: s.workspace_cleanup_max_instances]
+
+    def _exhausted(self, prev: dict) -> bool:
+        """A blocker only an operator can clear, past its attempt budget."""
+        return (
+            prev["status"] == S.BLOCKED
+            and prev["reason"] in TERMINAL
+            and prev["attempts"] >= self.settings.workspace_cleanup_max_attempts
+        )
+
+    async def _keep_terminal(self, run: RunState, cand: Candidate, prev: dict) -> None:
+        """A terminal row keeps its blocker: no attempt, no probe, no backoff."""
+        run.counts[S(prev["status"])] += 1
+        if prev["terminal"] or run.dry_run:
+            await self._touch(run, cand.root, cand.name)
+            return
+        path = os.path.join(cand.root, cand.name)
+        async with self.db.write() as tx:
+            await tx.conn.execute(
+                "UPDATE workspace_cleanup SET terminal = 1, decision = ?,"
+                " last_run_id = ?, updated_at = ? WHERE root = ? AND name = ?",
+                (
+                    _decision(path, prev["reason"], prev["error"], prev["attempts"]),
+                    run.id,
+                    ts(tx.now),
+                    cand.root,
+                    cand.name,
+                ),
+            )
+
+    async def _orphan(self, root: str, name: str, inst: dict | None) -> Outcome:
+        """A UUID directory with no instance row: reclassified once nothing live
+        references it, kept as `unknown_instance` while something does."""
+        path = os.path.join(root, name)
+        if inst is not None or await self._references(name, [path]):
+            return Outcome(S.PRESERVED, "unknown_instance")
+        return Outcome(
+            S.PRESERVED,
+            "orphan_unreferenced",
+            decision=f"{path}: no instance row references it; check it for"
+            " unpublished work, then remove it by hand",
+        )
+
+    async def _drop_stale(
+        self, root: str, present: set[str], audit: dict[tuple[str, str], dict]
+    ) -> None:
+        """Forget unfinished rows whose directory is gone: nothing is left to
+        clean, and a cleaned row stays as history."""
+        stale = [
+            n
+            for (r, n), row in audit.items()
+            if r == root
+            and n not in present
+            and row["status"] in (S.PRESERVED, S.ELIGIBLE, S.BLOCKED)
+        ]
+        if not stale:
+            return
+        async with self.db.write() as tx:
+            for n in stale:
+                await tx.conn.execute(
+                    "DELETE FROM workspace_cleanup WHERE root = ? AND name = ?"
+                    " AND lock_run_id IS NULL AND status IN"
+                    " ('preserved', 'eligible', 'blocked')",
+                    (root, n),
+                )
+
+    async def _enforce_archive_cap(self, run: RunState) -> None:
+        """Measure the archive root and, when allowed, prune the oldest archives
+        of finished instances until it fits `max_archive_bytes`."""
+        s = self.settings
+        archive = s.workspace_cleanup_archive_root
+        if not archive or self._archive_problem:
+            return
+        cap = s.workspace_cleanup_max_archive_bytes
+        try:
+            run.archive_bytes = await asyncio.to_thread(_tree_bytes, archive)
+            if (
+                run.archive_bytes > cap
+                and s.workspace_cleanup_prune_archives
+                and not run.dry_run
+            ):
+                run.archive_bytes = await self._prune_archives(
+                    run, archive, run.archive_bytes, cap
+                )
+        except OSError:
+            run.skipped.append("archive root: unreadable")
+            return
+        if run.archive_bytes > cap:
+            why = (
+                "prune_disabled"
+                if not s.workspace_cleanup_prune_archives
+                else "dry_run"
+                if run.dry_run
+                else "nothing_prunable"
+            )
+            run.skipped.append(
+                f"archive root: over_cap ({run.archive_bytes} of {cap} bytes, {why})"
+            )
+
+    async def _prune_archives(
+        self, run: RunState, archive: str, total: int, cap: int
+    ) -> int:
+        async with self.db.read() as conn:
+            async with conn.execute(
+                "SELECT id FROM instances WHERE state != 'terminated'"
+            ) as cur:
+                keep = {r["id"] for r in await cur.fetchall()}
+            async with conn.execute(
+                "SELECT name FROM workspace_cleanup WHERE status != 'cleaned'"
+            ) as cur:
+                keep |= {r["name"] for r in await cur.fetchall()}
+        dev = os.lstat(archive).st_dev
+        for _, iid, rid, size in sorted(
+            await asyncio.to_thread(_archive_runs, archive)
+        ):
+            if total <= cap:
+                break
+            if iid in keep:
+                continue
+            parent = os.path.join(archive, iid)
+            try:
+                await asyncio.to_thread(remove_tree, parent, rid, dev, self.mounts)
+            except (Unsafe, OSError) as exc:
+                run.skipped.append(f"archive {iid}/{rid}: prune_failed")
+                log.error("archive prune failed (%s)", wa.sanitize(exc))
+                continue
+            with contextlib.suppress(OSError):
+                os.rmdir(parent)
+            log.info("pruned archive %s/%s (%d bytes) over the cap", iid, rid, size)
+            total -= size
+        return total
 
     async def _retry_due(self, run: RunState, cand: Candidate, prev: dict) -> bool:
         """Whether an automatic run retries a directory past `max_attempts`: once
@@ -833,7 +1035,7 @@ class WorkspaceCleaner:
         if tree.unremovable_dir:
             return "permission_denied"
         path = os.path.join(cand.root, cand.name)
-        if problem := await self._references(cand, [path]):
+        if problem := await self._references(cand.name, [path]):
             return problem
         return "low_disk" if run.low_disk else None
 
@@ -893,7 +1095,7 @@ class WorkspaceCleaner:
 
     async def _dry(self, run: RunState, cand: Candidate) -> Outcome:
         path = os.path.join(cand.root, cand.name)
-        problem = await self._references(cand, [path])
+        problem = await self._references(cand.name, [path])
         if problem:
             return Outcome(S.BLOCKED, problem)
         try:
@@ -1005,6 +1207,18 @@ class WorkspaceCleaner:
             if self._archive_problem:
                 return Outcome(S.BLOCKED, self._archive_problem, tree.bytes)
             assert self.settings.workspace_cleanup_archive_root
+            budget = self.settings.workspace_cleanup_max_archive_bytes
+            try:
+                used = await asyncio.to_thread(
+                    _tree_bytes, self.settings.workspace_cleanup_archive_root
+                )
+            except OSError as exc:
+                return Outcome(
+                    S.BLOCKED, "archive_error", tree.bytes, error=wa.sanitize(exc)
+                )
+            room = budget - used
+            if room <= 0:
+                return Outcome(S.BLOCKED, "archive_cap_reached", tree.bytes)
             try:
                 final = await asyncio.to_thread(
                     wa.archive,
@@ -1015,14 +1229,15 @@ class WorkspaceCleaner:
                     run.id,
                     ts(self.db.now()),
                     self.git,
-                    max_bytes=self.settings.workspace_cleanup_max_archive_bytes,
+                    max_bytes=min(budget, room),
                     min_free=self.settings.workspace_cleanup_low_disk_bytes,
                     writer=self.writer,
                 )
             except wa.ArchiveError as exc:
-                return Outcome(
-                    S.BLOCKED, exc.code, tree.bytes, error=exc.detail or None
-                )
+                code = exc.code
+                if code == "archive_too_large" and room < budget:
+                    code = "archive_cap_reached"
+                return Outcome(S.BLOCKED, code, tree.bytes, error=exc.detail or None)
             archive_path = str(final)
         # Deletion starts: from here a leftover tombstone is finished, never restored.
         cand.deleting = True
@@ -1136,16 +1351,16 @@ class WorkspaceCleaner:
             return "db_error"
         if row is None or row["state"] != "terminated":
             return "state_changed"
-        return await self._references(cand, paths)
+        return await self._references(cand.name, paths)
 
-    async def _references(self, cand: Candidate, paths: list[str]) -> str | None:
+    async def _references(self, name: str, paths: list[str]) -> str | None:
         try:
             async with self.db.read() as conn:
                 async with conn.execute(
                     "SELECT a.state, (SELECT count(*) FROM tasks t WHERE"
                     " t.state = 'claimed' AND t.assignee_agent_id = a.id) AS claimed"
                     " FROM agents a WHERE a.instance_id = ?",
-                    (cand.name,),
+                    (name,),
                 ) as cur:
                     agents = await cur.fetchall()
                 pools = await service.list_pools(conn)
@@ -1305,6 +1520,30 @@ class WorkspaceCleaner:
                 cols["archive_path"] = outcome.archive_path
             if outcome.status == S.CLEANED:
                 cols["cleaned_at"] = ts(tx.now)
+            decision = outcome.decision
+            terminal = False
+            if (
+                not run.dry_run
+                and outcome.status == S.BLOCKED
+                and outcome.reason in TERMINAL
+            ):
+                async with tx.conn.execute(
+                    "SELECT attempts FROM workspace_cleanup WHERE root = ? AND name = ?",
+                    (root, name),
+                ) as cur:
+                    row = await cur.fetchone()
+                attempts = row["attempts"] if row else 0
+                if attempts >= self.settings.workspace_cleanup_max_attempts:
+                    terminal = True
+                    decision = _decision(
+                        os.path.join(root, name),
+                        outcome.reason,
+                        outcome.error,
+                        attempts,
+                    )
+            if not run.dry_run or decision:
+                cols["terminal"] = int(terminal)
+                cols["decision"] = decision
             await _put(tx, run.id, root, name, **cols)
             if (
                 event
@@ -1462,6 +1701,7 @@ def cleanup_settings(s: Settings) -> WorkspaceCleanupSettings:
         run_timeout_s=s.workspace_cleanup_run_timeout_s,
         max_instances=s.workspace_cleanup_max_instances,
         max_archive_bytes=s.workspace_cleanup_max_archive_bytes,
+        prune_archives=s.workspace_cleanup_prune_archives,
         max_attempts=s.workspace_cleanup_max_attempts,
         low_disk_bytes=s.workspace_cleanup_low_disk_bytes,
     )
@@ -1487,6 +1727,12 @@ async def summary(
             elif r["status"] != S.PRESERVED:
                 estimated += r["est"]
     async with conn.execute(
+        "SELECT coalesce(sum(bytes_estimated), 0) AS n FROM workspace_cleanup"
+        " WHERE status IN ('blocked', 'failed')"
+    ) as cur:
+        held = await cur.fetchone()
+    archive_bytes = last["archive_bytes"] if last else None
+    async with conn.execute(
         "SELECT * FROM workspace_cleanup WHERE status IN ('blocked', 'failed')"
         " ORDER BY updated_at DESC, name LIMIT 10"
     ) as cur:
@@ -1498,5 +1744,9 @@ async def summary(
         counts=counts,
         bytes_estimated=estimated,
         bytes_freed=freed,
+        archive_bytes=archive_bytes,
+        archive_over_cap=archive_bytes is not None
+        and archive_bytes > settings.workspace_cleanup_max_archive_bytes,
+        blocked_bytes=held["n"] if held else 0,
         problems=problems,
     )

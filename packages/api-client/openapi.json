@@ -29086,6 +29086,17 @@
             ],
             "title": "Cleaned At"
           },
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
           "error": {
             "anyOf": [
               {
@@ -29143,6 +29154,10 @@
           "status": {
             "$ref": "#/components/schemas/WorkspaceCleanupStatus"
           },
+          "terminal": {
+            "title": "Terminal",
+            "type": "boolean"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -29161,6 +29176,8 @@
           "bytes_freed",
           "archive_path",
           "error",
+          "terminal",
+          "decision",
           "last_run_id",
           "first_seen_at",
           "updated_at",
@@ -29195,6 +29212,17 @@
           "actor": {
             "title": "Actor",
             "type": "string"
+          },
+          "archive_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Bytes"
           },
           "blocked": {
             "title": "Blocked",
@@ -29325,6 +29353,7 @@
           "bytes_freed",
           "free_before",
           "free_after",
+          "archive_bytes",
           "skipped",
           "error"
         ],
@@ -29394,6 +29423,10 @@
             "title": "Min Age Hours",
             "type": "integer"
           },
+          "prune_archives": {
+            "title": "Prune Archives",
+            "type": "boolean"
+          },
           "run_timeout_s": {
             "title": "Run Timeout S",
             "type": "number"
@@ -29408,6 +29441,7 @@
           "run_timeout_s",
           "max_instances",
           "max_archive_bytes",
+          "prune_archives",
           "max_attempts",
           "low_disk_bytes"
         ],
@@ -29428,6 +29462,25 @@
       },
       "WorkspaceCleanupSummary": {
         "properties": {
+          "archive_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Bytes"
+          },
+          "archive_over_cap": {
+            "title": "Archive Over Cap",
+            "type": "boolean"
+          },
+          "blocked_bytes": {
+            "title": "Blocked Bytes",
+            "type": "integer"
+          },
           "bytes_estimated": {
             "title": "Bytes Estimated",
             "type": "integer"
@@ -29478,6 +29531,9 @@
           "counts",
           "bytes_estimated",
           "bytes_freed",
+          "archive_bytes",
+          "archive_over_cap",
+          "blocked_bytes",
           "problems"
         ],
         "title": "WorkspaceCleanupSummary",

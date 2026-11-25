@@ -127,6 +127,7 @@ class Settings:
     workspace_cleanup_run_timeout_s: float = 1800.0
     workspace_cleanup_max_instances: int = 20
     workspace_cleanup_max_archive_bytes: int = 2 * 1024 * 1024 * 1024
+    workspace_cleanup_prune_archives: bool = False
     workspace_cleanup_max_attempts: int = 3
     workspace_cleanup_low_disk_bytes: int = 10 * 1024 * 1024 * 1024
     workspace_cleanup_git_timeout_s: float = 300.0
@@ -319,6 +320,9 @@ class Settings:
                 os.environ.get(
                     "ARGUS_WORKSPACE_CLEANUP_MAX_ARCHIVE_BYTES", 2 * 1024 * 1024 * 1024
                 )
+            ),
+            workspace_cleanup_prune_archives=_env_bool(
+                "ARGUS_WORKSPACE_CLEANUP_PRUNE_ARCHIVES", "false"
             ),
             workspace_cleanup_max_attempts=int(
                 os.environ.get("ARGUS_WORKSPACE_CLEANUP_MAX_ATTEMPTS", 3)

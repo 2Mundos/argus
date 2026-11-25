@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-24
-updated: 2026-10-30
+updated: 2026-11-25
 ---
 
 # Workspace cleanup: terminated NanoClaw instance directories
@@ -50,7 +50,8 @@ All settings are environment variables read by `Settings.from_env`.
 | `ARGUS_WORKSPACE_CLEANUP_INTERVAL_S` | `3600` | Pause between loop runs; base of the retry backoff |
 | `ARGUS_WORKSPACE_CLEANUP_RUN_TIMEOUT_S` | `1800` | Wall-clock cap of one run |
 | `ARGUS_WORKSPACE_CLEANUP_MAX_INSTANCES` | `20` | Directories one run may act on |
-| `ARGUS_WORKSPACE_CLEANUP_MAX_ARCHIVE_BYTES` | `2147483648` | Archive budget per instance |
+| `ARGUS_WORKSPACE_CLEANUP_MAX_ARCHIVE_BYTES` | `2147483648` | Archive budget per instance, and cap of the whole archive root |
+| `ARGUS_WORKSPACE_CLEANUP_PRUNE_ARCHIVES` | `false` | Lets a real run delete the oldest archives while the archive root is over the cap |
 | `ARGUS_WORKSPACE_CLEANUP_MAX_ATTEMPTS` | `3` | Attempts per directory before automatic runs back off |
 | `ARGUS_WORKSPACE_CLEANUP_LOW_DISK_BYTES` | `10737418240` | Free-space floor (see 3.7) |
 | `ARGUS_WORKSPACE_CLEANUP_GIT_TIMEOUT_S` | `300` | Cap of one git command |
@@ -64,10 +65,17 @@ A run scans each validated instances root (3.3) and gives every entry exactly
 one audit status:
 
 - `preserved`: kept because it is not eligible. Reason codes: `not_uuid`,
-  `not_directory`, `unknown_instance`, `pool_mismatch`, `not_terminated`,
+  `not_directory`, `unknown_instance`, `orphan_unreferenced`, `pool_mismatch`, `not_terminated`,
   `too_recent`, `remote_target`, `root_invalid`.
 - `eligible`: a dry run found nothing that stops the deletion. The reason says
   `wip_found` or `no_wip`.
+- `preserved` with `unknown_instance`: a UUID directory with no `instances`
+  row. Once nothing live references it (no agent, container mount or process,
+  checked like 3.4), it becomes `orphan_unreferenced` with a `decision` naming
+  the path: check it for unpublished work and remove it by hand. It is never
+  deleted automatically. A reference keeps it `unknown_instance`. An audit row
+  of a directory that no longer exists, and that is not `cleaned`, is deleted
+  by the next real run.
 - `blocked`: eligible, but a safety check stopped it. The directory is kept
   where it was (3.4–3.6). An unexpected error while the directory sits at its
   tombstone gives `internal_error`, and the directory is renamed back; one
@@ -125,7 +133,17 @@ Rules for runs:
     empty), the directory is retried at once.
 
   A permanent failure therefore costs at most one attempt per backoff step, up
-  to one a day, and never spins. A skipped directory keeps its last status and
+  to one a day, and never spins.
+
+  **Terminal blockers.** `git_error`, `unsupported_repo` (for example
+  `shallow` or `gitdir_missing`) and `container_mount` need an operator, so
+  they never reach the backoff. Once such a row has used `max_attempts`
+  attempts, an automatic run marks it `terminal` (also rows already past the
+  budget) and stores a `decision`: the directory path, the reason and the
+  action required, for example `git fsck`, `git fetch --unshallow`, repairing
+  the worktree `.git` file, or `docker rm` of the mounting container. A
+  terminal row costs no attempt, no probe and no backoff step. Only a manual
+  run tries it again, and its outcome replaces the flag and the decision. A skipped directory keeps its last status and
   reason. Capped directories come after all others in the `max_instances`
   budget. A manual run always tries again.
 - **Dry runs.** A dry run writes only audit rows and the run row. It does no
@@ -383,11 +401,27 @@ directory, keeps the source, and records a reason code:
 - `archive_error`, `archive_hash_mismatch`;
 - `archive_permission`, `archive_no_space`;
 - `archive_timeout`, `git_missing`, `git_error`;
-- `archive_too_large`;
+- `archive_too_large`, `archive_cap_reached`;
 - `archive_root_unset`, `archive_root_invalid`.
 
 Logs, audit rows and API responses carry reason codes and exception class
 names only. They never carry file contents, git output or remote URLs.
+
+**Archive cap.** `max_archive_bytes` also bounds the whole archive root. Every
+run measures the regular files under it (apparent bytes) and records the total
+as `archive_bytes` on the run row.
+
+- A new archive is written only with the room left under the cap: when none is
+  left, or the archive would not fit, the instance is `blocked` with
+  `archive_cap_reached` and its directory stays.
+- When the root is over the cap, a run lists
+  `archive root: over_cap (<bytes> of <cap> bytes, <why>)` in `skipped`, with
+  why `prune_disabled`, `dry_run` or `nothing_prunable`.
+- With `ARGUS_WORKSPACE_CLEANUP_PRUNE_ARCHIVES=true`, a real run deletes whole
+  archive runs, oldest first, until the root fits. It never prunes the archive
+  of an instance that is not `terminated` or whose audit row is not `cleaned`.
+  Pruning is off by default because an archive can be the only copy of
+  unpublished work.
 
 **Restore.** `python -m argus_api.fleet.workspace_restore <archive dir> <dest>`
 does the following:
@@ -412,6 +446,9 @@ does the following:
 - `bytes_freed` is the `statvfs` free-space delta of the instances root's
   filesystem around the deletion, clamped at 0. It is approximate: other
   writers move it too.
+- The summary also holds `archive_bytes` (the archive root, as measured by the
+  last run), `archive_over_cap`, and `blocked_bytes` (the sum of
+  `bytes_estimated` over `blocked` and `failed` rows).
 - Neither number equals `du`. Reflinked or snapshotted extents, and hardlinks
   to files outside the tree, may free less than estimated.
 
@@ -492,11 +529,21 @@ directory it accepts can still fail at delete time (`permission_denied`).
   archived too? Today it is deleted with the directory.
 - Should committed secrets block cleanup instead of being bundled as they are?
 - Should an orphan folder with no instance row ever be eligible? It is not, by
-  design. Today an operator removes it by hand.
+  design. Today it is reported as `orphan_unreferenced` and an operator
+  removes it by hand.
+
+**Open items**
+
+- Archive pruning is opt-in. An archive of provably published work could be
+  pruned without a flag, but nothing records that today.
+- A root already over the cap (as on the host that prompted this change) is
+  only reported until an operator enables pruning or removes archives by hand.
+- Terminal rows leave the backoff of 3.2, so a blocker that clears by itself
+  (a removed container) is found only by a manual run.
 
 # 5. Constraints
 
-- Single node, SQLite only. Two migrations (0048, 0054), with no data
+- Single node, SQLite only. Three migrations (0048, 0054, 0092), with no data
   dropped. All writes go through
   `Database.write()` with `tx.now`. No filesystem, git or Docker call happens
   inside a write transaction.
@@ -511,7 +558,7 @@ directory it accepts can still fail at delete time (`permission_denied`).
 # 6. Implementation Consequences
 
 - **Backend:**
-  - `apps/api/src/argus_api/fleet/workspace_cleanup.py`: the run, eligibility,
+  - `apps/api/src/argus_api/fleet/workspace_cleanup.py`: the run, eligibility, archive cap, terminal blockers,
     lease, revalidation, safe walker, accounting and loop;
   - `fleet/workspace_archive.py`: the repository scan, archive and verify;
   - `fleet/workspace_restore.py`: restore and its CLI;

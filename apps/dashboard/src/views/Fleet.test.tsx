@@ -163,6 +163,7 @@ function cleanupSummary() {
       interval_s: 3600,
       low_disk_bytes: 0,
       max_archive_bytes: 0,
+      prune_archives: false,
       max_attempts: 3,
       max_instances: 100,
       run_timeout_s: 600,
@@ -172,6 +173,9 @@ function cleanupSummary() {
     counts: { eligible: 2, preserved: 5 },
     bytes_estimated: 2048,
     bytes_freed: 0,
+    archive_bytes: 4096,
+    archive_over_cap: true,
+    blocked_bytes: 1024,
     problems: [],
   };
 }
@@ -321,6 +325,9 @@ describe("Fleet", () => {
     expect(card?.textContent).toContain("last run no data");
     expect(card?.textContent).toContain("2 eligible · 5 preserved");
     expect(card?.textContent).toContain("approx. 2.0 KB estimated · 0 B freed");
+    expect(card?.textContent).toContain(
+      "held: 4.0 KB in archives (over cap) · 1.0 KB in blocked directories",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Dry run now" }));
     await waitFor(() =>
       expect(mock.posts).toEqual([
