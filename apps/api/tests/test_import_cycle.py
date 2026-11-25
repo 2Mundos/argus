@@ -13,6 +13,7 @@ import pytest
     [
         "argus_api.engine_choice",
         "argus_api.tasks.service",
+        "argus_api.tasks.worker",
         "argus_api.orchestrator",
         "argus_api.fleet.service",
         "argus_api.accounts.service",
