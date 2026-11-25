@@ -200,6 +200,8 @@ async def _apply(
             else Audience.ORCHESTRATOR,
             requested_by=actor,
         )
+    if new in (S.SUCCEEDED, S.FAILED, S.CANCELLED) and row["kind"] not in _REVIEW_KINDS:
+        await _cancel_review_children(tx, row, actor)
     if new is S.SUCCEEDED:
         await _promote_dependents(tx, row["id"])
     elif new in (S.FAILED, S.CANCELLED):
@@ -234,6 +236,30 @@ async def _apply(
             tx, row["created_by"].removeprefix("routine:"), row["id"]
         )
     return new
+
+
+_REVIEW_KINDS = ("code_review", "review_verification")
+
+
+async def _cancel_review_children(tx: Tx, parent: aiosqlite.Row, actor: str) -> None:
+    """A parent that went terminal takes its non-terminal review-gate children with
+    it, in the same transaction. The parent row is already terminal, so the child's
+    end hook cannot spawn a replacement reviewer; a claimed child loses its lease and
+    its next heartbeat or result is refused."""
+    async with tx.conn.execute(
+        "SELECT * FROM tasks WHERE parent_id = ? AND kind IN (?, ?)"
+        " AND state NOT IN (?, ?, ?) ORDER BY rowid",
+        (parent["id"], *_REVIEW_KINDS, S.SUCCEEDED, S.FAILED, S.CANCELLED),
+    ) as cur:
+        children = list(await cur.fetchall())
+    for child in children:
+        await _apply(
+            tx,
+            child,
+            Action.CANCEL,
+            actor,
+            data={"cancelled_by": actor, "reason": "parent_terminal"},
+        )
 
 
 def _budget_block(message: str) -> dict[str, Any]:
