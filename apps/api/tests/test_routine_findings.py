@@ -11,7 +11,7 @@ from api_support import FakeClock, insert_agent
 from argus_api.auth import Identity
 from argus_api.db import Database, ts
 from argus_api.decisions import service as decisions
-from argus_api.errors import ForbiddenError, ValidationFailedError
+from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.main import app
 from argus_api.routines import runs, service
 from argus_api.tasks import service as tasks
@@ -692,6 +692,31 @@ async def test_plain_approval_keeps_response_and_no_capabilities(
     assert task.state is TaskState.READY
     assert (task.deliverable, task.required_capabilities) == (Deliverable.RESPONSE, [])
     assert await _events(db, "task", child.id, "task.promoted") == []
+
+
+async def test_replayed_answer_must_agree_about_promotion(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id, request_id="r1")
+    # Same request_id, now asking for the PR: not a retry, so it is refused and the
+    # task stays a response deliverable.
+    with pytest.raises(ConflictError):
+        await _answer(db, decision_id, request_id="r1", promote="pr")
+    assert (await _task(db, child.id)).deliverable is Deliverable.RESPONSE
+
+
+async def test_replayed_promotion_is_idempotent_but_not_droppable(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id, request_id="r2", promote="pr")
+    await _answer(db, decision_id, request_id="r2", promote="pr")  # true replay
+    with pytest.raises(ConflictError):
+        await _answer(db, decision_id, request_id="r2")
+    assert len(await _events(db, "task", child.id, "task.promoted")) == 1
 
 
 async def test_admin_approval_can_promote_to_pr_open(

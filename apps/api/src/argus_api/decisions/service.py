@@ -135,7 +135,11 @@ async def answer(
 ) -> AnsweredDecision:
     decision = await store.get(tx.conn, decision_id)
     if decision.state is not DecisionState.OPEN:
-        if body.request_id is not None and same_answer(decision, body, caller):
+        if (
+            body.request_id is not None
+            and same_answer(decision, body, caller)
+            and bool(body.promote) == await was_promoted(tx, decision)
+        ):
             return AnsweredDecision(**decision.model_dump(), replayed=True)
         raise ConflictError(
             f"decision {decision_id} is {decision.state}", code="decision_not_open"
@@ -239,6 +243,18 @@ async def answer_many(
                 )
             )
     return outcomes
+
+
+async def was_promoted(tx: Tx, decision: Decision) -> bool:
+    """Whether answering this decision promoted its task to a PR deliverable. The
+    audit event is the record: the answer row does not carry `promote`, so a replay
+    that disagrees about it is a different answer, not a retry."""
+    async with tx.conn.execute(
+        "SELECT 1 FROM events WHERE kind = 'task.promoted'"
+        " AND json_extract(data, '$.decision_id') = ?",
+        (decision.id,),
+    ) as cur:
+        return await cur.fetchone() is not None
 
 
 def same_answer(decision: Decision, body: DecisionAnswer, caller: Identity) -> bool:
