@@ -1,7 +1,7 @@
 ---
 status: draft
 created: 2026-11-21
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 # Pre-merge independent review workflow
@@ -186,6 +186,15 @@ not itself a `code_review` child), `deliverable.check_complete` does not require
   without creating a duplicate. If an older active child targets a stale head or
   PR, it spawns the new child first and then cancels the stale child so
   `on_review_child_ended` ignores the superseded child.
+- A parent that reaches a terminal state (`cancelled`, `failed`, `succeeded`) cancels
+  every non-terminal `code_review` and `review_verification` child it owns in the
+  same transaction, recording a `task.cancel` event per child with
+  `reason: parent_terminal`. The parent row is already terminal when the children
+  end, so `on_review_child_ended` and `retry_reviewer` (which only act on an
+  `in_review` parent) never spawn a replacement reviewer, and
+  `on_verification_ended` does nothing on a parent that is not `in_review`. A claimed
+  child loses its lease: its next heartbeat is rejected and its result or push is
+  refused, so it cannot open a PR after the parent was cancelled.
 - `on_review_child_complete` is idempotent per `child_id` and ignores late
   verdicts from superseded (non-latest) reviewer children.
 - `retry_reviewer` returns an already-active reviewer child instead of spawning a

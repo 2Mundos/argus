@@ -3139,6 +3139,8 @@ async def on_verification_complete(
     if not parent_id or review is None:
         return
     parent = await tasks_svc._row(tx.conn, parent_id)
+    if parent["state"] != TaskState.IN_REVIEW:
+        return
     held = await _held_for(tx.conn, parent, review["id"], child["id"])
     findings = [f for f in inp.get("findings") or [] if isinstance(f, dict)]
     by_id = {f.get("id"): f for f in findings}
@@ -3205,6 +3207,8 @@ async def on_verification_ended(tx: Tx, child: aiosqlite.Row, actor: str) -> Non
     if not parent_id or review is None:
         return
     parent = await tasks_svc._row(tx.conn, parent_id)
+    if parent["state"] != TaskState.IN_REVIEW:
+        return
     held = await _held_for(tx.conn, parent, review["id"], child["id"])
     await _skip_verification(
         tx, parent_id, review["id"], child["id"], "verifier_failed", actor

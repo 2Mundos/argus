@@ -1412,3 +1412,113 @@ def test_regression_450_451_replacement_pr_blocks_merge_and_accept(
     assert st == "in_review"
     assert next_pr == PR_451_URL
     assert next_sha == HEAD_Y
+
+
+# ---------------------------------------------------------------------------
+# A terminal parent takes its review children with it and never respawns one
+# ---------------------------------------------------------------------------
+
+
+async def _review_children(db: Database, parent_id: str) -> list[tuple[str, str]]:
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT id, state FROM tasks WHERE parent_id = ?"
+            " AND kind IN ('code_review', 'review_verification') ORDER BY rowid",
+            (parent_id,),
+        ) as cur,
+    ):
+        return [(r["id"], r["state"]) for r in await cur.fetchall()]
+
+
+async def _spawn_for(db: Database, parent_id: str) -> str:
+    async with db.write() as tx:
+        child = await indep.spawn_reviewer(
+            tx,
+            await tasks.task_row(tx.conn, parent_id),
+            pr=PR_450_URL,
+            head_sha=HEAD_1,
+            setting=IndependentReviewSetting(mode="different_provider"),
+            policy={},
+            actor="system",
+        )
+    assert child is not None
+    return child
+
+
+async def test_parent_cancel_cancels_claimed_reviewer_and_revokes_its_lease(
+    db: Database, fleet
+) -> None:
+    from argus_api.agents import service as agents
+    from test_execution_routes import A, claim
+
+    await review_policy(db, [OPUS_ALT, CODEX_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child = await _spawn_for(db, parent.id)
+    claimed, _ = await claim(db, fleet, [*CAPS, "repository:write"])
+    assert claimed is not None and claimed.id == child
+    assert (await state(db, child))[0]["state"] == "claimed"
+
+    async with db.write() as tx:
+        await tasks.cancel(tx, parent.id, "admin:test")
+
+    assert await _review_children(db, parent.id) == [(child, "cancelled")]
+    assert (await state(db, parent.id))[0]["state"] == "cancelled"
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT data FROM events WHERE subject_id = ? AND kind = 'task.cancel'",
+            (child,),
+        ) as cur,
+    ):
+        rows = await cur.fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["data"])["reason"] == "parent_terminal"
+
+    # The worker's next heartbeat no longer holds the lease.
+    async with db.write() as tx:
+        beat = await agents.heartbeat(tx, A, [(child, claimed.attempt)])
+    assert [r.task_id for r in beat.rejected] == [child]
+    assert beat.renewed == []
+
+
+async def test_child_cancelled_then_parent_cancelled_leaves_no_active_reviewer(
+    db: Database, fleet
+) -> None:
+    await review_policy(db, [OPUS_ALT, CODEX_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child = await _spawn_for(db, parent.id)
+
+    # The orchestrator cancels the reviewer and, right after, the parent.
+    async with db.write() as tx:
+        await tasks.cancel(tx, child, "admin:test")
+    async with db.write() as tx:
+        await tasks.cancel(tx, parent.id, "admin:test")
+
+    children = await _review_children(db, parent.id)
+    assert children[0] == (child, "cancelled")
+    assert all(s == "cancelled" for _, s in children)
+    async with db.read() as conn:
+        assert await indep.has_active_reviewer(conn, parent.id) is False
+
+
+async def test_terminal_parent_never_gets_a_replacement_reviewer(
+    db: Database, fleet
+) -> None:
+    await review_policy(db, [OPUS_ALT, CODEX_ALT])
+    parent = await reviewed_parent(db, fleet, ("claude-opus-5-5", "anthropic", "cloud"))
+    child = await _spawn_for(db, parent.id)
+    async with db.write() as tx:
+        await tasks.cancel(tx, parent.id, "admin:test")
+    before = await _review_children(db, parent.id)
+    assert before == [(child, "cancelled")]
+
+    async with db.write() as tx:
+        await indep.on_review_child_ended(
+            tx,
+            await tasks.task_row(tx.conn, child),
+            TaskState.CANCELLED,
+            "system",
+        )
+        assert await indep.retry_reviewer(tx, parent.id, "human:test") is None
+    assert await _review_children(db, parent.id) == before
