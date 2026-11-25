@@ -1,6 +1,8 @@
 #!/bin/sh
 # argus: run a single-node Argus with Docker (docs/specs/launcher.spec.md).
-# POSIX sh; terminal commands need only docker and curl. The optional tray uses uv.
+# POSIX sh; terminal commands need only curl (container commands also need
+# docker). The optional tray uses uv. Installing the launcher and monitoring
+# a remote Argus need no Docker and no local install.
 set -eu
 
 ARGUS_HOME=${ARGUS_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/argus}
@@ -1101,18 +1103,29 @@ cmd_tray() {
 			[ -n "$tray" ] && [ "$tray" -nt "$f" ] || tray=$f
 		done
 		if [ -z "$tray" ]; then
+			# No usable cache: fetch the companion. A local install is not
+			# required; without one the newest release provides it. Docker is
+			# only one source: without it the file comes over HTTPS instead.
 			load_config
 			if [ "$HAVE_CONFIG" = 1 ] && valid_version "$ARGUS_VERSION"; then
-				tray=$ARGUS_HOME/tray/$ARGUS_VERSION.py
-				ensure_image "$(image)"
+				want=$ARGUS_VERSION
+			else
+				want=$(latest_version)
+			fi
+			tray=$ARGUS_HOME/tray/$want.py
+			if [ ! -s "$tray" ]; then
 				part=$tray.$$.tmp
-				if ! docker run --rm --entrypoint cat "$(image)" /app/bin/argus-tray.py >"$part"; then
+				if [ "$HAVE_CONFIG" = 1 ] && command -v docker >/dev/null 2>&1 &&
+					ensure_image "$(image "$want")" 2>/dev/null &&
+					docker run --rm --entrypoint cat "$(image "$want")" /app/bin/argus-tray.py >"$part" 2>/dev/null; then
+					:
+				elif curl -fsSL "https://raw.githubusercontent.com/$REPO/$want/deploy/argus-tray.py" >"$part" 2>/dev/null; then
+					:
+				else
 					rm -f "$part"
-					die "tray: this image has no desktop companion; run \`argus update\` first"
+					die "tray: could not fetch the desktop companion for $want; check the network and retry"
 				fi
 				mv "$part" "$tray"
-			else
-				die "tray: no cached desktop companion; run \`argus up\` once on this machine to cache it"
 			fi
 			grep -q '"--url"' "$tray" 2>/dev/null || die "tray: this install predates remote monitoring; run \`argus update\` once a release with tray --url ships, or run the tray from a checkout (uv run --script deploy/argus-tray.py --url BASE_URL)"
 		fi

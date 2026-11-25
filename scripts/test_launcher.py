@@ -259,6 +259,19 @@ url = sys.argv[-1]
 if url.endswith("/releases/latest"):
     print("HTTP/2 302\r\nlocation: https://github.com/2Mundos/argus/releases/tag/%s\r\n" % s["latest"])
     sys.exit(0)
+if "raw.githubusercontent.com" in url:
+    # https://raw.githubusercontent.com/2Mundos/argus/<ver>/deploy/<file>
+    ver, name = url.split("/")[-3], url.split("/")[-1]
+    if ver in s.get("raw_missing", []):
+        sys.exit(22)
+    if name == "argus":
+        with open(s["launcher_source"]) as f:
+            sys.stdout.write(f.read() + "\n# fake launcher for " + ver + "\n")
+        sys.exit(0)
+    if name == "argus-tray.py":
+        sys.stdout.write(s.get("tray_source", '"--url"\n'))
+        sys.exit(0)
+    sys.exit(22)
 if url.endswith("/readyz"):
     running = s["containers"].get("argus", {}).get("running", False)
     sys.exit(0 if running and s["ready"] else 22)
@@ -550,9 +563,49 @@ def test_install_sh_takes_the_newest_release_unless_pinned(
     bin_dir = env.tmp / "installed"
     extra = {"ARGUS_BIN_DIR": str(bin_dir)} | ({"ARGUS_VERSION": pin} if pin else {})
     r = env.run(script=ROOT / "deploy" / "install.sh", extra_env=extra)
-    assert ["pull", f"{IMAGE}:{expected}"] in env.state["calls"]
     assert (bin_dir / "argus").read_text().endswith(f"fake launcher for {expected}\n")
     assert f"Installed argus ({expected})" in r.stdout
+    assert not any(c[:1] == ["pull"] for c in env.state["calls"])
+
+
+def test_install_sh_falls_back_to_docker_when_fetch_fails(env: Env) -> None:
+    env.state["raw_missing"] = ["v0.7.0"]
+    bin_dir = env.tmp / "installed"
+    r = env.run(
+        script=ROOT / "deploy" / "install.sh",
+        extra_env={"ARGUS_BIN_DIR": str(bin_dir), "ARGUS_VERSION": "v0.7.0"},
+    )
+    assert ["pull", f"{IMAGE}:v0.7.0"] in env.state["calls"]
+    assert (bin_dir / "argus").read_text().endswith("fake launcher for v0.7.0\n")
+    assert "Installed argus (v0.7.0)" in r.stdout
+
+
+def _write_fake_uv(env: Env) -> None:
+    uv = env.bin / "uv"
+    uv.write_text('#!/bin/sh\necho "uv $@"\n')
+    uv.chmod(0o755)
+
+
+def test_tray_url_without_install_fetches_companion(env: Env) -> None:
+    _write_fake_uv(env)
+    r = env.run(
+        "tray", "--url", "https://argus.example.com", extra_env={"DISPLAY": ":0"}
+    )
+    assert "v0.8.0.py" in r.stdout
+    assert "--url https://argus.example.com" in r.stdout
+    assert '"--url"' in (env.home / "tray" / "v0.8.0.py").read_text()
+
+
+def test_tray_url_skips_cached_companion_without_url_flag(env: Env) -> None:
+    _write_fake_uv(env)
+    tray_dir = env.home / "tray"
+    tray_dir.mkdir(parents=True, exist_ok=True)
+    (tray_dir / "v0.7.0.py").write_text("# old companion without the flag\n")
+    r = env.run(
+        "tray", "--url", "https://argus.example.com", extra_env={"DISPLAY": ":0"}
+    )
+    assert "v0.8.0.py" in r.stdout
+    assert "--url https://argus.example.com" in r.stdout
 
 
 def test_ready_without_an_admin_token_file(env: Env) -> None:

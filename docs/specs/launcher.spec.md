@@ -63,9 +63,13 @@ The image carries `/app/bin/argus` (the launcher) and `/app/releases/`
 (`docs/releases/*.ref.md`). The launcher therefore always matches its image
 version, and the notes for every version are available offline. `install.sh`
 resolves the newest tag (3.4), or takes `ARGUS_VERSION=vX.Y.Z` to pin one,
-pulls that image and copies the launcher out of it into `~/.local/bin/argus`
-(or `$ARGUS_BIN_DIR`); it installs nothing else. The only network calls besides
-`docker pull` are the newest-tag lookup and fetching `install.sh` itself.
+and fetches `deploy/argus` at that tag over HTTPS into `~/.local/bin/argus`
+(or `$ARGUS_BIN_DIR`); it installs nothing else. When the fetch fails and
+Docker is available, it falls back to pulling that image and copying the
+launcher out of it. The only network calls besides the fallback `docker pull`
+are the newest-tag lookup and fetching `install.sh` itself. Installing the
+launcher needs no Docker and no local install, so a remote-only machine
+(`argus tray --url`, [desktop tray](tray.spec.md) 3.4) starts there.
 
 `install.sh` is fetched from the newest release, not from `main`: the release
 workflow attaches it to every release as an asset, so
@@ -263,10 +267,11 @@ Argus again; the tray's own Up and Restart suppress another tray launch.
 
 # 5. Constraints
 
-- POSIX `sh` plus `docker` and `curl` on the host; no `jq`, Python or age on
-  the host for terminal commands. Anything that needs more runs inside the Argus
-  image, except the optional `tray` companion, whose Python and Qt environment is
-  managed by `uv` on the desktop ([desktop tray](tray.spec.md)).
+- POSIX `sh` plus `curl` on the host for terminal commands (`docker` for
+  container commands); no `jq`, Python or age on the host. Anything that
+  needs more runs inside the Argus image, except the optional `tray`
+  companion, whose Python and Qt environment is managed by `uv` on the
+  desktop ([desktop tray](tray.spec.md)).
 - The launcher never prints secrets except the admin token on `up` and `token`.
   It never passes the age key or token on a command line or in
   `docker inspect`-visible environment.
@@ -293,7 +298,10 @@ Argus again; the tray's own Up and Restart suppress another tray launch.
   `--keep-data` (only named objects removed, an image still in use left,
   refused without a terminal and `-y`), and the first-run worker question
   (asked once; `--workers`, `--no-workers`, no terminal). `install.sh` runs against the same
-  fakes: the newest release by default, `ARGUS_VERSION` when set.
+  fakes: the newest release by default, `ARGUS_VERSION` when set, over HTTPS,
+  with the Docker fallback when the fetch fails; `tray --url` with no usable
+  cache fetches the companion over HTTPS with no install, skipping stale
+  cached companions that predate `--url`.
 - README Quickstart becomes the install line and `argus up`. "Run with Docker"
   keeps plain `docker run` and Compose as the manual route.
 - [Single-node](single-node.spec.md) 6 names the launcher as the packaged run;

@@ -85,7 +85,9 @@ one node. See [`docs/specs/single-node.spec.md`](docs/specs/single-node.spec.md)
 
 ## Quickstart
 
-Needs Docker and curl (Linux, macOS, or Windows with WSL 2).
+Needs curl (Linux, macOS, or Windows with WSL 2); running Argus itself
+needs Docker. Watching a remote Argus needs no Docker and no local install:
+install the launcher, then `argus tray --url https://host` (plus `uv` for the tray).
 
 ```bash
 curl -fsSL https://github.com/2Mundos/argus/releases/latest/download/install.sh | sh

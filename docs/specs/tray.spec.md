@@ -129,7 +129,11 @@ Backup and Recent logs controls are absent and every other control works as in
 background log under `$ARGUS_HOME` (`tray-remote-<id>`), so one local and any
 number of remote trays can run side by side; `argus tray --url <same URL>
 --stop` stops exactly that target. Local behavior without `--url` is
-unchanged, including the lock, address and log names.
+unchanged, including the lock, address and log names. A remote tray needs no
+local install and no Docker: with no cached companion that supports `--url`,
+the launcher takes the companion for the configured version (or the newest
+release when unconfigured), from its image when Docker is available, else
+over HTTPS, and caches it under `$ARGUS_HOME/tray/`.
 
 # 4. Open Questions
 
@@ -156,8 +160,11 @@ unchanged, including the lock, address and log names.
 - `deploy/argus` starts the tray from `up`, with a `--no-tray` opt-out, and provides
   `tray [--background|--stop] [--url BASE_URL]` (including its Windows/WSL
   bridge) and the private `__tray-config` command; the remote form reuses the
-  newest cached companion that supports `--url` and needs no local install,
-  and refuses with an actionable error when only older companions exist.
+  newest cached companion that supports `--url`, else fetches the companion
+  for the configured version (or the newest release) from its image when
+  Docker is available and over HTTPS otherwise, needing neither a local
+  install nor Docker, and refuses with an actionable error when only older
+  companions exist and the fetch fails.
   `deploy/Dockerfile.api` packages the companion beside the launcher.
 - The README documents invocation, prerequisites and menu behavior; the launcher
   spec describes this optional exception to its host dependency requirements.
@@ -173,8 +180,9 @@ unchanged, including the lock, address and log names.
   optional token lookup failures, stopped-container logs, and uninstall shutdown.
   Remote URL parsing and the anonymous `/readyz` plus authenticated
   `/api/system` reads were checked against a live remote host; remote trays
-  hide the launcher-backed controls and keep per-target locks and logs.
+  hide the launcher-backed controls and keep per-target locks and logs; the
+  remote companion fetch (cached skip, HTTPS fetch without an install) is
+  covered by the launcher fakes.
 - Not verified: real menu placement, browser launching and notifications in a
   Linux, macOS or Windows desktop session; the WSL-to-Windows process bridge and
-  localhost forwarding on a real Windows machine; extraction from a published
-  release awaits the image containing the companion.
+  localhost forwarding on a real Windows machine.
