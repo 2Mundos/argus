@@ -291,7 +291,7 @@ async def test_unknown_odd_and_recent_entries_are_preserved(env: Env) -> None:
     recent = await env.instance(A)
     await env.run(workspace_cleanup_min_age_hours=1)
     assert orphan.exists() and odd.exists() and recent.exists()
-    assert (await env.entry(B))["reason"] == "unknown_instance"
+    assert (await env.entry(B))["reason"] == "orphan_unreferenced"
     assert (await env.entry("not-a-uuid"))["reason"] == "not_uuid"
     assert (await env.entry("11111111-1111-4111-8111-11111111111f"))[
         "reason"
@@ -1944,3 +1944,204 @@ async def test_triggered_run_respects_min_age_and_loop_falls_back(
     ):
         triggers = [r["trigger"] for r in await cur.fetchall()]
     assert triggers == ["loop"]
+
+
+# -- archive cap, orphans, terminal blockers, byte split -----------------------------
+
+OLD = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+MID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+NEW = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+RUN = "0" * 32
+
+
+def fake_archive(env: Env, iid: str, size: int, age: int) -> Path:
+    """An archive run directory of `size` bytes whose mtime is `age` s old."""
+    path = env.archive / iid / RUN
+    path.mkdir(parents=True)
+    (path / "repo-0.bundle").write_bytes(b"x" * size)
+    stamp = 1_700_000_000 - age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+async def test_archive_over_cap_is_reported_and_kept_without_prune(env: Env) -> None:
+    kept = [fake_archive(env, OLD, 600, 30), fake_archive(env, MID, 600, 20)]
+    run = await env.run(workspace_cleanup_max_archive_bytes=1000)
+    assert all(p.exists() for p in kept)
+    assert run.archive_bytes == 1200
+    assert any(s.startswith("archive root: over_cap") for s in run.skipped)
+
+
+async def test_archive_cap_prunes_the_oldest_until_under_the_cap(env: Env) -> None:
+    old, mid, new = (
+        fake_archive(env, OLD, 600, 30),
+        fake_archive(env, MID, 600, 20),
+        fake_archive(env, NEW, 600, 10),
+    )
+    await env.instance(A, state="running")  # unrelated live instance
+    live = fake_archive(env, A, 600, 40)  # the oldest, but its instance is live
+    run = await env.run(
+        workspace_cleanup_max_archive_bytes=1300, workspace_cleanup_prune_archives=True
+    )
+    assert live.exists() and new.exists()
+    assert not old.exists() and not mid.exists()
+    assert not old.parent.exists()  # the emptied instance directory goes too
+    assert run.archive_bytes == 1200
+    assert not any("over_cap" in s for s in run.skipped)
+
+
+async def test_archive_that_cannot_be_pruned_is_reported(env: Env) -> None:
+    await env.instance(A, state="running")
+    live = fake_archive(env, A, 600, 40)
+    run = await env.run(
+        workspace_cleanup_max_archive_bytes=100, workspace_cleanup_prune_archives=True
+    )
+    assert live.exists()
+    assert any(s.startswith("archive root: over_cap") for s in run.skipped)
+
+
+async def test_dry_run_never_prunes_archives(env: Env) -> None:
+    old = fake_archive(env, OLD, 600, 30)
+    run = await env.run(
+        dry_run=True,
+        workspace_cleanup_max_archive_bytes=100,
+        workspace_cleanup_prune_archives=True,
+    )
+    assert old.exists() and run.archive_bytes == 600
+
+
+async def test_new_archive_is_refused_when_it_would_pass_the_cap(env: Env) -> None:
+    fake_archive(env, OLD, 900, 30)
+    path = await env.instance(A)
+    make_wip_repo(env.tmp, path)
+    await env.run(workspace_cleanup_max_archive_bytes=1000)
+    assert (path / "repo" / "new.bin").exists()
+    row = await env.entry(A)
+    assert (row["status"], row["reason"]) == ("blocked", "archive_cap_reached")
+    assert wc._tree_bytes(env.archive) == 900
+
+
+async def test_orphan_rows_with_and_without_directory_and_live_reference(
+    env: Env,
+) -> None:
+    gone = await env.run()  # nothing yet
+    assert gone.scanned == 0
+    stale = env.root / OLD
+    stale.mkdir()
+    live = env.root / MID
+    live.mkdir()
+    (env.proc / "4242").mkdir()
+    (env.proc / "4242" / "cwd").symlink_to(live)
+    await env.run()
+    assert (await env.entry(OLD))["reason"] == "orphan_unreferenced"
+    decision = (await env.entry(OLD))["decision"]
+    assert str(stale) in decision and "remove" in decision
+    assert (await env.entry(MID))["reason"] == "unknown_instance"
+    assert (await env.entry(MID))["decision"] is None
+    stale.rmdir()  # the directory is gone: its stale row goes with it
+    await env.run()
+    async with (
+        env.db.read() as conn,
+        conn.execute("SELECT name FROM workspace_cleanup") as cur,
+    ):
+        assert [r["name"] for r in await cur.fetchall()] == [MID]
+    assert live.exists()
+
+
+async def _block_git_error(env: Env, iid: str) -> Path:
+    path = await env.instance(iid)
+    (path / "repo" / ".git").mkdir(parents=True)
+    (path / "repo" / "u.txt").write_text("wip\n")
+    return path
+
+
+async def _block_shallow(env: Env, iid: str) -> Path:
+    origin = env.tmp / "deep"
+    origin.mkdir()
+    git(origin, "init", "-q")
+    for n in range(2):
+        (origin / "f.txt").write_text(str(n))
+        git(origin, "add", "f.txt")
+        git(origin, "commit", "-q", "-m", str(n))
+    path = await env.instance(iid)
+    repo = path / "shallow"
+    git(env.tmp, "clone", "-q", "--depth", "1", f"file://{origin}", str(repo))
+    git(repo, "remote", "remove", "origin")
+    (repo / "wip.txt").write_text("wip\n")
+    return path
+
+
+async def _block_gitdir_missing(env: Env, iid: str) -> Path:
+    path = await env.instance(iid)
+    (path / "wt").mkdir()
+    (path / "wt" / ".git").write_text("gitdir: /workspace/agent/nope/.git\n")
+    return path
+
+
+async def _block_container_mount(env: Env, iid: str) -> Path:
+    path = await env.instance(iid)
+    env.target.mounts = [("c1", str(path / "sub"), False)]
+    return path
+
+
+@pytest.mark.parametrize(
+    ("make", "reason", "action"),
+    [
+        (_block_git_error, "git_error", "git fsck"),
+        (_block_shallow, "unsupported_repo", "unshallow"),
+        (_block_gitdir_missing, "unsupported_repo", "worktree"),
+        (_block_container_mount, "container_mount", "docker rm"),
+    ],
+)
+async def test_repeated_blocker_turns_terminal_with_a_decision(
+    env: Env, clock: FakeClock, make, reason: str, action: str
+) -> None:
+    path = await make(env, A)
+    cleaner = env.cleaner()
+    for _ in range(3):  # max_attempts
+        await cleaner.run("loop", wc.ACTOR, False)
+    row = await env.entry(A)
+    assert (row["status"], row["reason"], row["attempts"]) == ("blocked", reason, 3)
+    assert row["terminal"] == 1
+    assert str(path) in row["decision"] and action in row["decision"]
+    for _ in range(3):  # no retry, however long the wait
+        clock.advance(10 * 24 * 3600)
+        await cleaner.run("loop", wc.ACTOR, False)
+    assert (await env.entry(A))["attempts"] == 3
+    await env.run()  # a manual run still tries again
+    assert (await env.entry(A))["attempts"] == 4
+    assert path.exists()
+
+
+async def test_existing_blocked_row_past_the_budget_becomes_terminal(
+    env: Env,
+) -> None:
+    path = await _block_git_error(env, A)
+    await env.run()
+    async with env.db.write() as tx:
+        await tx.conn.execute("UPDATE workspace_cleanup SET attempts = 17")
+    await env.cleaner().run("loop", wc.ACTOR, False)
+    row = await env.entry(A)
+    assert (row["attempts"], row["terminal"]) == (17, 1)
+    assert str(path) in row["decision"]
+
+
+async def test_below_the_budget_a_blocker_is_not_terminal(env: Env) -> None:
+    await _block_git_error(env, A)
+    await env.cleaner().run("loop", wc.ACTOR, False)
+    row = await env.entry(A)
+    assert (row["terminal"], row["decision"]) == (0, None)
+
+
+async def test_summary_splits_archive_and_blocked_bytes(env: Env) -> None:
+    fake_archive(env, OLD, 600, 30)
+    path = await _block_git_error(env, A)
+    await env.run(workspace_cleanup_max_archive_bytes=500)
+    async with env.db.read() as conn:
+        out = await wc.summary(
+            conn, env.settings(workspace_cleanup_max_archive_bytes=500), False
+        )
+    assert out.archive_bytes == 600 and out.archive_over_cap is True
+    blocked = (await env.entry(A))["bytes_estimated"]
+    assert blocked and out.blocked_bytes == blocked
+    assert path.exists()

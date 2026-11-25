@@ -658,6 +658,8 @@ class WorkspaceCleanupEntry(BaseModel):
     bytes_freed: int | None
     archive_path: str | None
     error: str | None  # sanitized: exception class and errno name only
+    terminal: bool  # a blocker past its attempt budget: only a manual run retries
+    decision: str | None  # the path and the action an operator must take
     last_run_id: str
     first_seen_at: datetime
     updated_at: datetime
@@ -689,6 +691,7 @@ class WorkspaceCleanupRun(BaseModel):
     bytes_freed: int
     free_before: int | None
     free_after: int | None
+    archive_bytes: int | None  # held by the archive root when the run ended
     skipped: list[str]  # roots or pools skipped as a whole, with a reason code
     error: str | None
 
@@ -702,6 +705,7 @@ class WorkspaceCleanupSettings(BaseModel):
     run_timeout_s: float
     max_instances: int
     max_archive_bytes: int
+    prune_archives: bool
     max_attempts: int
     low_disk_bytes: int
 
@@ -713,6 +717,9 @@ class WorkspaceCleanupSummary(BaseModel):
     counts: dict[WorkspaceCleanupStatus, int]
     bytes_estimated: int  # over rows that are not cleaned yet
     bytes_freed: int  # over cleaned rows; approximate
+    archive_bytes: int | None  # held by the archive root at the last run
+    archive_over_cap: bool
+    blocked_bytes: int  # held by directories that stay blocked or failed
     problems: list[WorkspaceCleanupEntry]  # latest blocked or failed rows
 
 

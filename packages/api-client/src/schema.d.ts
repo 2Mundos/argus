@@ -14093,6 +14093,8 @@ export interface components {
             bytes_freed: number | null;
             /** Cleaned At */
             cleaned_at: string | null;
+            /** Decision */
+            decision: string | null;
             /** Error */
             error: string | null;
             /**
@@ -14113,6 +14115,8 @@ export interface components {
             /** Root */
             root: string;
             status: components["schemas"]["WorkspaceCleanupStatus"];
+            /** Terminal */
+            terminal: boolean;
             /**
              * Updated At
              * Format: date-time
@@ -14130,6 +14134,8 @@ export interface components {
         WorkspaceCleanupRun: {
             /** Actor */
             actor: string;
+            /** Archive Bytes */
+            archive_bytes: number | null;
             /** Blocked */
             blocked: number;
             /** Bytes Estimated */
@@ -14205,6 +14211,8 @@ export interface components {
             max_instances: number;
             /** Min Age Hours */
             min_age_hours: number;
+            /** Prune Archives */
+            prune_archives: boolean;
             /** Run Timeout S */
             run_timeout_s: number;
         };
@@ -14216,6 +14224,12 @@ export interface components {
         WorkspaceCleanupStatus: "eligible" | "preserved" | "blocked" | "cleaned" | "failed";
         /** WorkspaceCleanupSummary */
         WorkspaceCleanupSummary: {
+            /** Archive Bytes */
+            archive_bytes: number | null;
+            /** Archive Over Cap */
+            archive_over_cap: boolean;
+            /** Blocked Bytes */
+            blocked_bytes: number;
             /** Bytes Estimated */
             bytes_estimated: number;
             /** Bytes Freed */
