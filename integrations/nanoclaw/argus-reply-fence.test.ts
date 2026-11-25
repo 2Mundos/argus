@@ -284,20 +284,14 @@ describe("a rejected COMPLETE nudges the worker", () => {
   });
 });
 
-describe("a COMPLETE whose result.data fails the kind's schema", () => {
+describe("a COMPLETE that a domain 422 validation_failed refuses", () => {
   const field = "findings/0: 'description' is a required property";
-  async function schemaRejected() {
+  async function rejectedWith(message: string, details: string[]) {
     const fake = fakeArgus([A], {
       routes: {
         "/tasks/task-a/complete": () =>
           new Response(
-            JSON.stringify({
-              detail: {
-                code: "validation_failed",
-                message: "result.data does not match its kind's schema",
-                details: [field],
-              },
-            }),
+            JSON.stringify({ detail: { code: "validation_failed", message, details } }),
             { status: 422 },
           ),
       },
@@ -308,6 +302,8 @@ describe("a COMPLETE whose result.data fails the kind's schema", () => {
     await until(() => h.inbound.length === 1);
     return { fake, h };
   }
+  const schemaRejected = () =>
+    rejectedWith("result.data does not match its kind's schema", [field]);
 
   it("shows the worker the fields, keeps the result, and allows one corrected delivery", async () => {
     const { fake, h } = await schemaRejected();
@@ -316,6 +312,21 @@ describe("a COMPLETE whose result.data fails the kind's schema", () => {
     expect(nudge).toContain(field);
     expect(nudge).toContain("artifact art-1");
     expect(paths(fake)).toContain("/tasks/task-a/artifacts");
+    expect(paths(fake)).not.toContain("/tasks/task-a/fail");
+  });
+
+  it("retries a different domain 422 that carries details too, not only a schema one", async () => {
+    // `check_findings` (a repeated finding id) and `_check_artifacts` (an artifact the
+    // reply lists but never uploaded) are domain 422s with `detail.details` as well.
+    const missing = "art-9";
+    const { fake, h } = await rejectedWith(
+      "result lists artifacts that were not uploaded for this task",
+      [missing],
+    );
+    await h.adapter.deliver("local", h.thread(), reply('COMPLETE: {"summary":"verdict"}'));
+    const nudge = h.inbound.at(-1).content.text as string;
+    expect(nudge).toContain(missing);
+    expect(nudge).toContain("artifact art-1");
     expect(paths(fake)).not.toContain("/tasks/task-a/fail");
   });
 

@@ -6050,9 +6050,10 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
           d.kind === "complete" &&
           !schemaRejected.has(`${task.id}:${task.attempt}`)
         ) {
-          // The reply's result.data does not match the kind's schema (only that rejection carries
-          // `detail.details`; request-validation 422s are permanent). Keep what the
-          // worker produced, show it which fields are wrong, and let it deliver once more.
+          // A domain 422 `validation_failed` with `detail.details` (request-validation 422s
+          // answer `detail` as an array and carry none): the result schema, a repeated finding
+          // id, or an artifact the reply lists but never uploaded. Keep what the worker
+          // produced, show it the reasons, and let it deliver once more.
           schemaRejected.add(`${task.id}:${task.attempt}`);
           const kept = await storeRejectedResult(task, d.text);
           resends += 1;
@@ -6061,7 +6062,7 @@ export function createArgusAdapter(cfg: ArgusConfig): ChannelAdapter {
             task.attempt,
             `[Argus] Your COMPLETE was rejected (422 validation_failed): ${err.message}.${
               err.details.length ? `\n${err.details.map((x) => `- ${x}`).join("\n")}` : ""
-            }\nFix exactly these fields and send the COMPLETE again in this attempt; do not resend the same shape.${
+            }\nFix exactly what these say and send the COMPLETE again in this attempt; do not resend the same shape.${
               kept ? ` Your rejected result is kept as artifact ${kept}.` : ""
             }`,
           );

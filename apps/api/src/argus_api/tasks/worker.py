@@ -473,7 +473,8 @@ async def fail(
     rejected: dict[str, Any] = {}
     if details:
         # The reply was refused with reasons: keep them where the next attempt and
-        # the orchestrator read them (event, error text, log).
+        # the orchestrator read them (event, error text, log). No import here: `log`
+        # takes `check_lease` from `leases`, so it does not re-enter this module.
         rejected = {"details": details}
         error += "\n" + "\n".join(f"- {d}" for d in details)
         await log.record(

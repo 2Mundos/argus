@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from argus_api.db import Snapshot, Tx, ts
 from argus_api.errors import NotFoundError, RateLimitedError, TooLargeError
 from argus_api.events import transient
-from argus_api.tasks import service
+from argus_api.tasks.leases import check_lease
 
 MAX_LINES = 200  # per batch
 MAX_LINE_CHARS = 2000  # longer lines are cut, with "…"
@@ -143,7 +143,7 @@ async def admit(
     """The lease and rate checks of `append`, without writing. The route runs them on
     a read snapshot first, so a refused batch costs no cleaning; `append` repeats them
     in the writer, where they are authoritative."""
-    row = await service.check_lease(tx, task_id, attempt, agent_id)
+    row = await check_lease(tx, task_id, attempt, agent_id)
     async with tx.conn.execute(
         "SELECT at FROM task_log WHERE task_id = ? AND attempt = ? AND source = ?"
         " ORDER BY seq DESC LIMIT 1",
