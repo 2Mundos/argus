@@ -185,9 +185,12 @@ async def preview(
     choice: str | None = None,
     text: str = "",
     request_id: str | None = None,
+    promote: Literal["pr"] | None = None,
 ) -> DecisionPreview:
     decision = await store.get(snap.conn, decision_id)
-    body = DecisionAnswer(choice=choice, text=text, request_id=request_id)
+    body = DecisionAnswer(
+        choice=choice, text=text, request_id=request_id, promote=promote
+    )
     source_at = decision.decided_at or decision.created_at
     given = choice is not None or bool(text)
 
@@ -196,6 +199,9 @@ async def preview(
     if decision.subject_type == "task":
         task_row, task = await _task_facts(snap, decision)
 
+    promoted = decision.state is not DecisionState.OPEN and await service.was_promoted(
+        snap.conn, decision
+    )
     auth_error = _auth_error(decision, caller)
     shape_error: DomainError | None = None
     try:
@@ -261,7 +267,14 @@ async def preview(
             error=auth_error.code if auth_error else None,
         ),
         answer_outcome=_outcome(
-            decision, body, caller, auth_error, shape_error, transition_error, given
+            decision,
+            body,
+            caller,
+            auth_error,
+            shape_error,
+            transition_error,
+            given,
+            promoted,
         ),
         transition=transition,
         task=task,
@@ -303,9 +316,14 @@ def _outcome(
     shape_error: DomainError | None,
     transition_error: Exception | None,
     given: bool,
+    promoted: bool,
 ) -> PreviewAnswerOutcome:
     if decision.state is not DecisionState.OPEN:
-        if body.request_id is not None and service.same_answer(decision, body, caller):
+        if (
+            body.request_id is not None
+            and service.same_answer(decision, body, caller)
+            and bool(body.promote) == promoted
+        ):
             return PreviewAnswerOutcome(result="replay")
         return PreviewAnswerOutcome(
             result="rejected",

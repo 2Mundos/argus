@@ -10,6 +10,7 @@ import pytest
 from api_support import FakeClock, insert_agent
 from argus_api.auth import Identity
 from argus_api.db import Database, ts
+from argus_api.decisions import preview as preview_module
 from argus_api.decisions import service as decisions
 from argus_api.errors import ConflictError, ForbiddenError, ValidationFailedError
 from argus_api.main import app
@@ -717,6 +718,27 @@ async def test_replayed_promotion_is_idempotent_but_not_droppable(
     with pytest.raises(ConflictError):
         await _answer(db, decision_id, request_id="r2")
     assert len(await _events(db, "task", child.id, "task.promoted")) == 1
+
+
+async def test_preview_replay_agrees_with_answer_about_promotion(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    _, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id, request_id="r2", promote="pr")
+    results = {}
+    for promote in ("pr", None):
+        async with db.snapshot() as snap:
+            out = await preview_module.preview(
+                snap,
+                decision_id,
+                OWNER,
+                choice="approve",
+                request_id="r2",
+                promote=promote,
+            )
+        results[promote] = out.answer_outcome.result
+    assert results == {"pr": "replay", None: "rejected"}
 
 
 async def test_admin_approval_can_promote_to_pr_open(

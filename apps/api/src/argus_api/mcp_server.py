@@ -1904,6 +1904,7 @@ async def preview_decision(
     choice: str | None = None,
     text: str = "",
     request_id: str | None = None,
+    promote: Literal["pr"] | None = None,
 ) -> dict:
     """See what answering would do, before you answer: whether you may, whether the
     choice is valid, the task transition and side effects, and stored observations
@@ -1914,7 +1915,12 @@ async def preview_decision(
         ctx,
         "GET",
         f"/decisions/{decision_id}/preview",
-        params={"choice": choice, "text": text, "request_id": request_id},
+        params={
+            "choice": choice,
+            "text": text,
+            "request_id": request_id,
+            "promote": promote,
+        },
     )
 
 

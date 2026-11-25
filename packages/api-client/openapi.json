@@ -34452,6 +34452,23 @@
               ],
               "title": "Request Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "promote",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "pr",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Promote"
+            }
           }
         ],
         "responses": {

@@ -16881,6 +16881,7 @@ export interface operations {
                 choice?: string | null;
                 text?: string;
                 request_id?: string | null;
+                promote?: "pr" | null;
             };
             header?: never;
             path: {

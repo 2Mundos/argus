@@ -138,7 +138,7 @@ async def answer(
         if (
             body.request_id is not None
             and same_answer(decision, body, caller)
-            and bool(body.promote) == await was_promoted(tx, decision)
+            and bool(body.promote) == await was_promoted(tx.conn, decision)
         ):
             return AnsweredDecision(**decision.model_dump(), replayed=True)
         raise ConflictError(
@@ -245,11 +245,11 @@ async def answer_many(
     return outcomes
 
 
-async def was_promoted(tx: Tx, decision: Decision) -> bool:
+async def was_promoted(conn, decision: Decision) -> bool:
     """Whether answering this decision promoted its task to a PR deliverable. The
     audit event is the record: the answer row does not carry `promote`, so a replay
     that disagrees about it is a different answer, not a retry."""
-    async with tx.conn.execute(
+    async with conn.execute(
         "SELECT 1 FROM events WHERE kind = 'task.promoted'"
         " AND json_extract(data, '$.decision_id') = ?",
         (decision.id,),
