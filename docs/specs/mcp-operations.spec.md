@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-18
-updated: 2026-11-24
+updated: 2026-11-26
 ---
 
 # MCP operations
@@ -87,7 +87,10 @@ Findings outside the gap list:
   ids, title, state, kind, project, age, attempt, version, and references (ids)
   to decisions, artifacts and dependencies. A task summary also keeps the short
   operational fields the board shows (assignee, lease, block reason, progress
-  note). It carries no `spec`, `result`, `input`, `question` or `payload` bodies.
+  note). It carries no `spec`, `result`, `input`, `question` or `payload` bodies,
+  and no `models`; its free text (`block_reason`, `progress_message`, and an
+  inbox row's `question`) is cut to **300 characters** (`SUMMARY_CHARS`), with the
+  full length in `truncated`. Twenty task summaries stay under 15 KB.
   Detail carries the full model, but every free-text field over **4 KB** is cut,
   and each item says so with `truncated: {field: full length in bytes}`. A
   single-item read (`GET /tasks/{id}`, `GET /decisions/{id}`) stays whole.
@@ -395,6 +398,63 @@ Findings outside the gap list:
   `release_task(task_id, reason, attempt?)` requeues a claimed task without
   counting an attempt ([worker lifecycle](worker-lifecycle.spec.md) 3.3).
 
+## 3.2f Orchestrator reads and routine template patch
+
+Four additions for an orchestrator that must see live work, find lost work and
+change many routines without reading the whole fleet. Every read is bounded and
+read-only; none changes task lifecycle, leases or review.
+
+- **`get_queue(project?, states?)`** (manager scope; REST `GET /api/tasks/queue`,
+  `state` repeated). Covers only `blocked`, `claimed`, `ready`, `in_review` and
+  `awaiting_approval` tasks that are not archived: never finished, failed,
+  cancelled or pending ones. Each row has the full task `id`, `project`, `state`,
+  `attempt`, `failures`, `max_attempts`, `block_reason` (cut to 160 characters),
+  `title` (cut to 120) and, when the task has an open decision, `decision {id
+  (the full id `answer_decision` takes), kind, question (cut to 300)}`. With
+  several open decisions the oldest is shown. The answer also carries
+  `totals_by_state` over every match, and at most 200 rows (oldest first), then
+  `truncated: true`. Fifty active tasks stay under 20 KB.
+- **`get_task_recovery(task_id)`** (manager scope; REST `GET
+  /api/tasks/{id}/recovery`). Per attempt (at most 50): `agent_id`,
+  `instance_id`, and the newest workspace-cleanup ledger rows for that instance
+  (at most 5: `status`, `reason`, `archive_path`) with the archive summary
+  per repo: `branch`, `head`, `local_commits`, `has_wip`, `staged_count`,
+  `unstaged_count`, `untracked_count` and the stored files `{name, bytes, sha256,
+  verified}`. `verified` is true only when the file's size and SHA-256 match
+  the manifest, re-hashed on every read; the archive's `verified` is true when
+  every file is. A row without an archive has `archive: null`. The archive is
+  read only when its path resolves under `workspace_cleanup_archive_root`
+  (otherwise `problem: outside_archive_root`); a manifest over 4 MB, unreadable
+  or malformed gives `verified: false` and a `problem`. The task's other
+  artifacts (at most 100, not the `policy_snapshot` ones) come as `{name, attempt,
+  role, size, sha256}`. It never returns file bytes, and strings pass the
+  standard redaction. An unknown task is `404`.
+- **`patch_routine_template(project, routines, set, append_to_spec?, dry_run?,
+  expected_version?)`** (admin scope only; REST `PATCH
+  /api/projects/{project}/routines`). `routines` is a list of slugs or `"all"`
+  (every routine of the project). `set` maps template fields (`TEMPLATE_FIELDS`)
+  to values; an unknown field is `422 unknown_template_field`, and nothing is
+  written. `append_to_spec` adds text to the end of each spec unless the spec
+  already contains it, and cannot be combined with `set.spec`. The merged
+  template is checked as a routine save by an admin is, so the
+  [untrusted-content and integrations-grant rules](routines.spec.md) are
+  unchanged. Only the named fields are replaced; every other stored field keeps
+  its bytes. `expected_version` (a routine's `version`, its `updated_at`; one
+  routine only) fails with `409 stale_version` when the routine changed. The
+  patch is all or none, and each routine that changes records a
+  `routine.updated` event (and `routine.integrations_granted` when the grant
+  changed). The answer lists, per routine, `changed`, `spec_len_before`,
+  `spec_len_after`, `changes {field, before_bytes, after_bytes}` and its
+  new `version`; `dry_run: true` returns the same and writes nothing.
+- **Routine read by slug.** `GET /api/projects/{project}/routines/{slug}` returns
+  the same routine as `GET /api/routines/{id}` (any token that reads the
+  project), and `get_routine(routine_id, project?)` uses it when `project` is
+  given, so a routine the list returns can always be read one by one. A
+  routine now also carries `version`.
+- **`view=summary` on `get_tasks` and `get_inbox`.** See 3.1: no `models`, text
+  cut to 300 characters, and `compact` and `detail` unchanged. `get_inbox` rows
+  carry `question` in the summary view.
+
 ## 3.2b Model observability
 
 `report_task_models` (agents), `get_task_models` and `get_agent_models` (any
@@ -670,6 +730,13 @@ batch journey's context to 69,672 bytes (17,418 est. tokens), against 77,422 for
 answering one at a time on the same tree. Against the frozen baseline (227,008)
 that is −69%, in 16 calls instead of 32. The orchestrator's `tools/list` is
 26,957 bytes (44 tools), `wait_for_events` included.
+
+**Size of the step 7 reads** (`results/queue.json`, `bench/mcp_inbox.py queue`,
+reads only: the answering journeys above stopped passing on main when the
+acceptance gate began refusing their reviews, so they are not rerun). On the 40
+task seed, in response bytes: `get_queue` 18,604 (project `alpha` alone 9,290),
+`get_inbox` summary over the whole inbox 49,045, `get_tasks` summary for 20 queue
+rows 21,725, and `get_task_recovery` of one task 405.
 
 **Schema cost of step 5** (no fleet journey is benchmarked): the orchestrator's
 `tools/list` grows to 26,148 bytes (43 tools, +2.3 KB), the admin's to 21,123

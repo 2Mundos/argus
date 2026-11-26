@@ -299,7 +299,7 @@ def test_compact_view_is_small_and_summary_keys_are_unchanged(
         "review", "attempt", "max_attempts", "assignee_agent_id",
         "lease_expires_at", "block_reason", "progress_message",
         "progress_percent", "progress_at", "progress_kind", "progress_data",
-        "models", "output_at", "created_at", "archived_at", "version", "age_s",
+        "output_at", "created_at", "archived_at", "version", "age_s",
         "truncated", "depends_on", "decision_ids", "artifact_ids",
     }  # fmt: skip
     page = ok(

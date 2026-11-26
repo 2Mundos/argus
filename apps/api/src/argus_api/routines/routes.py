@@ -9,12 +9,14 @@ from argus_core.routines import (
     Routine,
     RoutineEnabled,
     RoutineRunResult,
+    RoutineTemplatePatch,
+    RoutineTemplatePatchResult,
     RoutineWrite,
 )
 from fastapi import APIRouter, Path, Response, status
 
 from argus_api.access import require_project_readable
-from argus_api.deps import CallerDep, DbDep, ManagerDep
+from argus_api.deps import AdminDep, CallerDep, DbDep, ManagerDep
 from argus_api.routines import runs, service
 
 router = APIRouter(tags=["routines"])
@@ -35,6 +37,26 @@ async def get_routine(routine_id: str, db: DbDep, caller: CallerDep) -> Routine:
         routine = await service.get_routine(conn, routine_id, db.now())
         await require_project_readable(conn, caller, routine.project)
         return routine
+
+
+@router.get("/projects/{slug}/routines/{routine}")
+async def get_routine_by_slug(
+    slug: Slug, routine: Slug, db: DbDep, caller: CallerDep
+) -> Routine:
+    """The same read as `GET /routines/{id}`, by project and slug."""
+    async with db.read() as conn:
+        await require_project_readable(conn, caller, slug)
+        return await service.get_routine_by_slug(conn, slug, routine, db.now())
+
+
+@router.patch("/projects/{slug}/routines")
+async def patch_routine_templates(
+    slug: Slug, body: RoutineTemplatePatch, db: DbDep, caller: AdminDep
+) -> RoutineTemplatePatchResult:
+    """Admin only. Change named template fields of the named routines (or `all`),
+    all or none; every other stored field is kept as is. `dry_run` writes nothing."""
+    async with db.write() as tx:
+        return await service.patch_templates(tx, slug, body, caller.actor)
 
 
 @router.put("/projects/{slug}/routines/{routine}")

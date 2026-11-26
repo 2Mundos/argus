@@ -13,14 +13,23 @@ from argus_core.routines import (
     FindingIntake,
     Routine,
     RoutineRun,
+    RoutineTemplatePatch,
+    RoutineTemplatePatchResult,
+    RoutineTemplateResult,
     RoutineWrite,
+    TemplateChange,
 )
 from argus_core.tasks import TaskCreate
 from pydantic import ValidationError
 
 from argus_api.db import Tx, ts
 from argus_api.decisions import store as decisions
-from argus_api.errors import ForbiddenError, NotFoundError, ValidationFailedError
+from argus_api.errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationFailedError,
+)
 from argus_api.events import record
 from argus_api.integrations import selection
 from argus_api.knowledge import service as knowledge
@@ -86,6 +95,13 @@ async def get_routine(
         for r in run_rows
     ]
     return _to_routine(row, now).model_copy(update={"last_runs": runs})
+
+
+async def get_routine_by_slug(
+    conn: aiosqlite.Connection, project: str, slug: str, now: datetime
+) -> Routine:
+    row = await _require_by_slug(conn, project, slug)
+    return await get_routine(conn, row["id"], now)
 
 
 # -- writes ------------------------------------------------------------------------
@@ -220,6 +236,116 @@ async def set_enabled(
         else:
             await _record_disabled(tx, actor, row["id"])
     return await get_routine(tx.conn, row["id"], tx.now)
+
+
+async def patch_templates(
+    tx: Tx, project: str, body: RoutineTemplatePatch, actor: str
+) -> RoutineTemplatePatchResult:
+    """Change only the named template fields of the named routines, all or none.
+    Every change is checked as a save is (admin: the integrations rule is the save's);
+    untouched fields keep their stored bytes. `dry_run` writes nothing."""
+    await knowledge.get_project(tx.conn, project)  # raises unknown_project
+    if not body.fields and body.append_to_spec is None:
+        raise ValidationFailedError(
+            "nothing to change: give `set` or `append_to_spec`", code="empty_patch"
+        )
+    if unknown := sorted(set(body.fields) - TEMPLATE_FIELDS):
+        raise ValidationFailedError(
+            "unknown template fields: " + ", ".join(unknown),
+            code="unknown_template_field",
+            details=[f"set.{key}: not a template field" for key in unknown],
+        )
+    if body.append_to_spec is not None and "spec" in body.fields:
+        raise ValidationFailedError(
+            "`set.spec` and `append_to_spec` are exclusive", code="spec_conflict"
+        )
+    if body.routines == "all":
+        async with tx.conn.execute(
+            "SELECT * FROM routines WHERE project = ? ORDER BY slug", (project,)
+        ) as cur:
+            rows = list(await cur.fetchall())
+    else:
+        slugs = list(dict.fromkeys(body.routines))
+        rows = [await _require_by_slug(tx.conn, project, s) for s in slugs]
+    if body.expected_version is not None and len(rows) != 1:
+        raise ValidationFailedError(
+            "expected_version applies to exactly one routine",
+            code="version_needs_one_routine",
+        )
+    results: list[RoutineTemplateResult] = []
+    for row in rows:
+        if body.expected_version is not None and (
+            row["updated_at"] != body.expected_version
+            and _at(row["updated_at"]) != _at(body.expected_version)
+        ):
+            raise ConflictError(
+                f"routine {row['slug']} changed since version {body.expected_version}"
+                f" (now {row['updated_at']})",
+                code="stale_version",
+            )
+        old: dict[str, Any] = json.loads(row["template"])
+        wanted = dict(body.fields)
+        if body.append_to_spec is not None:
+            spec = old.get("spec") or ""
+            if body.append_to_spec not in spec:
+                wanted["spec"] = spec + body.append_to_spec
+        merged = old | wanted
+        stored = old
+        if wanted:
+            checked = await _check_template(
+                tx.conn, project, row["title"], merged, admin=True
+            )
+            stored = old | {k: checked[k] for k in wanted if k in checked}
+        changed = sorted(k for k in stored if stored[k] != old.get(k))
+        changed += sorted(k for k in stored if k not in old and k not in changed)
+        changes = [
+            TemplateChange(
+                field=k,
+                before_bytes=len(json.dumps(old[k])) if k in old else 0,
+                after_bytes=len(json.dumps(stored[k])),
+            )
+            for k in changed
+        ]
+        version = row["updated_at"]
+        if changed and not body.dry_run:
+            version = ts(tx.now)
+            await tx.conn.execute(
+                "UPDATE routines SET template = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(stored), version, row["id"]),
+            )
+            await record(
+                tx,
+                actor,
+                "routine",
+                row["id"],
+                "routine.updated",
+                {"project": project, "slug": row["slug"], "template_fields": changed},
+            )
+            if "integrations" in changed and stored.get("integrations"):
+                await record(
+                    tx,
+                    actor,
+                    "routine",
+                    row["id"],
+                    "routine.integrations_granted",
+                    {
+                        "project": project,
+                        "slug": row["slug"],
+                        "integrations": sorted(set(stored["integrations"])),
+                    },
+                )
+        results.append(
+            RoutineTemplateResult(
+                slug=row["slug"],
+                id=row["id"],
+                changed=bool(changed),
+                spec_len_before=len(old.get("spec") or ""),
+                spec_len_after=len(stored.get("spec") or ""),
+                changes=changes,
+                version=version,
+            )
+        )
+    return RoutineTemplatePatchResult(dry_run=body.dry_run, routines=results)
 
 
 async def reenable(tx: Tx, routine_id: str, actor: str) -> None:
@@ -385,6 +511,7 @@ def _to_routine(row: aiosqlite.Row, now: datetime) -> Routine:
         created_by=row["created_by"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        version=row["updated_at"],
         next_slots=slots,
     )
 

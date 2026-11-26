@@ -73,6 +73,42 @@ class RoutineWrite(BaseModel):
     enabled: bool = True
 
 
+class RoutineTemplatePatch(BaseModel):
+    """`PATCH /projects/{slug}/routines`: change named template fields of several
+    routines at once, leaving every other field as stored. Admin only."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    routines: list[str] | Literal["all"]
+    fields: dict[str, Any] = Field(default={}, alias="set")
+    # Text added to the end of each routine's `spec`; skipped where it is already there.
+    append_to_spec: str | None = Field(default=None, min_length=1)
+    dry_run: bool = False
+    # The routine's `version`; only with exactly one routine.
+    expected_version: str | None = None
+
+
+class TemplateChange(BaseModel):
+    field: str
+    before_bytes: int  # 0 when the field was not set
+    after_bytes: int
+
+
+class RoutineTemplateResult(BaseModel):
+    slug: str
+    id: str
+    changed: bool
+    spec_len_before: int
+    spec_len_after: int
+    changes: list[TemplateChange]
+    version: str  # the routine's version after the write (before, on a dry run)
+
+
+class RoutineTemplatePatchResult(BaseModel):
+    dry_run: bool
+    routines: list[RoutineTemplateResult]
+
+
 class RoutineEnabled(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,6 +138,7 @@ class Routine(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+    version: str  # the stored updated_at; pass it back as expected_version
     # The next three slots from now, enabled or not: a preview of the schedule.
     next_slots: list[datetime]
     # Most recent run tasks first; filled by `GET /routines/{id}` only.

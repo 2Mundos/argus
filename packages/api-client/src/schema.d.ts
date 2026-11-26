@@ -2384,7 +2384,12 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Patch Routine Templates
+         * @description Admin only. Change named template fields of the named routines (or `all`),
+         *     all or none; every other stored field is kept as is. `dry_run` writes nothing.
+         */
+        patch: operations["patch_routine_templates_api_projects__slug__routines_patch"];
         trace?: never;
     };
     "/api/projects/{slug}/routines/{routine}": {
@@ -2394,7 +2399,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Routine By Slug
+         * @description The same read as `GET /routines/{id}`, by project and slug.
+         */
+        get: operations["get_routine_by_slug_api_projects__slug__routines__routine__get"];
         /**
          * Put Routine
          * @description Create or replace. `findings: auto`, or changing an `auto` routine, is admin only.
@@ -2944,6 +2953,28 @@ export interface paths {
          * @description Claim a ready task, long-polling up to `wait_s` seconds for one.
          */
         post: operations["claim_task_api_tasks_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Queue
+         * @description Every blocked, claimed, ready, in-review and awaiting-approval task (never
+         *     historical or pending ones), at most 200 rows, with the open decision's full id,
+         *     kind and question excerpt, and totals per state.
+         */
+        get: operations["get_queue_api_tasks_queue_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3687,6 +3718,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task Recovery
+         * @description Per attempt: agent, instance, workspace cleanup ledger rows and the archive
+         *     manifest summary with a `verified` re-hash, plus the task's non-policy artifacts.
+         *     Metadata only; never file bytes.
+         */
+        get: operations["get_task_recovery_api_tasks__task_id__recovery_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/release": {
         parameters: {
             query?: never;
@@ -4292,6 +4345,8 @@ export interface components {
             last_signal_source?: string | null;
             /** Project */
             project: string | null;
+            /** Question */
+            question?: string | null;
             /** Stall Cause */
             stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "paused_disk" | "unknown") | null;
             state: components["schemas"]["TaskState"] | null;
@@ -4656,6 +4711,50 @@ export interface components {
             /** Subject Type */
             subject_type: string;
         };
+        /** ArchiveSummary */
+        ArchiveSummary: {
+            /** Problem */
+            problem?: string | null;
+            /**
+             * Repos
+             * @default []
+             */
+            repos?: components["schemas"]["ArchivedRepo"][];
+            /** Verified */
+            verified: boolean;
+        };
+        /** ArchivedFile */
+        ArchivedFile: {
+            /** Bytes */
+            bytes: number;
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Verified */
+            verified: boolean;
+        };
+        /** ArchivedRepo */
+        ArchivedRepo: {
+            /** Artifacts */
+            artifacts: components["schemas"]["ArchivedFile"][];
+            /** Branch */
+            branch: string | null;
+            /** Has Wip */
+            has_wip: boolean;
+            /** Head */
+            head: string | null;
+            /** Local Commits */
+            local_commits: number;
+            /** Rel */
+            rel: string;
+            /** Staged Count */
+            staged_count: number;
+            /** Unstaged Count */
+            unstaged_count: number;
+            /** Untracked Count */
+            untracked_count: number;
+        };
         /** Artifact */
         Artifact: {
             /** Attached By */
@@ -4861,6 +4960,19 @@ export interface components {
             total_rows: number;
             /** Unpriced Runs */
             unpriced_runs: number;
+        };
+        /** AttemptRecovery */
+        AttemptRecovery: {
+            /** Agent Id */
+            agent_id: string;
+            /** Attempt */
+            attempt: number;
+            /** Claimed At */
+            claimed_at: string;
+            /** Instance Id */
+            instance_id: string | null;
+            /** Ledger */
+            ledger: components["schemas"]["LedgerRow"][];
         };
         /**
          * Audience
@@ -8361,6 +8473,8 @@ export interface components {
             last_signal_source?: string | null;
             /** Project */
             project: string | null;
+            /** Question */
+            question?: string | null;
             /** Stall Cause */
             stall_cause?: ("workspace_missing" | "session_gone" | "silent_delegate_active" | "no_progress" | "paused_disk" | "unknown") | null;
             state: components["schemas"]["TaskState"] | null;
@@ -9028,6 +9142,16 @@ export interface components {
             provider: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** LedgerRow */
+        LedgerRow: {
+            archive?: components["schemas"]["ArchiveSummary"] | null;
+            /** Archive Path */
+            archive_path: string | null;
+            /** Reason */
+            reason: string;
+            /** Status */
+            status: string;
         };
         /**
          * LocalAccountUpdate
@@ -10994,6 +11118,44 @@ export interface components {
              */
             replayed?: boolean;
         };
+        /** Queue */
+        Queue: {
+            /** Items */
+            items: components["schemas"]["QueueTask"][];
+            /** Totals By State */
+            totals_by_state: {
+                [key: string]: number;
+            };
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** QueueDecision */
+        QueueDecision: {
+            /** Id */
+            id: string;
+            kind: components["schemas"]["DecisionKind"];
+            /** Question */
+            question: string;
+        };
+        /** QueueTask */
+        QueueTask: {
+            /** Attempt */
+            attempt: number;
+            /** Block Reason */
+            block_reason: string | null;
+            decision?: components["schemas"]["QueueDecision"] | null;
+            /** Failures */
+            failures: number;
+            /** Id */
+            id: string;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Project */
+            project: string;
+            state: components["schemas"]["TaskState"];
+            /** Title */
+            title: string;
+        };
         /**
          * QuotaProbe
          * @description The latest quota probe of an account (one per account), whatever came of it.
@@ -11189,6 +11351,19 @@ export interface components {
          * @enum {string}
          */
         ReceiptState: "materialized" | "verified" | "consumed" | "failed";
+        /** RecoveryArtifact */
+        RecoveryArtifact: {
+            /** Attempt */
+            attempt: number;
+            /** Name */
+            name: string;
+            /** Role */
+            role: string | null;
+            /** Sha256 */
+            sha256: string;
+            /** Size */
+            size: number;
+        };
         /**
          * RecoveryExample
          * @description One auditable synthetic sample: source fail (+ claim) event ids.
@@ -11821,6 +11996,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Version */
+            version: string;
         };
         /** RoutineEnabled */
         RoutineEnabled: {
@@ -11851,6 +12028,55 @@ export interface components {
             skipped?: "previous_running" | null;
             /** Task Id */
             task_id: string | null;
+        };
+        /**
+         * RoutineTemplatePatch
+         * @description `PATCH /projects/{slug}/routines`: change named template fields of several
+         *     routines at once, leaving every other field as stored. Admin only.
+         */
+        RoutineTemplatePatch: {
+            /** Append To Spec */
+            append_to_spec?: string | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
+            /** Expected Version */
+            expected_version?: string | null;
+            /** Routines */
+            routines: string[] | "all";
+            /**
+             * Set
+             * @default {}
+             */
+            set?: {
+                [key: string]: unknown;
+            };
+        };
+        /** RoutineTemplatePatchResult */
+        RoutineTemplatePatchResult: {
+            /** Dry Run */
+            dry_run: boolean;
+            /** Routines */
+            routines: components["schemas"]["RoutineTemplateResult"][];
+        };
+        /** RoutineTemplateResult */
+        RoutineTemplateResult: {
+            /** Changed */
+            changed: boolean;
+            /** Changes */
+            changes: components["schemas"]["TemplateChange"][];
+            /** Id */
+            id: string;
+            /** Slug */
+            slug: string;
+            /** Spec Len After */
+            spec_len_after: number;
+            /** Spec Len Before */
+            spec_len_before: number;
+            /** Version */
+            version: string;
         };
         /**
          * RoutineWrite
@@ -13529,6 +13755,15 @@ export interface components {
             version: string;
             workspace?: components["schemas"]["WorkspaceFacts"] | null;
         };
+        /** TaskRecovery */
+        TaskRecovery: {
+            /** Artifacts */
+            artifacts: components["schemas"]["RecoveryArtifact"][];
+            /** Attempts */
+            attempts: components["schemas"]["AttemptRecovery"][];
+            /** Task Id */
+            task_id: string;
+        };
         /** TaskRepeats */
         TaskRepeats: {
             /** Repeats */
@@ -13724,6 +13959,15 @@ export interface components {
             public_url_configured: boolean;
             /** Templates */
             templates: components["schemas"]["WorkerTemplate"][];
+        };
+        /** TemplateChange */
+        TemplateChange: {
+            /** After Bytes */
+            after_bytes: number;
+            /** Before Bytes */
+            before_bytes: number;
+            /** Field */
+            field: string;
         };
         /** TemplateDefaults */
         TemplateDefaults: {
@@ -18867,6 +19111,73 @@ export interface operations {
             };
         };
     };
+    patch_routine_templates_api_projects__slug__routines_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutineTemplatePatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineTemplatePatchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_routine_by_slug_api_projects__slug__routines__routine__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                routine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Routine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     put_routine_api_projects__slug__routines__routine__put: {
         parameters: {
             query?: never;
@@ -19978,6 +20289,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_queue_api_tasks_queue_get: {
+        parameters: {
+            query?: {
+                project?: string | null;
+                state?: ("blocked" | "claimed" | "ready" | "in_review" | "awaiting_approval")[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Queue"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -21271,6 +21614,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_task_recovery_api_tasks__task_id__recovery_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRecovery"];
                 };
             };
             /** @description Validation Error */

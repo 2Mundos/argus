@@ -25,6 +25,7 @@ from argus_api.paging import (
     clamp,
     decode_cursor,
     encode_cursor,
+    excerpt,
 )
 from argus_api.settings import service as settings_svc
 from argus_api.tasks import delivery, readiness, service
@@ -60,6 +61,9 @@ class MatchHit(BaseModel):
     truncated: bool
 
 
+NO_MODELS = ModelsSummary()
+
+
 class TaskSummary(Refs):
     id: str
     parent_id: str | None
@@ -83,7 +87,10 @@ class TaskSummary(Refs):
     progress_at: datetime | None
     progress_kind: ProgressKind | None = None
     progress_data: dict[str, Any] | None = None
-    models: ModelsSummary = ModelsSummary()
+    # The summary view leaves it out (the shared `NO_MODELS` object); detail carries it.
+    models: ModelsSummary = Field(
+        default=NO_MODELS, exclude_if=lambda v: v is NO_MODELS
+    )
     output_at: datetime | None = None
     created_at: datetime
     archived_at: datetime | None
@@ -506,22 +513,26 @@ async def _page(
         return _compact_page(rows)
     ids = [r["id"] for r in rows]
     by_id = await refs(snap.conn, ids) if rows else {}
-    models = await modeltrace.summaries(snap.conn, ids) if rows else {}
+    models = (
+        await modeltrace.summaries(snap.conn, ids) if rows and view != "summary" else {}
+    )
     reviews = await badges(snap.conn, ids) if review_badges else {}
     items: list[TaskSummary | TaskDetail] = []
     omitted: set[str] = set()
+    # The summary view is the cheap scan: its text is cut to SUMMARY_CHARS.
+    text = excerpt if view == "summary" else cap
     for row in rows:
         truncated: dict[str, int] = {}
         common: dict[str, Any] = {
             **by_id[row["id"]].model_dump(),
             "version": row["updated_at"],
-            "models": models[row["id"]],
+            "models": models.get(row["id"], NO_MODELS),
             "age_s": _age(snap.now, row["created_at"]),
-            "block_reason": cap(row["block_reason"], "block_reason", truncated),
+            "block_reason": text(row["block_reason"], "block_reason", truncated),
             "progress_data": (
                 json.loads(row["progress_data"]) if row["progress_data"] else None
             ),
-            "progress_message": cap(
+            "progress_message": text(
                 row["progress_message"], "progress_message", truncated
             ),
         }
@@ -544,7 +555,7 @@ async def _page(
         omitted |= truncated.keys()
         items.append(item)
     if view == "summary":
-        omitted |= set(SUMMARY_OMITS)
+        omitted |= set(SUMMARY_OMITS) | {"models"}
     return TaskPage(
         items=items,
         total=len(items),

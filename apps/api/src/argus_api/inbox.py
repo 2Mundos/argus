@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from argus_core.decisions import Audience, DecisionKind
+from argus_core.redact import redact
 from argus_core.tasks import StallCause, TaskState
 from pydantic import BaseModel, PrivateAttr
 
@@ -23,6 +24,7 @@ from argus_api.paging import (
     clamp,
     decode_cursor,
     encode_cursor,
+    excerpt,
 )
 from argus_api.settings import service as settings_service
 from argus_api.tasks import service as tasks_service
@@ -77,6 +79,7 @@ class InboxItem(BaseModel):
     last_signal_source: str | None = None  # activity, progress, log, or claim
     stall_cause: StallCause | None = None  # quiet claims (stall visibility 3.7)
     stuck: Stuck | None = None  # same block reason or progress past the threshold
+    question: str | None = None  # view=summary only: the decision's, cut to 300 chars
     task: TaskDetail | None = None  # view=detail only
     decision: DecisionDetail | None = None  # view=detail only
     _cursor: str = PrivateAttr(default="")  # resumes after this row (budget cuts)
@@ -235,6 +238,7 @@ async def inbox(
     last_signals = await _quiet_last_signals(snap, quiet_ids)
     threshold_s = int(await settings_service.global_value(conn, STUCK_AFTER_KEY))
     stuck_by_task = await _stuck(snap, rows, threshold_s)
+    questions = await _questions(snap, rows) if view == "summary" else {}
     items: list[InboxItem] = []
     omitted: set[str] = set()
     for r in rows:
@@ -251,6 +255,7 @@ async def inbox(
         )
         item._cursor = encode_cursor(_cursor_key(r, order), filters)
         item.stuck = stuck_by_task.get(r["subject_id"])
+        item.question = questions.get(r["decision_id"])
         if sig := last_signals.get(r["subject_id"]):
             item.last_signal_at, item.last_signal_source, item.stall_cause = sig
         if view == "detail":
@@ -280,6 +285,18 @@ async def inbox(
         totals_by_state=dict(sorted(by_state.items())),
         totals_by_decision_kind=dict(sorted(by_kind.items())),
     )
+
+
+async def _questions(snap: Snapshot, rows: list[Any]) -> dict[str, str]:
+    """The open decisions' questions, each cut to the summary excerpt."""
+    ids = [r["decision_id"] for r in rows if r["decision_id"] is not None]
+    if not ids:
+        return {}
+    sql = f"SELECT id, question FROM decisions WHERE id IN ({','.join('?' * len(ids))})"  # noqa: S608
+    async with snap.conn.execute(sql, ids) as cur:
+        return {
+            i: excerpt(redact(q), "question", {}) or "" for i, q in await cur.fetchall()
+        }
 
 
 def _cursor_key(row: Any, order: Order) -> list[Any]:

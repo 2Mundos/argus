@@ -341,6 +341,7 @@ class Runtime(BaseModel):
 
 ViewArg = Literal["summary", "detail"]
 TaskViewArg = Literal["summary", "detail", "compact"]
+QueueState = Literal["blocked", "claimed", "ready", "in_review", "awaiting_approval"]
 InboxState = Literal["blocked", "in_review", "awaiting_approval", "pending", "claimed"]
 TaskStateArg = Literal[
     "awaiting_approval",
@@ -505,11 +506,38 @@ async def get_tasks(
     ctx: Context, ids: list[str], view: TaskViewArg = "summary"
 ) -> dict:
     """Read up to 50 tasks in one call, in the order given; unknown ids come back in
-    `missing`. view=detail adds spec and result (long text cut, see `truncated`);
+    `missing`. view=summary (default) has ids and state, text cut to 300 chars, no
+    models; view=detail adds spec and result (long text cut, see `truncated`);
     view=compact keeps only id, title, state, attempt, progress and timestamps."""
     return await _call(
         ctx, "GET", "/tasks", params={"ids": ",".join(ids), "view": view}
     )
+
+
+@tool(MANAGERS)
+async def get_queue(
+    ctx: Context,
+    project: str | None = None,
+    states: list[QueueState] | None = None,
+) -> dict:
+    """Live work in one read: every blocked, claimed, ready, in-review and
+    awaiting-approval task (never finished or pending ones; at most 200, then
+    `truncated`), each with attempt, failures, max_attempts, block_reason, title and
+    its open decision {id (full), kind, question cut to 300 chars}, plus
+    `totals_by_state`."""
+    return await _call(
+        ctx, "GET", "/tasks/queue", params={"project": project, "state": states}
+    )
+
+
+@tool(MANAGERS)
+async def get_task_recovery(ctx: Context, task_id: str) -> dict:
+    """Where a task's worker left its work, per attempt: agent id, instance id and the
+    workspace-cleanup ledger rows (status, reason, archive_path) with the archive
+    manifest summary per repo (branch, head, local_commits, has_wip, staged, unstaged
+    and untracked counts, files with bytes and sha256, `verified` from re-hashing the
+    stored files), plus the task's non-policy artifacts. Metadata only, no file bytes."""
+    return await _call(ctx, "GET", f"/tasks/{task_id}/recovery")
 
 
 @tool(MANAGERS)
@@ -1395,7 +1423,8 @@ async def get_inbox(
     limit: int = 25,
     cursor: str | None = None,
 ) -> dict:
-    """What waits on you, oldest first (order=impact: most blocked tasks first): blocked, in-review and awaiting-approval
+    """What waits on you, oldest first (order=impact: most blocked tasks first). view=summary
+    (default) adds each row's `question` cut to 300 chars; blocked, in-review and awaiting-approval
     tasks with their open decision (id, kind, audience) and current artifact ids,
     pending tasks stuck on a failed or cancelled dependency (`failed_dependencies`:
     retry it or set_task_dependencies), plus open pool and knowledge decisions. Each row
@@ -2162,8 +2191,13 @@ async def list_routines(ctx: Context, project: str) -> list[dict]:
 
 
 @tool(ANYONE)
-async def get_routine(ctx: Context, routine_id: str) -> dict:
-    """One routine with its next three slots and its most recent run tasks."""
+async def get_routine(
+    ctx: Context, routine_id: str, project: str | None = None
+) -> dict:
+    """One routine with its next three slots, its most recent run tasks and its
+    `version`. With `project`, `routine_id` is the routine's slug."""
+    if project is not None:
+        return await _call(ctx, "GET", f"/projects/{project}/routines/{routine_id}")
     return await _call(ctx, "GET", f"/routines/{routine_id}")
 
 
@@ -2196,6 +2230,36 @@ async def upsert_routine(
             "template": template or {},
             "findings": findings,
             "enabled": enabled,
+        },
+    )
+
+
+@tool(ADMINS)
+async def patch_routine_template(
+    ctx: Context,
+    project: str,
+    routines: list[str] | Literal["all"],
+    set: dict | None = None,
+    append_to_spec: str | None = None,
+    dry_run: bool = False,
+    expected_version: str | None = None,
+) -> dict:
+    """Change only the named template fields of routine slugs (or "all") in a project,
+    all or none; other fields keep their stored bytes. `set` maps template fields to
+    values, checked as a save is; `append_to_spec` adds text to each spec unless it is
+    already there. `expected_version` (a routine's `version`, one routine only)
+    refuses a stale write. Returns per routine the spec length before and after and
+    the changed fields; dry_run=true writes nothing."""
+    return await _call(
+        ctx,
+        "PATCH",
+        f"/projects/{project}/routines",
+        json={
+            "routines": routines,
+            "set": set or {},
+            "append_to_spec": append_to_spec,
+            "dry_run": dry_run,
+            "expected_version": expected_version,
         },
     )
 

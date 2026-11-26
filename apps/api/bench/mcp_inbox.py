@@ -29,7 +29,7 @@ summary plus list_decisions, in `results/actionable.json`; that run also
 records `triage`, the inbox read alone (summary then detail against
 actionable). Each recorded journey stays as it was; a later step adds its own.
 
-    uv run python apps/api/bench/mcp_inbox.py [actionable|answers|after|before]
+    uv run python apps/api/bench/mcp_inbox.py [queue|actionable|answers|after|before]
         [--out FILE]
 """
 
@@ -497,11 +497,21 @@ def journey_actionable(agent: Agent) -> dict[str, Any]:
     return {"states": states, "for_human": sorted(for_human)}
 
 
+def journey_queue(agent: Agent) -> dict[str, Any]:
+    """Reads only, nothing answered: the live queue, then the rows' summaries."""
+    agent.list_tools()
+    ids = [t["id"] for t in agent.call("get_queue", project=TARGET)["items"]]
+    back = agent.call("get_tasks", ids=ids)
+    assert not back["missing"]
+    return {"states": {t["id"]: t["state"] for t in back["items"]}, "for_human": []}
+
+
 JOURNEYS: dict[str, Callable[[Agent], dict[str, Any]]] = {
     "before": journey_before,
     "after": journey_after,
     "answers": journey_answers,
     "actionable": journey_actionable,
+    "queue": journey_queue,
 }
 
 TRIAGE_RUNS = 20
@@ -533,6 +543,36 @@ def triage(client: TestClient, token: str) -> dict[str, Any]:
     return out
 
 
+def orchestrator_reads(client: TestClient, token: str) -> dict[str, Any]:
+    """Bytes and calls of the step 7 reads over the seeded set: the live queue, the
+    inbox and get_tasks summaries, and the recovery read of one task."""
+    out: dict[str, Any] = {}
+    reads: dict[str, Callable[[Agent], Any]] = {
+        "get_queue": lambda a: a.call("get_queue"),
+        "get_queue(project)": lambda a: a.call("get_queue", project=TARGET),
+        "get_inbox(summary)": lambda a: pages(a, view="summary", limit=25),
+    }
+    for label, read in reads.items():
+        agent = Agent(client, token)
+        read(agent)
+        m = agent.metrics
+        out[label] = {"mcp_calls": m.mcp_calls, "response_bytes": m.response_bytes}
+    ids = [t["id"] for t in Agent(client, token).call("get_queue")["items"]][:20]
+    agent = Agent(client, token)
+    agent.call("get_tasks", ids=ids, view="summary")
+    out["get_tasks(summary, 20)"] = {
+        "mcp_calls": 1,
+        "response_bytes": agent.metrics.response_bytes,
+    }
+    agent = Agent(client, token)
+    agent.call("get_task_recovery", task_id=ids[0])
+    out["get_task_recovery"] = {
+        "mcp_calls": 1,
+        "response_bytes": agent.metrics.response_bytes,
+    }
+    return out
+
+
 # -- runner --------------------------------------------------------------------
 
 
@@ -552,7 +592,11 @@ def run(name: str, schemas: Path | None = None) -> dict[str, Any]:
         with TestClient(app) as client:
             expected = seed(client)
             agent = Agent(client, register(client, "orchestrator"))
-            reads = triage(client, agent.token) if name == "actionable" else None
+            reads = None
+            if name == "actionable":
+                reads = triage(client, agent.token)
+            elif name == "queue":
+                reads = orchestrator_reads(client, agent.token)
             started = time.perf_counter()
             outcome = JOURNEYS[name](agent)
             wall_s = time.perf_counter() - started
@@ -565,7 +609,7 @@ def run(name: str, schemas: Path | None = None) -> dict[str, Any]:
             if schemas is not None:  # the full tool set, as an orchestrator sees it
                 tools = Agent(client, agent.token).list_tools()
                 schemas.write_text(json.dumps(tools, indent=2) + "\n")
-    if outcome != asdict(expected):
+    if name != "queue" and outcome != asdict(expected):
         raise SystemExit(f"journey {name!r} reached a different outcome:\n{outcome}")
     m = agent.metrics
     return {
@@ -583,7 +627,7 @@ def run(name: str, schemas: Path | None = None) -> dict[str, Any]:
         "context_bytes": m.context_bytes,
         "context_tokens_estimate": m.context_bytes // 4,
         "wall_s": round(wall_s, 3),
-        **({"triage": reads} if reads else {}),
+        **({("reads" if name == "queue" else "triage"): reads} if reads else {}),
     }
 
 
