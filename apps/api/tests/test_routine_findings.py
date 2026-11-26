@@ -741,7 +741,7 @@ async def test_preview_replay_agrees_with_answer_about_promotion(
     assert results == {"pr": "replay", None: "rejected"}
 
 
-async def test_admin_approval_can_promote_to_pr_open(
+async def test_admin_approval_can_promote_to_pr_merged(
     db: Database, projects: None
 ) -> None:
     await _repository(db)
@@ -757,7 +757,7 @@ async def test_admin_approval_can_promote_to_pr_open(
     task = await _task(db, child.id)
     assert task.state is TaskState.READY
     assert (task.deliverable, task.required_capabilities) == (
-        Deliverable.PR_OPEN,
+        Deliverable.PR_MERGED,
         [WRITE],
     )
     assert (task.parent_id, task.input) == (child.parent_id, child.input)
@@ -767,7 +767,7 @@ async def test_admin_approval_can_promote_to_pr_open(
             {
                 "decision_id": decision_id,
                 "decided_by": "admin:test",
-                "deliverable": "pr_open",
+                "deliverable": "pr_merged",
                 "required_capabilities": [WRITE],
             },
         )
@@ -780,6 +780,34 @@ async def test_admin_approval_can_promote_to_pr_open(
     async with db.write() as tx:
         claimed = await tasks.claim(tx, "writer", [WRITE])
     assert claimed is not None and claimed.id == child.id
+
+
+async def test_promoted_task_carries_the_delivery_rule(
+    db: Database, projects: None
+) -> None:
+    await _repository(db)
+    child, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id, promote="pr")
+    task = await _task(db, child.id)
+    assert task.spec.startswith(child.spec)
+    rule = task.spec.removeprefix(child.spec)
+    for phrase in (
+        "argus-task deliver",
+        "argus-task wait ci --pr N",
+        "every failing check",
+        "no replacement PR, and never merge",
+        "argus-task wait merge --pr N",
+    ):
+        assert phrase in rule
+    assert task.deliverable is Deliverable.PR_MERGED
+
+
+async def test_plain_approval_does_not_change_the_spec(
+    db: Database, projects: None
+) -> None:
+    child, decision_id = await _pending_finding(db)
+    await _answer(db, decision_id)
+    assert (await _task(db, child.id)).spec == child.spec
 
 
 async def test_promotion_needs_an_admin(db: Database, projects: None) -> None:

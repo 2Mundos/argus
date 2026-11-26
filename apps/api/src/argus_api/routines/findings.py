@@ -164,13 +164,29 @@ def _first_error(exc: ValidationError) -> str:
     return f"{loc}: {e['msg']}" if loc else e["msg"]
 
 
+# Appended to a promoted finding task's spec, the text the worker reads. Argus
+# writes it, after the untrusted finding spec, in the same transaction as the
+# deliverable change: a PR opening is not the end of the task.
+PROMOTED_DELIVERY_RULE = (
+    "Owner approved PR delivery for this finding (Argus). Commit your changes on the"
+    " task branch and run the repo gates (make check). Deliver with"
+    " `argus-task deliver`, then `argus-task wait ci --pr N` until CI on the exact head"
+    " finishes. Fix every failing check and every actionable review finding in new"
+    " commits on the same PR: no replacement PR, and never merge. Only when CI is green"
+    " and the review is clean, run `argus-task wait merge --pr N` until the owner"
+    " merges it."
+)
+
+
 async def promote_to_pr(
     tx: Tx, task_id: str, decision_id: str, decider: str, scope: Scope
 ) -> None:
     """The owner's `approve` with `promote: pr` on a finding task still awaiting
-    approval: the task becomes a `pr_open` deliverable with repository write. Only a
-    human admin answering the approval decision gets here (3.3); nothing a run wrote
-    reaches this, and a task not filed by intake is refused."""
+    approval: the task becomes a `pr_merged` deliverable with repository write, so it
+    completes only after the owner merges the PR (the worker waits with
+    `argus-task wait merge`). Only a human admin answering the approval decision gets
+    here (3.3); nothing a run wrote reaches this, and a task not filed by intake is
+    refused."""
     if scope is not Scope.ADMIN:
         raise ForbiddenError("only an admin can promote a finding task to a PR")
     async with tx.conn.execute(
@@ -193,12 +209,18 @@ async def promote_to_pr(
         )
     capabilities = [deliverables.REPOSITORY_WRITE]
     await deliverables.check_creatable(
-        tx.conn, row["project"], capabilities, Deliverable.PR_OPEN
+        tx.conn, row["project"], capabilities, Deliverable.PR_MERGED
     )
     await tx.conn.execute(
-        "UPDATE tasks SET deliverable = ?, required_capabilities = ?, updated_at = ?"
-        " WHERE id = ?",
-        (Deliverable.PR_OPEN, json.dumps(capabilities), ts(tx.now), task_id),
+        "UPDATE tasks SET deliverable = ?, required_capabilities = ?, updated_at = ?,"
+        " spec = spec || ? WHERE id = ?",
+        (
+            Deliverable.PR_MERGED,
+            json.dumps(capabilities),
+            ts(tx.now),
+            f"\n\n{PROMOTED_DELIVERY_RULE}",
+            task_id,
+        ),
     )
     await record(
         tx,
@@ -209,7 +231,7 @@ async def promote_to_pr(
         {
             "decision_id": decision_id,
             "decided_by": decider,
-            "deliverable": Deliverable.PR_OPEN,
+            "deliverable": Deliverable.PR_MERGED,
             "required_capabilities": capabilities,
         },
     )
