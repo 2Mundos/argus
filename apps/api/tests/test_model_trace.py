@@ -152,7 +152,11 @@ def test_both_layers_flow_and_card_summary(client, agent) -> None:
         },
     ]
     assert "account_name" in h and "account_name" in d
-    card = client.get("/api/tasks").json()["items"][0]["models"]
+    listed = client.get("/api/tasks").json()["items"][0]
+    assert "models" not in listed  # the summary view leaves it out
+    card = client.get("/api/tasks", params={"view": "detail"}).json()["items"][0][
+        "models"
+    ]
     assert card["delegate"]["executor"] == "claude" and "timeline" not in card
     assert card["used"][0]["model"] == "gpt-6-luna"
 

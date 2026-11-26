@@ -1,0 +1,60 @@
+{
+  "journey": "queue",
+  "outcome_ok": true,
+  "tasks_resolved": 15,
+  "for_human": 0,
+  "mcp_calls": 2,
+  "rest_calls": 0,
+  "by_name": {
+    "get_queue": {
+      "calls": 1,
+      "response_bytes": 9290
+    },
+    "get_tasks": {
+      "calls": 1,
+      "response_bytes": 16218
+    }
+  },
+  "tools_list_bytes": 91157,
+  "tools_list_by_scope": {
+    "worker": {
+      "tools": 40,
+      "bytes": 37674
+    },
+    "orchestrator": {
+      "tools": 98,
+      "bytes": 91157
+    },
+    "admin": {
+      "tools": 99,
+      "bytes": 86191
+    }
+  },
+  "request_bytes": 827,
+  "response_bytes": 25508,
+  "context_bytes": 117492,
+  "context_tokens_estimate": 29373,
+  "wall_s": 0.028,
+  "reads": {
+    "get_queue": {
+      "mcp_calls": 1,
+      "response_bytes": 18604
+    },
+    "get_queue(project)": {
+      "mcp_calls": 1,
+      "response_bytes": 9290
+    },
+    "get_inbox(summary)": {
+      "mcp_calls": 2,
+      "response_bytes": 49045
+    },
+    "get_tasks(summary, 20)": {
+      "mcp_calls": 1,
+      "response_bytes": 21725
+    },
+    "get_task_recovery": {
+      "mcp_calls": 1,
+      "response_bytes": 405
+    }
+  }
+}

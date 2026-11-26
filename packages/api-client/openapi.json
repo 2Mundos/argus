@@ -1221,6 +1221,17 @@
             ],
             "title": "Project"
           },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
           "stall_cause": {
             "anyOf": [
               {
@@ -2408,6 +2419,136 @@
         "title": "AnsweredDecision",
         "type": "object"
       },
+      "ArchiveSummary": {
+        "properties": {
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "repos": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ArchivedRepo"
+            },
+            "title": "Repos",
+            "type": "array"
+          },
+          "verified": {
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "verified"
+        ],
+        "title": "ArchiveSummary",
+        "type": "object"
+      },
+      "ArchivedFile": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "verified": {
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "bytes",
+          "sha256",
+          "verified"
+        ],
+        "title": "ArchivedFile",
+        "type": "object"
+      },
+      "ArchivedRepo": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArchivedFile"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "has_wip": {
+            "title": "Has Wip",
+            "type": "boolean"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head"
+          },
+          "local_commits": {
+            "title": "Local Commits",
+            "type": "integer"
+          },
+          "rel": {
+            "title": "Rel",
+            "type": "string"
+          },
+          "staged_count": {
+            "title": "Staged Count",
+            "type": "integer"
+          },
+          "unstaged_count": {
+            "title": "Unstaged Count",
+            "type": "integer"
+          },
+          "untracked_count": {
+            "title": "Untracked Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rel",
+          "branch",
+          "head",
+          "local_commits",
+          "has_wip",
+          "staged_count",
+          "unstaged_count",
+          "untracked_count",
+          "artifacts"
+        ],
+        "title": "ArchivedRepo",
+        "type": "object"
+      },
       "Artifact": {
         "properties": {
           "attached_by": {
@@ -3030,6 +3171,49 @@
           "models"
         ],
         "title": "AttemptCost",
+        "type": "object"
+      },
+      "AttemptRecovery": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "claimed_at": {
+            "title": "Claimed At",
+            "type": "string"
+          },
+          "instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Id"
+          },
+          "ledger": {
+            "items": {
+              "$ref": "#/components/schemas/LedgerRow"
+            },
+            "title": "Ledger",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt",
+          "agent_id",
+          "instance_id",
+          "claimed_at",
+          "ledger"
+        ],
+        "title": "AttemptRecovery",
         "type": "object"
       },
       "Audience": {
@@ -12140,6 +12324,17 @@
             ],
             "title": "Project"
           },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
           "stall_cause": {
             "anyOf": [
               {
@@ -14073,6 +14268,46 @@
           "provider"
         ],
         "title": "LeaseSettings",
+        "type": "object"
+      },
+      "LedgerRow": {
+        "properties": {
+          "archive": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArchiveSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "archive_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Path"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "archive_path"
+        ],
+        "title": "LedgerRow",
         "type": "object"
       },
       "LocalAccountUpdate": {
@@ -19445,6 +19680,121 @@
         "title": "PublishResult",
         "type": "object"
       },
+      "Queue": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QueueTask"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "totals_by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Totals By State",
+            "type": "object"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "totals_by_state",
+          "truncated"
+        ],
+        "title": "Queue",
+        "type": "object"
+      },
+      "QueueDecision": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DecisionKind"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "question"
+        ],
+        "title": "QueueDecision",
+        "type": "object"
+      },
+      "QueueTask": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Reason"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project",
+          "state",
+          "attempt",
+          "failures",
+          "max_attempts",
+          "block_reason",
+          "title"
+        ],
+        "title": "QueueTask",
+        "type": "object"
+      },
       "QuotaProbe": {
         "description": "The latest quota probe of an account (one per account), whatever came of it.",
         "properties": {
@@ -20124,6 +20474,46 @@
         ],
         "title": "ReceiptState",
         "type": "string"
+      },
+      "RecoveryArtifact": {
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "attempt",
+          "role",
+          "size",
+          "sha256"
+        ],
+        "title": "RecoveryArtifact",
+        "type": "object"
       },
       "RecoveryExample": {
         "description": "One auditable synthetic sample: source fail (+ claim) event ids.",
@@ -21970,6 +22360,10 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
           }
         },
         "required": [
@@ -21988,6 +22382,7 @@
           "created_by",
           "created_at",
           "updated_at",
+          "version",
           "next_slots"
         ],
         "title": "Routine",
@@ -22071,6 +22466,133 @@
           "task_id"
         ],
         "title": "RoutineRunResult",
+        "type": "object"
+      },
+      "RoutineTemplatePatch": {
+        "additionalProperties": false,
+        "description": "`PATCH /projects/{slug}/routines`: change named template fields of several\nroutines at once, leaving every other field as stored. Admin only.",
+        "properties": {
+          "append_to_spec": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append To Spec"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "routines": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "const": "all",
+                "type": "string"
+              }
+            ],
+            "title": "Routines"
+          },
+          "set": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Set",
+            "type": "object"
+          }
+        },
+        "required": [
+          "routines"
+        ],
+        "title": "RoutineTemplatePatch",
+        "type": "object"
+      },
+      "RoutineTemplatePatchResult": {
+        "properties": {
+          "dry_run": {
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "routines": {
+            "items": {
+              "$ref": "#/components/schemas/RoutineTemplateResult"
+            },
+            "title": "Routines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "dry_run",
+          "routines"
+        ],
+        "title": "RoutineTemplatePatchResult",
+        "type": "object"
+      },
+      "RoutineTemplateResult": {
+        "properties": {
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateChange"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "spec_len_after": {
+            "title": "Spec Len After",
+            "type": "integer"
+          },
+          "spec_len_before": {
+            "title": "Spec Len Before",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "id",
+          "changed",
+          "spec_len_before",
+          "spec_len_after",
+          "changes",
+          "version"
+        ],
+        "title": "RoutineTemplateResult",
         "type": "object"
       },
       "RoutineWrite": {
@@ -27388,6 +27910,35 @@
         "title": "TaskRead",
         "type": "object"
       },
+      "TaskRecovery": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/AttemptRecovery"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "attempts",
+          "artifacts"
+        ],
+        "title": "TaskRecovery",
+        "type": "object"
+      },
       "TaskRepeats": {
         "properties": {
           "repeats": {
@@ -28041,6 +28592,29 @@
           "pools"
         ],
         "title": "TemplateCatalog",
+        "type": "object"
+      },
+      "TemplateChange": {
+        "properties": {
+          "after_bytes": {
+            "title": "After Bytes",
+            "type": "integer"
+          },
+          "before_bytes": {
+            "title": "Before Bytes",
+            "type": "integer"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "before_bytes",
+          "after_bytes"
+        ],
+        "title": "TemplateChange",
         "type": "object"
       },
       "TemplateDefaults": {
@@ -37982,6 +38556,63 @@
         "tags": [
           "routines"
         ]
+      },
+      "patch": {
+        "description": "Admin only. Change named template fields of the named routines (or `all`),\nall or none; every other stored field is kept as is. `dry_run` writes nothing.",
+        "operationId": "patch_routine_templates_api_projects__slug__routines_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutineTemplatePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutineTemplatePatchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Routine Templates",
+        "tags": [
+          "routines"
+        ]
       }
     },
     "/api/projects/{slug}/routines/{routine}": {
@@ -38031,6 +38662,63 @@
           }
         ],
         "summary": "Delete Routine",
+        "tags": [
+          "routines"
+        ]
+      },
+      "get": {
+        "description": "The same read as `GET /routines/{id}`, by project and slug.",
+        "operationId": "get_routine_by_slug_api_projects__slug__routines__routine__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "routine",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "title": "Routine",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Routine"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Routine By Slug",
         "tags": [
           "routines"
         ]
@@ -39872,6 +40560,87 @@
           }
         ],
         "summary": "Claim Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/queue": {
+      "get": {
+        "description": "Every blocked, claimed, ready, in-review and awaiting-approval task (never\nhistorical or pending ones), at most 200 rows, with the open decision's full id,\nkind and question excerpt, and totals per state.",
+        "operationId": "get_queue_api_tasks_queue_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "blocked",
+                      "claimed",
+                      "ready",
+                      "in_review",
+                      "awaiting_approval"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Queue",
         "tags": [
           "tasks"
         ]
@@ -42169,6 +42938,54 @@
           }
         ],
         "summary": "Reconcile Pr",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/recovery": {
+      "get": {
+        "description": "Per attempt: agent, instance, workspace cleanup ledger rows and the archive\nmanifest summary with a `verified` re-hash, plus the task's non-policy artifacts.\nMetadata only; never file bytes.",
+        "operationId": "get_task_recovery_api_tasks__task_id__recovery_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskRecovery"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Task Recovery",
         "tags": [
           "tasks"
         ]

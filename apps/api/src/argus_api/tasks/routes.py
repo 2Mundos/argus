@@ -75,7 +75,9 @@ from argus_api.tasks import (
     log,
     pr_binding,
     prerequisites,
+    queue,
     quota_resume,
+    recovery,
     resumability,
     review_rounds,
     route,
@@ -255,6 +257,20 @@ async def create_task(
             chat_turn=x_argus_chat_turn,
             dsh_enabled=settings.dsh_enabled,
         )
+
+
+@router.get("/queue")
+async def get_queue(
+    db: DbDep,
+    caller: ManagerDep,
+    project: str | None = None,
+    state: Annotated[list[queue.QueueState] | None, Query()] = None,
+) -> queue.Queue:
+    """Every blocked, claimed, ready, in-review and awaiting-approval task (never
+    historical or pending ones), at most 200 rows, with the open decision's full id,
+    kind and question excerpt, and totals per state."""
+    async with db.snapshot() as snap:
+        return await queue.get_queue(snap, project=project, states=state)
 
 
 @router.get("")
@@ -1013,6 +1029,19 @@ async def observe_task(
     the attempt like every worker write."""
     async with db.write() as tx:
         return await service.observe(tx, agent_id, task_id, body)
+
+
+@router.get("/{task_id}/recovery")
+async def get_task_recovery(
+    task_id: str, db: DbDep, caller: ManagerDep, settings: SettingsDep
+) -> recovery.TaskRecovery:
+    """Per attempt: agent, instance, workspace cleanup ledger rows and the archive
+    manifest summary with a `verified` re-hash, plus the task's non-policy artifacts.
+    Metadata only; never file bytes."""
+    async with db.read() as conn:
+        return await recovery.get_recovery(
+            conn, task_id, settings.workspace_cleanup_archive_root
+        )
 
 
 @router.get("/{task_id}/attempts")

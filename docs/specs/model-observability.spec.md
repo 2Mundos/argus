@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-07
+updated: 2026-11-26
 ---
 
 # Model observability
@@ -103,8 +103,8 @@ therefore can never be labelled a model switch.
   `{attempt, executions[], selections[]}`; returns the full trace.
 - `GET /api/tasks/{id}/models` (any token): `{task_id, summary, executions,
   timeline}`, oldest first.
-- `Task.models` and the task list items (REST and MCP `list_tasks`) carry the
-  compact `ModelsSummary` (`harness`, `delegate` latest-run view, `executions`,
+- `Task.models` and the `view=detail` task list items (REST and MCP `list_tasks`,
+  `get_tasks`) carry the compact `ModelsSummary` (`harness`, `delegate` latest-run view, `executions`,
   `switches`, and `used`: each distinct layer/tool/model, at most 8, oldest
   first, the model being the observed one when reported, else the configured,
   else the requested one, with `observed` saying which); a layer with no report

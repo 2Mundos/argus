@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 # Routines
@@ -159,7 +159,11 @@ lookup on `tasks.input`):
 
 ## 3.4 API, MCP, dashboard
 
-- `GET /api/projects/{slug}/routines`, `GET /api/routines/{id}` (with the last runs).
+- `GET /api/projects/{slug}/routines`, `GET /api/routines/{id}` and
+  `GET /api/projects/{slug}/routines/{routine}` (by slug; with the last runs).
+- `PATCH /api/projects/{slug}/routines` (admin) changes named template fields of
+  several routines at once, all or none
+  ([MCP operations](mcp-operations.spec.md) 3.2f).
 - `PUT /api/projects/{slug}/routines/{routine}` creates or replaces; `PATCH` for
   `enabled`; `DELETE` removes the routine (its run tasks stay).
 - `POST /api/routines/{id}/run` runs it now, still subject to the overlap rule.

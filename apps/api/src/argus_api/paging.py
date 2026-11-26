@@ -64,6 +64,17 @@ def decode_cursor(cursor: str | None, filters: dict[str, Any]) -> list[Any] | No
     return key
 
 
+SUMMARY_CHARS = 300  # characters of one free-text field in a summary view
+
+
+def excerpt(value: str | None, field: str, truncated: dict[str, int]) -> str | None:
+    """Cut `value` to SUMMARY_CHARS characters, noting its full length."""
+    if value is None or len(value) <= SUMMARY_CHARS:
+        return value
+    truncated[field] = len(value.encode())
+    return value[:SUMMARY_CHARS]
+
+
 def cap(value: str | None, field: str, truncated: dict[str, int]) -> str | None:
     """Cut `value` to TEXT_CAP bytes, noting its full length in `truncated`."""
     if value is None:
