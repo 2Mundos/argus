@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { defaultHash, homeHash, isCurrent, parseRoute } from "./App";
+import { BRAND_HREF, defaultHash, homeHash, isCurrent, parseRoute } from "./App";
 
 describe("defaultHash", () => {
   it("rewrites an empty or invalid hash by the default route rule", () => {
@@ -18,7 +18,8 @@ describe("defaultHash", () => {
 });
 
 describe("menu", () => {
-  it("links the brand to the page the app opens on", () => {
+  it("opens the dashboard from the brand, whatever the app opens on", () => {
+    expect(BRAND_HREF).toBe("#dashboard");
     expect(homeHash(true)).toBe("#chat");
     expect(homeHash(false)).toBe("#dashboard");
     expect(defaultHash("", true)).toBe(homeHash(true));
