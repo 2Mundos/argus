@@ -798,6 +798,67 @@ def test_sandboxed_nanoclaw_has_no_docker_socket() -> None:
     assert "CONTAINER_MEMORY_LIMIT" not in spec.env
 
 
+def test_nanoclaw_checkpoint_dir_wires_env_and_shared_mount() -> None:
+    from argus_api.fleet.runtimes import container_spec
+
+    upsert = _sandboxed_pool(checkpoint_dir="/srv/nc-ckpt")
+    pool = _pool_from_upsert("sbx", upsert, env={"ARGUS_NODE_ID": "n1"})
+    specs = [
+        container_spec(pool, i, ["argus_boot_x"], "http://argus")
+        for i in ("i-1", "i-2")
+    ]
+    for spec in specs:
+        assert spec.env["ARGUS_CHECKPOINT_DIR"] == "/srv/nc-ckpt"
+        assert spec.env["ARGUS_NODE_ID"] == "n1"  # the pool's own id wins
+        assert ("/srv/nc-ckpt", "/srv/nc-ckpt", "rw") in [
+            (m.host, m.container, m.mode) for m in spec.mounts
+        ]
+    default_id = container_spec(
+        _pool_from_upsert("sbx", upsert), "i-1", ["t"], "http://argus"
+    )
+    assert default_id.env["ARGUS_NODE_ID"] == "argus-pool-sbx"
+
+
+def test_nanoclaw_checkpoint_dir_uses_worker_uid_in_socket_mode() -> None:
+    from argus_api.fleet.runtimes import container_spec
+    from argus_core.fleet import NanoclawOptions
+
+    nc = NanoclawOptions(
+        install_dir="/opt/nanoclaw",
+        instances_root="/srv/nc-i",
+        agent_image="nanoclaw-agent:1",
+        checkpoint_dir="/srv/nc-ckpt",
+        user="1000:1000",
+    )
+    pool = _pool_from_upsert(
+        "sock",
+        PoolUpsert(runtime="nanoclaw", image="h:1", max_replicas=1, nanoclaw=nc),
+    )
+    spec = container_spec(pool, "i-1", ["t"], "http://argus")
+    (mount,) = [m for m in spec.mounts if m.host == "/srv/nc-ckpt"]
+    assert (mount.container, mount.mode, mount.create_owner) == (
+        "/srv/nc-ckpt",
+        "rw",
+        "1000:1000",
+    )
+
+
+def test_nanoclaw_without_checkpoint_dir_is_unchanged() -> None:
+    from argus_api.fleet.runtimes import container_spec
+
+    pool = _pool_from_upsert("sbx", _sandboxed_pool())
+    assert pool.nanoclaw is not None and pool.nanoclaw.checkpoint_dir is None
+    spec = container_spec(pool, "i-1", ["t"], "http://argus")
+    assert "ARGUS_CHECKPOINT_DIR" not in spec.env
+    assert "ARGUS_NODE_ID" not in spec.env
+    assert [m.host for m in spec.mounts] == ["/opt/nanoclaw", "/srv/nc-i/i-1"]
+
+
+def test_nanoclaw_checkpoint_dir_must_be_absolute() -> None:
+    with pytest.raises(ValueError, match=r"checkpoint_dir"):
+        _sandboxed_pool(checkpoint_dir="relative/ckpt")
+
+
 def test_nanoclaw_host_propagates_session_cpu_and_memory_quota() -> None:
     from argus_api.fleet.runtimes import container_spec
 

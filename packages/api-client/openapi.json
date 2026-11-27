@@ -15897,6 +15897,18 @@
             ],
             "title": "Agent Image Archive"
           },
+          "checkpoint_dir": {
+            "anyOf": [
+              {
+                "pattern": "^/",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Dir"
+          },
           "docker_socket": {
             "anyOf": [
               {
@@ -15981,6 +15993,18 @@
             ],
             "title": "Agent Image Archive"
           },
+          "checkpoint_dir": {
+            "anyOf": [
+              {
+                "pattern": "^/",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Dir"
+          },
           "docker_socket": {
             "anyOf": [
               {
@@ -16044,6 +16068,7 @@
           "onecli_url",
           "docker_socket",
           "agent_image_archive",
+          "checkpoint_dir",
           "repositories",
           "user",
           "group_add"

@@ -416,9 +416,13 @@ changes whenever the container is recreated. A store and node id set through the
 pool's `env` are therefore per instance: put the store under the instance
 directory, or it does not survive the container, and set `ARGUS_NODE_ID`, or a
 recreated container refuses its own checkpoints as foreign
-(`env_checkpoint_unavailable`). A retry on another instance finds no checkpoint.
-Argus provides no shared store mount, so sharing checkpoints between instances is
-not supported yet.
+(`env_checkpoint_unavailable`). A retry on another instance finds no checkpoint
+unless the pool sets `nanoclaw.checkpoint_dir` (default off): an absolute host
+path that Argus mounts rw at the same path in every instance of the pool, owned
+by the pool's worker `user`, and passes as `ARGUS_CHECKPOINT_DIR`. Argus then also
+sets `ARGUS_NODE_ID` to `argus-pool-<pool name>` unless the pool's `env` names
+one, so the instances share a node id. The store is node-local: it is shared only
+by pools whose containers run on that Docker host.
 
 ## Quota resume (off by default)
 
