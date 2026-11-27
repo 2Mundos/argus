@@ -4,6 +4,7 @@ import { ApiError, api, call, type TaskState } from "../api";
 import { DateChip } from "../DateChip";
 import { useLiveData } from "../live";
 import { PageHeader } from "../PageHeader";
+import { TaskStateBadge } from "../TaskStateBadge";
 
 type Routine = Awaited<ReturnType<typeof loadRoutines>>[number];
 
@@ -270,7 +271,7 @@ function LastRun({ routine }: { routine: Routine }) {
         <span className="muted">task unknown</span>
       )}{" "}
       {state ? (
-        <span className={`badge state-${state}`}>{state.replace("_", " ")}</span>
+        <TaskStateBadge state={state} />
       ) : (
         <span className="muted small">state unknown</span>
       )}

@@ -72,7 +72,9 @@ describe("TaskDelivery", () => {
     expect(screen.getByText(/checks pending/)).toBeTruthy();
     expect(screen.getByText(/Stale head/)).toBeTruthy();
     expect(screen.getByText(/Partial forge read: reviews/)).toBeTruthy();
+    expect(screen.getByText("Merge policy")).toBeTruthy();
     expect(screen.getByText(/do not authorize merge/i)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "PR #7" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
   });
 });

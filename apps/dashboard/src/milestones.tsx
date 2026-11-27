@@ -1,4 +1,4 @@
-import type { Task } from "./api";
+import type { Task, TaskState } from "./api";
 import { DateChip } from "./DateChip";
 import { shortId } from "./format";
 
@@ -117,9 +117,16 @@ export function MilestoneLine({ task, now }: { task: Signal; now: number }) {
 const PIE_RADIUS = 6;
 const PIE_CIRCUMFERENCE = 2 * Math.PI * PIE_RADIUS;
 
+/** States whose chip lives inside the card's corner mark instead of the meta row. */
+export const MARK_STATES = new Set<TaskState>(["claimed", "succeeded", "cancelled"]);
+
+function clampPercent(percent: number): number {
+  return Math.min(100, Math.max(0, Math.round(percent)));
+}
+
 /** The last reported overall progress: a small pie with its percentage. */
 export function ProgressPie({ percent }: { percent: number }) {
-  const value = Math.min(100, Math.max(0, Math.round(percent)));
+  const value = clampPercent(percent);
   return (
     <span className="progress-pie" role="img" aria-label={`${value}% complete`}>
       <svg viewBox="0 0 16 16" aria-hidden="true" className={value === 100 ? "done" : undefined}>
@@ -141,6 +148,92 @@ export function ProgressPie({ percent }: { percent: number }) {
       <span>{value}%</span>
     </span>
   );
+}
+
+/**
+ * Card corner mark: progress pie fused with claimed / succeeded / cancelled so the
+ * meta row does not repeat those chips. Other states keep a plain pie.
+ */
+export function TaskCardMark({
+  state,
+  percent,
+}: {
+  state: TaskState;
+  percent: number | null | undefined;
+}) {
+  if (state === "succeeded") {
+    return (
+      <span
+        className="progress-pie task-mark state-succeeded"
+        role="img"
+        aria-label="succeeded"
+        title="succeeded"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" className="done">
+          <circle className="mark-disc" cx="8" cy="8" r="7" />
+          <path className="check" d="M3.4 8.4l3.1 3.1L12.8 4.7" />
+        </svg>
+      </span>
+    );
+  }
+  if (state === "cancelled") {
+    return (
+      <span
+        className="progress-pie task-mark state-cancelled"
+        role="img"
+        aria-label="cancelled"
+        title="cancelled"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" className="done">
+          <circle className="track" cx="8" cy="8" r={PIE_RADIUS} />
+          <path className="ban" d="M4.1 4.1l7.8 7.8" />
+        </svg>
+      </span>
+    );
+  }
+  const value = clampPercent(percent ?? 0);
+  if (state === "claimed") {
+    const label = `in progress · ${value}%`;
+    return (
+      <span
+        className="progress-pie task-mark state-claimed is-live"
+        role="img"
+        aria-label={label}
+        title={label}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle className="track" cx="8" cy="8" r={PIE_RADIUS} />
+          {value > 0 ? (
+            <>
+              <circle
+                className="value"
+                cx="8"
+                cy="8"
+                r={PIE_RADIUS}
+                strokeDasharray={`${(value / 100) * PIE_CIRCUMFERENCE} ${PIE_CIRCUMFERENCE}`}
+              />
+              <circle
+                className="orbit"
+                cx="8"
+                cy="8"
+                r={PIE_RADIUS}
+                strokeDasharray={`${0.12 * PIE_CIRCUMFERENCE} ${PIE_CIRCUMFERENCE}`}
+              />
+            </>
+          ) : (
+            <circle
+              className="spinner"
+              cx="8"
+              cy="8"
+              r={PIE_RADIUS}
+              strokeDasharray={`${0.28 * PIE_CIRCUMFERENCE} ${PIE_CIRCUMFERENCE}`}
+            />
+          )}
+        </svg>
+      </span>
+    );
+  }
+  return <ProgressPie percent={value} />;
 }
 
 /** The quiet-agent warning for a claimed task, or nothing. */

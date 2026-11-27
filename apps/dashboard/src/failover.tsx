@@ -42,7 +42,7 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
   return (
     <>
       {task.serving_account && (
-        <>
+        <div className="task-fact">
           <dt>Account</dt>
           <dd>
             {task.serving_account.name}{" "}
@@ -55,10 +55,10 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
               </span>
             )}
           </dd>
-        </>
+        </div>
       )}
       {waiting && (
-        <>
+        <div className="task-fact">
           <dt>Waiting for quota</dt>
           <dd>
             {task.refill_at ? (
@@ -69,16 +69,16 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
               "until an account recovers"
             )}
           </dd>
-        </>
+        </div>
       )}
       {cls && (
-        <>
+        <div className="task-fact">
           <dt>Failure</dt>
           <dd>{cls}</dd>
-        </>
+        </div>
       )}
       {f && (
-        <>
+        <div className="task-fact task-fact-wide">
           <dt>Last failover</dt>
           <dd>
             {f.from_account ?? "—"} → {f.to_account ?? "no account left"}{" "}
@@ -101,7 +101,7 @@ export function TaskFailover({ task, now = Date.now() }: { task: FailoverInfo; n
               </div>
             ) : null}
           </dd>
-        </>
+        </div>
       )}
     </>
   );

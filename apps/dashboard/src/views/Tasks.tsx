@@ -15,10 +15,11 @@ import {
 import { DateChip } from "../DateChip";
 import { DELIVERABLES, type Deliverable } from "../deliverables";
 import { reportPage, useLiveData } from "../live";
-import { ProgressPie, TaskSignal } from "../milestones";
+import { MARK_STATES, TaskCardMark, TaskSignal } from "../milestones";
 import { PageHeader } from "../PageHeader";
 import { repositoryNeed, repositoryState, repositoryWarning } from "../projectRepository";
-import { TaskLabel } from "../TaskLabel";
+import { ProjectChip, TaskLabel } from "../TaskLabel";
+import { TaskStateBadge } from "../TaskStateBadge";
 import {
   fetchTaskDefaults,
   sourceText,
@@ -210,47 +211,60 @@ export function Tasks({
     );
   }
 
+  const searchForm = (
+    <form role="search" className="task-search" onSubmit={search}>
+      <label htmlFor="task-search-input" className="task-search-label">
+        Search tasks
+      </label>
+      <input
+        id="task-search-input"
+        type="search"
+        value={draft}
+        placeholder="Words in a title or spec"
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <button type="submit" className="compact">
+        Search
+      </button>
+      {(q || draft) && (
+        <button
+          type="button"
+          className="compact"
+          onClick={() => {
+            setDraft("");
+            window.location.hash = tasksHash({ states });
+          }}
+        >
+          Clear
+        </button>
+      )}
+    </form>
+  );
+  const boardActions = (
+    <>
+      {searchForm}
+      <label className="check header-toggle">
+        <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />
+        Archived
+      </label>
+      {!archived && (
+        <button type="button" className="compact" onClick={() => setArchiving(true)}>
+          Archive…
+        </button>
+      )}
+      <button type="button" className="primary compact" onClick={() => setCreating(true)}>
+        + New task
+      </button>
+    </>
+  );
+
   return (
     <section className={selected ? "tasks-open" : "tasks-page"}>
       {showHeader ? (
-        <PageHeader title="Tasks">
-          <label className="check header-toggle">
-            <input
-              type="checkbox"
-              checked={archived}
-              onChange={(e) => setArchived(e.target.checked)}
-            />
-            Archived
-          </label>
-          {!archived && (
-            <button type="button" className="compact" onClick={() => setArchiving(true)}>
-              Archive…
-            </button>
-          )}
-          <button type="button" className="primary compact" onClick={() => setCreating(true)}>
-            + New task
-          </button>
-        </PageHeader>
+        <PageHeader title="Tasks">{boardActions}</PageHeader>
       ) : (
         <div className="tasks-embedded-actions">
-          <div className="actions left">
-            <label className="check header-toggle">
-              <input
-                type="checkbox"
-                checked={archived}
-                onChange={(e) => setArchived(e.target.checked)}
-              />
-              Archived
-            </label>
-            {!archived && (
-              <button type="button" className="compact" onClick={() => setArchiving(true)}>
-                Archive…
-              </button>
-            )}
-            <button type="button" className="primary compact" onClick={() => setCreating(true)}>
-              + New task
-            </button>
-          </div>
+          <div className="actions left">{boardActions}</div>
         </div>
       )}
       {states.length > 0 && (
@@ -260,31 +274,6 @@ export function Tasks({
           <a href={tasksHash({ q })}>Clear</a>
         </p>
       )}
-      <form role="search" className="task-search" onSubmit={search}>
-        <label htmlFor="task-search-input">Search tasks</label>
-        <input
-          id="task-search-input"
-          type="search"
-          value={draft}
-          placeholder="Words in a title or spec"
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button type="submit" className="compact">
-          Search
-        </button>
-        {(q || draft) && (
-          <button
-            type="button"
-            className="compact"
-            onClick={() => {
-              setDraft("");
-              window.location.hash = tasksHash({ states });
-            }}
-          >
-            Clear
-          </button>
-        )}
-      </form>
       {archived && <p className="muted small">Showing archived tasks only.</p>}
       {q && (
         <p className="muted small">
@@ -386,19 +375,61 @@ const TaskCard = memo(
   }) {
     return (
       <button type="button" className="task-card has-pie" onClick={() => onOpen(task.id)}>
-        <ProgressPie percent={task.state === "succeeded" ? 100 : (task.progress_percent ?? 0)} />
-        <TaskLabel className="title" title={task.title} project={task.project} />
+        <TaskCardMark state={task.state} percent={task.progress_percent} />
+        <TaskLabel
+          className="title"
+          title={task.title}
+          project={task.project}
+          projectChip={false}
+        />
         <span className="meta">
-          <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
+          <ProjectChip project={task.project} />
+          {!MARK_STATES.has(task.state) && <TaskStateBadge state={task.state} />}
           {task.kind !== "generic" && <span className="badge">{task.kind}</span>}
-          {task.priority !== 0 && <span className="badge">p{task.priority}</span>}
+          {task.priority !== 0 && (
+            <span className="badge" title={`priority ${task.priority}`}>
+              p{task.priority}
+            </span>
+          )}
           {task.review_badge && (
             <span className={`badge review-${task.review_badge.verdict ?? "none"}`}>
               review {task.review_badge.round} ·{" "}
               {verdictText(task.review_badge.verdict, task.review_badge.state)}
             </span>
           )}
-          {task.attempt > 0 && <span className="muted">attempt {task.attempt}</span>}
+          {task.attempt > 0 && (
+            <span className="badge meta-attempt" title={`attempt ${task.attempt}`}>
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M8 2.5a5.5 5.5 0 1 1-4.6 2.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+                <path d="M3.2 2.2v3.1h3.1" fill="none" stroke="currentColor" strokeWidth="1.6" />
+              </svg>
+              {task.attempt}
+            </span>
+          )}
+          {task.state === "claimed" && task.assignee_agent_id && (
+            <WorkerChip agentId={task.assignee_agent_id} layout="inline" />
+          )}
+          {task.state === "claimed" && (
+            <span className="badge meta-lease" title="lease expires">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <path
+                  d="M8 5v3.2l2 1.3"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+              <DateChip at={task.lease_expires_at} now={now} />
+            </span>
+          )}
         </span>
         {task.models?.used?.length ? (
           <span className="meta" aria-label="Models used">
@@ -412,12 +443,6 @@ const TaskCard = memo(
             ))}
           </span>
         ) : null}
-        {task.state === "claimed" && task.assignee_agent_id && (
-          <span className="muted small">
-            <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
-            <DateChip at={task.lease_expires_at} now={now} />
-          </span>
-        )}
         {task.state === "claimed" && <TaskSignal task={task} now={now} />}
         {task.block_reason && task.state === "blocked" && (
           <span className="small muted">{task.block_reason}</span>
