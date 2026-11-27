@@ -2053,3 +2053,365 @@ async def test_legacy_reviewer_pick_only_without_execution_chains(db, fleet):
     assert [a.id for a in alternatives] == ["codex"]
     assert meta.chain_source == "execution.chains" and meta.selected == "codex"
     assert [(s.id, s.reason) for s in meta.skipped] == [("opus", "author")]
+
+
+async def test_same_alternative_account_failover_bounded_and_no_bounce_back(db, fleet):
+    """Quota on unpinned account A fails over to compatible account B on the same
+    alternative/model, records auditable events/receipts, and never bounces back
+    to A after A's 5-minute cooldown elapses in the same unresolved quota window."""
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, "cloud", AccountUpdate(enabled=False), "admin:test"
+        )
+    await add_account(
+        db, fleet, "anth-a", "anthropic", {"api_key": "k-a"}, priority=10, max_leases=1
+    )
+    await add_account(
+        db, fleet, "anth-b", "anthropic", {"api_key": "k-b"}, priority=5, max_leases=1
+    )
+    opus = direct(
+        "single-opus",
+        anyone("anthropic", "claude", {"source": "explicit", "id": "claude-opus-4"}),
+    )
+    haiku = direct(
+        "single-haiku",
+        anyone("anthropic", "claude", {"source": "explicit", "id": "claude-haiku-4"}),
+    )
+    await policy(db, [opus, haiku])
+    task = await make_task(db)
+
+    claimed, engine = await claim(db, fleet)
+    assert claimed is not None and engine.account_id == "anth-a"
+    _, diagnostic = await state(db, task.id)
+    gen1 = diagnostic.selection.generation
+    assert diagnostic.selection.alternative.id == "single-opus"
+    assert diagnostic.selection.harness.model == "claude-opus-4"
+
+    # Quota on anth-a -> stays on single-opus (cursor=0), selects anth-b on next claim.
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=gen1,
+                action="advance",
+                stopped=True,
+                reason="quota",
+            ),
+        )
+    # Duplicate/stale report is fenced.
+    with pytest.raises(ConflictError):
+        async with db.write() as tx:
+            await routes.report(
+                tx,
+                task.id,
+                A,
+                ExecutionReport(
+                    attempt=claimed.attempt,
+                    generation=gen1,
+                    action="advance",
+                    stopped=True,
+                    reason="quota",
+                ),
+            )
+
+    row, diagnostic = await state(db, task.id)
+    assert row["state"] == "ready" and diagnostic.cursor == 0
+
+    claimed2, engine2 = await claim(db, fleet)
+    assert claimed2 is not None and engine2.account_id == "anth-b"
+    _, diagnostic2 = await state(db, task.id)
+    assert diagnostic2.selection.alternative.id == "single-opus"
+    assert diagnostic2.selection.harness.account_id == "anth-b"
+    assert diagnostic2.selection.harness.model == "claude-opus-4"
+
+    # Auditable events & attempt receipt contain old and replacement account IDs.
+    async with (
+        db.read() as conn,
+        conn.execute(
+            "SELECT kind, data FROM events WHERE subject_id=? ORDER BY id", (task.id,)
+        ) as cur,
+    ):
+        evts = [
+            (r["kind"], json.loads(r["data"] or "{}")) for r in await cur.fetchall()
+        ]
+    failover_evts = [d for k, d in evts if k == "task.execution_route_account_failover"]
+    assert len(failover_evts) == 1
+    assert failover_evts[0]["old_account_id"] == "anth-a"
+    assert failover_evts[0]["new_account_id"] == "anth-b"
+    assert failover_evts[0]["alternative_id"] == "single-opus"
+    assert failover_evts[0]["model"] == "claude-opus-4"
+    assert failover_evts[0]["reason"] == "quota"
+    assert failover_evts[0]["until_kind"] == "cooldown"
+    selected_evts = [d for k, d in evts if k == "task.execution_route_selected"]
+    assert selected_evts[-1]["harness"]["account_id"] == "anth-b"
+
+    # Simulate anth-a's 5-minute cooldown expiring while anth-b is running;
+    # when anth-b also hits quota, it must NOT bounce back to anth-a.
+    async with db.write() as tx:
+        await tx.conn.execute(
+            "UPDATE accounts SET state='available', exhausted_until=NULL WHERE id='anth-a'"
+        )
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed2.attempt,
+                generation=diagnostic2.selection.generation,
+                action="advance",
+                stopped=True,
+                reason="quota",
+            ),
+        )
+
+    # anth-a is bounded out for single-opus, so cursor advances to single-haiku (index 1).
+    row3, diagnostic3 = await state(db, task.id)
+    assert row3["state"] == "ready" and diagnostic3.cursor == 1
+    claimed3, engine3 = await claim(db, fleet)
+    assert claimed3 is not None and engine3.account_id == "anth-a"
+    _, diagnostic4 = await state(db, task.id)
+    assert diagnostic4.selection.alternative.id == "single-haiku"
+    assert diagnostic4.selection.harness.model == "claude-haiku-4"
+
+
+async def test_account_failover_skips_disabled_and_auth_rejected_accounts(db, fleet):
+    await add_account(db, fleet, "anth-a", "anthropic", {"api_key": "k-a"}, priority=10)
+    await add_account(
+        db, fleet, "anth-disabled", "anthropic", {"api_key": "k-d"}, priority=9
+    )
+    await add_account(
+        db, fleet, "anth-auth", "anthropic", {"api_key": "k-r"}, priority=8
+    )
+    await add_account(db, fleet, "anth-b", "anthropic", {"api_key": "k-b"}, priority=5)
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, "anth-disabled", AccountUpdate(enabled=False), "admin:test"
+        )
+        await accounts._login_required(
+            tx, A, "anth-auth", None, None, "test", role="engine"
+        )
+    opus = direct(
+        "single-opus",
+        anyone("anthropic", "claude", {"source": "explicit", "id": "claude-opus-4"}),
+    )
+    await policy(db, [opus])
+    task = await make_task(db)
+
+    claimed, engine = await claim(db, fleet)
+    assert claimed is not None and engine.account_id == "anth-a"
+    _, diagnostic = await state(db, task.id)
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=diagnostic.selection.generation,
+                action="advance",
+                stopped=True,
+                reason="auth_expired",
+            ),
+        )
+    claimed2, engine2 = await claim(db, fleet)
+    assert claimed2 is not None and engine2.account_id == "anth-b"
+
+
+async def test_account_failover_busy_compatible_account_waits_not_exhausted(db, fleet):
+    await insert_agent(db, "agent-b")
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, "cloud", AccountUpdate(enabled=False), "admin:test"
+        )
+    await add_account(
+        db, fleet, "anth-a", "anthropic", {"api_key": "k-a"}, priority=10, max_leases=1
+    )
+    await add_account(
+        db, fleet, "anth-b", "anthropic", {"api_key": "k-b"}, priority=5, max_leases=1
+    )
+    opus = direct(
+        "single-opus",
+        anyone("anthropic", "claude", {"source": "explicit", "id": "claude-opus-4"}),
+    )
+    await policy(db, [opus])
+    await make_task(db)
+    await make_task(db)
+
+    # task1 gets anth-a, task2 gets anth-b (so anth-b is busy).
+    c1, e1 = await claim(db, fleet)
+    assert c1 is not None and e1.account_id == "anth-a"
+    async with db.write() as tx:
+        c2, e2 = await accounts.claim(tx, "agent-b", CAPS, PROVIDERS, fleet)
+    assert c2 is not None and e2.account_id == "anth-b"
+
+    # task1 hits quota on anth-a while anth-b is busy.
+    _, d1 = await state(db, c1.id)
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            c1.id,
+            A,
+            ExecutionReport(
+                attempt=c1.attempt,
+                generation=d1.selection.generation,
+                action="advance",
+                stopped=True,
+                reason="quota",
+            ),
+        )
+    # Must NOT be exhausted; next claim puts c1.id into awaiting_execution_route wait.
+    row1, d1_after = await state(db, c1.id)
+    assert row1["state"] == "ready" and d1_after.cursor == 0
+    assert (await claim(db, fleet))[0] is None
+    row1_wait, _ = await state(db, c1.id)
+    assert row1_wait["state"] == "blocked" and row1_wait["block_reason"] == routes.WAIT
+
+    # Releasing anth-b wakes c1.id and claims anth-b on single-opus.
+    async with db.write() as tx:
+        await accounts.release(tx, "agent-b", "done")
+        await routes.wake(tx)
+    c1_retry, e1_retry = await claim(db, fleet)
+    assert c1_retry is not None and c1_retry.id == c1.id
+    assert e1_retry.account_id == "anth-b"
+
+
+async def test_pinned_selector_forbids_account_failover(db, fleet):
+    await add_account(db, fleet, "anth-a", "anthropic", {"api_key": "k-a"}, priority=10)
+    await add_account(db, fleet, "anth-b", "anthropic", {"api_key": "k-b"}, priority=5)
+    pinned = direct(
+        "pinned-opus",
+        selector(
+            "anth-a",
+            "anthropic",
+            "claude",
+            {"source": "explicit", "id": "claude-opus-4"},
+        ),
+    )
+    await policy(db, [pinned])
+    task = await make_task(db)
+
+    claimed, engine = await claim(db, fleet)
+    assert claimed is not None and engine.account_id == "anth-a"
+    _, diagnostic = await state(db, task.id)
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=diagnostic.selection.generation,
+                action="advance",
+                stopped=True,
+                reason="quota",
+            ),
+        )
+    row, diagnostic2 = await state(db, task.id)
+    assert row["state"] == "blocked" and row["block_reason"] == routes.EXHAUSTED
+    assert diagnostic2.cursor == 1
+
+
+async def test_paired_executor_failure_fails_over_account_keeping_model_pair(db, fleet):
+    await add_account(
+        db,
+        fleet,
+        "custom-b",
+        "custom",
+        {"api_key": "k-cb"},
+        config={
+            "base_url": "https://openrouter.ai/api/v1",
+            "label": "openrouter",
+            "engine": {"model": "vendor/harness"},
+            "executor": {"model": "vendor/code"},
+        },
+        priority=1,
+    )
+    pair = {
+        "id": "paired-unpinned",
+        "mode": "paired",
+        "runtime": "nanoclaw",
+        "harness": anyone("local", "claude"),
+        "executor": anyone(
+            "custom", "opencode", {"source": "explicit", "id": "vendor/code"}
+        ),
+    }
+    await policy(db, [pair])
+    task = await make_task(db)
+
+    claimed, engine = await claim(db, fleet)
+    assert claimed is not None and engine.account_id == "local"
+    _, diagnostic = await state(db, task.id)
+    first_exec = diagnostic.selection.executor.account_id
+    assert first_exec in {"custom", "custom-b"}
+    other_exec = "custom-b" if first_exec == "custom" else "custom"
+
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=diagnostic.selection.generation,
+                action="advance",
+                stopped=True,
+                failed_role="executor",
+                reason="quota",
+            ),
+        )
+    claimed2, engine2 = await claim(db, fleet)
+    assert claimed2 is not None and engine2.account_id == "local"
+    _, diagnostic2 = await state(db, task.id)
+    assert diagnostic2.selection.alternative.id == "paired-unpinned"
+    assert diagnostic2.selection.harness.model == diagnostic.selection.harness.model
+    assert diagnostic2.selection.executor.model == "vendor/code"
+    assert diagnostic2.selection.executor.account_id == other_exec
+
+
+async def test_quota_report_preserves_provider_until_when_supplied(db, fleet):
+    from argus_api.db import ts
+
+    async with db.write() as tx:
+        await accounts.update_account(
+            tx, "cloud", AccountUpdate(enabled=False), "admin:test"
+        )
+    await add_account(db, fleet, "anth-a", "anthropic", {"api_key": "k-a"}, priority=10)
+    await add_account(db, fleet, "anth-b", "anthropic", {"api_key": "k-b"}, priority=5)
+    opus = direct(
+        "single-opus",
+        anyone("anthropic", "claude", {"source": "explicit", "id": "claude-opus-4"}),
+    )
+    await policy(db, [opus])
+    task = await make_task(db)
+    claimed, _ = await claim(db, fleet)
+    _, diagnostic = await state(db, task.id)
+    stated_until = datetime(2026, 11, 28, 12, 0, tzinfo=UTC)
+    async with db.write() as tx:
+        await routes.report(
+            tx,
+            task.id,
+            A,
+            ExecutionReport(
+                attempt=claimed.attempt,
+                generation=diagnostic.selection.generation,
+                action="advance",
+                stopped=True,
+                reason="quota",
+                until=stated_until,
+            ),
+        )
+    async with db.read() as conn:
+        async with conn.execute(
+            "SELECT exhausted_until FROM accounts WHERE id='anth-a'"
+        ) as cur:
+            assert (await cur.fetchone())[0] == ts(stated_until)
+        async with conn.execute(
+            "SELECT data FROM events WHERE subject_id=? AND kind='task.execution_route_account_failover'",
+            (task.id,),
+        ) as cur:
+            evt = json.loads((await cur.fetchone())[0])
+            assert evt["until_kind"] == "stated"
+            assert evt["until"] == ts(stated_until)
