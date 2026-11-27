@@ -133,6 +133,9 @@ export function parseRoute(): Route {
 const ROUTE_HEADS = new Set(["tasks", "workers", "setup", ...Object.keys(TABS)]);
 
 /** Where the app lands: Chat with the orchestrator on, the Dashboard without it (onboarding 3.4). */
+/** The signed-in logo always opens the dashboard, which has no menu entry. */
+export const BRAND_HREF = "#dashboard";
+
 export function homeHash(orchestrator: boolean): string {
   return orchestrator ? "#chat" : "#dashboard";
 }
@@ -289,8 +292,13 @@ function Shell({ onSignOut }: { onSignOut: () => void }) {
     <WorkerPanelProvider selectedId={selectedWorker} openWorker={openWorker}>
       <div className={`shell${selectedWorker ? " shell-worker" : ""}`}>
         <aside className="nav-side">
-          <Brand as="a" href={homeHash(onboarding?.orchestrator ?? false)} />
-          <PrimaryNav route={route} awaiting={awaiting} openDecisions={openDecisions} />
+          <Brand as="a" href={BRAND_HREF} />
+          <PrimaryNav
+            route={route}
+            awaiting={awaiting}
+            openDecisions={openDecisions}
+            orchestrator={onboarding?.orchestrator ?? false}
+          />
           <ServerBox system={system} />
           <button type="button" className="nav-signout" onClick={onSignOut}>
             <Icon d={SIGN_OUT_ICON} />

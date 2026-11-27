@@ -64,15 +64,17 @@ export function PrimaryNav({
   route,
   awaiting,
   openDecisions,
+  orchestrator = false,
 }: {
   route: Route;
   awaiting?: number;
   openDecisions?: number;
+  /** Chat is listed only while the internal orchestrator is enabled. */
+  orchestrator?: boolean;
 }) {
   return (
     <nav aria-label="Primary">
-      <NavLink href="#chat" current={isCurrent("#chat", route)} label="Chat" />
-      <NavLink href="#dashboard" current={isCurrent("#dashboard", route)} label="Dashboard" />
+      {orchestrator && <NavLink href="#chat" current={isCurrent("#chat", route)} label="Chat" />}
       <NavLink href="#tasks" current={isCurrent("#tasks", route)} label="Tasks" count={awaiting} />
       <NavLink
         href="#inbox"
