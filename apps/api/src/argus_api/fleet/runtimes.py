@@ -171,6 +171,17 @@ def container_spec(
             # Only this instance's directory: hosts cannot see each other's state.
             Mount(workdir, workdir, "rw", create_owner=nc.user),
         ]
+        if nc.checkpoint_dir:
+            # Shared by the pool's instances so a retry restores the previous
+            # attempt's WIP; owned by the worker uid like the instance workdir.
+            env["ARGUS_CHECKPOINT_DIR"] = nc.checkpoint_dir
+            # A checkpoint restores only on the node id that saved it, and the
+            # hostname is a per-container id: pin one id for the pool unless its
+            # env already names one.
+            env.setdefault("ARGUS_NODE_ID", f"argus-pool-{pool.name}")
+            mounts.append(
+                Mount(nc.checkpoint_dir, nc.checkpoint_dir, "rw", create_owner=nc.user)
+            )
         pids_limit = NANOCLAW_HOST_PIDS_LIMIT
         if sandboxed:
             # No host socket: the instance runs its own daemon inside the sandbox

@@ -9720,6 +9720,8 @@ export interface components {
             agent_image: string;
             /** Agent Image Archive */
             agent_image_archive?: string | null;
+            /** Checkpoint Dir */
+            checkpoint_dir?: string | null;
             /** Docker Socket */
             docker_socket?: string | null;
             /**
@@ -9759,6 +9761,8 @@ export interface components {
             agent_image: string;
             /** Agent Image Archive */
             agent_image_archive: string | null;
+            /** Checkpoint Dir */
+            checkpoint_dir: string | null;
             /** Docker Socket */
             docker_socket: string | null;
             /**

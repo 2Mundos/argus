@@ -220,6 +220,10 @@ class NanoclawOptions(BaseModel):
     # daemon when `docker.runtime` is set (that daemon starts without images).
     # Absent: `agent_image` is pulled from its registry.
     agent_image_archive: str | None = Field(default=None, pattern=r"^/")
+    # Node-local checkpoint store for unpublished WIP: an absolute path on the
+    # Docker host, mounted rw at the same path in every instance of the pool and
+    # passed as ARGUS_CHECKPOINT_DIR. Absent: no store (checkpoints disabled).
+    checkpoint_dir: str | None = Field(default=None, pattern=r"^/")
     # Explicit project -> HTTPS repository allowlist; values are not secrets.
     repositories: dict[str, str] = {}
     user: str | None = None  # "uid:gid" to run the host container as
