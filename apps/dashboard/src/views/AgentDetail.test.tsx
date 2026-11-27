@@ -144,10 +144,11 @@ describe("Activity", () => {
 
   it("keeps counting how long the agent has been silent", async () => {
     const { container } = render(<Activity task={task} events={[]} />);
-    const stamp = () => container.querySelector(".muted.small")?.textContent ?? "";
-    expect(stamp()).toMatch(/updated now/);
+    const stamp = () =>
+      container.querySelector('[title="last progress update"]')?.textContent ?? "";
+    expect(stamp()).toBe("now");
     await flush(30_000);
-    expect(stamp()).toMatch(/updated 30 seconds ago/);
+    expect(stamp()).toBe("30 seconds ago");
   });
 
   it("is hidden for a finished task that sent no note", () => {
@@ -164,7 +165,8 @@ describe("AgentDetail", () => {
     await flush(); // agent + work
     await flush(); // TaskLog backfill
     expect(screen.getByText("nanoclaw/1.2 · codex · unknown")).toBeTruthy();
-    expect(screen.getByText("Global - Finance canary")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open Global task graph" })).toBeTruthy();
+    expect(screen.getByText("Finance canary")).toBeTruthy();
     expect(screen.getByText("running the tests")).toBeTruthy();
     expect(screen.getByText("40%")).toBeTruthy();
     expect(screen.getByLabelText("Live")).toBeTruthy();
@@ -179,7 +181,7 @@ describe("AgentDetail", () => {
   it("links the held task as a compact chip in the panel State row", async () => {
     render(<AgentDetail agentId="agent-1" onClose={() => {}} variant="panel" />);
     await flush();
-    const chip = screen.getByRole("link", { name: /Open task Global - Finance canary/ });
+    const chip = screen.getByRole("link", { name: /Open task Global · Finance canary/ });
     expect(chip.getAttribute("href")).toBe("#tasks/task-1");
     expect(chip.className).toMatch(/task-chip/);
     expect(chip.textContent).toBe("Finance canary");

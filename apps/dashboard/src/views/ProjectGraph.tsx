@@ -1,12 +1,51 @@
 import { useState } from "react";
-import { api, call } from "../api";
+import { api, call, type TaskState } from "../api";
 import { useLiveData } from "../live";
+import { MARK_STATES } from "../milestones";
+import { stateLabel } from "../TaskStateBadge";
 import { type GraphEdge, layers, lineage } from "../taskGraph";
 
 const NODE_W = 190;
 const NODE_H = 46;
 const GAP_X = 70;
 const GAP_Y = 14;
+const MARK_R = 5;
+const MARK_C = 2 * Math.PI * MARK_R;
+
+/** Same glyphs as the task-card corner marks, drawn in the graph SVG. */
+function GraphStateMark({ state, x, y }: { state: TaskState; x: number; y: number }) {
+  if (!MARK_STATES.has(state)) return null;
+  return (
+    <g
+      className={`tg-mark tg-mark-${state}`}
+      transform={`translate(${x}, ${y})`}
+      aria-hidden="true"
+    >
+      {state === "succeeded" ? (
+        <>
+          <circle className="mark-disc" cx="7" cy="7" r="6.5" />
+          <path className="check" d="M3.2 7.2l2.6 2.6L11 4.5" />
+        </>
+      ) : state === "cancelled" ? (
+        <>
+          <circle className="track" cx="7" cy="7" r={MARK_R} />
+          <path className="ban" d="M3.5 3.5l7 7" />
+        </>
+      ) : (
+        <>
+          <circle className="track" cx="7" cy="7" r={MARK_R} />
+          <circle
+            className="spinner"
+            cx="7"
+            cy="7"
+            r={MARK_R}
+            strokeDasharray={`${0.28 * MARK_C} ${MARK_C}`}
+          />
+        </>
+      )}
+    </g>
+  );
+}
 
 function loadGraph(project: string, includeDone: boolean, signal: AbortSignal) {
   return call(
@@ -107,15 +146,19 @@ export function ProjectGraph({ project }: { project: string }) {
               const at = position.get(n.id);
               if (!at) return null;
               const stuck = n.state === "pending" && n.failed_dependencies.length > 0;
+              const marked = MARK_STATES.has(n.state);
+              const label = stateLabel(n.state);
               const cls = [
                 "tg-node",
                 `tg-${n.state}`,
                 stuck && "is-stuck",
+                marked && "has-mark",
                 n.project !== project && "is-foreign",
                 related && (related.has(n.id) ? "is-on" : "is-dim"),
               ]
                 .filter(Boolean)
                 .join(" ");
+              const titleMax = marked ? 24 : 26;
               return (
                 <a
                   key={n.id}
@@ -128,18 +171,22 @@ export function ProjectGraph({ project }: { project: string }) {
                   onBlur={() => setHovered(null)}
                 >
                   <title>
-                    {n.title} — {n.state.replace("_", " ")}
+                    {n.title} — {label}
                     {stuck ? " (a dependency failed or was cancelled)" : ""}
                     {n.project !== project ? ` (project ${n.project})` : ""}
                   </title>
                   <rect x={at.x} y={at.y} width={NODE_W} height={NODE_H} rx={8} />
-                  <text x={at.x + 10} y={at.y + 19}>
-                    {n.title.length > 26 ? `${n.title.slice(0, 25)}…` : n.title}
+                  <text x={at.x + 10} y={at.y + (marked ? 27 : 19)}>
+                    {n.title.length > titleMax ? `${n.title.slice(0, titleMax - 1)}…` : n.title}
                   </text>
-                  <text className="tg-sub" x={at.x + 10} y={at.y + 36}>
-                    {stuck ? "stuck · " : ""}
-                    {n.state.replace("_", " ")}
-                  </text>
+                  {marked ? (
+                    <GraphStateMark state={n.state} x={at.x + NODE_W - 22} y={at.y + 16} />
+                  ) : (
+                    <text className="tg-sub" x={at.x + 10} y={at.y + 36}>
+                      {stuck ? "stuck · " : ""}
+                      {label}
+                    </text>
+                  )}
                 </a>
               );
             })}

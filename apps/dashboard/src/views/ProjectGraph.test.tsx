@@ -30,6 +30,7 @@ vi.hoisted(() => {
       make("c", "cancelled"),
       make("d", "pending", ["c"]),
       make("x", "ready"),
+      make("r", "claimed"),
     ],
     edges: [
       { from: "a", to: "b" },
@@ -61,12 +62,17 @@ afterEach(cleanup);
 describe("ProjectGraph", () => {
   it("links nodes to task detail, marks stuck ones and highlights lineage on hover", async () => {
     const { container } = render(<ProjectGraph project="web" />);
-    await waitFor(() => expect(container.querySelectorAll("a.tg-node")).toHaveLength(5));
+    await waitFor(() => expect(container.querySelectorAll("a.tg-node")).toHaveLength(6));
     expect(screen.getByRole("status").textContent).toContain("Only the newest tasks");
 
     const link = (id: string) => container.querySelector(`a[href="#tasks/${id}"]`) as Element;
     expect(link("d").classList.contains("is-stuck")).toBe(true);
     expect(link("b").classList.contains("is-stuck")).toBe(false);
+    expect(link("a").querySelector(".tg-mark-succeeded")).toBeTruthy();
+    expect(link("c").querySelector(".tg-mark-cancelled")).toBeTruthy();
+    expect(link("r").querySelector(".tg-mark-claimed .spinner")).toBeTruthy();
+    expect(link("a").querySelector(".tg-sub")).toBeNull();
+    expect(link("r").querySelector("title")?.textContent).toMatch(/in progress/);
 
     fireEvent.mouseEnter(link("b"));
     expect(link("a").classList.contains("is-on")).toBe(true);

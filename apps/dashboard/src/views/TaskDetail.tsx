@@ -12,6 +12,7 @@ import { useLiveData } from "../live";
 import { Markdown } from "../Markdown";
 import { TaskReadiness } from "../readiness";
 import { TaskLabel } from "../TaskLabel";
+import { TaskStateBadge } from "../TaskStateBadge";
 import { pinText } from "../taskEdit";
 import { WorkerChip } from "../WorkerChip";
 import { Activity } from "./Activity";
@@ -259,12 +260,13 @@ export function TaskDetail({
       {task && (
         <div className="panel-titlebar-actions" role="group" aria-label="Task actions">
           {(task.editable_fields ?? []).length > 0 && !editing && (
-            <button type="button" onClick={() => setEditing(true)}>
+            <button type="button" className="compact" onClick={() => setEditing(true)}>
               Edit
             </button>
           )}
           {task.state === "blocked" && task.block_reason !== "budget_exhausted" && (
             <ActionButton
+              className="compact"
               pending={action.is("unblock")}
               disabled={action.busy}
               action={() => act("unblock")}
@@ -276,7 +278,7 @@ export function TaskDetail({
             (confirmingRetry ? (
               <>
                 <ActionButton
-                  className="primary"
+                  className="primary compact"
                   pending={action.is("retry")}
                   disabled={action.busy}
                   action={() => act("retry")}
@@ -285,6 +287,7 @@ export function TaskDetail({
                 </ActionButton>
                 <button
                   type="button"
+                  className="compact"
                   disabled={action.busy}
                   onClick={() => setConfirmingRetry(false)}
                 >
@@ -294,6 +297,7 @@ export function TaskDetail({
             ) : (
               <button
                 type="button"
+                className="compact"
                 title={`Reset failures (${task.failures}/${task.max_attempts} used) and run it again`}
                 disabled={action.busy}
                 onClick={() => setConfirmingRetry(true)}
@@ -304,6 +308,7 @@ export function TaskDetail({
           {ARCHIVABLE.includes(task.state) &&
             (task.archived_at ? (
               <ActionButton
+                className="compact"
                 pending={action.is("unarchive")}
                 disabled={action.busy}
                 action={() => act("unarchive")}
@@ -312,6 +317,7 @@ export function TaskDetail({
               </ActionButton>
             ) : (
               <ActionButton
+                className="compact"
                 pending={action.is("archive")}
                 disabled={action.busy}
                 action={() => act("archive")}
@@ -322,6 +328,7 @@ export function TaskDetail({
           {steerable && selected === task.attempt && supportsSteer !== false && (
             <button
               type="button"
+              className="compact"
               aria-expanded={steerOpen}
               onClick={() => setSteerOpen((open) => !open)}
             >
@@ -329,13 +336,18 @@ export function TaskDetail({
             </button>
           )}
           {!ARCHIVABLE.includes(task.state) && (
-            <button type="button" disabled={action.busy} onClick={() => setForcing(true)}>
+            <button
+              type="button"
+              className="compact"
+              disabled={action.busy}
+              onClick={() => setForcing(true)}
+            >
               Accept and close
             </button>
           )}
           {!ARCHIVABLE.includes(task.state) && (
             <ActionButton
-              className="danger"
+              className="danger compact"
               pending={action.is("cancel")}
               disabled={action.busy}
               action={() => act("cancel")}
@@ -415,258 +427,23 @@ export function TaskDetail({
               unknown: may have been delivered (never acknowledged)
             </p>
           )}
-          <Activity task={task} events={events ?? []} selected={selected} />
-          {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
-          <TaskReadiness task={task} />
-          {task.kind === "code_review" ? (
-            task.parent_id && (
-              <p className="small">
-                Review round of <a href={`#tasks/${task.parent_id}`}>parent task</a>
-              </p>
-            )
-          ) : (
-            <TaskReviews taskId={taskId} />
-          )}
-          {executionRoute?.execution && (
-            <details className="card">
-              <summary>
-                Execution route ·{" "}
-                {executionRoute.execution.selection?.alternative.id ?? "Not selected"} · cursor{" "}
-                {executionRoute.execution.cursor}
-              </summary>
-              <p>
-                Last recorded selection is not a claim of current eligibility. Task pins bypass the
-                whole chain; resets and classified advances are recorded in activity.
-              </p>
-              {executionRoute.execution.review && (
-                <p>
-                  Independent review of {executionRoute.execution.review.parent_id}: chose{" "}
-                  {executionRoute.execution.review.selected}
-                  {executionRoute.execution.review.skipped?.map(
-                    (s) => `; skipped ${s.id} (${s.reason})`,
-                  )}
+          <div className="task-status-band">
+            <Activity task={task} events={events ?? []} selected={selected} />
+            <div className="task-live">
+              {delivery && <TaskDelivery delivery={delivery} onChanged={reload} />}
+              <TaskReadiness task={task} />
+              {task.kind === "code_review" && task.parent_id && (
+                <p className="small task-parent-link">
+                  Review round of <a href={`#tasks/${task.parent_id}`}>parent task</a>
                 </p>
               )}
-              <pre>{JSON.stringify(executionRoute.execution, null, 2)}</pre>
-            </details>
-          )}
+            </div>
+          </div>
           {task.state === "blocked" && task.block_reason === "env_repository_unconfigured" && (
             <RepositoryBlockAction taskId={taskId} project={task.project} onUnblocked={reload} />
           )}
           {task.state === "blocked" && task.block_reason === "budget_exhausted" && (
             <BudgetBlockAction task={task} onChanged={reload} />
-          )}
-          <dl className="facts task-facts">
-            <dt>State</dt>
-            <dd className="task-state-line">
-              <span className={`badge state-${task.state}`}>{task.state.replace("_", " ")}</span>
-              {task.block_reason && (
-                <span className="muted"> · {blockReasonText(task.block_reason)}</span>
-              )}
-              {task.oom_kill && <span className="muted"> · OOM-killed (kernel out of memory)</span>}
-            </dd>
-            {task.review_disposition && (
-              <>
-                <dt>Review</dt>
-                <dd className="review-disposition">
-                  {reviewOutcomeText(task.review_disposition.outcome)}
-                  {task.review_disposition.reason && (
-                    <span className="muted"> · {task.review_disposition.reason}</span>
-                  )}
-                  {(task.review_disposition.unmet?.length ?? 0) > 0 && (
-                    <span className="muted">
-                      {" "}
-                      · {task.review_disposition.unmet?.length} acceptance item(s) verification
-                      missing
-                    </span>
-                  )}
-                </dd>
-              </>
-            )}
-            {task.kind !== "generic" && (
-              <>
-                <dt>Kind</dt>
-                <dd>{task.kind}</dd>
-              </>
-            )}
-            <dt>Difficulty</dt>
-            <dd>
-              <span className={`badge difficulty-${task.difficulty ?? "standard"}`}>
-                {task.difficulty ?? "standard"}
-              </span>{" "}
-              <span className="muted small">({task.difficulty_source ?? "inferred"})</span>
-            </dd>
-            <dt>Deliverable</dt>
-            <dd>{deliverableLabel(task.deliverable)}</dd>
-            {task.knowledge.length > 0 && (
-              <>
-                <dt>Pinned pages</dt>
-                <dd>{task.knowledge.map(shortId).join(", ")}</dd>
-              </>
-            )}
-            <dt>Attempt</dt>
-            <dd>
-              {task.attempt} (failures {task.failures}/{task.max_attempts})
-            </dd>
-            <dt>Workspace</dt>
-            <dd>
-              {task.workspace ? (
-                <>
-                  <WorkerChip agentId={task.workspace.owner_agent_id} layout="inline" /> ·{" "}
-                  {CHECKPOINT_TEXT[task.workspace.checkpoint]}
-                  <span className="muted small">
-                    {" "}
-                    ({OWNER_STATUS_TEXT[task.workspace.owner_status ?? "unknown"]}
-                    {task.workspace.owner_node_id ? ` on ${task.workspace.owner_node_id}` : ""})
-                  </span>
-                </>
-              ) : (
-                <span className="muted">
-                  No workspace yet: the task has not started an attempt.
-                </span>
-              )}
-            </dd>
-            <TaskFailover task={task} />
-            {task.assignee_agent_id && (
-              <>
-                <dt>Assignee</dt>
-                <dd>
-                  <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
-                  <DateChip at={task.lease_expires_at} />
-                </dd>
-              </>
-            )}
-            {task.timeout_at && (
-              <>
-                <dt>Times out</dt>
-                <dd>
-                  <DateChip at={task.timeout_at} />
-                </dd>
-              </>
-            )}
-            {task.required_capabilities.length > 0 && (
-              <>
-                <dt>Needs</dt>
-                <dd>{task.required_capabilities.join(", ")}</dd>
-              </>
-            )}
-            {task.account_providers && (
-              <>
-                <dt>Runs on</dt>
-                <dd>{task.account_providers.join(", ")}</dd>
-              </>
-            )}
-            {task.harness_account && (
-              <>
-                <dt>Harness account</dt>
-                <dd>{task.harness_account}</dd>
-              </>
-            )}
-            {task.harness_model && (
-              <>
-                <dt>Harness</dt>
-                <dd>{pinText(task.harness_model)}</dd>
-              </>
-            )}
-            {task.executor_model && (
-              <>
-                <dt>Executor</dt>
-                <dd>{pinText(task.executor_model)}</dd>
-              </>
-            )}
-            {task.depends_on.length > 0 && (
-              <>
-                <dt>Depends on</dt>
-                <dd>{task.depends_on.map(shortId).join(", ")}</dd>
-              </>
-            )}
-            <dt>Created</dt>
-            <dd>
-              <DateChip at={task.created_at} /> by {task.created_by}
-            </dd>
-          </dl>
-          <TaskCostTile taskId={taskId} />
-          {task.depends_on.length > 0 && <TaskPrerequisites taskId={taskId} />}
-          <TaskContinuation taskId={taskId} />
-          {!!modelTrace?.executions.length && (
-            <section className="task-models" aria-label="Models">
-              <div className="task-models-list">
-                {modelAttempts.map((attempt) => (
-                  <section
-                    key={attempt}
-                    className="task-models-attempt"
-                    aria-label={`Attempt ${attempt} models`}
-                  >
-                    <span className="task-models-attempt-tag" title={`Attempt ${attempt}`}>
-                      #{attempt}
-                    </span>
-                    <div className="task-models-runs">
-                      {modelTrace.executions
-                        .filter((run) => run.attempt === attempt)
-                        .map((run) => (
-                          <p key={run.id} className="task-models-run">
-                            <span className="task-models-engine">
-                              {run.layer === "harness"
-                                ? (run.engine ?? "harness")
-                                : (run.executor ?? "executor")}
-                            </span>{" "}
-                            <span className="task-models-detail">
-                              {run.observed_model ?? run.configured_model ?? "not reported"}
-                              {run.observed_model
-                                ? ` (${run.evidence})`
-                                : run.configured_model
-                                  ? " (configured)"
-                                  : ""}
-                              {!run.observed_model && run.evidence_reason
-                                ? ` · not reported: ${run.evidence_reason.replaceAll("_", " ")}`
-                                : ""}
-                              {run.account_name
-                                ? ` · account ${run.account_name}`
-                                : run.account_id
-                                  ? ` · account ${run.account_id}`
-                                  : ""}
-                              {" · "}
-                              {run.state}
-                              {run.started_at ? (
-                                <>
-                                  {" · "}
-                                  <DateChip at={run.started_at} />
-                                </>
-                              ) : null}
-                              {run.ended_at ? (
-                                <>
-                                  {" → "}
-                                  <DateChip at={run.ended_at} />
-                                </>
-                              ) : null}
-                              {run.usage
-                                ? ` · ${run.usage.input_tokens ?? 0}+${run.usage.output_tokens ?? 0} tokens · $${run.usage.cost_usd ?? "?"}`
-                                : ""}
-                            </span>
-                          </p>
-                        ))}
-                      {modelTrace.timeline
-                        .filter((selection) => selection.attempt === attempt)
-                        .map((selection) => (
-                          <p key={selection.id} className="task-models-hop muted">
-                            {selection.kind} · {selection.reason_code} ·{" "}
-                            {selection.from_model ??
-                              selection.from_account_name ??
-                              selection.from_account_id ??
-                              "start"}{" "}
-                            →{" "}
-                            {selection.to_model ??
-                              selection.to_account_name ??
-                              selection.to_account_id ??
-                              "?"}
-                            {selection.outcome ? ` · ${selection.outcome}` : ""}
-                          </p>
-                        ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            </section>
           )}
           {steerable && selected === task.attempt && supportsSteer !== false && (
             <TaskSteers
@@ -681,7 +458,7 @@ export function TaskDetail({
               showList={false}
             />
           )}
-          {error && <p className="error">{error}</p>}
+          {error && <p className="error task-inline-error">{error}</p>}
           {task.error && (
             <LastError
               key={`${task.error_attempt}:${task.error}`}
@@ -690,6 +467,269 @@ export function TaskDetail({
               label={errorLabel(task)}
             />
           )}
+          {task.kind !== "code_review" && <TaskReviews taskId={taskId} />}
+          <div className="task-meta-card">
+            <dl className="facts task-facts">
+              <div
+                className={
+                  task.block_reason || task.oom_kill ? "task-fact task-fact-wide" : "task-fact"
+                }
+              >
+                <dt>State</dt>
+                <dd className="task-state-line">
+                  <TaskStateBadge state={task.state} />
+                  {task.block_reason && (
+                    <span className="muted"> · {blockReasonText(task.block_reason)}</span>
+                  )}
+                  {task.oom_kill && (
+                    <span className="muted"> · OOM-killed (kernel out of memory)</span>
+                  )}
+                </dd>
+              </div>
+              {task.kind !== "generic" && (
+                <div className="task-fact">
+                  <dt>Kind</dt>
+                  <dd>{task.kind}</dd>
+                </div>
+              )}
+              <div className="task-fact">
+                <dt>Difficulty</dt>
+                <dd>
+                  <span className={`badge difficulty-${task.difficulty ?? "standard"}`}>
+                    {task.difficulty ?? "standard"}
+                  </span>{" "}
+                  <span className="muted small">({task.difficulty_source ?? "inferred"})</span>
+                </dd>
+              </div>
+              <div className="task-fact">
+                <dt>Deliverable</dt>
+                <dd>{deliverableLabel(task.deliverable)}</dd>
+              </div>
+              <div className="task-fact">
+                <dt>Attempt</dt>
+                <dd>
+                  {task.attempt} (failures {task.failures}/{task.max_attempts})
+                </dd>
+              </div>
+              {task.assignee_agent_id && (
+                <div className="task-fact">
+                  <dt>Assignee</dt>
+                  <dd>
+                    <WorkerChip agentId={task.assignee_agent_id} layout="inline" /> · lease{" "}
+                    <DateChip at={task.lease_expires_at} />
+                  </dd>
+                </div>
+              )}
+              {task.timeout_at && (
+                <div className="task-fact">
+                  <dt>Times out</dt>
+                  <dd>
+                    <DateChip at={task.timeout_at} />
+                  </dd>
+                </div>
+              )}
+              <TaskFailover task={task} />
+              {task.required_capabilities.length > 0 && (
+                <div className="task-fact">
+                  <dt>Needs</dt>
+                  <dd>{task.required_capabilities.join(", ")}</dd>
+                </div>
+              )}
+              {task.account_providers && (
+                <div className="task-fact">
+                  <dt>Runs on</dt>
+                  <dd>{task.account_providers.join(", ")}</dd>
+                </div>
+              )}
+              {task.harness_account && (
+                <div className="task-fact">
+                  <dt>Harness account</dt>
+                  <dd>{task.harness_account}</dd>
+                </div>
+              )}
+              {task.harness_model && (
+                <div className="task-fact">
+                  <dt>Harness</dt>
+                  <dd>{pinText(task.harness_model)}</dd>
+                </div>
+              )}
+              {task.executor_model && (
+                <div className="task-fact">
+                  <dt>Executor</dt>
+                  <dd>{pinText(task.executor_model)}</dd>
+                </div>
+              )}
+              <div className="task-fact">
+                <dt>Created</dt>
+                <dd>
+                  <DateChip at={task.created_at} /> by {task.created_by}
+                </dd>
+              </div>
+              {task.review_disposition && (
+                <div className="task-fact task-fact-wide">
+                  <dt>Review</dt>
+                  <dd className="review-disposition">
+                    {reviewOutcomeText(task.review_disposition.outcome)}
+                    {task.review_disposition.reason && (
+                      <span className="muted"> · {task.review_disposition.reason}</span>
+                    )}
+                    {(task.review_disposition.unmet?.length ?? 0) > 0 && (
+                      <span className="muted">
+                        {" "}
+                        · {task.review_disposition.unmet?.length} acceptance item(s) verification
+                        missing
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              )}
+              <div className="task-fact task-fact-wide">
+                <dt>Workspace</dt>
+                <dd>
+                  {task.workspace ? (
+                    <>
+                      <WorkerChip agentId={task.workspace.owner_agent_id} layout="inline" /> ·{" "}
+                      {CHECKPOINT_TEXT[task.workspace.checkpoint]}
+                      <span className="muted small">
+                        {" "}
+                        ({OWNER_STATUS_TEXT[task.workspace.owner_status ?? "unknown"]}
+                        {task.workspace.owner_node_id ? ` on ${task.workspace.owner_node_id}` : ""})
+                      </span>
+                    </>
+                  ) : (
+                    <span className="muted">
+                      No workspace yet: the task has not started an attempt.
+                    </span>
+                  )}
+                </dd>
+              </div>
+              {task.knowledge.length > 0 && (
+                <div className="task-fact task-fact-wide">
+                  <dt>Pinned pages</dt>
+                  <dd>{task.knowledge.map(shortId).join(", ")}</dd>
+                </div>
+              )}
+              {task.depends_on.length > 0 && (
+                <div className="task-fact task-fact-wide">
+                  <dt>Depends on</dt>
+                  <dd>{task.depends_on.map(shortId).join(", ")}</dd>
+                </div>
+              )}
+            </dl>
+            <TaskCostTile taskId={taskId} />
+            {!!modelTrace?.executions.length && (
+              <section className="task-models" aria-label="Models">
+                <header className="task-section-label">Models</header>
+                <div className="task-models-list">
+                  {modelAttempts.map((attempt) => (
+                    <section
+                      key={attempt}
+                      className="task-models-attempt"
+                      aria-label={`Attempt ${attempt} models`}
+                    >
+                      <span className="task-models-attempt-tag" title={`Attempt ${attempt}`}>
+                        #{attempt}
+                      </span>
+                      <div className="task-models-runs">
+                        {modelTrace.executions
+                          .filter((run) => run.attempt === attempt)
+                          .map((run) => (
+                            <p key={run.id} className="task-models-run">
+                              <span className="task-models-engine">
+                                {run.layer === "harness"
+                                  ? (run.engine ?? "harness")
+                                  : (run.executor ?? "executor")}
+                              </span>{" "}
+                              <span className="task-models-detail">
+                                {run.observed_model ?? run.configured_model ?? "not reported"}
+                                {run.observed_model
+                                  ? ` (${run.evidence})`
+                                  : run.configured_model
+                                    ? " (configured)"
+                                    : ""}
+                                {!run.observed_model && run.evidence_reason
+                                  ? ` · not reported: ${run.evidence_reason.replaceAll("_", " ")}`
+                                  : ""}
+                                {run.account_name
+                                  ? ` · account ${run.account_name}`
+                                  : run.account_id
+                                    ? ` · account ${run.account_id}`
+                                    : ""}
+                                {" · "}
+                                {run.state}
+                                {run.started_at ? (
+                                  <>
+                                    {" · "}
+                                    <DateChip at={run.started_at} />
+                                  </>
+                                ) : null}
+                                {run.ended_at ? (
+                                  <>
+                                    {" → "}
+                                    <DateChip at={run.ended_at} />
+                                  </>
+                                ) : null}
+                                {run.usage
+                                  ? ` · ${run.usage.input_tokens ?? 0}+${run.usage.output_tokens ?? 0} tokens · $${run.usage.cost_usd ?? "?"}`
+                                  : ""}
+                              </span>
+                            </p>
+                          ))}
+                        {modelTrace.timeline
+                          .filter((selection) => selection.attempt === attempt)
+                          .map((selection) => (
+                            <p key={selection.id} className="task-models-hop muted">
+                              {selection.kind} · {selection.reason_code} ·{" "}
+                              {selection.from_model ??
+                                selection.from_account_name ??
+                                selection.from_account_id ??
+                                "start"}{" "}
+                              →{" "}
+                              {selection.to_model ??
+                                selection.to_account_name ??
+                                selection.to_account_id ??
+                                "?"}
+                              {selection.outcome ? ` · ${selection.outcome}` : ""}
+                            </p>
+                          ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+          <div className="task-disclosures">
+            {executionRoute?.execution && (
+              <details className="task-disclosure task-route">
+                <summary>
+                  <span className="task-section-label">Execution route</span>
+                  <span className="task-disclosure-meta muted small">
+                    {executionRoute.execution.selection?.alternative.id ?? "Not selected"} · cursor{" "}
+                    {executionRoute.execution.cursor}
+                  </span>
+                </summary>
+                <div className="task-disclosure-body">
+                  <p className="muted small">
+                    Last recorded selection is not a claim of current eligibility. Task pins bypass
+                    the whole chain; resets and classified advances are recorded in activity.
+                  </p>
+                  {executionRoute.execution.review && (
+                    <p className="small">
+                      Independent review of {executionRoute.execution.review.parent_id}: chose{" "}
+                      {executionRoute.execution.review.selected}
+                      {executionRoute.execution.review.skipped?.map(
+                        (s) => `; skipped ${s.id} (${s.reason})`,
+                      )}
+                    </p>
+                  )}
+                  <pre>{JSON.stringify(executionRoute.execution, null, 2)}</pre>
+                </div>
+              </details>
+            )}
+            <TaskContinuation taskId={taskId} />
+            {task.depends_on.length > 0 && <TaskPrerequisites taskId={taskId} />}
+          </div>
           {editing ? (
             <TaskEditForm
               task={task}
@@ -699,12 +739,12 @@ export function TaskDetail({
               }}
             />
           ) : (
-            <>
+            <section className="task-spec-section" aria-label="Spec">
               <header className="task-section-label">Spec</header>
               <div className="spec">
                 <Markdown>{task.spec || "_No spec._"}</Markdown>
               </div>
-            </>
+            </section>
           )}
           {task.project !== "global" && <TaskIntegrations task={task} onSaved={reload} />}
           {task.attempt > 0 && (

@@ -37,22 +37,31 @@ export function TaskReadiness({ task }: { task: TaskRead }) {
   // An older API answers without the decisions: show nothing rather than guess.
   if (!task.merge) return null;
   const gate = task.pr_gate;
+  const reviewOff = task.forge_review !== "required";
+  const merge = mergeLine(task.merge);
   return (
-    <section className="delivery" aria-label="Merge and review">
-      <div>Merge: {mergeLine(task.merge)}</div>
-      <div>
-        Review: {task.forge_review === "required" ? "required by forge review policy" : "off"}
+    <section className="delivery delivery-readiness" aria-label="Merge and review">
+      <div className="delivery-row">
+        <span className="badge" title={`Merge: ${merge}`}>
+          Merge: {task.merge.may_merge ? "authorized" : "not authorized"}
+        </span>
+        <span className="badge">
+          Review: {reviewOff ? "off" : "required by forge review policy"}
+        </span>
+        {gate && (
+          <span className="badge" title={gate.head_sha ?? undefined}>
+            PR gate{gate.head_sha ? ` at ${gate.head_sha.slice(0, 7)}` : ""}:{" "}
+            {gate.pr_state !== "open"
+              ? `PR ${gate.pr_state}`
+              : gate.ready
+                ? "ready"
+                : gate.reasons.map((r) => gateReason(r, gate)).join("; ")}
+          </span>
+        )}
       </div>
-      {gate && (
-        <div>
-          PR gate{gate.head_sha ? ` at ${gate.head_sha.slice(0, 7)}` : ""}:{" "}
-          {gate.pr_state !== "open"
-            ? `PR ${gate.pr_state}`
-            : gate.ready
-              ? "ready"
-              : gate.reasons.map((r) => gateReason(r, gate)).join("; ")}
-        </div>
-      )}
+      <p className="muted small delivery-merge-detail" title={`Merge: ${merge}`}>
+        Merge: {merge}
+      </p>
     </section>
   );
 }

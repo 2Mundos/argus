@@ -274,7 +274,7 @@ export function TaskContinuation({ taskId }: { taskId: string }) {
   const [opened, setOpened] = useState(false);
   return (
     <details
-      className="task-continuation"
+      className="task-disclosure task-continuation"
       aria-label="Continuation"
       onToggle={(e) => e.currentTarget.open && setOpened(true)}
     >

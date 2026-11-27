@@ -153,3 +153,54 @@ describe("Activity finalization", () => {
     expect(screen.getByText("Agent finished.")).toBeTruthy();
   });
 });
+
+describe("Activity notes", () => {
+  const now = Date.parse("2026-10-29T12:00:00.000Z");
+  const task = {
+    id: "t1",
+    state: "claimed" as const,
+    attempt: 1,
+    progress_message: "Waiting on CI for #12 at abc",
+    progress_percent: 70,
+    progress_at: new Date(now - 30_000).toISOString(),
+    progress_kind: "waiting" as const,
+    progress_data: { on: "ci", ref: "#12", since: new Date(now - 60_000).toISOString() },
+    lease_expires_at: new Date(now + 120_000).toISOString(),
+    quiet_at: null,
+    last_signal_at: null,
+    last_signal_source: null,
+    stall_cause: null,
+  };
+  const note = (id: number, message: string, agoMs: number) => ({
+    id,
+    kind: "task.progress" as const,
+    at: new Date(now - agoMs).toISOString(),
+    subject_type: "task",
+    subject_id: "t1",
+    actor: "agent:a1",
+    data: { attempt: 1, message },
+  });
+
+  it("collapses older notes and prefers the milestone over a duplicate message", () => {
+    vi.useFakeTimers({ now: new Date(now) });
+    render(
+      <Activity
+        task={task}
+        events={[
+          note(1, "Waiting on CI for #12 at abc", 30_000),
+          note(2, "frontend done", 120_000),
+          note(3, "backend done", 300_000),
+        ]}
+      />,
+    );
+    expect(screen.getByText(/Waiting on CI for #12/)).toBeTruthy();
+    expect(screen.getByRole("img", { name: "70% complete" })).toBeTruthy();
+    expect(screen.getByLabelText("in progress")).toBeTruthy();
+    const earlier = screen.getByText(/Earlier notes \(2\)/);
+    const details = earlier.closest("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    details.open = true;
+    expect(screen.getByText("frontend done")).toBeTruthy();
+    expect(screen.getByText("backend done")).toBeTruthy();
+  });
+});

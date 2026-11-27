@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { NO_SIGNAL_MINUTES, noSignalMinutes, parseNoSignalMinutes, TaskSignal } from "./milestones";
+import {
+  NO_SIGNAL_MINUTES,
+  noSignalMinutes,
+  parseNoSignalMinutes,
+  TaskCardMark,
+  TaskSignal,
+} from "./milestones";
 
 afterEach(cleanup);
 
@@ -142,5 +148,27 @@ describe("no-signal threshold", () => {
     expect(parseNoSignalMinutes("")).toBe(10);
     expect(parseNoSignalMinutes("abc")).toBe(10);
     expect(parseNoSignalMinutes("-3")).toBe(10);
+  });
+});
+
+describe("TaskCardMark", () => {
+  it("labels claimed as in progress and keeps the mark animating", () => {
+    const { container } = render(<TaskCardMark state="claimed" percent={25} />);
+    const mark = screen.getByRole("img", { name: "in progress · 25%" });
+    expect(mark.className).toMatch(/is-live/);
+    expect(container.querySelector(".orbit")).toBeTruthy();
+  });
+
+  it("spins an indeterminate arc before the first progress report", () => {
+    const { container } = render(<TaskCardMark state="claimed" percent={0} />);
+    expect(screen.getByRole("img", { name: "in progress · 0%" })).toBeTruthy();
+    expect(container.querySelector(".spinner")).toBeTruthy();
+  });
+
+  it("draws succeeded and cancelled as terminal marks", () => {
+    const { rerender } = render(<TaskCardMark state="succeeded" percent={40} />);
+    expect(screen.getByRole("img", { name: "succeeded" })).toBeTruthy();
+    rerender(<TaskCardMark state="cancelled" percent={null} />);
+    expect(screen.getByRole("img", { name: "cancelled" })).toBeTruthy();
   });
 });

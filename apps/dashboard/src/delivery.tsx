@@ -19,6 +19,17 @@ function shortSha(sha: string | null | undefined): string | null {
   return sha ? sha.slice(0, 7) : null;
 }
 
+function shortPrLabel(pr: string): string {
+  try {
+    const path = new URL(pr).pathname.replace(/\/$/, "");
+    const parts = path.split("/").filter(Boolean);
+    const n = parts[parts.length - 1];
+    return n && /^\d+$/.test(n) ? `#${n}` : path.replace(/^\//, "");
+  } catch {
+    return pr.replace(/^https?:\/\//, "");
+  }
+}
+
 /** The PR state read from the forge. `unknown` is its own badge, never styled as open. */
 export function TaskDelivery({
   delivery,
@@ -32,6 +43,7 @@ export function TaskDelivery({
   const merged = delivery.pr_state === "merged";
   const head = shortSha(delivery.head?.sha);
   const combined = delivery.checks_combined;
+  const policyNotes = delivery.authorization?.notes?.trim();
 
   async function accept(decisionId: string) {
     await action.run(async () => {
@@ -52,31 +64,41 @@ export function TaskDelivery({
 
   return (
     <section className="delivery" aria-label="Delivery">
-      <div>
-        PR{" "}
-        <a href={delivery.pr} target="_blank" rel="noreferrer">
-          {delivery.pr.replace(/^https:\/\//, "")}
-        </a>{" "}
+      <div className="delivery-row">
+        <a className="delivery-pr" href={delivery.pr} target="_blank" rel="noreferrer">
+          PR {shortPrLabel(delivery.pr)}
+        </a>
         <span className={`badge pr-${delivery.pr_state}`}>{stateLabel(delivery.pr_state)}</span>
-        {head && (
-          <span className="muted small">
-            {" "}
-            head <code>{head}</code>
-            {delivery.head?.source ? ` (${delivery.head.source})` : ""}
-          </span>
-        )}
         {combined && (
           <span className={`badge check-${combined}`} title="Exact-head checks combined">
-            {" "}
             checks {combined}
+          </span>
+        )}
+        {head && (
+          <span className="badge delivery-head" title={delivery.head?.source ?? undefined}>
+            <code>{head}</code>
+            {delivery.head?.source ? (
+              <span className="muted"> · {delivery.head.source}</span>
+            ) : null}
+          </span>
+        )}
+        {delivery.checklist && delivery.checklist.total > 0 && (
+          <span
+            className="badge"
+            title={
+              delivery.checklist.pending
+                ? `${delivery.checklist.pending} pending`
+                : "checklist complete"
+            }
+          >
+            Checklist {delivery.checklist.done}/{delivery.checklist.total}
           </span>
         )}
         {delivery.merged_at && (
           <span className="muted small">
-            {" "}
             merged <DateChip at={delivery.merged_at} />
           </span>
-        )}{" "}
+        )}
         <span className="muted small">
           checked <DateChip at={delivery.checked_at} />
         </span>
@@ -92,12 +114,11 @@ export function TaskDelivery({
           <strong>Merged, pending review.</strong> A merge is not acceptance.
         </p>
       )}
-      {delivery.authorization && <p className="muted small">{delivery.authorization.notes}</p>}
-      {delivery.checklist && delivery.checklist.total > 0 && (
-        <p className="muted small">
-          Checklist {delivery.checklist.done}/{delivery.checklist.total} done
-          {delivery.checklist.pending ? ` (${delivery.checklist.pending} pending)` : ""}.
-        </p>
+      {policyNotes && (
+        <details className="delivery-policy">
+          <summary>Merge policy</summary>
+          <p className="muted small">{policyNotes}</p>
+        </details>
       )}
       {delivery.accept_decision_id && (
         <ActionButton

@@ -173,7 +173,7 @@ export function TaskPrerequisites({ taskId }: { taskId: string }) {
   const [opened, setOpened] = useState(false);
   return (
     <details
-      className="task-prereq"
+      className="task-disclosure task-prereq"
       aria-label="Dependency delivery"
       onToggle={(e) => e.currentTarget.open && setOpened(true)}
     >

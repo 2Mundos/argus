@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { ArgusEvent, Task, TaskRead } from "../api";
 import { DateChip } from "../DateChip";
 import { MilestoneLine, NoSignal, ProgressPie } from "../milestones";
 import { finalizationLine, quietFacts } from "../stall";
+import { TaskStateBadge } from "../TaskStateBadge";
 
 /** The current time, re-read every `ms`, so "N s ago" keeps counting between events. */
 export function useNow(ms = 1000): number {
@@ -40,6 +41,77 @@ export function attemptNotes(task: Progress, events: ArgusEvent[]): ArgusEvent[]
   );
 }
 
+function noteMessage(event: ArgusEvent): string {
+  return (event.data as { message?: string }).message ?? "";
+}
+
+/** One-line progress note: time chip + clamped message. */
+function NoteRow({ event, now }: { event: ArgusEvent; now: number }) {
+  const message = noteMessage(event);
+  return (
+    <li>
+      <DateChip at={event.at} now={now} />{" "}
+      <span className="note-text" title={message || undefined}>
+        {message}
+      </span>
+    </li>
+  );
+}
+
+function NotesList({
+  notes,
+  now,
+  collapseAfter = 0,
+}: {
+  notes: ArgusEvent[];
+  now: number;
+  /** When > 0 and notes exceed this, wrap the rest in “Earlier notes”. */
+  collapseAfter?: number;
+}) {
+  if (notes.length === 0) return null;
+  const visible = collapseAfter > 0 ? notes.slice(0, collapseAfter) : notes;
+  const earlier = collapseAfter > 0 ? notes.slice(collapseAfter) : [];
+  return (
+    <>
+      {visible.length > 0 && (
+        <ol className="notes">
+          {visible.map((e) => (
+            <NoteRow key={e.id} event={e} now={now} />
+          ))}
+        </ol>
+      )}
+      {earlier.length > 0 && (
+        <details className="activity-notes">
+          <summary>Earlier notes ({earlier.length})</summary>
+          <ol className="notes">
+            {earlier.map((e) => (
+              <NoteRow key={e.id} event={e} now={now} />
+            ))}
+          </ol>
+        </details>
+      )}
+    </>
+  );
+}
+
+function LeaseChip({ at, now }: { at: string | null | undefined; now: number }) {
+  return (
+    <span className="badge meta-lease" title="lease expires">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <path
+          d="M8 5v3.2l2 1.3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+      <DateChip at={at} now={now} />
+    </span>
+  );
+}
+
 /** What the agent says it is doing now (live work spec 3.1). */
 export function Activity({
   task,
@@ -59,13 +131,7 @@ export function Activity({
         {prior.length === 0 ? (
           <span className="muted small">No progress notes for this attempt.</span>
         ) : (
-          <ol className="notes">
-            {prior.map((e) => (
-              <li key={e.id}>
-                <DateChip at={e.at} now={now} /> {(e.data as { message?: string }).message}
-              </li>
-            ))}
-          </ol>
+          <NotesList notes={prior} now={now} collapseAfter={3} />
         )}
       </div>
     );
@@ -92,6 +158,17 @@ export function Activity({
   // Claimed tasks keep a progress row (lease / quiet); finished ones only with notes.
   const showProgress = task.state === "claimed" || hasProgress;
   if (task.state !== "claimed" && notes.length === 0 && !quietLine && !finalLine) return null;
+
+  // Milestone already carries the live status; otherwise show the progress message.
+  const primary: ReactNode = task.progress_kind ? (
+    <MilestoneLine task={task} now={now} />
+  ) : task.progress_message || task.state === "claimed" ? (
+    <span className="activity-primary">{task.progress_message ?? "No progress note yet."}</span>
+  ) : null;
+
+  // notes[0] mirrors the status strip; only older ones go in the disclosure.
+  const earlier = notes.slice(1);
+
   return (
     <div className="activity">
       {finalLine && (
@@ -105,38 +182,36 @@ export function Activity({
         </p>
       )}
       {showProgress && (
-        <div className="progress">
-          {task.progress_percent != null && <ProgressPie percent={task.progress_percent} />}
-          <NoSignal task={task} now={now} />
-          <MilestoneLine task={task} now={now} />
-          {(task.progress_message || task.state === "claimed") && (
-            <span>{task.progress_message ?? "No progress note yet."}</span>
-          )}
-          <span className="muted small">
+        <div className="activity-strip">
+          <div className="activity-strip-main">
+            {task.progress_percent != null && <ProgressPie percent={task.progress_percent} />}
+            {task.state === "claimed" && <TaskStateBadge state={task.state} />}
+            <div className="activity-strip-text">
+              <NoSignal task={task} now={now} />
+              {primary}
+            </div>
+          </div>
+          <div className="activity-strip-meta muted small">
             {task.progress_at ? (
-              <>
-                updated <DateChip at={task.progress_at} now={now} />
-              </>
+              <span title="last progress update">
+                <DateChip at={task.progress_at} now={now} />
+              </span>
             ) : task.state === "claimed" ? (
-              "silent so far"
+              <span>silent so far</span>
             ) : null}
-            {task.state === "claimed" && (
-              <>
-                {" · lease "}
-                <DateChip at={task.lease_expires_at} now={now} />
-              </>
-            )}
-          </span>
+            {task.state === "claimed" && <LeaseChip at={task.lease_expires_at} now={now} />}
+          </div>
         </div>
       )}
-      {notes.length > 1 && (
-        <ol className="notes">
-          {notes.slice(1).map((e) => (
-            <li key={e.id}>
-              <DateChip at={e.at} now={now} /> {(e.data as { message?: string }).message}
-            </li>
-          ))}
-        </ol>
+      {earlier.length > 0 && (
+        <details className="activity-notes">
+          <summary>Earlier notes ({earlier.length})</summary>
+          <ol className="notes">
+            {earlier.map((e) => (
+              <NoteRow key={e.id} event={e} now={now} />
+            ))}
+          </ol>
+        </details>
       )}
     </div>
   );
