@@ -97,9 +97,14 @@ A run reports findings in its result data:
 - **Promotion.** A finding task is a `response` deliverable with no capabilities, so a
   worker cannot push a fix. The human approval is the trust point: an admin answering
   the task's open `approval` decision with `approve` and `promote: "pr"` (dashboard
-  "approve with PR"; `answer_decision`'s `promote`) also sets `deliverable: pr_open`
+  "approve with PR"; `answer_decision`'s `promote`) also sets `deliverable: pr_merged`
   and `required_capabilities: ["repository:write"]` in the same action, before the
-  task becomes claimable. Plain `approve` ("approve as investigation") keeps today's
+  task becomes claimable. The task completes only after the owner merges the PR: the
+  worker opens it, then waits with `argus-task wait merge`; the worker never merges.
+  The same transaction appends a fixed Argus delivery rule to the task's spec (after
+  the finding text): commit, run the gates, deliver, watch exact-head CI
+  (`argus-task wait ci`), fix failing checks and actionable review findings on the same
+  PR, and only then wait for the merge. A PR opening alone never completes the task. Plain `approve` ("approve as investigation") keeps today's
   behaviour, which stays the default. Nothing a run writes can request it: the entry
   fields in the next list are ignored beyond those five, `auto` tasks never go through
   an approval and are never promoted, and the answer is refused (`403` for a

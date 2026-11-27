@@ -452,7 +452,7 @@ function DecisionCard(props: {
             className="primary"
             action={() => answer("approve", "pr")}
           >
-            approve with PR
+            approve with PR (pr_merged, done on merge)
           </ActionButton>
         )}
       </div>

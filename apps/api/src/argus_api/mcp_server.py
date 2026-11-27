@@ -1969,7 +1969,8 @@ async def answer_decision(
     who authorized it (unmet items stay verification_missing). Pass a
     fresh `request_id` so a retry returns the stored answer (`replayed`), not 409.
     `promote="pr"` with `approve` (admin only; the decision payload lists it) makes a
-    routine finding task a pr_open deliverable with repository:write."""
+    routine finding task a pr_merged deliverable with repository:write; it completes
+    only after the owner merges the PR."""
     return await _call(
         ctx,
         "POST",
