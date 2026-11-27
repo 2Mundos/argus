@@ -23,6 +23,7 @@ from argus_core.task_edit import (
 )
 from argus_core.tasks import (
     ENV_BLOCK_REASONS,
+    TERMINAL,
     ClaimedTask,
     PriorWorkspace,
     Task,
@@ -68,6 +69,7 @@ from argus_api.settings import service as settings_svc
 from argus_api.tasks import (
     changes,
     command_blocked,
+    deliverable,
     delivery,
     execution_routes,
     finalization,
@@ -205,6 +207,20 @@ class ReleaseRequest(BaseModel):
     """Why the operator takes the task back (recorded on the event and attempt)."""
     attempt: int | None = None
     """Compare-and-set guard: release only if this is still the current attempt."""
+
+
+class ForceAcceptRequest(BaseModel):
+    reason: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=service.FORCE_ACCEPT_REASON_MAX,
+        ),
+    ]
+    """Why the owner closes the task as accepted (recorded on the disposition)."""
+    expected_version: str | None = None
+    """The task's `version`; a mismatch is 409 `stale_version`."""
 
 
 class BlockRequest(BaseModel):
@@ -1107,6 +1123,45 @@ async def set_dependencies(
 async def cancel_task(task_id: str, db: DbDep, caller: ManagerDep) -> Task:
     async with db.write() as tx:
         return await service.cancel(tx, task_id, caller.actor)
+
+
+@router.post("/{task_id}/force-accept")
+async def force_accept_task(
+    task_id: str,
+    body: ForceAcceptRequest,
+    request: Request,
+    db: DbDep,
+    caller: ManagerDep,
+) -> Task:
+    """Owner action: end a non-terminal task as `succeeded` with the disposition
+    `force_accepted` and the required reason, skipping review and deliverable
+    gates. Releases an active claim without a failure, cancels open decisions and
+    review children, and never writes to the forge. A terminal task answers 409
+    `task_not_open` and changes nothing."""
+    from argus_api.orchestrator import require_not_internal_orchestrator
+
+    forge = None
+    async with db.read() as conn:
+        await require_not_internal_orchestrator(
+            conn, caller, action="force_accept_task"
+        )
+        task = await service.get_task(conn, task_id)
+        if task.state not in TERMINAL:
+            try:  # the PR as the forge shows it now, for the audit event only
+                forge = deliverable.ForgeRead(
+                    await delivery.delivery_of(conn, request.app.state.pr_checker, task)
+                )
+            except Exception:
+                forge = None
+    async with db.write() as tx:
+        return await service.force_accept(
+            tx,
+            task_id,
+            caller.actor,
+            body.reason,
+            expected_version=body.expected_version,
+            forge=forge,
+        )
 
 
 @router.post("/archive")

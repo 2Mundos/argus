@@ -397,6 +397,10 @@ Findings outside the gap list:
   (which takes the field overrides of [task edit](task-edit.spec.md) 3.11);
   `release_task(task_id, reason, attempt?)` requeues a claimed task without
   counting an attempt ([worker lifecycle](worker-lifecycle.spec.md) 3.3).
+  `force_accept_task(task_id, reason, expected_version?)` is the owner-authorized
+  "Accept and close": it ends a non-terminal task as `succeeded` with the
+  `force_accepted` disposition and writes nothing to the forge ([task
+  deliverable](task-deliverable.spec.md) 3.10.1).
 
 ## 3.2f Orchestrator reads and routine template patch
 

@@ -87,6 +87,8 @@ export function TaskDetail({
 }) {
   const [error, setError] = useState<string>();
   const [confirmingRetry, setConfirmingRetry] = useState(false);
+  const [forcing, setForcing] = useState(false);
+  const [forceReason, setForceReason] = useState("");
   const [editing, setEditing] = useState(false);
   // The attempt the user picked, kept with the task and current attempt it was picked
   // under: a new current attempt or another task re-selects the current one. No effect
@@ -231,6 +233,26 @@ export function TaskDetail({
     }, kind);
   }
 
+  async function forceAccept() {
+    const reason = forceReason.trim();
+    if (!reason) return;
+    setError(undefined);
+    await action.run(async () => {
+      try {
+        await call(
+          api.POST("/api/tasks/{task_id}/force-accept", {
+            params: { path: { task_id: taskId } },
+            body: { reason, expected_version: task?.version },
+          }),
+        );
+        setForcing(false);
+        setForceReason("");
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }, "force_accept");
+  }
+
   const titlebar = (
     <header className="panel-titlebar">
       <h2>{task ? <TaskLabel title={task.title} project={task.project} /> : "…"}</h2>
@@ -307,6 +329,11 @@ export function TaskDetail({
             </button>
           )}
           {!ARCHIVABLE.includes(task.state) && (
+            <button type="button" disabled={action.busy} onClick={() => setForcing(true)}>
+              Accept and close
+            </button>
+          )}
+          {!ARCHIVABLE.includes(task.state) && (
             <ActionButton
               className="danger"
               pending={action.is("cancel")}
@@ -316,6 +343,49 @@ export function TaskDetail({
               Cancel task
             </ActionButton>
           )}
+        </div>
+      )}
+      {task && forcing && (
+        <div
+          role="dialog"
+          aria-label="Accept and close"
+          className="force-accept-dialog"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={() => {}}
+        >
+          <p>
+            Close this task as accepted without review. It ends as succeeded, recorded as a forced
+            owner acceptance; nothing is merged or changed on the forge.
+          </p>
+          <label>
+            Reason (required)
+            <textarea
+              value={forceReason}
+              maxLength={2000}
+              rows={3}
+              onChange={(e) => setForceReason(e.target.value)}
+            />
+          </label>
+          <div className="actions">
+            <ActionButton
+              className="primary"
+              pending={action.is("force_accept")}
+              disabled={action.busy || !forceReason.trim()}
+              action={forceAccept}
+            >
+              Confirm accept and close
+            </ActionButton>
+            <button
+              type="button"
+              disabled={action.busy}
+              onClick={() => {
+                setForcing(false);
+                setForceReason("");
+              }}
+            >
+              Keep open
+            </button>
+          </div>
         </div>
       )}
       <button type="button" className="icon-close" aria-label="Close" onClick={onClose}>
@@ -721,6 +791,7 @@ const REVIEW_OUTCOMES: Record<string, string> = {
   accepted: "accepted",
   accepted_with_deviation: "accepted with recorded deviation",
   not_reviewed: "not reviewed",
+  force_accepted: "accepted and closed by the owner (forced, no review)",
 };
 
 function reviewOutcomeText(outcome: string): string {

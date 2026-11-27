@@ -17,11 +17,16 @@ const mock = vi.hoisted(() => ({
   prereq: {} as Record<string, unknown>,
   prereqFail: [] as Error[],
   reviews: { rounds: [] } as Record<string, unknown>,
+  posts: [] as { path: string; body: unknown }[],
 }));
 vi.mock("../api", () => ({
   api: {
     GET: (path: string, opts?: { params?: { path?: { task_id?: string } } }) =>
       opts?.params?.path?.task_id ? path.replace("{task_id}", opts.params.path.task_id) : path,
+    POST: (path: string, opts?: { body?: unknown }) => {
+      mock.posts.push({ path, body: opts?.body });
+      return path;
+    },
   },
   ENDED_STATES: ["succeeded", "failed", "cancelled"],
   boardTasks: async () => ({
@@ -763,5 +768,71 @@ describe("TaskDetail review rounds", () => {
     fireEvent.click(parentLink);
     expect(await screen.findByRole("heading", { name: /Parent task title/ })).toBeTruthy();
     expect(await screen.findByRole("link", { name: /Review task/ })).toBeTruthy();
+  });
+});
+
+describe("TaskDetail Accept and close", () => {
+  const open = async (state: string) => {
+    mock.task = { ...base, state, version: "v1" };
+    mock.trace = { executions: [], timeline: [] };
+    mock.posts = [];
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    await screen.findByText(/trace task/);
+  };
+
+  it.each(["pending", "ready", "claimed", "blocked", "in_review", "awaiting_quota"])(
+    "sits beside Cancel task for a %s task",
+    async (state) => {
+      await open(state);
+      expect(screen.getByRole("button", { name: "Accept and close" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Cancel task" })).toBeTruthy();
+    },
+  );
+
+  it.each(["succeeded", "failed", "cancelled"])("is absent for a %s task", async (state) => {
+    await open(state);
+    expect(screen.queryByRole("button", { name: "Accept and close" })).toBeNull();
+  });
+
+  it("requires a reason before it calls the API, then sends it with the version", async () => {
+    await open("in_review");
+    fireEvent.click(screen.getByRole("button", { name: "Accept and close" }));
+    const confirm = screen.getByRole("button", { name: "Confirm accept and close" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Reason (required)"), { target: { value: "   " } });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect(mock.posts).toEqual([]);
+    fireEvent.change(screen.getByLabelText("Reason (required)"), {
+      target: { value: " owner merged PR " },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Confirm accept and close" }));
+    });
+    expect(mock.posts).toEqual([
+      {
+        path: "/api/tasks/{task_id}/force-accept",
+        body: { reason: "owner merged PR", expected_version: "v1" },
+      },
+    ]);
+  });
+
+  it("renders the force_accepted disposition with its reason", async () => {
+    mock.task = {
+      ...base,
+      state: "succeeded",
+      review_disposition: {
+        outcome: "force_accepted",
+        reason: "owner merged PR",
+        unmet: [],
+        decided_by: "admin",
+        decided_at: "2026-11-27T00:00:00Z",
+        attempt: 1,
+      },
+    };
+    mock.trace = { executions: [], timeline: [] };
+    render(<TaskDetail taskId="t1" onClose={() => {}} />);
+    await screen.findByText(/trace task/);
+    expect(screen.getByText(/accepted and closed by the owner/)).toBeTruthy();
+    expect(screen.getByText(/owner merged PR/)).toBeTruthy();
   });
 });

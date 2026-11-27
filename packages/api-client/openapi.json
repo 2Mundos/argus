@@ -11686,6 +11686,32 @@
         "title": "FleetHealth",
         "type": "object"
       },
+      "ForceAcceptRequest": {
+        "properties": {
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ForceAcceptRequest",
+        "type": "object"
+      },
       "GapView": {
         "properties": {
           "component": {
@@ -21073,7 +21099,8 @@
             "enum": [
               "accepted",
               "accepted_with_deviation",
-              "not_reviewed"
+              "not_reviewed",
+              "force_accepted"
             ],
             "title": "Outcome",
             "type": "string"
@@ -42090,6 +42117,64 @@
           }
         ],
         "summary": "Fail Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/tasks/{task_id}/force-accept": {
+      "post": {
+        "description": "Owner action: end a non-terminal task as `succeeded` with the disposition\n`force_accepted` and the required reason, skipping review and deliverable\ngates. Releases an active claim without a failure, cancels open decisions and\nreview children, and never writes to the forge. A terminal task answers 409\n`task_not_open` and changes nothing.",
+        "operationId": "force_accept_task_api_tasks__task_id__force_accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForceAcceptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Force Accept Task",
         "tags": [
           "tasks"
         ]

@@ -395,10 +395,41 @@ set on every move to `succeeded`:
 - `not_reviewed`: the task succeeded on completion without a review, for
   example `review.acceptance` off ([settings](settings.spec.md) 3.11, `reason`
   `acceptance_off`).
+- `force_accepted`: the owner closed a non-terminal task with "Accept and
+  close" (`POST /api/tasks/{id}/force-accept`, MCP `force_accept_task`); `reason`
+  is the required owner text (see 3.10.1).
 
 Unmet criteria never read as met. On every success, an acceptance item that is
 not `done` is stored `verification_missing` (with the `unmet_at_success`
 reason) and listed in `unmet`; nothing marks it `done`.
+
+### 3.10.1 Force accept
+
+A task stuck where the only exit is cancel (for example `in_review` when every
+independent `code_review` child dies and the owner has already verified and merged
+the PR) is ended as `succeeded` by the owner action `force-accept`, which keeps the
+outcome instead of losing it as a cancel would.
+
+- Body `{reason, expected_version?}`: `reason` is required (non-blank, at most
+  2000 characters; `422` otherwise); a stale `expected_version` is `409
+  stale_version`. Caller scope is that of cancel: manager or admin, orchestrator
+  tokens included. MCP: `force_accept_task(task_id, reason, expected_version)`,
+  owner-authorized only.
+- Allowed from every non-terminal state. `succeeded`, `failed` and `cancelled`
+  answer `409 task_not_open` and change nothing.
+- One write: state `succeeded` with `review_disposition.outcome = force_accepted`
+  (`reason`, `decided_by` the actor); an active claim ends like a release (the
+  attempt outcome is `released`, no failure counted, the holder's next write is
+  refused); open decisions are cancelled, not answered; non-terminal
+  `code_review` and `review_verification` children are cancelled and no
+  replacement reviewer is spawned; unmet acceptance items stay
+  `verification_missing`; dependents are promoted as for any success.
+- Event `task.force_accepted` carries `reason`, `forced_by`, `prior_state`
+  and, when the task names a PR, `pr` (`url`, `state`, `head_sha`) as the
+  delivery projection showed it just before the write (best effort).
+- No deliverable evidence or review is required. Nothing is written to the forge:
+  no merge, push or PR close. No setting changes and no other task's review gate
+  is touched.
 
 The review gate (`review=orchestrator` or `human`) has three choices, also on
 decisions opened before this change:

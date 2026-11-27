@@ -3434,6 +3434,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tasks/{task_id}/force-accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Force Accept Task
+         * @description Owner action: end a non-terminal task as `succeeded` with the disposition
+         *     `force_accepted` and the required reason, skipping review and deliverable
+         *     gates. Releases an active claim without a failure, cancels open decisions and
+         *     review children, and never writes to the forge. A terminal task answers 409
+         *     `task_not_open` and changes nothing.
+         */
+        post: operations["force_accept_task_api_tasks__task_id__force_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{task_id}/inputs": {
         parameters: {
             query?: never;
@@ -8254,6 +8278,13 @@ export interface components {
             window_hours: number;
             yield: components["schemas"]["Yield"];
         };
+        /** ForceAcceptRequest */
+        ForceAcceptRequest: {
+            /** Expected Version */
+            expected_version?: string | null;
+            /** Reason */
+            reason: string;
+        };
         /** GapView */
         GapView: {
             /** Component */
@@ -11582,7 +11613,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "accepted" | "accepted_with_deviation" | "not_reviewed";
+            outcome: "accepted" | "accepted_with_deviation" | "not_reviewed" | "force_accepted";
             /** Reason */
             reason?: string | null;
             /**
@@ -21123,6 +21154,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["FailRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    force_accept_task_api_tasks__task_id__force_accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForceAcceptRequest"];
             };
         };
         responses: {

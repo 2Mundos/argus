@@ -489,6 +489,8 @@ def _usage_outcome_reason(action: Action, data: dict[str, Any]) -> str:
         return "requeued"
     if action is Action.CANCEL:
         return "cancelled"
+    if action is Action.FORCE_ACCEPT:
+        return "released"
     if action is Action.EXPIRE:
         why = str(data.get("reason") or "")
         if why in ("timeout", "stalled"):
