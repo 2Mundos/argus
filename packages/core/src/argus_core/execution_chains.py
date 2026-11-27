@@ -7,6 +7,7 @@ account roles, capacity, credentials and the worker's declared adapter capabilit
 import hashlib
 import json
 import re
+from datetime import datetime
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -402,6 +403,7 @@ class ExecutionReport(ClosedModel):
         ]
         | None
     ) = None
+    until: datetime | None = None  # provider-reported reset time, when known
 
 
 class ExecutionCapability(ClosedModel):

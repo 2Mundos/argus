@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-17
-updated: 2026-11-22
+updated: 2026-11-27
 ---
 
 # Execution chains
@@ -297,6 +297,27 @@ leaving the task claimed.
 
 Fallback means **advance to another complete alternative**, with evidence, not
 swap one layer or keep a dangling executor from the previous alternative.
+Before advancing the alternative cursor or declaring chain exhaustion on an
+account-scoped `quota` or `auth_expired` failure, an **unpinned** selector
+performs bounded **same-alternative account failover**:
+
+- Record the failed account ID per alternative and role (`failed_accounts` in
+  `task_execution_routes`) for the current unresolved quota window, so each
+  account is tried at most once per alternative and never bounced back to if its
+  cooldown elapses during the same window. Preserve a provider-reported `until`
+  reset time when supplied on `ExecutionReport`; otherwise apply the existing
+  cooldown without fabricating a stated reset.
+- Keep `cursor` on the current alternative (preserving the exact alternative,
+  role, adapter, and model — including both models of a paired route when an
+  executor fails) if another compatible, non-disabled, non-auth-rejected,
+  non-exhausted, unexcluded account exists for that selector.
+- If a compatible replacement account is currently at `max_leases` capacity,
+  treat it as busy-slot waiting (`awaiting_execution_route` /
+  `task.execution_route_busy_wait`), not quota exhaustion.
+- If the failed role is pinned (`account_id` set, or either side of a
+  same-provider native pair pinned) or no eligible replacement account remains,
+  advance `cursor` to `index + 1` (or block `execution_chain_exhausted` after the
+  final alternative).
 
 | Condition | Action | Task accounting |
 | --- | --- | --- |
@@ -344,10 +365,12 @@ selection/stop acknowledgements are worker-and-live-claim scoped, not admin
 settings writes. Extend retry/unblock and their MCP wrappers together.
 
 Record `task.execution_route_selected`, `task.execution_route_skipped`,
+`task.execution_route_account_failover`, `task.execution_route_busy_wait`,
 `task.execution_route_advanced`, `task.execution_route_exhausted` and
 `task.execution_route_reset` with revision, difficulty, alternative ID/index,
-mode, configured/resolved model, account IDs, generation, reason code and
-from/to IDs where applicable. Deduplicate repeated preflight skips by route
+mode, configured/resolved model, account IDs (old/new on failover), role,
+generation, failure classification, reason code and from/to IDs where applicable.
+Deduplicate repeated preflight skips by route
 revision, availability reason and alternative; bound detail, redact errors,
 never include credentials, arbitrary response bodies or URL query strings.
 Model execution records retain configured versus observed IDs separately;

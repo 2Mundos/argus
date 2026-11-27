@@ -6,7 +6,7 @@ No network calls. Credentials stay in the existing lease delivery, never snapsho
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -240,6 +240,7 @@ class RoutePolicy(BaseModel):
     cursor: int = 0
     generation: int = 0
     skips: list[dict[str, Any]] = []
+    failed_accounts: dict[str, dict[str, list[str]]] = {}
     selection: ExecutionSelection | None = None
     review: ReviewRoute | None = None
 
@@ -287,6 +288,9 @@ async def resolve(conn: aiosqlite.Connection, row: aiosqlite.Row) -> RoutePolicy
         if state["fingerprint"] == fingerprint(row, policy):
             policy.cursor = state["cursor"]
             policy.skips = json.loads(state["skips"])
+            policy.failed_accounts = (
+                json.loads(state["failed_accounts"]) if state["failed_accounts"] else {}
+            )
         if state["selection"]:
             policy.selection = ExecutionSelection.model_validate_json(
                 state["selection"]
@@ -358,6 +362,7 @@ async def _reserve_selector(
     served: Mapping[str, tuple[str, ...] | None] | None,
     *,
     reuse: bool = False,
+    exclude: Collection[str] = (),
 ) -> tuple[AccountLease, ResolvedSelector]:
     """Lease the pinned account, or the best usable one when `account_id` is None.
 
@@ -365,7 +370,7 @@ async def _reserve_selector(
     a served model; a pin never does. The concrete account is returned in
     `ResolvedSelector.account_id`, which the selection event and attempt record keep.
     """
-    rejected: set[str] = set()
+    rejected: set[str] = set(exclude)
     last: Unavailable | None = None
     while True:
         try:
@@ -427,6 +432,10 @@ async def _reserve_account(
                 row, role, fallback_to_engine=True
             ):
                 raise Unavailable("executor_model_missing")
+        if await _usable_accounts(
+            tx.conn, tx.now, selector, account_id, role, exclude=rejected
+        ):
+            raise Unavailable(f"{role}_account_busy")
         raise Unavailable(f"{role}_account_unavailable")
     known = (served or {}).get(lease.account_id)
     if selector.model.source == "explicit":
@@ -507,6 +516,12 @@ async def reserve(
     restriction = (
         json.loads(row["account_providers"]) if row["account_providers"] else None
     )
+    fp = fingerprint(row, policy)
+    prior_failed = (
+        policy.failed_accounts
+        if (previous is not None and previous["fingerprint"] == fp)
+        else {}
+    )
     for index in range(policy.cursor, len(policy.alternatives)):
         alternative = policy.alternatives[index]
         try:
@@ -521,6 +536,11 @@ async def reserve(
                 ):
                     raise Unavailable("harness_provider_restricted")
                 harness_pin, executor_pin = pins(alternative)
+                alt_failed = prior_failed.get(str(index), {})
+                engine_exclude = set(alt_failed.get("engine", []))
+                executor_exclude = set(alt_failed.get("executor", []))
+                if shared_native(alternative):
+                    engine_exclude |= executor_exclude
                 engine, harness = await _reserve_selector(
                     tx,
                     agent_id,
@@ -529,6 +549,7 @@ async def reserve(
                     "engine",
                     store,
                     served,
+                    exclude=engine_exclude,
                 )
                 executor_lease = None
                 executor = None
@@ -544,6 +565,7 @@ async def reserve(
                         store,
                         served,
                         reuse=alternative.executor.provider != "custom",
+                        exclude=executor_exclude,
                     )
                 selection = ExecutionSelection(
                     source=policy.source,
@@ -557,14 +579,15 @@ async def reserve(
                     executor=executor,
                 )
                 await tx.conn.execute(
-                    "INSERT INTO task_execution_routes (task_id, fingerprint, cursor, generation, selection, applied, skips) VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT(task_id) DO UPDATE SET fingerprint=excluded.fingerprint, cursor=excluded.cursor, generation=excluded.generation, selection=excluded.selection, applied=0, skips=excluded.skips",
+                    "INSERT INTO task_execution_routes (task_id, fingerprint, cursor, generation, selection, applied, skips, failed_accounts) VALUES (?, ?, ?, ?, ?, 0, ?, ?) ON CONFLICT(task_id) DO UPDATE SET fingerprint=excluded.fingerprint, cursor=excluded.cursor, generation=excluded.generation, selection=excluded.selection, applied=0, skips=excluded.skips, failed_accounts=excluded.failed_accounts",
                     (
                         row["id"],
-                        fingerprint(row, policy),
+                        fp,
                         index,
                         selection.generation,
                         selection.model_dump_json(),
                         json.dumps(skips),
+                        json.dumps(prior_failed),
                     ),
                 )
                 await record(
@@ -606,13 +629,14 @@ async def reserve(
             {"revision": policy.revision, "skips": skips},
         )
     await tx.conn.execute(
-        "INSERT INTO task_execution_routes(task_id, fingerprint, cursor, generation, skips) VALUES (?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET fingerprint=excluded.fingerprint, cursor=excluded.cursor, skips=excluded.skips",
+        "INSERT INTO task_execution_routes(task_id, fingerprint, cursor, generation, skips, failed_accounts) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(task_id) DO UPDATE SET fingerprint=excluded.fingerprint, cursor=excluded.cursor, skips=excluded.skips, failed_accounts=excluded.failed_accounts",
         (
             row["id"],
-            fingerprint(row, policy),
+            fp,
             policy.cursor,
             policy.generation,
             json.dumps(skips),
+            json.dumps(prior_failed),
         ),
     )
     return None
@@ -742,14 +766,15 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
             "execution_lease_missing",
         )
         return
+    reset_at = None
     if body.reason == "quota":
         from argus_api.accounts import service as accounts
 
-        await accounts._mark_exhausted(
+        _, reset_at = await accounts._mark_exhausted(
             tx,
             agent_id,
             failed.account_id,
-            None,
+            body.until,
             "execution_route_quota",
             timedelta(minutes=5),
         )
@@ -777,10 +802,105 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
             raise ConflictError(
                 "execution lease no longer owned", code="execution_lease_missing"
             )
+    failed_role_key: LeaseRole = "engine" if failed is selection.harness else "executor"
+    harness_pin, executor_pin = pins(selection.alternative)
+    pinned = (
+        harness_pin is not None
+        if failed is selection.harness
+        else executor_pin is not None
+    )
+    failed_accounts: dict[str, dict[str, list[str]]] = (
+        json.loads(state["failed_accounts"]) if state["failed_accounts"] else {}
+    )
+    failure_class = "auth_expired" if body.reason == "auth_expired" else "quota"
+    if body.reason in {"quota", "auth_expired"} and not pinned:
+        alt_key = str(selection.index)
+        alt_failed = failed_accounts.setdefault(alt_key, {})
+        role_failed = alt_failed.setdefault(failed_role_key, [])
+        if failed.account_id not in role_failed:
+            role_failed.append(failed.account_id)
+        if shared_native(selection.alternative):
+            other_role: LeaseRole = (
+                "executor" if failed_role_key == "engine" else "engine"
+            )
+            other_failed = alt_failed.setdefault(other_role, [])
+            if failed.account_id not in other_failed:
+                other_failed.append(failed.account_id)
+        ready_candidates, busy_candidates = await _failover_candidates(
+            tx.conn,
+            tx.now,
+            selection.alternative,
+            failed_role_key,
+            alt_failed,
+        )
+        if ready_candidates or busy_candidates:
+            cursor = selection.index
+            await tx.conn.execute(
+                "UPDATE task_execution_routes SET cursor=?, generation=generation+1, applied=0, failed_accounts=? WHERE task_id=?",
+                (cursor, json.dumps(failed_accounts), task_id),
+            )
+            await tasks.pause_for_quota(
+                tx,
+                agent_id,
+                task_id,
+                body.attempt,
+                body.reason,
+                wait=False,
+                reason=failure_class
+                if body.reason == "auth_expired"
+                else "quota_exhausted",
+            )
+            if ready_candidates:
+                await record(
+                    tx,
+                    f"agent:{agent_id}",
+                    "task",
+                    task_id,
+                    "task.execution_route_account_failover",
+                    {
+                        "generation": body.generation,
+                        "alternative_id": selection.alternative.id,
+                        "cursor": cursor,
+                        "role": failed_role_key,
+                        "model": failed.model,
+                        "old_account_id": failed.account_id,
+                        "new_account_id": ready_candidates[0],
+                        "reason": body.reason,
+                        "failure_class": failure_class,
+                        "until": ts(reset_at) if reset_at else None,
+                        "until_kind": (
+                            "stated"
+                            if body.until is not None and body.until > tx.now
+                            else "cooldown"
+                        )
+                        if body.reason == "quota" and reset_at is not None
+                        else None,
+                    },
+                )
+            else:
+                await record(
+                    tx,
+                    f"agent:{agent_id}",
+                    "task",
+                    task_id,
+                    "task.execution_route_busy_wait",
+                    {
+                        "generation": body.generation,
+                        "alternative_id": selection.alternative.id,
+                        "cursor": cursor,
+                        "role": failed_role_key,
+                        "model": failed.model,
+                        "old_account_id": failed.account_id,
+                        "busy_account_ids": busy_candidates,
+                        "reason": body.reason,
+                        "failure_class": failure_class,
+                    },
+                )
+            return
     cursor = selection.index + 1
     await tx.conn.execute(
-        "UPDATE task_execution_routes SET cursor=?, generation=generation+1, applied=0 WHERE task_id=?",
-        (cursor, task_id),
+        "UPDATE task_execution_routes SET cursor=?, generation=generation+1, applied=0, failed_accounts=? WHERE task_id=?",
+        (cursor, json.dumps(failed_accounts), task_id),
     )
     exhausted = cursor >= len(selection.candidates)
     if body.reason in {"quota", "provider_unavailable", "auth_expired"}:
@@ -821,7 +941,11 @@ async def report(tx: Tx, task_id: str, agent_id: str, body: ExecutionReport) -> 
             "generation": body.generation,
             "from": selection.alternative.id,
             "cursor": cursor,
+            "role": failed_role_key,
+            "model": failed.model,
+            "old_account_id": failed.account_id,
             "reason": body.reason,
+            "failure_class": body.reason,
         },
     )
 
@@ -876,7 +1000,7 @@ async def executor_delivery(
 
 async def reset(tx: Tx, task_id: str, actor: str) -> None:
     await tx.conn.execute(
-        "UPDATE task_execution_routes SET cursor=0, generation=generation+1, selection=NULL, applied=0, skips='[]' WHERE task_id=?",
+        "UPDATE task_execution_routes SET cursor=0, generation=generation+1, selection=NULL, applied=0, skips='[]', failed_accounts='{}' WHERE task_id=?",
         (task_id,),
     )
     await record(tx, actor, "task", task_id, "task.execution_route_reset")
@@ -963,7 +1087,9 @@ async def eligible(
     restriction = (
         json.loads(row["account_providers"]) if row["account_providers"] else None
     )
-    for alternative in policy.alternatives[policy.cursor :]:
+    for index in range(policy.cursor, len(policy.alternatives)):
+        alternative = policy.alternatives[index]
+        alt_failed = policy.failed_accounts.get(str(index), {})
         if await alternative_eligible(
             conn,
             now,
@@ -972,6 +1098,8 @@ async def eligible(
             capabilities,
             providers,
             dsh_enabled=dsh_enabled,
+            exclude_engine=alt_failed.get("engine", ()),
+            exclude_executor=alt_failed.get("executor", ()),
         ):
             return True
     return False
@@ -986,6 +1114,8 @@ async def alternative_eligible(
     providers: list[str],
     *,
     dsh_enabled: bool | None = None,
+    exclude_engine: Collection[str] = (),
+    exclude_executor: Collection[str] = (),
 ) -> bool:
     if _uses_dsh(alternative) and not is_dsh_enabled(dsh_enabled):
         return False
@@ -996,12 +1126,20 @@ async def alternative_eligible(
     ):
         return False
     harness_pin, executor_pin = pins(alternative)
+    engine_exclude = set(exclude_engine)
+    if shared_native(alternative):
+        engine_exclude |= set(exclude_executor)
     harness_rows = await _usable_accounts(
-        conn, now, alternative.harness, harness_pin, "engine"
+        conn, now, alternative.harness, harness_pin, "engine", exclude=engine_exclude
     )
     if isinstance(alternative, PairedAlternative):
         executor_rows = await _usable_accounts(
-            conn, now, alternative.executor, executor_pin, "executor"
+            conn,
+            now,
+            alternative.executor,
+            executor_pin,
+            "executor",
+            exclude=exclude_executor,
         )
     else:
         executor_rows = [None]
@@ -1019,15 +1157,84 @@ async def alternative_eligible(
     return False
 
 
+async def _failover_candidates(
+    conn: aiosqlite.Connection,
+    now: Any,
+    alternative: Alternative,
+    failed_role: LeaseRole,
+    alt_failed: Mapping[str, list[str]],
+) -> tuple[list[str], list[str]]:
+    """Return `(ready_ids, busy_ids)` for `failed_role` in `alternative` excluding failed accounts."""
+    harness_pin, executor_pin = pins(alternative)
+    engine_exclude = set(alt_failed.get("engine", ()))
+    executor_exclude = set(alt_failed.get("executor", ()))
+    if shared_native(alternative):
+        engine_exclude |= executor_exclude
+    harness_rows = await _usable_accounts(
+        conn, now, alternative.harness, harness_pin, "engine", exclude=engine_exclude
+    )
+    if isinstance(alternative, PairedAlternative):
+        executor_rows = await _usable_accounts(
+            conn,
+            now,
+            alternative.executor,
+            executor_pin,
+            "executor",
+            exclude=executor_exclude,
+        )
+    else:
+        executor_rows = [None]
+    ready: list[str] = []
+    busy: list[str] = []
+    for harness in harness_rows:
+        for executor in executor_rows:
+            if (
+                executor is not None
+                and shared_native(alternative)
+                and executor["id"] != harness["id"]
+            ):
+                continue
+            target = harness if failed_role == "engine" else executor
+            if target is None:
+                continue
+            target_id = str(target["id"])
+            if _fits(alternative, harness, executor):
+                if target_id not in ready:
+                    ready.append(target_id)
+            elif target_id not in busy and (
+                (
+                    harness["max_leases"] is None
+                    or harness["max_leases"]
+                    >= (
+                        2
+                        if executor is not None
+                        and not shared_native(alternative)
+                        and executor["id"] == harness["id"]
+                        else 1
+                    )
+                )
+                and (
+                    executor is None
+                    or executor["max_leases"] is None
+                    or executor["max_leases"] >= 1
+                )
+            ):
+                busy.append(target_id)
+    busy = [b for b in busy if b not in ready]
+    return ready, busy
+
+
 async def _usable_accounts(
     conn: aiosqlite.Connection,
     now: Any,
     selector: Selector,
     pin: str | None,
     role: LeaseRole,
+    *,
+    exclude: Collection[str] = (),
 ) -> list[aiosqlite.Row]:
     """Accounts of the selector's provider (just the pin, when pinned) that are
-    available and serve `role`, ordered by id for deterministic evidence."""
+    available and serve `role`, ordered by priority/load/name/id."""
     from argus_api.accounts import service as accounts
     from argus_api.accounts.eligibility import LEASE_BLOCK_SQL
 
@@ -1035,12 +1242,19 @@ async def _usable_accounts(
         "SELECT a.*, (SELECT count(*) FROM account_leases l WHERE l.account_id=a.id AND l.released_at IS NULL) AS active "  # noqa: S608
         "FROM accounts a WHERE provider=? AND (? IS NULL OR id=?) "
         "AND (state='available' OR (state='exhausted' AND exhausted_until<=?)) "
-        f"AND {LEASE_BLOCK_SQL} IS NULL ORDER BY id",
+        f"AND {LEASE_BLOCK_SQL} IS NULL "
+        "ORDER BY priority DESC, active ASC, name ASC, id ASC",
         (selector.provider, pin, pin, ts(now)),
     ) as cur:
         rows = await cur.fetchall()
+    excluded = set(exclude)
     fallback = _fallback_to_engine(role, selector.adapter)
-    return [a for a in rows if accounts._serves(a, role, fallback_to_engine=fallback)]
+    return [
+        a
+        for a in rows
+        if a["id"] not in excluded
+        and accounts._serves(a, role, fallback_to_engine=fallback)
+    ]
 
 
 def _fits(

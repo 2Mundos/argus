@@ -1270,3 +1270,86 @@ def test_dsh_routes_enabled_engine_model_fallback_and_missing_model_failure(
         )
         assert no_model_lease.status_code == 409
         assert "executor or engine model" in no_model_lease.text
+
+
+def test_account_failover_reaches_normal_secret_delivery(client: TestClient):
+    worker = _register_worker(client)
+    anth_a = account(
+        client,
+        "anthropic",
+        name="anth-a",
+        credential={"api_key": "sk-ant-api03-fixture-a"},
+        priority=10,
+    )
+    anth_b = account(
+        client,
+        "anthropic",
+        name="anth-b",
+        credential={"api_key": "sk-ant-api03-fixture-b"},
+        priority=5,
+    )
+    chain = [
+        {
+            "id": "single-opus",
+            "mode": "single",
+            "runtime": "nanoclaw",
+            "harness": {
+                "adapter": "claude",
+                "provider": "anthropic",
+                "model": {"source": "explicit", "id": "claude-opus-4"},
+            },
+        }
+    ]
+    put = client.put(
+        "/api/settings/execution.chains",
+        json={"value": {"version": 1, "difficulties": {"hard": chain}}},
+        headers=ADMIN,
+    )
+    assert put.status_code == 200, put.text
+    created = client.post(
+        "/api/tasks",
+        json={
+            "project": "demo",
+            "title": "secret delivery failover",
+            "difficulty": "hard",
+        },
+        headers=ADMIN,
+    )
+    assert created.status_code == 201, created.text
+    task_id = created.json()["id"]
+
+    claim1 = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
+    assert claim1.status_code == 200, claim1.text
+    c1 = claim1.json()
+    assert c1["engine_lease"]["account_id"] == anth_a
+    assert c1["engine_lease"]["credential"] == {"api_key": "sk-ant-api03-fixture-a"}
+
+    rep = client.post(
+        f"/api/tasks/{task_id}/execution",
+        json={
+            "attempt": c1["attempt"],
+            "generation": c1["execution"]["generation"],
+            "action": "advance",
+            "stopped": True,
+            "reason": "quota",
+        },
+        headers=worker,
+    )
+    assert rep.status_code == 204, rep.text
+
+    claim2 = client.post(
+        "/api/tasks/claim",
+        json={"capabilities": CAPS, "runtime_providers": ["anthropic"]},
+        headers=worker,
+    )
+    assert claim2.status_code == 200, claim2.text
+    c2 = claim2.json()
+    assert c2["execution"]["alternative"]["id"] == "single-opus"
+    assert c2["execution"]["harness"]["account_id"] == anth_b
+    assert c2["execution"]["harness"]["model"] == "claude-opus-4"
+    assert c2["engine_lease"]["account_id"] == anth_b
+    assert c2["engine_lease"]["credential"] == {"api_key": "sk-ant-api03-fixture-b"}

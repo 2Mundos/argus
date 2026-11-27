@@ -11865,6 +11865,15 @@ export interface components {
              */
             cursor?: number;
             /**
+             * Failed Accounts
+             * @default {}
+             */
+            failed_accounts?: {
+                [key: string]: {
+                    [key: string]: string[];
+                };
+            };
+            /**
              * Generation
              * @default 0
              */
@@ -14742,6 +14751,8 @@ export interface components {
              * @default false
              */
             stopped?: boolean;
+            /** Until */
+            until?: string | null;
         };
         /** Fact */
         argus_core__fleet__Fact: {

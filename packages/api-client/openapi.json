@@ -21992,6 +21992,20 @@
             "title": "Cursor",
             "type": "integer"
           },
+          "failed_accounts": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            "default": {},
+            "title": "Failed Accounts",
+            "type": "object"
+          },
           "generation": {
             "default": 0,
             "title": "Generation",
@@ -30634,6 +30648,18 @@
             "default": false,
             "title": "Stopped",
             "type": "boolean"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
           }
         },
         "required": [
