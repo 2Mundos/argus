@@ -130,7 +130,7 @@ def test_review_off_versus_required_with_a_bound_pr_without_approvals(
 ) -> None:
     forge(
         client,
-        full_forge(open_pr(), statuses=[{"context": "ci", "state": "success"}]),
+        full_forge(open_pr(), statuses=[{"context": "ci", "status": "success"}]),
     )
     task_id = review_task(client, f"see {URL}")
     off = client.get(f"/api/tasks/{task_id}").json()
@@ -150,7 +150,7 @@ def test_review_off_versus_required_with_a_bound_pr_without_approvals(
 def test_failing_ci_is_a_gate_reason(client: TestClient) -> None:
     forge(
         client,
-        full_forge(open_pr(), statuses=[{"context": "ci", "state": "failure"}]),
+        full_forge(open_pr(), statuses=[{"context": "ci", "status": "failure"}]),
     )
     task_id = review_task(client, f"see {URL}")
     gate = client.get(f"/api/tasks/{task_id}").json()["pr_gate"]
