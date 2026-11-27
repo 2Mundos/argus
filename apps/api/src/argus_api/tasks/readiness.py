@@ -2,7 +2,7 @@
 (worker lifecycle spec 3.7).
 
 These are DECISIONS, not hints. `decide_merge` is the Python twin of
-`taskAuthorizesMerge` / `taskMayMerge` (integrations/nanoclaw/argus-merge-auth.ts, which
+`taskAuthorizesMerge` / `taskDeniesMerge` / `taskMayMerge` (integrations/nanoclaw/argus-merge-auth.ts, which
 stays authoritative) and `forge_review_policy` of `forgeReviewPolicy`
 (argus-forge-review.ts). Both sides run the cases in
 integrations/nanoclaw/fixtures/merge-decision/cases.json, so a parity break fails in both
@@ -32,6 +32,8 @@ class MergeDecision(BaseModel):
     auto_merge_source: Literal["project", "global", "default"]
     # `input.delivery.allow_merge`; false when prompt_trust is "worker" (never authority).
     allow_merge: bool
+    # Owner-authored `input.delivery.deny_merge: true`: vetoes every grant (never worker input).
+    deny_merge: bool
     # Which input granted the merge, when one did.
     granted_by: Literal["auto_merge", "allow_merge"] | None
 
@@ -51,6 +53,13 @@ def decide_merge(
         and isinstance(delivery, dict)
         and delivery.get("allow_merge") is True
     )
+    deny = (
+        task.prompt_trust is not PromptTrust.WORKER
+        and isinstance(delivery, dict)
+        and delivery.get("deny_merge") is True
+    )
+    by_setting = by_setting and not deny
+    allow = allow and not deny
     authorized = by_setting or allow
     review_ok = not independent_review_required or independent_review_approved
     return MergeDecision(
@@ -64,6 +73,7 @@ def decide_merge(
         if auto_merge.source == "project"
         else ("global" if auto_merge.source == "global" else "default"),
         allow_merge=allow,
+        deny_merge=deny,
         granted_by="auto_merge" if by_setting else ("allow_merge" if allow else None),
     )
 

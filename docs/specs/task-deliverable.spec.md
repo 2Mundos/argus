@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-01
-updated: 2026-11-21
+updated: 2026-11-27
 ---
 
 # Task deliverable
@@ -92,6 +92,39 @@ availability](project-code-availability.spec.md)); branch/pr deliverables still
 require `repository:write` here. `pr_merged` does not require `delivery.allow_merge`:
 a human or orchestrator may merge; the worker's prompt states whether it may (the
 task input grants it, or `delivery.auto_merge` does, 3.4).
+
+## 3.3.1 Explicit task merge denial
+
+An owner or authorized orchestrator authors `input.delivery.deny_merge: true`
+(boolean) through REST task creation, MCP `create_task`'s `input`, a REST/MCP task
+draft body, or a routine task template. The stored input, immutable task origin
+(`created_by`, `prompt_trust`), and attempt definition snapshot are the audit
+record. Only non-worker origin input is authoritative. No prose is parsed and
+historical tasks are not migrated. Omitted denial, `deny_merge: false`, and legacy
+`allow_merge: false` preserve existing behavior.
+
+Explicit denial vetoes both global/project `delivery.auto_merge` with `pr_merged`
+and `allow_merge: true`; conflicts resolve to denial. The task read's merge
+decision exposes `deny_merge`, reports no grant, and the effective worker contract
+and trusted guidance name the denial. The channel never issues a merge token for
+it, clears inherited grants, and the normal merge helper refuses the denial before
+any forge request, even if grant environment flags are also present. Environment
+flags are never an owner authoring surface. Existing CI, exact-head review,
+repository identity and write-capability gates remain required for allowed tasks.
+All engines use the same channel policy and helper.
+
+**G7 regression and containment.** A prose instruction or legacy false grant can
+coexist with auto-merge and therefore cannot express an explicit veto. Operators
+must author the structured denial before publishing; use `pr_green` when the
+worker should stop after green CI, or retain `pr_merged` when an owner will merge.
+Inspect the task input and merge decision before dispatch. Input is immutable on
+published tasks: for an existing running task, stop/cancel its attempt through the
+supported lifecycle, confirm the worker stopped, and create a replacement with the
+denial (or correct an unpublished draft). Disabling project auto-merge is additional
+containment, but does not revoke an explicit allow grant. Steers and worker shell
+flags do not change authority. This is a supported-helper policy boundary, not
+sandbox protection against a worker rewriting helper code or fabricating a complete
+HMAC tuple: the existing shared environment is not a secrecy boundary.
 
 ## 3.4 Completion gate
 

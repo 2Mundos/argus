@@ -6,9 +6,9 @@ usage: patch-merge-auth-env.py /path/to/nanoclaw
 argus-merge-auth.ts mints ARGUS_MERGE_AUTH_KEY/TASK/ATTEMPT and ARGUS_MERGE_AUTHORIZED in
 the host process env. A session is a separate container whose env is built from the
 `contributedEnv` allowlist in container-runner.ts (the loop install.sh extends with the git
-identity, command guard and forge review), so the four names must be on that list or
+identity, command guard and forge review), so the names must be on that list or
 `argus-github-api merge` never sees them. A name unset on the host is skipped by the loop,
-so the script first deletes all four from any prepopulated contribution/gateway env: an
+so the script first deletes all of them from any prepopulated contribution/gateway env: an
 unauthorized attempt must not inherit an earlier valid tuple. Extends a runner patched
 before these names existed; idempotent; fails closed when the list is missing.
 """
@@ -24,6 +24,7 @@ NAMES = (
     "ARGUS_MERGE_AUTHORIZED",
     "ARGUS_MERGE_APPROVED_PR",
     "ARGUS_MERGE_APPROVED_SHA",
+    "ARGUS_MERGE_DENIED",
 )
 DROP = "// argus: drop stale merge authorization"
 

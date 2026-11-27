@@ -5,6 +5,7 @@ import {
   mergeAuthorizationToken,
   scopeMergeAuthorization,
   taskAuthorizesMerge,
+  taskDeniesMerge,
   taskMayMerge,
 } from "./argus-merge-auth.js";
 
@@ -28,6 +29,24 @@ const NAMES = [
 const scope = (env: NodeJS.ProcessEnv, t: ArgusTask) =>
   scopeMergeAuthorization(env, t, taskMayMerge(t));
 const absent = (env: NodeJS.ProcessEnv) => NAMES.every((n) => !(n in env));
+
+describe("owner merge denial", () => {
+  const deny = { prompt_trust: "orchestrator", input: { delivery: { deny_merge: true } } };
+  it("clears every grant and forwards only the denial", () => {
+    const env: NodeJS.ProcessEnv = { ARGUS_MERGE_AUTHORIZED: "stale", ARGUS_MERGE_AUTH_KEY: "k" };
+    const t = task({ auto_merge: true, ...deny });
+    expect(taskDeniesMerge(t)).toBe(true);
+    scopeMergeAuthorization(env, t, taskMayMerge(t), taskDeniesMerge(t));
+    expect(env.ARGUS_MERGE_DENIED).toBe("1");
+    expect(absent(env)).toBe(true);
+    scopeMergeAuthorization(env, undefined, false);
+    expect("ARGUS_MERGE_DENIED" in env).toBe(false);
+  });
+  it("ignores worker-authored denial and non-boolean values", () => {
+    expect(taskDeniesMerge(task({ ...deny, prompt_trust: "worker" }))).toBe(false);
+    expect(taskDeniesMerge(task({ input: { delivery: { deny_merge: "true" } } }))).toBe(false);
+  });
+});
 
 describe("merge authorization scope", () => {
   it("issues a key and an attempt-bound token for an auto_merge pr_merged task", () => {

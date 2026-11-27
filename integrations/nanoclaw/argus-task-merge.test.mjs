@@ -246,6 +246,10 @@ describe("merge: never merges without the grant", () => {
   };
   for (const [name, env] of [
     ["no grant at all", bare],
+    [
+      "owner denial even with a valid grant and review disabled",
+      { ARGUS_MERGE_DENIED: "1", ARGUS_FORGE_REVIEW: "off" },
+    ],
     ["a bare worker-set ARGUS_MERGE_AUTHORIZED", { ...bare, ARGUS_MERGE_AUTHORIZED: "yes" }],
     ["a token forged without the key", { ...bare, ARGUS_MERGE_AUTHORIZED: "0".repeat(64) }],
     ["a token for another attempt", { ARGUS_MERGE_AUTH_ATTEMPT: "2" }],

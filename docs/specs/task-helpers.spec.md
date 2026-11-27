@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-11-02
-updated: 2026-11-24
+updated: 2026-11-27
 ---
 
 # Task helpers (`argus-task`)
@@ -445,7 +445,11 @@ does not create an artifact.
 then waited for a merge nobody performed. `argus-task merge --pr N [--sha S] [--merge-method
 merge|squash|rebase] [--interval S] [--max S]` is the one step that merges, in one bounded call.
 
-**Authorization.** Before any forge request it verifies the channel's per-attempt merge
+**Authorization.** An owner-authored `input.delivery.deny_merge: true` vetoes
+both grant paths, including conflicts (G7 regression;
+[authoring and containment](task-deliverable.spec.md#331-explicit-task-merge-denial)).
+The channel clears inherited authorization and forwards an explicit denial;
+worker-set grant flags cannot override that denial in the helper. Before any forge request it verifies the channel's per-attempt merge
 authorization (`ARGUS_MERGE_AUTH_KEY`, `_TASK`, `_ATTEMPT` and the HMAC `ARGUS_MERGE_AUTHORIZED`,
 [GitHub repositories](github-repositories.spec.md) 3.4), the check `argus-github-api merge`
 makes. The channel mints it only for a task that may merge (`taskMayMerge`): `auto_merge` with
