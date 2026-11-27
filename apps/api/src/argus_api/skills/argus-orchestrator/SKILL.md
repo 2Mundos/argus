@@ -147,6 +147,7 @@ the next attempt's spec.
 | `blocked` as `runtime_failed` | `get_project_runtime(project)`; read the `failed` reasons. Fixing it is an admin action. |
 | `claimed` but silent | `get_task_log(id)` and the agent in `list_agents`. To take it back, `release_task(id, reason, attempt)` (no attempt counted). |
 | Task no longer wanted | `cancel_task`. |
+| Work already verified and merged by the owner but the task cannot finish (review children keep dying) | Only on the owner's explicit instruction: `force_accept_task(id, reason)`; it ends the task `succeeded` as a forced owner acceptance and writes nothing to the forge. |
 
 `edit_task` only changes what the task's `editable_fields` allow: everything
 while `ready`, `pending` or `awaiting_approval`; `priority`, `budget_usd` and

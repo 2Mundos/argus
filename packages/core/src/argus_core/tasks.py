@@ -249,6 +249,7 @@ class Action(StrEnum):
     ACCEPT = "accept"
     REJECT = "reject"
     CANCEL = "cancel"
+    FORCE_ACCEPT = "force_accept"  # the owner closes a non-terminal task as succeeded
 
 
 class Review(StrEnum):
@@ -261,7 +262,9 @@ class ReviewDisposition(BaseModel):
     """How a task reached `succeeded` (task deliverable spec 3.10). `unmet` names the
     acceptance items that were not `done`; they stay `verification_missing`."""
 
-    outcome: Literal["accepted", "accepted_with_deviation", "not_reviewed"]
+    outcome: Literal[
+        "accepted", "accepted_with_deviation", "not_reviewed", "force_accepted"
+    ]
     # Why: the deviation and who authorized it, or why no review ran.
     reason: str | None = None
     unmet: list[str] = []
@@ -447,6 +450,8 @@ def transition(state: TaskState, action: Action, ctx: TransitionContext) -> Task
     S, A = TaskState, Action
     if action is A.CANCEL and state not in TERMINAL:
         return S.CANCELLED
+    if action is A.FORCE_ACCEPT and state not in TERMINAL:
+        return S.SUCCEEDED
     match state, action:
         case S.AWAITING_APPROVAL, A.APPROVE:
             return S.READY if ctx.deps_done else S.PENDING

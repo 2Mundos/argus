@@ -37,6 +37,7 @@ HIDDEN = frozenset(
         "scale_pool",
         "create_worker",
         "drain_agent",
+        "force_accept_task",  # owner-authorized only
     }
 )
 # Offered when the model's context window is known and small (3.6).

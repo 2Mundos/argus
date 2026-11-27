@@ -276,6 +276,75 @@ async def cancel(tx: Tx, task_id: str, actor: str) -> Task:
     return await get_task(tx.conn, task_id)
 
 
+FORCE_ACCEPT_REASON_MAX = 2000
+FORCE_ACCEPTED = "force_accepted"
+
+
+async def force_accept(
+    tx: Tx,
+    task_id: str,
+    actor: str,
+    reason: str,
+    *,
+    expected_version: str | None = None,
+    forge: deliverable.ForgeRead | None = None,
+) -> Task:
+    """The owner ends a non-terminal task as `succeeded` with the disposition
+    `force_accepted` (deliverable spec 3.10). No review, deliverable or checklist
+    gate runs; unmet items stay `verification_missing`. An active claim ends like a
+    release (no failure counted), open decisions are cancelled, and non-terminal
+    review children are cancelled by the terminal move without a replacement.
+    Nothing is written to the forge: `forge` is the read taken beforehand, recorded
+    on the event when the task names a PR."""
+    row = await _row(tx.conn, task_id)
+    if expected_version is not None and row["updated_at"] != expected_version:
+        raise ConflictError(
+            f"task {task_id} changed since you read it; read it again",
+            code="stale_version",
+        )
+    if row["state"] in (S.SUCCEEDED, S.FAILED, S.CANCELLED):
+        raise ConflictError(f"task is {row['state']}, not open", code="task_not_open")
+    reason = clean(reason) or reason
+    data: dict[str, Any] = {
+        "reason": reason,
+        "forced_by": actor,
+        "prior_state": row["state"],
+    }
+    if (seen := forge.delivery if forge else None) is not None:
+        data["pr"] = {
+            "url": seen.pr,
+            "state": seen.pr_state,
+            "head_sha": seen.head.sha if seen.head else None,
+        }
+    holder = row["assignee_agent_id"] if row["state"] == S.CLAIMED else None
+    await _apply(
+        tx,
+        row,
+        Action.FORCE_ACCEPT,
+        actor,
+        data=data,
+        event="task.force_accepted",
+        disposition=(FORCE_ACCEPTED, reason),
+    )
+    if row["state"] == S.CLAIMED:
+        await tx.conn.execute(
+            "UPDATE task_attempts SET outcome = 'released', outcome_reason = ?"
+            " WHERE id = (SELECT max(id) FROM task_attempts"
+            "  WHERE task_id = ? AND attempt = ?)",
+            ("force_accepted", row["id"], row["attempt"]),
+        )
+    if holder:
+        from argus_api.accounts import service as accounts  # it imports this module
+
+        async with tx.conn.execute(
+            "SELECT 1 FROM tasks WHERE state = 'claimed' AND assignee_agent_id = ?",
+            (holder,),
+        ) as cur:
+            if await cur.fetchone() is None:
+                await accounts.release(tx, holder, "task_released")
+    return await get_task(tx.conn, task_id)
+
+
 async def approve(tx: Tx, task_id: str, actor: str) -> Task:
     row = await _row(tx.conn, task_id)
     await _apply(

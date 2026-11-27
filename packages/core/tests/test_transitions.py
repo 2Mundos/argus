@@ -34,6 +34,11 @@ LEGAL: dict[tuple[TaskState, Action], TaskState] = {
         for s in S
         if s not in {S.SUCCEEDED, S.FAILED, S.CANCELLED}
     },
+    **{
+        (s, A.FORCE_ACCEPT): S.SUCCEEDED
+        for s in S
+        if s not in {S.SUCCEEDED, S.FAILED, S.CANCELLED}
+    },
 }
 
 

@@ -76,10 +76,12 @@ from argus_api.tasks.leases import (
 )
 from argus_api.tasks.manage import (
     ENV_DISK_FULL,
+    FORCE_ACCEPT_REASON_MAX,
     RELEASE_REASON_MAX,
     approve,
     cancel,
     check_reviewer,
+    force_accept,
     release,
     release_agent_tasks,
     retry,
@@ -108,6 +110,7 @@ __all__ = [
     "ATTEMPT_PROGRESS_SQL",
     "ENV_DISK_FULL",
     "EXIT_ERROR_MAX",
+    "FORCE_ACCEPT_REASON_MAX",
     "LATEST_TASK_EVENT_SQL",
     "LATE_DETECT_AFTER_S",
     "MAX_DEPENDENCIES",
@@ -160,6 +163,7 @@ __all__ = [
     "fail",
     "fail_runtime_holds",
     "flag_quiet",
+    "force_accept",
     "get_task",
     "hold_for_runtime",
     "manages_accounts",

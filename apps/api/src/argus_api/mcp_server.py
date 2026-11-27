@@ -1728,6 +1728,27 @@ async def cancel_task(ctx: Context, task_id: str) -> dict:
     return await _call(ctx, "POST", f"/tasks/{task_id}/cancel")
 
 
+@tool(MANAGERS)
+async def force_accept_task(
+    ctx: Context,
+    task_id: str,
+    reason: str,
+    expected_version: str | None = None,
+) -> dict:
+    """Owner-authorized only: close a non-terminal task as `succeeded` with the
+    disposition `force_accepted` (orchestrators and admins). Use it only on the
+    owner's explicit instruction, e.g. when the owner already verified and merged
+    the work and review can no longer answer. `reason` is required and recorded.
+    Skips review and deliverable gates; unmet checklist items stay
+    `verification_missing`. Releases the claim without a failure, cancels open
+    decisions and review children, and never merges, pushes or closes a PR. 409
+    `task_not_open` on a finished task; `expected_version` guards a stale read."""
+    body: dict[str, Any] = {"reason": reason}
+    if expected_version is not None:
+        body["expected_version"] = expected_version
+    return await _call(ctx, "POST", f"/tasks/{task_id}/force-accept", json=body)
+
+
 @tool(ADMINS)
 async def attest_checkpoint_nothing_to_save(
     ctx: Context,
