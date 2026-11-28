@@ -331,10 +331,9 @@ describe("execution chain editor", () => {
   });
   it("shows each level's built-in executor order where no chain exists", () => {
     render(<ExecutionChains {...base} setting={undefined} />);
-    expect(
-      screen.getAllByText(/executor order agent → claude → codex/, { hidden: true }),
-    ).toHaveLength(2);
-    expect(screen.getAllByText(/executor order claude → codex/, { hidden: true })).toHaveLength(2);
+    const levels = [...document.querySelectorAll(".chain-level")].map((el) => el.textContent ?? "");
+    expect(levels.filter((t) => /executor order agent → claude → codex/.test(t))).toHaveLength(2);
+    expect(levels.filter((t) => /executor order claude → codex/.test(t))).toHaveLength(2);
     expect(screen.getByText("claude / local: harness or executor")).toBeTruthy();
     expect(screen.getByText("opencode / custom: executor only")).toBeTruthy();
   });
