@@ -1578,6 +1578,10 @@ function prOutput(pr) {
  * Keep the formula in step with `mergeAuthorizationToken` there.
  */
 function requireMergeAuthorization(env, target = {}) {
+  if (env.ARGUS_MERGE_DENIED)
+    throw policy(
+      "merge is explicitly denied for this task by its owner (input.delivery.deny_merge); no grant can override it",
+    );
   const given = env.ARGUS_MERGE_AUTHORIZED;
   if (!given)
     throw policy(

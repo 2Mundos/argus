@@ -506,6 +506,7 @@ runtime_keys = [
     "ARGUS_MERGE_AUTHORIZED",
     "ARGUS_MERGE_APPROVED_PR",
     "ARGUS_MERGE_APPROVED_SHA",
+    "ARGUS_MERGE_DENIED",
 ]
 missing = [k for k in runtime_keys if f"  '{k}',\n" not in s]
 if missing:

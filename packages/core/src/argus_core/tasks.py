@@ -566,6 +566,13 @@ class TaskCreate(BaseModel):
         encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
         if len(encoded) > INPUT_MAX_CHARS:
             raise ValueError(f"input exceeds {INPUT_MAX_CHARS} characters")
+        delivery = value.get("delivery")
+        if (
+            isinstance(delivery, dict)
+            and "deny_merge" in delivery
+            and not isinstance(delivery["deny_merge"], bool)
+        ):
+            raise ValueError("input.delivery.deny_merge must be a boolean")
         return value
 
     @field_validator("account_providers")

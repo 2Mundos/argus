@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-23
-updated: 2026-11-17
+updated: 2026-11-27
 ---
 
 # Task continuation
@@ -232,6 +232,12 @@ away), and foreign checklist ids are never sent. On the server,
 checklist and that B's ids fail closed with `checklist_mismatch`.
 
 ## 3.9 Authority
+
+`input.delivery.deny_merge: true` on a non-worker-origin task vetoes all merge
+grants, including project/global auto-merge and conflicting `allow_merge: true`
+([deliverable 3.3.1](task-deliverable.spec.md#331-explicit-task-merge-denial)).
+The effective worker contract carries the denial and trusted grants say merge=no.
+Attempt snapshots retain input and prompt trust for audit.
 
 `delivery.allow_merge` only counts on orchestrator-origin tasks: `input` of a
 worker-created task is worker-authored and grants nothing. Force-push, Production

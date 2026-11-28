@@ -11,8 +11,18 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { ArgusTask } from "./argus.js";
 
-/** True only when the operator's setting or an orchestrator-origin input grants the merge. */
+/** True only for an owner-authored boolean `input.delivery.deny_merge`; worker input is never authority. */
+export function taskDeniesMerge(task: ArgusTask): boolean {
+  if (task.prompt_trust === "worker") return false;
+  const delivery = task.input?.delivery;
+  if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return false;
+  return (delivery as Record<string, unknown>).deny_merge === true;
+}
+
+/** True only when the operator's setting or an orchestrator-origin input grants the merge;
+ *  an explicit owner denial vetoes both. */
 export function taskAuthorizesMerge(task: ArgusTask): boolean {
+  if (taskDeniesMerge(task)) return false;
   // The operator's setting, delivered with the claim, is authenticated metadata.
   if (task.auto_merge === true && task.deliverable === "pr_merged") return true;
   // `input` of a worker-created task is worker-authored: it can never grant authority.
@@ -65,9 +75,12 @@ const VARS = [
   "ARGUS_MERGE_AUTHORIZED",
   "ARGUS_MERGE_APPROVED_PR",
   "ARGUS_MERGE_APPROVED_SHA",
+  "ARGUS_MERGE_DENIED",
 ] as const;
 
-/** Issues the key and token for this attempt; anything else (or `undefined`) removes all six. */
+/** Issues the key and token for this attempt; anything else (or `undefined`) removes all seven.
+ *  `denied` forwards an explicit owner denial (`ARGUS_MERGE_DENIED=1`) with no grant; the
+ *  helper refuses on it before any forge request. Setting it can only restrict. */
 export function scopeMergeAuthorization(
   env: NodeJS.ProcessEnv,
   task:
@@ -80,8 +93,13 @@ export function scopeMergeAuthorization(
       }
     | undefined,
   authorized: boolean,
+  denied = false,
 ): void {
   for (const name of VARS) delete env[name];
+  if (denied && task) {
+    env.ARGUS_MERGE_DENIED = "1";
+    return;
+  }
   if (!authorized || !task) return;
   const approvedSha =
     task.independent_review_required === true

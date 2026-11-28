@@ -15,6 +15,7 @@ const GATE_REASONS: Record<string, string> = {
 };
 
 export function mergeLine(merge: Merge): string {
+  if (merge.deny_merge) return "merge denied by the task owner (deny_merge); no setting grants it";
   if (merge.granted_by === "auto_merge") {
     const by = merge.auto_merge_source === "project" ? "project" : "global";
     const line = `authorized by ${by} auto-merge (deliverable ${merge.deliverable})`;

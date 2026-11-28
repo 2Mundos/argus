@@ -15290,6 +15290,10 @@
           "deliverable": {
             "$ref": "#/components/schemas/Deliverable"
           },
+          "deny_merge": {
+            "title": "Deny Merge",
+            "type": "boolean"
+          },
           "granted_by": {
             "anyOf": [
               {
@@ -15317,6 +15321,7 @@
           "auto_merge",
           "auto_merge_source",
           "allow_merge",
+          "deny_merge",
           "granted_by"
         ],
         "title": "MergeDecision",

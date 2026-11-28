@@ -155,3 +155,31 @@ def test_failing_ci_is_a_gate_reason(client: TestClient) -> None:
     task_id = review_task(client, f"see {URL}")
     gate = client.get(f"/api/tasks/{task_id}").json()["pr_gate"]
     assert gate["reasons"] == ["ci_failed"]
+
+
+@pytest.mark.parametrize("setting", [AUTO_MERGE, PROJECT_AUTO_MERGE])
+@pytest.mark.parametrize("allow", [True, False])
+def test_owner_denial_vetoes_settings_and_conflicting_allow(client, setting, allow):
+    assert client.put(setting, json={"value": True}).status_code == 200
+    got = read(
+        client,
+        "pr_merged",
+        input={
+            "delivery": {
+                "deny_merge": True,
+                "allow_merge": allow,
+            }
+        },
+    )
+    assert got["input"]["delivery"]["deny_merge"] is True
+    decision = got["merge"]
+    assert decision["auto_merge"] is True
+    assert decision["deny_merge"] is True
+    assert decision["authorized"] is False
+    assert decision["may_merge"] is False
+    assert decision["granted_by"] is None
+
+
+def test_non_boolean_denial_is_rejected_at_authoring(client: TestClient) -> None:
+    res = create(client, "pr_merged", input={"delivery": {"deny_merge": "true"}})
+    assert res.status_code == 422

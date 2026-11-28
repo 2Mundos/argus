@@ -3,19 +3,28 @@
   "merge": [
     {
       "name": "pr_merged with auto_merge",
-      "task": { "deliverable": "pr_merged", "auto_merge": true },
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true
+      },
       "authorized": true,
       "may_merge": true
     },
     {
       "name": "pr_green with auto_merge is not authorized",
-      "task": { "deliverable": "pr_green", "auto_merge": true },
+      "task": {
+        "deliverable": "pr_green",
+        "auto_merge": true
+      },
       "authorized": false,
       "may_merge": false
     },
     {
       "name": "pr_merged without auto_merge",
-      "task": { "deliverable": "pr_merged", "auto_merge": false },
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": false
+      },
       "authorized": false,
       "may_merge": false
     },
@@ -24,14 +33,25 @@
       "task": {
         "deliverable": "pr_green",
         "auto_merge": false,
-        "input": { "delivery": { "allow_merge": true } }
+        "input": {
+          "delivery": {
+            "allow_merge": true
+          }
+        }
       },
       "authorized": true,
       "may_merge": true
     },
     {
       "name": "allow_merge must be boolean true",
-      "task": { "deliverable": "pr_green", "input": { "delivery": { "allow_merge": "true" } } },
+      "task": {
+        "deliverable": "pr_green",
+        "input": {
+          "delivery": {
+            "allow_merge": "true"
+          }
+        }
+      },
       "authorized": false,
       "may_merge": false
     },
@@ -40,14 +60,22 @@
       "task": {
         "deliverable": "pr_green",
         "prompt_trust": "worker",
-        "input": { "delivery": { "allow_merge": true } }
+        "input": {
+          "delivery": {
+            "allow_merge": true
+          }
+        }
       },
       "authorized": false,
       "may_merge": false
     },
     {
       "name": "auto_merge still applies to a worker-created pr_merged task",
-      "task": { "deliverable": "pr_merged", "auto_merge": true, "prompt_trust": "worker" },
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "prompt_trust": "worker"
+      },
       "authorized": true,
       "may_merge": true
     },
@@ -63,13 +91,118 @@
     },
     {
       "name": "delivery input that is not an object",
-      "task": { "deliverable": "pr_green", "input": { "delivery": [true] } },
+      "task": {
+        "deliverable": "pr_green",
+        "input": {
+          "delivery": [true]
+        }
+      },
       "authorized": false,
       "may_merge": false
+    },
+    {
+      "name": "owner denial overrides auto merge",
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "prompt_trust": "orchestrator",
+        "input": {
+          "delivery": {
+            "deny_merge": true
+          }
+        }
+      },
+      "authorized": false,
+      "may_merge": false
+    },
+    {
+      "name": "denial wins conflicting explicit allow",
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "prompt_trust": "orchestrator",
+        "input": {
+          "delivery": {
+            "deny_merge": true,
+            "allow_merge": true
+          }
+        }
+      },
+      "authorized": false,
+      "may_merge": false
+    },
+    {
+      "name": "legacy false is not denial",
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "prompt_trust": "orchestrator",
+        "input": {
+          "delivery": {
+            "allow_merge": false
+          }
+        }
+      },
+      "authorized": true,
+      "may_merge": true
+    },
+    {
+      "name": "false denial preserves explicit allow",
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "prompt_trust": "orchestrator",
+        "input": {
+          "delivery": {
+            "deny_merge": false,
+            "allow_merge": true
+          }
+        }
+      },
+      "authorized": true,
+      "may_merge": true
+    },
+    {
+      "name": "worker input cannot author owner denial",
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "prompt_trust": "worker",
+        "input": {
+          "delivery": {
+            "deny_merge": true
+          }
+        }
+      },
+      "authorized": true,
+      "may_merge": true
+    },
+    {
+      "name": "string denial is not boolean denial",
+      "task": {
+        "deliverable": "pr_merged",
+        "auto_merge": true,
+        "prompt_trust": "orchestrator",
+        "input": {
+          "delivery": {
+            "deny_merge": "true"
+          }
+        }
+      },
+      "authorized": true,
+      "may_merge": true
     }
   ],
   "review": [
-    { "name": "setting on", "forge_agentic_review_required": true, "policy": "required" },
-    { "name": "setting off", "forge_agentic_review_required": false, "policy": "off" }
+    {
+      "name": "setting on",
+      "forge_agentic_review_required": true,
+      "policy": "required"
+    },
+    {
+      "name": "setting off",
+      "forge_agentic_review_required": false,
+      "policy": "off"
+    }
   ]
 }

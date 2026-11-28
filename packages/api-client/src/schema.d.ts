@@ -9516,6 +9516,8 @@ export interface components {
              */
             auto_merge_source: "project" | "global" | "default";
             deliverable: components["schemas"]["Deliverable"];
+            /** Deny Merge */
+            deny_merge: boolean;
             /** Granted By */
             granted_by: ("auto_merge" | "allow_merge") | null;
             /** May Merge */
