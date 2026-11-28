@@ -106,18 +106,18 @@ _DECLARED: list[tuple[str, str, tuple[EngineLayer, ...], Axes, list[str], str]] 
     (
         "antigravity",
         "Antigravity (Google)",
-        (X,),
+        (H, X),
         Axes(
             model_provider="google",
             model=None,
-            harness="agy -p",
+            harness="nanoclaw provider agy",
             executor="agy",
             account_provider="google",
         ),
         ["argus-account", "GEMINI_API_KEY", "google-oauth"],
-        "Code executor only (never a harness). An Argus google account (a Gemini API "
-        "key or an imported Google OAuth subscription login) reaches it through the "
-        "vault; blocked without a gateway sentinel.",
+        "NanoClaw harness and code executor, chosen by account priority like any "
+        "other. An Argus google account (a Gemini API key or an imported Google "
+        "OAuth subscription login) reaches it through the vault.",
     ),
 ]
 

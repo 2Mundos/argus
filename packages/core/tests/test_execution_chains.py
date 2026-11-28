@@ -472,6 +472,32 @@ def test_capabilities_publish_effort_support_per_role():
         "xhigh",
         "max",
     ]
+    assert "thought_level" in caps["nanoclaw:harness:agy:google"].effort_interface
+    assert caps["nanoclaw:harness:agy:google"].efforts == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert caps["nanoclaw:harness:agy:google"].modes == ["single", "paired"]
+    agy_single = policy(
+        "standard",
+        [
+            {
+                "id": "agy-direct",
+                "mode": "single",
+                "runtime": "nanoclaw",
+                "harness": {
+                    "adapter": "agy",
+                    "provider": "google",
+                    "model": {"source": "explicit", "id": "gemini-4-neon"},
+                    "effort": "xhigh",
+                },
+            }
+        ],
+    )
+    assert agy_single.difficulties["standard"][0].harness.effort == "xhigh"
     for id in [
         "nanoclaw:harness:claude:local",
         "nanoclaw:harness:claude:custom",

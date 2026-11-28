@@ -452,9 +452,37 @@ async def claim_task(
                         conn, task.id, task.attempt
                     )
                 if (
+                    engine_lease is not None
+                    and engine_lease.provider == google_auth.PROVIDER
+                ):
+                    await google_refresh.refresher_for(
+                        request.app.state
+                    ).refresh_account(db, secrets, engine_lease.account_id)
+                    async with (
+                        db.read() as conn,
+                        conn.execute(
+                            "SELECT secret_ref FROM accounts WHERE id = ?",
+                            (engine_lease.account_id,),
+                        ) as cur,
+                    ):
+                        row = await cur.fetchone()
+                    if row is not None:
+                        from argus_api.secrets import ref_name
+
+                        name = ref_name(row["secret_ref"])
+                        refreshed = secrets.get(name) if name else None
+                        if refreshed is not None:
+                            engine_lease = engine_lease.model_copy(
+                                update={"credential": refreshed}
+                            )
+                if (
                     execution is not None
                     and execution.executor is not None
                     and execution.executor.selector.provider == google_auth.PROVIDER
+                    and (
+                        engine_lease is None
+                        or execution.executor.account_id != engine_lease.account_id
+                    )
                 ):
                     await google_refresh.refresher_for(
                         request.app.state

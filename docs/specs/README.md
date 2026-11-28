@@ -41,7 +41,7 @@ Every spec in this directory with its status, kept in sync by
 | [Forge integrations: repository credentials per project](forge-integrations.spec.md) | `implemented` |
 | [Gitea helper for workers (`argus-gitea-api`)](gitea-helper.spec.md) | `implemented` |
 | [GitHub repositories](github-repositories.spec.md) | `implemented` |
-| [Google (Antigravity) accounts: import, executor lease, delegated CLI](google-accounts.spec.md) | `implemented` |
+| [Google (Antigravity) accounts: import, harness and executor lease, delegated CLI](google-accounts.spec.md) | `implemented` |
 | [Home](home.spec.md) | `implemented` |
 | [Integrations: MCP connections and Kubernetes clusters](integrations.spec.md) | `partial` |
 | [Internal Orchestrator](internal-orchestrator.spec.md) | `implemented` |

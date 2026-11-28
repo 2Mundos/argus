@@ -100,8 +100,8 @@ def _why_unusable(entry: EngineEntry | None, name: str) -> str:
     return f"{name} is not usable ({missing or 'not in the catalogue'})"
 
 
-# Engines a NanoClaw harness can run (an engine id is also its executor name).
-_HARNESSES = ("claude", "codex", "muse")
+# Engines a NanoClaw harness can run (an engine id maps to its executor via axes).
+_HARNESSES = ("claude", "codex", "muse", "antigravity")
 
 
 def _rank(entry: EngineEntry | None) -> int | None:
@@ -157,7 +157,12 @@ def _fallback(catalog: EngineCatalog) -> tuple[str, str | None, str | None]:
                     f"{name} ({reason.removeprefix(f'{name} is not usable ')})",
                 )
         return target, None, None
-    entry = by_id.get("claude") or by_id.get("codex") or by_id.get("muse")
+    entry = (
+        by_id.get("claude")
+        or by_id.get("codex")
+        or by_id.get("muse")
+        or by_id.get("antigravity")
+    )
     name = entry.id if entry is not None else "claude"
     return name, _why_unusable(entry, name), None
 
@@ -170,7 +175,10 @@ def _executor(request: RouteRequest, catalog: EngineCatalog, target: str) -> str
         return None
     ranked = _ranked(catalog)
     best = ranked[0][1] if ranked else None
-    return best if best is not None and best != target else None
+    if best is None or best == target:
+        return None
+    entry = next((e for e in catalog.engines if e.id == best), None)
+    return entry.axes.executor if entry is not None and entry.axes.executor else best
 
 
 # Executor order per difficulty (task difficulty spec 3); `ARGUS_DIFFICULTY_EXECUTORS`

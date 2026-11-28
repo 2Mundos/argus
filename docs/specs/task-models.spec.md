@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-21
-updated: 2026-11-23
+updated: 2026-11-27
 ---
 
 # Task models
@@ -51,10 +51,10 @@ explicit list, or when task model/account pins choose the whole legacy pin path.
 
 | Field | Shape | Provider it needs |
 | --- | --- | --- |
-| `harness_model` | `{engine: claude \| codex \| muse, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `muse` → `muse` |
+| `harness_model` | `{engine: claude \| codex \| muse \| agy, model}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `muse` → `muse`, `agy` → `google` |
 | `executor_model` | `{executor: claude \| codex \| agent \| opencode \| copilot \| agy \| dsh \| muse, model, account_provider?: local \| custom}` or `null` | `claude` → `anthropic`, `codex` → `openai`, `agent` → `cursor`, `opencode` → `local` (or `account_provider`), `copilot` → `copilot`, `agy` → `google`, `dsh` → `account_provider` (`local` or `custom`, required), `muse` → `muse` |
 
-The `copilot`, `agy` and `dsh` executors are executor-only: `copilot` and `agy` run on `copilot` and `google` respectively, `dsh` runs on `custom` or `local`, and none runs as an engine. `muse` is both: it runs as an engine on `muse` and as an executor on `muse`.
+The `copilot` and `dsh` executors are executor-only: `copilot` runs on `copilot`, `dsh` runs on `custom` or `local`, and neither runs as an engine. `agy` and `muse` are both: `agy` runs as an engine and executor on `google`, and `muse` runs as an engine and executor on `muse`.
 
 An OpenCode pin optionally carries `account_provider: local | custom`. Omitted or
 null preserves the existing `local` route; `custom` strictly leases the existing

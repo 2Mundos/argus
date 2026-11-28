@@ -2344,13 +2344,13 @@ async def reset_model_policy(ctx: Context) -> dict:
 
 @tool(ANYONE)
 async def list_engines(ctx: Context) -> dict:
-    """Engines (claude, codex, opencode, cursor-agent, antigravity) and the local model. Each entry
-    lists its `layers`: the NanoClaw `harness` and the code `executor` (claude and codex
-    have both, cursor-agent, antigravity and opencode only the executor). Every layer has its own
-    `readiness` (installed, authenticated, validated; ok=null is unknown), `accounts` and
-    `usable` (true only when all three hold). Validating one layer proves nothing about
-    the other. The top-level `readiness`, `accounts`, `usable` and `role` are the
-    deprecated single-layer view. Read-only."""
+    """Engines (claude, codex, muse, antigravity, opencode, cursor-agent) and the local model.
+    Each entry lists its `layers`: the NanoClaw `harness` and the code `executor` (claude,
+    codex, muse and antigravity have both; cursor-agent and opencode only the executor). Every
+    layer has its own `readiness` (installed, authenticated, validated; ok=null is unknown),
+    `accounts` and `usable` (true only when all three hold). Validating one layer proves
+    nothing about the other. The top-level `readiness`, `accounts`, `usable` and `role` are
+    the deprecated single-layer view. Read-only."""
     return await _call(ctx, "GET", "/engines")
 
 

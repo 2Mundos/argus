@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, call } from "../api";
 
 // Providers whose accounts can run a harness (task models spec 3.4).
-const ENGINE_PROVIDERS = new Set(["anthropic", "openai", "custom", "local"]);
+const ENGINE_PROVIDERS = new Set(["anthropic", "openai", "muse", "google", "custom", "local"]);
 
 type Option = { id: string; name: string; provider: string; enabled: boolean };
 

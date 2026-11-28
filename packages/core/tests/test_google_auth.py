@@ -3,7 +3,12 @@ from datetime import UTC, datetime
 import pytest
 from argus_core import google_auth
 from argus_core.accounts import ENGINE_PROVIDERS, EXECUTOR_ONLY, role_accepts
-from argus_core.tasks import EXECUTOR_PROVIDERS, HARNESS_PROVIDERS, ExecutorModel
+from argus_core.tasks import (
+    EXECUTOR_PROVIDERS,
+    HARNESS_PROVIDERS,
+    ExecutorModel,
+    HarnessModel,
+)
 
 NOW = datetime(2026, 11, 19, 18, 0, tzinfo=UTC)
 FUTURE = "2026-11-19T19:00:00Z"
@@ -89,14 +94,15 @@ def test_rejections_name_the_rule_and_never_echo_secrets(
         assert secret not in msg
 
 
-def test_google_is_executor_only_with_agy_executor() -> None:
+def test_google_is_harness_and_executor_with_agy() -> None:
     runtime = ["google"]
     assert role_accepts("executor", "google", runtime)
-    assert not role_accepts("engine", "google", runtime)
+    assert role_accepts("engine", "google", runtime)
     assert EXECUTOR_PROVIDERS["agy"] == "google"
-    assert "google" in EXECUTOR_ONLY
-    assert "google" not in ENGINE_PROVIDERS
-    assert "google" not in HARNESS_PROVIDERS.values()
+    assert HARNESS_PROVIDERS["agy"] == "google"
+    assert "google" not in EXECUTOR_ONLY
+    assert "google" in ENGINE_PROVIDERS
+    assert HarnessModel(engine="agy", model="gemini-4-neon").provider == "google"
     assert (
         ExecutorModel(executor="agy", model="gemini-4-neon-high").provider == "google"
     )

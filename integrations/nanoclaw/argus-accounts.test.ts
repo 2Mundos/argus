@@ -803,12 +803,12 @@ describe("channel with accounts", () => {
     await until(() => h.inbound.length === 1);
     const claim = w.calls.find((c) => c.path === "/tasks/claim")!;
     expect(claim.body).toMatchObject({
-      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse", "google"],
     });
     // the restriction is the server's: the lease request is unchanged and names the task
     const leaseCall = w.calls.find((c) => c.path === "/accounts/lease")!;
     expect(leaseCall.body).toMatchObject({
-      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse", "google"],
       task_id: "t1",
       attempt: 1,
     });
@@ -1103,7 +1103,7 @@ describe("engine and executor leases in the channel", () => {
     const leaseCalls = w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body);
     expect(leaseCalls).toEqual([
       {
-        runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "muse", "google"],
         task_id: "t1",
         attempt: 1,
       },
@@ -1611,12 +1611,13 @@ const googleOauthLease = (over: Partial<AccountLease> = {}) =>
 describe("google credential documents", () => {
   const target = { identifier: "g", name: "G" };
 
-  it("is an executor-only provider run by the agy delegate", () => {
-    expect(runtimeProviders("engine")).not.toContain("google");
+  it("is a harness and executor provider run by agy", () => {
+    expect(runtimeProviders("engine")).toContain("google");
     expect(runtimeProviders("executor")).toContain("google");
     expect(executorFor("google")).toBe("agy");
     expect(providerForExecutor("agy")).toBe("google");
     expect(preferredExecutorForLease(codexLease(), googleApiKeyLease())).toBe("agy");
+    expect(preferredExecutorForLease(googleApiKeyLease({ role: "engine" }), null)).toBe("agy");
   });
 
   it("maps an API key to x-goog-api-key on generativelanguage.googleapis.com", async () => {
@@ -1721,12 +1722,18 @@ describe("google credential documents", () => {
     expect(w.onecli.secrets).toEqual([]);
   });
 
-  it("is never an engine lease", async () => {
+  it("applies as an engine lease targeting the agy harness in both API key and OAuth modes", async () => {
     const w = world({ leases: [] });
     const onecli = new OneCliClient("http://127.0.0.1:10254", w.fetchImpl);
-    await expect(
-      applyLeases(onecli, target, [googleApiKeyLease({ role: "engine" })]),
-    ).rejects.toThrow(/executor, not an engine/);
+    const apiOut = await applyLeasesDetailed(onecli, target, [
+      googleApiKeyLease({ role: "engine" }),
+    ]);
+    expect(apiOut.engine).toBe("agy");
+
+    const oauthOut = await applyLeasesDetailed(onecli, target, [
+      googleOauthLease({ role: "engine" }),
+    ]);
+    expect(oauthOut.engine).toBe("agy");
   });
 });
 
@@ -1756,7 +1763,7 @@ describe("cursor executor selection in the channel", () => {
     await until(() => w.calls.some((c) => c.path === "/engines/selected"));
     expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
       {
-        runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+        runtime_providers: ["anthropic", "openai", "local", "custom", "muse", "google"],
         task_id: "t1",
         attempt: 1,
       },
@@ -1868,7 +1875,7 @@ describe("structured providerFailure on a failure notice", () => {
       source: "structured",
       reset_status: "absent",
       role: "engine",
-      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse", "google"],
       task_id: "t1",
       attempt: 1,
     });
@@ -2083,7 +2090,7 @@ describe("task-scoped repository auth", () => {
       expect(h.inbound[0].content.text).not.toContain("dummy-gitea-token");
       expect(w.calls.filter((c) => c.path === "/accounts/lease").map((c) => c.body)).toEqual([
         {
-          runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+          runtime_providers: ["anthropic", "openai", "local", "custom", "muse", "google"],
           task_id: REPO_ID,
           attempt: 1,
         },
@@ -4550,7 +4557,7 @@ describe("no usable account at claim time", () => {
     await until(() => w.calls.some((c) => c.path === "/accounts/awaiting-quota"), 7000);
     const call = w.calls.find((c) => c.path === "/accounts/awaiting-quota")!;
     expect(call.body).toMatchObject({
-      runtime_providers: ["anthropic", "openai", "local", "custom", "muse"],
+      runtime_providers: ["anthropic", "openai", "local", "custom", "muse", "google"],
     });
     expect(w.calls.some((c) => c.path === "/tasks/claim")).toBe(true);
     expect(w.calls.find((c) => c.path === "/tasks/t1/fail")!.body).toMatchObject({

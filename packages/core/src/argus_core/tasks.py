@@ -50,6 +50,7 @@ HARNESS_PROVIDERS: dict[str, str] = {
     "claude": "anthropic",
     "codex": "openai",
     "muse": "muse",
+    "agy": "google",
 }
 EXECUTOR_PROVIDERS: dict[str, str] = {
     "claude": "anthropic",
@@ -74,7 +75,7 @@ class HarnessModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    engine: Literal["claude", "codex", "muse"]
+    engine: Literal["claude", "codex", "muse", "agy"]
     model: ModelId
 
     @property

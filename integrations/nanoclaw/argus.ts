@@ -786,6 +786,7 @@ const PIN_PROVIDERS: Record<string, string> = {
   claude: "anthropic",
   codex: "openai",
   muse: "muse",
+  agy: "google",
 };
 
 /**

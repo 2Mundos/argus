@@ -97,18 +97,20 @@ def test_import_rejects_bad_shapes_and_secret_ref_only(client: TestClient) -> No
     assert no_cred.status_code == 422
 
 
-def test_google_leases_only_for_executor_role_and_updates_catalogue(
+def test_google_leases_for_engine_and_executor_and_updates_catalogue(
     client: TestClient,
 ) -> None:
     created = _create(client, {"api_key": FAKE_KEY}, name="google-exec")
     assert created.status_code == 201
     acc_id = created.json()["id"]
 
-    # Engine catalogue reflects the registered google account on antigravity.
+    # Engine catalogue reflects the registered google account on both antigravity layers.
     cat = client.get("/api/engines", headers=ADMIN).json()
     agy = next(e for e in cat["engines"] if e["id"] == "antigravity")
+    assert agy["axes"]["harness"] == "nanoclaw provider agy"
     assert agy["axes"]["executor"] == "agy"
     assert agy["axes"]["account_provider"] == "google"
+    assert [layer["layer"] for layer in agy["layers"]] == ["harness", "executor"]
     assert agy["readiness"]["authenticated"]["ok"] is True
     assert agy["accounts"]["available"] == 1
 
@@ -126,20 +128,28 @@ def test_google_leases_only_for_executor_role_and_updates_catalogue(
         approve = client.post(f"/api/tasks/{task['id']}/approve", headers=ADMIN)
         assert approve.status_code == 200, approve.text
     worker = _register_worker(client)
-    claimed_res = client.post("/api/tasks/claim", headers=worker, json={})
+    claimed_res = client.post(
+        "/api/tasks/claim",
+        headers=worker,
+        json={"runtime_providers": ["google"]},
+    )
     assert claimed_res.status_code == 200, claimed_res.text
     claimed = claimed_res.json()
     claim = {"task_id": task["id"], "attempt": claimed["attempt"]}
 
-    # Engine role never leases google.
+    # Engine role leases google.
     eng = client.post(
         "/api/accounts/lease",
         headers=worker,
         json={"role": "engine", "runtime_providers": ["google"], **claim},
     )
-    assert eng.status_code == 409
+    assert eng.status_code == 200, eng.text
+    eng_lease = eng.json()
+    assert eng_lease["account_id"] == acc_id
+    assert eng_lease["provider"] == "google"
+    assert eng_lease["role"] == "engine"
 
-    # Executor role leases google.
+    # Executor role also leases google.
     exe = client.post(
         "/api/accounts/lease",
         headers=worker,
@@ -598,6 +608,111 @@ def test_execution_chain_claim_refreshes_expired_google_oauth_executor(
     assert body["executor_lease"]["account_id"] == goog_id
     assert body["executor_lease"]["credential"]["token"]["access_token"] == (
         "ya29.CHAIN_REFRESHED_ACCESS_00000"
+    )
+    assert len(calls) == 1
+
+
+def test_single_layer_agy_execution_chain_claim_refreshes_google_oauth(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-layer `agy`/`google` execution chain claims with an engine lease only,
+    refreshing an expired OAuth token before delivery."""
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_ID", "client-id-test")
+    monkeypatch.setenv("ARGUS_GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-test")
+    calls: list[dict[str, str]] = []
+
+    async def fake_post(url: str, form: dict[str, str]) -> tuple[int, dict]:
+        calls.append(dict(form))
+        return (
+            200,
+            {
+                "access_token": "ya29.SINGLE_LAYER_REFRESHED_00000",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            },
+        )
+
+    app.state.google_refresher = GoogleTokenRefresher(post_form=fake_post)
+    goog = _create(
+        client,
+        {
+            "token": {
+                "access_token": FAKE_ACCESS,
+                "token_type": "Bearer",
+                "refresh_token": FAKE_REFRESH,
+                "expiry": "2020-01-01T00:00:00Z",
+                "expires_in": 3600,
+            },
+            "auth_method": "consumer",
+        },
+        name="google-single-layer",
+    )
+    assert goog.status_code == 201, goog.text
+    goog_id = goog.json()["id"]
+
+    proj = client.put("/api/projects/p-single-agy", headers=ADMIN, json={"name": "Agy"})
+    assert proj.status_code == 200, proj.text
+    chain = {
+        "version": 1,
+        "difficulties": {
+            "standard": [
+                {
+                    "id": "agy-single",
+                    "mode": "single",
+                    "runtime": "nanoclaw",
+                    "harness": {
+                        "account_id": goog_id,
+                        "provider": "google",
+                        "adapter": "agy",
+                        "model": {"source": "explicit", "id": "gemini-4-neon"},
+                        "effort": "high",
+                    },
+                }
+            ],
+        },
+    }
+    put_chain = client.put(
+        "/api/projects/p-single-agy/settings/execution.chains",
+        headers=ADMIN,
+        json={"value": chain},
+    )
+    assert put_chain.status_code == 200, put_chain.text
+
+    created_task = client.post(
+        "/api/tasks",
+        headers=ADMIN,
+        json={"project": "p-single-agy", "title": "single layer agy", "spec": "s"},
+    )
+    assert created_task.status_code == 201, created_task.text
+    task = created_task.json()
+    if task["state"] == "awaiting_approval":
+        approve = client.post(f"/api/tasks/{task['id']}/approve", headers=ADMIN)
+        assert approve.status_code == 200, approve.text
+
+    worker = _register_worker(client)
+    claimed = client.post(
+        "/api/tasks/claim",
+        headers=worker,
+        json={
+            "capabilities": [
+                "execution-chains-v1",
+                "nanoclaw:harness:agy:google",
+            ],
+            "runtime_providers": ["anthropic", "openai", "google", "local", "custom"],
+        },
+    )
+    assert claimed.status_code == 200, claimed.text
+    body = claimed.json()
+    assert body["execution"]["alternative"]["mode"] == "single"
+    assert body["execution"]["harness"]["selector"]["adapter"] == "agy"
+    assert body["execution"]["harness"]["selector"]["effort"] == "high"
+    assert "executor_lease" not in body
+    assert body["engine_lease"] is not None
+    assert body["engine_lease"]["account_id"] == goog_id
+    assert body["engine_lease"]["provider"] == "google"
+    assert body["engine_lease"]["role"] == "engine"
+    assert body["engine_lease"]["credential"]["token"]["access_token"] == (
+        "ya29.SINGLE_LAYER_REFRESHED_00000"
     )
     assert len(calls) == 1
 

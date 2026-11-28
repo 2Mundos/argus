@@ -620,8 +620,7 @@ export const PROVIDERS: Record<string, ProviderMapping> = {
   google: {
     type: "generic",
     host: GOOGLE_GEMINI_HOST,
-    engine: "",
-    executorOnly: true,
+    engine: "agy",
     secretSuffix: "-google",
     generic: {
       headerName: "x-goog-api-key",
