@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-26
-updated: 2026-11-24
+updated: 2026-11-27
 ---
 
 # Settings
@@ -73,10 +73,13 @@ and a one-line description shown in the dashboard. The registry is served by
 - MCP: `get_settings {project?}` (any token), `set_setting {key, value, project?}`
   and `reset_setting {key, project?}` (admin), over the same routes.
 - **Settings tab**: a scope picker (`Global` or a project) in the page toolbar.
-  Each key is its own card and shows its effective value, where it comes from,
-  and a "Reset to inherited" action on an override. Model chains are grouped by
-  scope, with standard chains (harness, implementation, trivial) apart from the
-  hard-task maps, and each engine chain in its own panel. The Engines
+  Keys are grouped into in-page tabs — **Orchestrator** (global only), **Tasks**
+  (defaults, models, git identity), **Execution** (execution chains), and
+  **Review** (delivery and review toggles, independent review, review policy) —
+  instead of one vertical stack. Each key shows its effective value, where it
+  comes from, and a "Reset to inherited" action on an override. Unsaved editor
+  drafts (notably execution chains) are kept across live reloads and in-page
+  tab switches until the operator saves, discards, or changes scope. The Engines
   view keeps engine readiness and links to Settings for model chains.
 
 ## 3.4 Model preferences
