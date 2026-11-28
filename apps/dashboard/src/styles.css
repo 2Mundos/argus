@@ -3197,6 +3197,147 @@ th {
 .settings-page .card > section > p {
   margin: 0;
 }
+.execution-chains {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.execution-chains > .toolbar {
+  margin-bottom: 0;
+}
+.execution-chains > p,
+.execution-chains > details,
+.execution-chains > ul {
+  margin: 0;
+}
+.chain-notes {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  list-style: disc inside;
+}
+.chain-notes.error {
+  border-color: color-mix(in srgb, var(--danger, #c44) 45%, var(--border));
+  color: var(--danger, #c44);
+}
+.chain-notes .link {
+  color: inherit;
+  text-align: left;
+}
+.subtabs button.chain-tab-blocked {
+  color: var(--danger, #c44);
+}
+.chain-alt-head input[aria-invalid="true"] {
+  border-color: var(--danger, #c44);
+  outline-color: var(--danger, #c44);
+}
+.chain-caps summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.chain-caps ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+.chain-level {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.chain-level[hidden] {
+  display: none;
+}
+.chain-level-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+.chain-level-bar > .small {
+  margin: 0;
+}
+.chain-level-bar .actions {
+  margin: 0;
+}
+.chain-alt {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.75rem;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.chain-alt > p {
+  margin: 0;
+}
+.chain-alt-head {
+  display: grid;
+  grid-template-columns: auto minmax(7rem, 1fr) minmax(8rem, 1fr) auto auto;
+  gap: 0.45rem 0.65rem;
+  align-items: end;
+}
+.chain-alt-head label {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.chain-alt-head input,
+.chain-alt-head select {
+  width: 100%;
+}
+.chain-alt-index {
+  font-weight: 600;
+  padding-bottom: 0.45rem;
+}
+.chain-alt-head .actions {
+  margin: 0;
+  grid-column: -2 / -1;
+}
+.chain-role {
+  margin: 0;
+  padding: 0.55rem 0.65rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.chain-role > legend {
+  padding: 0 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.chain-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.45rem 0.65rem;
+}
+.chain-fields label {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.chain-fields input,
+.chain-fields select {
+  width: 100%;
+}
+.chain-role-meta {
+  margin: 0.45rem 0 0;
+}
+@media (max-width: 720px) {
+  .chain-alt-head {
+    grid-template-columns: auto 1fr;
+  }
+  .chain-alt-head .actions {
+    grid-column: 1 / -1;
+  }
+}
 .integration-prereqs {
   display: grid;
   gap: 0.5rem;
@@ -3660,15 +3801,27 @@ th {
   padding-bottom: 0.65rem;
   border-bottom: 1px solid var(--border);
 }
-.subtabs a {
+.subtabs a,
+.subtabs button {
+  border: 0;
+  background: transparent;
   color: var(--muted);
   text-decoration: none;
   border-radius: 8px;
   padding: 0.35rem 0.75rem;
 }
-.subtabs a[aria-current="page"] {
+.subtabs a[aria-current="page"],
+.subtabs button[aria-selected="true"] {
   color: var(--text);
   background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+}
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.settings-panel[hidden] {
+  display: none;
 }
 .home-panel {
   display: flex;

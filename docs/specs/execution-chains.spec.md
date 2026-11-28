@@ -377,12 +377,15 @@ Model execution records retain configured versus observed IDs separately;
 unknown observation is unknown, not proof that the configured model ran.
 
 `#setup` currently defaults to Settings (`#setup/settings`); both must expose
-**Execution chains**, with a global/project picker and all four difficulties.
-Each difficulty has ordered cards: Single layer / Harness + executor, supported
-runtime, adapter, provider, account (default "Any available account", optional pin),
-allowed model-source selectors and, per role, an effort select offering "Runtime
-default" plus the catalogue levels the chosen model takes (3.8). An unsupported
-adapter disables it with its reason; an inherited list shows each role's effort.
+**Execution chains**, with a global/project picker and all four difficulties as
+in-page tabs (one difficulty visible at a time; tabs mark inherited vs editing).
+Each difficulty has ordered compact alternatives: Single layer / Harness +
+executor, supported runtime, adapter, provider, account (default "Any available
+account", optional pin), allowed model-source selectors and, per role, an effort
+select offering "Runtime default" plus the catalogue levels the chosen model
+takes (3.8). Role fields sit in a dense grid; long capability and pin/effort
+notes collapse to one meta line or a details disclosure. An unsupported adapter
+disables it with its reason; an inherited list shows each role's effort.
 Add/remove/reorder changes the **whole alternative**. Show source, effective
 inherited list, editable scoped list, save validation and per-level inherit/reset.
 Save validation lists every problem above the Save button, one line each, naming

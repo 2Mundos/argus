@@ -101,6 +101,10 @@ const base = {
   onChanged: vi.fn(),
 };
 
+function openLevel(name: string) {
+  fireEvent.click(screen.getByRole("tab", { name: new RegExp(`^${name}\\b`) }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   capabilities.list = capabilities.all;
@@ -109,11 +113,14 @@ afterEach(cleanup);
 describe("execution chain editor", () => {
   it("preserves per-level inheritance without materializing it on project save", async () => {
     render(<ExecutionChains {...base} setting={setting} />);
+    openLevel("hard");
     expect(
       screen.getByText("Source: global · revision — · inherited (read only until overridden)"),
     ).toBeTruthy();
-    for (const d of ["trivial", "simple", "standard", "hard"])
+    for (const d of ["trivial", "simple", "standard", "hard"]) {
+      openLevel(d);
       expect(screen.getByRole("button", { name: `Add ${d} alternative` })).toBeTruthy();
+    }
     fireEvent.click(screen.getByRole("button", { name: "Save execution chains" }));
     await waitFor(() =>
       expect(saved.put).toHaveBeenCalledWith(
@@ -125,6 +132,7 @@ describe("execution chain editor", () => {
   });
   it("saves exact mixed alternatives and reorders the entire pair", async () => {
     render(<ExecutionChains {...base} setting={setting} />);
+    openLevel("hard");
     fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
     fireEvent.click(screen.getByRole("button", { name: "Add hard alternative" }));
     fireEvent.change(screen.getByLabelText("hard alternative 2 mode"), {
@@ -149,6 +157,7 @@ describe("execution chain editor", () => {
   });
   it("per-level reset restores inheritance and env locks prevent saving", async () => {
     const view = render(<ExecutionChains {...base} setting={setting} />);
+    openLevel("hard");
     fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
     fireEvent.click(screen.getByRole("button", { name: "Inherit / reset hard" }));
     expect(screen.getByRole("button", { name: "Override hard" })).toBeTruthy();
@@ -160,6 +169,23 @@ describe("execution chain editor", () => {
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Reset execution chains" }));
     await waitFor(() => expect(saved.reset).toHaveBeenCalledWith("execution.chains", "demo"));
+  });
+  it("keeps unsaved chain edits when the setting prop is refreshed", () => {
+    const view = render(<ExecutionChains {...base} setting={setting} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add trivial alternative" }));
+    expect(screen.getByLabelText("trivial alternative 1 ID")).toBeTruthy();
+    view.rerender(
+      <ExecutionChains
+        {...base}
+        setting={{
+          ...setting,
+          value: { ...(setting.value as object) },
+          scoped_value: { version: 1, difficulties: {} },
+        }}
+      />,
+    );
+    expect(screen.getByLabelText("trivial alternative 1 ID")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save execution chains" })).toBeTruthy();
   });
   it("saves a single-layer local route with no account chosen", async () => {
     render(<ExecutionChains {...base} setting={undefined} />);
@@ -187,6 +213,7 @@ describe("execution chain editor", () => {
   });
   it("names an empty explicit model ID, blocks Save until it is fixed", async () => {
     render(<ExecutionChains {...base} setting={setting} />);
+    openLevel("hard");
     fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
     fireEvent.click(screen.getByRole("button", { name: "Add hard alternative" }));
     fireEvent.change(screen.getByLabelText("hard alternative 2 mode"), {
@@ -212,6 +239,7 @@ describe("execution chain editor", () => {
   });
   it("reports an invalid alternative ID", () => {
     render(<ExecutionChains {...base} setting={setting} />);
+    openLevel("hard");
     fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
     fireEvent.change(screen.getByLabelText("hard alternative 1 ID"), {
       target: { value: "bad id!" },
@@ -235,16 +263,13 @@ describe("execution chain editor", () => {
   });
   it("sets effort per role from the supported levels and blocks a level the model lacks", async () => {
     render(<ExecutionChains {...base} setting={setting} />);
+    openLevel("hard");
     // Inherited alternatives show their effort; a local claude harness has none to set.
     expect(screen.getByText(/local \/ local · effort runtime default/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Override hard" }));
     const localEffort = screen.getByLabelText("harness reasoning effort") as HTMLSelectElement;
     expect(localEffort.disabled).toBe(true);
-    expect(
-      screen.getByText(
-        "claude / local has no reasoning effort setting for the harness; the runtime default applies.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText(/claude \/ local: no effort setting/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("hard alternative 1 mode"), {
       target: { value: "paired" },
     });
@@ -270,7 +295,7 @@ describe("execution chain editor", () => {
     fireEvent.change(screen.getByLabelText("executor model ID"), {
       target: { value: "gpt-6.1-sol" },
     });
-    expect(screen.getByText(/not in the verified list/)).toBeTruthy();
+    expect(screen.getByText(/verified list/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("executor reasoning effort"), {
       target: { value: "ultra" },
     });
@@ -306,8 +331,9 @@ describe("execution chain editor", () => {
   });
   it("shows each level's built-in executor order where no chain exists", () => {
     render(<ExecutionChains {...base} setting={undefined} />);
-    expect(screen.getAllByText(/executor order agent → claude → codex/)).toHaveLength(2);
-    expect(screen.getAllByText(/executor order claude → codex/)).toHaveLength(2);
+    const levels = [...document.querySelectorAll(".chain-level")].map((el) => el.textContent ?? "");
+    expect(levels.filter((t) => /executor order agent → claude → codex/.test(t))).toHaveLength(2);
+    expect(levels.filter((t) => /executor order claude → codex/.test(t))).toHaveLength(2);
     expect(screen.getByText("claude / local: harness or executor")).toBeTruthy();
     expect(screen.getByText("opencode / custom: executor only")).toBeTruthy();
   });

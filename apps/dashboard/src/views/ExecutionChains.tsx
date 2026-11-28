@@ -1,5 +1,5 @@
 import type { components } from "@argus/api-client";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { type Account, api, call } from "../api";
 import { useLiveData } from "../live";
 import {
@@ -9,6 +9,7 @@ import {
   resetSetting,
   type SettingValue,
 } from "../settings";
+import { useUnsavedChanges } from "../unsaved";
 
 type Capability = components["schemas"]["ExecutionCapability"];
 type Selector = components["schemas"]["Selector"];
@@ -17,6 +18,9 @@ type Alternative =
   | components["schemas"]["PairedAlternative"];
 type Policy = { version: 1; difficulties: Partial<Record<DifficultyLevel, Alternative[]>> };
 const empty = (): Policy => ({ version: 1, difficulties: {} });
+const policyOf = (setting?: SettingValue): Policy =>
+  (setting?.scoped_value as Policy | undefined) ?? empty();
+const ALT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** No account: "any available account of this provider"; admission picks and records one. */
 const blank = (): Selector => ({
   adapter: "claude",
@@ -91,7 +95,7 @@ function draftProblems(draft: Policy, caps: Capability[]): string[] {
     if (!list.length) problems.push(`${level}: list is empty`);
     list.forEach((a, index) => {
       const where = `${level}, alternative ${index + 1}`;
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(a.id))
+      if (!ALT_ID.test(a.id))
         problems.push(`${where}: alternative ID must match [A-Za-z0-9_-]{1,64}`);
       if (a.harness.model.source === "explicit" && !a.harness.model.id)
         problems.push(`${where}: harness model ID is empty`);
@@ -139,158 +143,156 @@ function SelectorEditor({
   // is pinned, this side can only use that same account.
   const sharedNative = !!harness && !!capability?.same_provider_same_account;
   const effort = effortChoices(capability, value);
+  const accountHint = value.account_id
+    ? "Pinned: only this account; skipped when it cannot serve."
+    : "Unpinned: admission leases a matching account and records which one.";
+  const effortHint = capability?.efforts?.length
+    ? `${capability.effort_interface}${effort.verified ? "" : " · model not on verified list"}`
+    : `${value.adapter} / ${value.provider}: no effort setting; runtime default.`;
   return (
-    <fieldset>
+    <fieldset className="chain-role">
       <legend>{role === "harness" ? "Harness" : "Executor"}</legend>
-      <label>
-        Adapter / provider{" "}
-        <select
-          aria-label={`${role} adapter / provider`}
-          value={capability?.id ?? ""}
-          onChange={(e) => {
-            const selected = choices.find((c) => c.id === e.target.value);
-            if (!selected) return;
-            onChange({
-              adapter: selected.adapter as Selector["adapter"],
-              provider: selected.provider as Selector["provider"],
-              model: selected.model_sources.includes("account")
-                ? { source: "account" }
-                : { source: "explicit", id: "" },
-            });
-          }}
-        >
-          <option value="" disabled>
-            Select a supported adapter
-          </option>
-          {choices.map((c) => {
-            const reason = unavailableReason(c, role, harness);
-            return (
-              <option key={c.id} value={c.id} disabled={!!reason}>
-                {c.adapter} / {c.provider}
-                {reason ? ` — ${reason}` : ""}
-              </option>
-            );
-          })}
-        </select>
-      </label>
-      <label>
-        Account{" "}
-        <select
-          aria-label={`${role} account`}
-          value={value.account_id ?? ""}
-          onChange={(e) => {
-            const { account_id: _unpinned, ...rest } = value;
-            onChange(e.target.value ? { ...rest, account_id: e.target.value } : rest);
-          }}
-        >
-          <option value="">Any available account</option>
-          {accounts
-            .filter((a) => a.provider === value.provider)
-            .map((a) => {
-              const unsupported =
-                (a.provider === "custom" &&
-                  !a.config?.[role === "harness" ? "engine" : "executor"]?.model) ||
-                (sharedNative &&
-                  harness.provider === a.provider &&
-                  !!harness.account_id &&
-                  harness.account_id !== a.id);
+      <div className="chain-fields">
+        <label>
+          Adapter / provider
+          <select
+            aria-label={`${role} adapter / provider`}
+            value={capability?.id ?? ""}
+            onChange={(e) => {
+              const selected = choices.find((c) => c.id === e.target.value);
+              if (!selected) return;
+              onChange({
+                adapter: selected.adapter as Selector["adapter"],
+                provider: selected.provider as Selector["provider"],
+                model: selected.model_sources.includes("account")
+                  ? { source: "account" }
+                  : { source: "explicit", id: "" },
+              });
+            }}
+          >
+            <option value="" disabled>
+              Select a supported adapter
+            </option>
+            {choices.map((c) => {
+              const reason = unavailableReason(c, role, harness);
               return (
-                <option key={a.id} value={a.id} disabled={unsupported}>
-                  {a.name} ({a.state}){unsupported ? " — role or same-account restriction" : ""}
+                <option key={c.id} value={c.id} disabled={!!reason}>
+                  {c.adapter} / {c.provider}
+                  {reason ? ` — ${reason}` : ""}
                 </option>
               );
             })}
-        </select>
-      </label>
-      <p className="small">
-        {value.account_id
-          ? "Pinned: only this account is used; the alternative is skipped when it cannot serve."
-          : "Unpinned: admission leases the best available account of this provider that can serve the role and records which one it chose."}
-      </p>
-      <label>
-        Model source{" "}
-        <select
-          aria-label={`${role} model source`}
-          value={value.model.source}
-          onChange={(e) =>
-            onChange({
-              ...value,
-              model:
-                e.target.value === "account"
-                  ? { source: "account" }
-                  : { source: "explicit", id: "" },
-            })
-          }
-        >
-          <option value="account" disabled={!capability?.model_sources.includes("account")}>
-            Configured account model
-          </option>
-          <option value="explicit" disabled={!capability?.model_sources.includes("explicit")}>
-            Explicit model ID
-          </option>
-        </select>
-      </label>
-      {value.model.source === "explicit" && (
-        <label>
-          Model ID{" "}
-          <input
-            aria-label={`${role} model ID`}
-            value={value.model.id}
-            onChange={(e) =>
-              onChange({ ...value, model: { source: "explicit", id: e.target.value } })
-            }
-          />
+          </select>
         </label>
-      )}
-      <label>
-        Reasoning effort{" "}
-        <select
-          aria-label={`${role} reasoning effort`}
-          value={value.effort ?? ""}
-          disabled={!capability?.efforts?.length && !value.effort}
-          onChange={(e) => {
-            const { effort: _omitted, ...rest } = value;
-            onChange(e.target.value ? { ...rest, effort: e.target.value } : rest);
-          }}
-        >
-          <option value="">Runtime default</option>
-          {effort.levels.map((level) => (
-            <option key={level} value={level}>
-              {level}
+        <label>
+          Account
+          <select
+            aria-label={`${role} account`}
+            title={accountHint}
+            value={value.account_id ?? ""}
+            onChange={(e) => {
+              const { account_id: _unpinned, ...rest } = value;
+              onChange(e.target.value ? { ...rest, account_id: e.target.value } : rest);
+            }}
+          >
+            <option value="">Any available account</option>
+            {accounts
+              .filter((a) => a.provider === value.provider)
+              .map((a) => {
+                const unsupported =
+                  (a.provider === "custom" &&
+                    !a.config?.[role === "harness" ? "engine" : "executor"]?.model) ||
+                  (sharedNative &&
+                    harness.provider === a.provider &&
+                    !!harness.account_id &&
+                    harness.account_id !== a.id);
+                return (
+                  <option key={a.id} value={a.id} disabled={unsupported}>
+                    {a.name} ({a.state}){unsupported ? " — role or same-account restriction" : ""}
+                  </option>
+                );
+              })}
+          </select>
+        </label>
+        <label>
+          Model source
+          <select
+            aria-label={`${role} model source`}
+            value={value.model.source}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                model:
+                  e.target.value === "account"
+                    ? { source: "account" }
+                    : { source: "explicit", id: "" },
+              })
+            }
+          >
+            <option value="account" disabled={!capability?.model_sources.includes("account")}>
+              Configured account model
             </option>
-          ))}
-          {value.effort && !effort.levels.includes(value.effort) && (
-            <option value={value.effort} disabled>
-              {value.effort} (not supported here)
+            <option value="explicit" disabled={!capability?.model_sources.includes("explicit")}>
+              Explicit model ID
             </option>
-          )}
-        </select>
-      </label>
-      <p className="small">
-        {capability?.efforts?.length
-          ? `Applied with ${capability.effort_interface}. ${
-              effort.verified
-                ? "Runtime default leaves the CLI's own level."
-                : "This model is not in the verified list: the CLI may reject a level."
-            }`
-          : `${value.adapter} / ${value.provider} has no reasoning effort setting for the ${role}; the runtime default applies.`}
-      </p>
-      <p className="small">
-        Configured account model: {accountModel(account, role)}.{" "}
-        {value.provider !== "local" && (
-          <strong>Paid/cloud alternative; no spend cap implied.</strong>
+          </select>
+        </label>
+        {value.model.source === "explicit" ? (
+          <label>
+            Model ID
+            <input
+              aria-label={`${role} model ID`}
+              value={value.model.id}
+              onChange={(e) =>
+                onChange({ ...value, model: { source: "explicit", id: e.target.value } })
+              }
+            />
+          </label>
+        ) : (
+          <label>
+            Account model
+            <input
+              readOnly
+              value={accountModel(account, role)}
+              aria-label={`${role} configured account model`}
+            />
+          </label>
         )}
+        <label>
+          Reasoning effort
+          <select
+            aria-label={`${role} reasoning effort`}
+            title={effortHint}
+            value={value.effort ?? ""}
+            disabled={!capability?.efforts?.length && !value.effort}
+            onChange={(e) => {
+              const { effort: _omitted, ...rest } = value;
+              onChange(e.target.value ? { ...rest, effort: e.target.value } : rest);
+            }}
+          >
+            <option value="">Runtime default</option>
+            {effort.levels.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+            {value.effort && !effort.levels.includes(value.effort) && (
+              <option value={value.effort} disabled>
+                {value.effort} (not supported here)
+              </option>
+            )}
+          </select>
+        </label>
+      </div>
+      <p className="muted small chain-role-meta">
+        {accountHint} · {effortHint}
+        {value.provider !== "local" ? " · Paid/cloud; no spend cap implied." : ""}
+        {account?.local
+          ? ` · Discovered ${account.local.served_models?.join(", ") ?? "Unknown"} (${account.local.discovery.at ?? "Not checked"}); observed ${account.local.inference.model ?? "Unknown"} (${account.local.inference.at ?? "Not checked"}).`
+          : ""}
       </p>
-      {account?.local && (
-        <p className="small">
-          Discovered: {account.local.served_models?.join(", ") ?? "Unknown"} ·{" "}
-          {account.local.discovery.at ?? "Not checked"}. Observed worker model:{" "}
-          {account.local.inference.model ?? "Unknown"} ·{" "}
-          {account.local.inference.at ?? "Not checked"}.
-        </p>
-      )}
       {account?.local?.warnings?.map((warning) => (
-        <p className="error" key={warning}>
+        <p className="error small" key={warning}>
           {warning}
         </p>
       ))}
@@ -333,13 +335,23 @@ export function ExecutionChains({
     (signal) => call(api.GET("/api/accounts", { signal })),
     [],
   );
-  const [draft, setDraft] = useState<Policy>(
-    () => (setting?.scoped_value as Policy | undefined) ?? empty(),
-  );
+  const [draft, setDraft] = useState<Policy>(() => policyOf(setting));
+  const [baseline, setBaseline] = useState<Policy>(() => policyOf(setting));
+  const [level, setLevel] = useState<DifficultyLevel>("trivial");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const projectRef = useRef(project);
+  useUnsavedChanges(dirty);
+  // Live/reload refreshes replace `setting` identity; keep unsaved edits until save or scope change.
   useEffect(() => {
-    setDraft((setting?.scoped_value as Policy | undefined) ?? empty());
+    const next = policyOf(setting);
+    const scopeChanged = projectRef.current !== project;
+    projectRef.current = project;
+    setBaseline(next);
+    if (scopeChanged || !dirtyRef.current) setDraft(next);
   }, [project, setting]);
   const effective = (setting?.value as Policy | undefined) ?? empty();
   const caps = catalog?.execution_capabilities ?? [];
@@ -365,8 +377,15 @@ export function ExecutionChains({
     setBusy(true);
     setError(undefined);
     try {
-      if (reset) await resetSetting(settingKey, project);
-      else await putSetting(settingKey, draft, project);
+      if (reset) {
+        await resetSetting(settingKey, project);
+        const cleared = empty();
+        setDraft(cleared);
+        setBaseline(cleared);
+      } else {
+        await putSetting(settingKey, draft, project);
+        setBaseline(draft);
+      }
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -376,27 +395,62 @@ export function ExecutionChains({
   }
   return (
     <section className="card execution-chains">
-      <h3>{title}</h3>
-      {intro ?? (
-        <>
-          <p>
-            Ordered complete alternatives for every difficulty. Single layer has no executor.
-            Fallback never mixes accounts between cards. Runtime capabilities describe adapter
-            support, not installed CLI, endpoint or model readiness.
-          </p>
-          <p>
-            Task model/account pins bypass the entire chain using legacy_task_pin. Where no chain is
-            configured a difficulty keeps its built-in executor order, shown on that level, and the
-            model preferences above. Leave the account on <em>Any available account</em> to let
-            admission pick one; pin it only to force that account.
-          </p>
-        </>
+      <div className="toolbar">
+        <h3>{title}</h3>
+        <button
+          type="button"
+          aria-describedby={notes.length > 0 ? notesId : undefined}
+          title={notes[0]}
+          disabled={busy || problems.length > 0 || !caps.length || !!setting?.notice}
+          onClick={() => void save()}
+        >
+          Save {title.toLowerCase()}
+        </button>
+        <button type="button" disabled={busy} onClick={() => void save(true)}>
+          Reset {title.toLowerCase()}
+        </button>
+      </div>
+      {notes.length > 0 && (
+        <ul
+          id={notesId}
+          role="status"
+          className={`small chain-notes${problems.length ? " error" : ""}`}
+        >
+          {notes.map((note) => {
+            const jump = DIFFICULTY_LEVELS.find(
+              (d) => note.startsWith(`${d}:`) || note.startsWith(`${d},`),
+            );
+            return (
+              <li key={note}>
+                {jump ? (
+                  <button type="button" className="link" onClick={() => setLevel(jump)}>
+                    {note}
+                  </button>
+                ) : (
+                  note
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
-      <ul className="small" aria-label="Adapter and provider capabilities">
-        {describeCapabilities(caps).map((line) => (
-          <li key={line}>{line}</li>
-        ))}
-      </ul>
+      {intro ?? (
+        <p className="muted small">
+          Ordered fallbacks per difficulty. Single layer has no executor; pins bypass the chain.
+          Leave account on Any available unless you need a pin. Alternative IDs are letters, digits,
+          `_` and `-` only (no spaces).
+        </p>
+      )}
+      {caps.length > 0 && (
+        <details className="chain-caps">
+          <summary className="small">Adapter capabilities ({caps.length})</summary>
+          <ul className="small" aria-label="Adapter and provider capabilities">
+            {describeCapabilities(caps).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </details>
+      )}
       {legacyNotice && (
         <p className="error" role="alert">
           {legacyNotice}
@@ -419,32 +473,91 @@ export function ExecutionChains({
           {error ?? catalogError?.message ?? accountsError?.message}
         </p>
       )}
-      {DIFFICULTY_LEVELS.map((level) => {
-        const own = draft.difficulties[level];
-        const list = own ?? effective.difficulties[level];
+      <nav className="subtabs" role="tablist" aria-label="Difficulty levels">
+        {DIFFICULTY_LEVELS.map((id) => {
+          const overridden = !!draft.difficulties[id];
+          const inherited = !overridden && !!effective.difficulties[id];
+          const blocked = problems.some((p) => p.startsWith(`${id}:`) || p.startsWith(`${id},`));
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`chain-tab-${id}`}
+              aria-selected={level === id}
+              aria-controls={`chain-panel-${id}`}
+              className={blocked ? "chain-tab-blocked" : undefined}
+              onClick={() => setLevel(id)}
+            >
+              {id}
+              {blocked ? " · fix" : overridden ? " · edit" : inherited ? " · inherited" : ""}
+            </button>
+          );
+        })}
+      </nav>
+      {DIFFICULTY_LEVELS.map((id) => {
+        const own = draft.difficulties[id];
+        const list = own ?? effective.difficulties[id];
         return (
-          <fieldset key={level}>
-            <legend>{level}</legend>
-            <p>
-              Source: {setting?.difficulty_sources?.[level] ?? "legacy"} · revision{" "}
-              {setting?.difficulty_revisions?.[level]?.slice(0, 12) ?? "—"}
-              {!own && list ? " · inherited (read only until overridden)" : ""}
-            </p>
+          <div
+            key={id}
+            className="chain-level"
+            role="tabpanel"
+            id={`chain-panel-${id}`}
+            aria-labelledby={`chain-tab-${id}`}
+            hidden={level !== id}
+          >
+            <div className="chain-level-bar">
+              <p className="small">
+                Source: {setting?.difficulty_sources?.[id] ?? "legacy"} · revision{" "}
+                {setting?.difficulty_revisions?.[id]?.slice(0, 12) ?? "—"}
+                {!own && list ? " · inherited (read only until overridden)" : ""}
+              </p>
+              <div className="actions left">
+                {!own && list && (
+                  <button type="button" onClick={() => change(id, structuredClone(list))}>
+                    Override {id}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={(own?.length ?? 0) >= 16 || !caps.length || (!own && !!list)}
+                  onClick={() =>
+                    change(id, [
+                      ...(own ?? []),
+                      {
+                        id: `alternative-${(own?.length ?? 0) + 1}`,
+                        mode: "single",
+                        runtime: "nanoclaw",
+                        harness: blank(),
+                      },
+                    ])
+                  }
+                >
+                  Add {id} alternative
+                </button>
+                {own && (
+                  <button type="button" onClick={() => change(id, undefined)}>
+                    Inherit / reset {id}
+                  </button>
+                )}
+              </div>
+            </div>
             {!list && (
-              <p>
+              <p className="muted small">
                 {unconfigured ??
-                  `No chain: built-in routing, harness chosen from the model preferences, executor order ${legacyExecutors?.[level]?.length ? legacyExecutors[level].join(" → ") : "none"}.`}{" "}
-                Add an alternative to replace it; a single layer is a harness with no executor.
+                  `No chain: built-in routing, harness from model preferences, executor order ${legacyExecutors?.[id]?.length ? legacyExecutors[id].join(" → ") : "none"}.`}{" "}
+                Override or add an alternative to replace it.
               </p>
             )}
             {list?.map((alternative, index) => (
-              <div className="card" key={`${level}-${index}`}>
-                <p>
-                  {index + 1}. {alternative.id} ·{" "}
-                  {alternative.mode === "single" ? "No executor" : "Harness + executor"}
-                </p>
+              <div className="chain-alt" key={`${id}-${index}`}>
                 {!own ? (
-                  <p>
+                  <p className="small">
+                    <strong>
+                      {index + 1}. {alternative.id}
+                    </strong>{" "}
+                    · {alternative.mode === "single" ? "No executor" : "Harness + executor"} ·{" "}
                     {alternative.harness.provider} /{" "}
                     {alternative.harness.account_id ?? "any account"} · effort{" "}
                     {alternative.harness.effort ?? "runtime default"}
@@ -454,51 +567,90 @@ export function ExecutionChains({
                   </p>
                 ) : (
                   <>
-                    <label>
-                      Alternative ID{" "}
-                      <input
-                        aria-label={`${level} alternative ${index + 1} ID`}
-                        value={alternative.id}
-                        onChange={(e) =>
-                          change(
-                            level,
-                            own.map((a, i) => (i === index ? { ...a, id: e.target.value } : a)),
-                          )
-                        }
-                      />
-                    </label>
-                    <label>
-                      Mode{" "}
-                      <select
-                        aria-label={`${level} alternative ${index + 1} mode`}
-                        value={alternative.mode}
-                        onChange={(e) => {
-                          const base = {
-                            id: alternative.id,
-                            runtime: alternative.runtime,
-                            harness: alternative.harness,
-                          };
-                          change(
-                            level,
-                            own.map((a, i) =>
-                              i !== index
-                                ? a
-                                : e.target.value === "single"
-                                  ? { ...base, mode: "single" }
-                                  : {
-                                      ...base,
-                                      mode: "paired",
-                                      executor: { ...blank(), adapter: "opencode" },
-                                    },
-                            ),
-                          );
-                        }}
-                      >
-                        <option value="single">Single layer</option>
-                        <option value="paired">Harness + executor</option>
-                      </select>
-                    </label>
-                    <p>Runtime: {alternative.runtime}</p>
+                    <div className="chain-alt-head">
+                      <span className="chain-alt-index">{index + 1}.</span>
+                      <label>
+                        ID
+                        <input
+                          aria-label={`${id} alternative ${index + 1} ID`}
+                          aria-invalid={!ALT_ID.test(alternative.id)}
+                          value={alternative.id}
+                          onChange={(e) =>
+                            change(
+                              id,
+                              own.map((a, i) => (i === index ? { ...a, id: e.target.value } : a)),
+                            )
+                          }
+                        />
+                      </label>
+                      <label>
+                        Mode
+                        <select
+                          aria-label={`${id} alternative ${index + 1} mode`}
+                          value={alternative.mode}
+                          onChange={(e) => {
+                            const baseAlt = {
+                              id: alternative.id,
+                              runtime: alternative.runtime,
+                              harness: alternative.harness,
+                            };
+                            change(
+                              id,
+                              own.map((a, i) =>
+                                i !== index
+                                  ? a
+                                  : e.target.value === "single"
+                                    ? { ...baseAlt, mode: "single" }
+                                    : {
+                                        ...baseAlt,
+                                        mode: "paired",
+                                        executor: { ...blank(), adapter: "opencode" },
+                                      },
+                              ),
+                            );
+                          }}
+                        >
+                          <option value="single">Single layer</option>
+                          <option value="paired">Harness + executor</option>
+                        </select>
+                      </label>
+                      <span className="muted small">Runtime: {alternative.runtime}</span>
+                      <div className="actions left">
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => {
+                            const next = [...own];
+                            [next[index - 1], next[index]] = [next[index]!, next[index - 1]!];
+                            change(id, next);
+                          }}
+                        >
+                          Move up
+                        </button>
+                        <button
+                          type="button"
+                          disabled={index === own.length - 1}
+                          onClick={() => {
+                            const next = [...own];
+                            [next[index], next[index + 1]] = [next[index + 1]!, next[index]!];
+                            change(id, next);
+                          }}
+                        >
+                          Move down
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            change(
+                              id,
+                              own.filter((_, i) => i !== index),
+                            )
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
                     <SelectorEditor
                       value={alternative.harness}
                       role="harness"
@@ -506,7 +658,7 @@ export function ExecutionChains({
                       accounts={accounts ?? []}
                       onChange={(harness) =>
                         change(
-                          level,
+                          id,
                           own.map((a, i) => (i === index ? { ...a, harness } : a)),
                         )
                       }
@@ -521,105 +673,26 @@ export function ExecutionChains({
                           accounts={accounts ?? []}
                           onChange={(executor) =>
                             change(
-                              level,
+                              id,
                               own.map((a, i) =>
                                 i === index && a.mode === "paired" ? { ...a, executor } : a,
                               ),
                             )
                           }
                         />
-                        <p className="small">
-                          Local harnesses require agent or opencode. Same-provider native pairs run
-                          on one account, chosen when the route is admitted. Custom pairs require
-                          separate role capacity. Unsupported pairs are rejected on Save.
+                        <p className="muted small">
+                          Local harnesses need agent or opencode. Same-provider native pairs share
+                          one account; custom pairs need separate role capacity.
                         </p>
                       </>
                     )}
-                    <button
-                      type="button"
-                      disabled={index === 0}
-                      onClick={() => {
-                        const next = [...own];
-                        [next[index - 1], next[index]] = [next[index]!, next[index - 1]!];
-                        change(level, next);
-                      }}
-                    >
-                      Move up
-                    </button>
-                    <button
-                      type="button"
-                      disabled={index === own.length - 1}
-                      onClick={() => {
-                        const next = [...own];
-                        [next[index], next[index + 1]] = [next[index + 1]!, next[index]!];
-                        change(level, next);
-                      }}
-                    >
-                      Move down
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        change(
-                          level,
-                          own.filter((_, i) => i !== index),
-                        )
-                      }
-                    >
-                      Remove alternative
-                    </button>
                   </>
                 )}
               </div>
             ))}
-            {!own && list && (
-              <button type="button" onClick={() => change(level, structuredClone(list))}>
-                Override {level}
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={(own?.length ?? 0) >= 16 || !caps.length}
-              onClick={() =>
-                change(level, [
-                  ...(own ?? []),
-                  {
-                    id: `alternative-${(own?.length ?? 0) + 1}`,
-                    mode: "single",
-                    runtime: "nanoclaw",
-                    harness: blank(),
-                  },
-                ])
-              }
-            >
-              Add {level} alternative
-            </button>
-            {own && (
-              <button type="button" onClick={() => change(level, undefined)}>
-                Inherit / reset {level}
-              </button>
-            )}
-          </fieldset>
+          </div>
         );
       })}
-      {notes.length > 0 && (
-        <ul id={notesId} role="status" className="small">
-          {notes.map((note) => (
-            <li key={note}>{note}</li>
-          ))}
-        </ul>
-      )}
-      <button
-        type="button"
-        aria-describedby={notes.length > 0 ? notesId : undefined}
-        disabled={busy || problems.length > 0 || !caps.length || !!setting?.notice}
-        onClick={() => void save()}
-      >
-        Save {title.toLowerCase()}
-      </button>
-      <button type="button" disabled={busy} onClick={() => void save(true)}>
-        Reset {title.toLowerCase()}
-      </button>
     </section>
   );
 }

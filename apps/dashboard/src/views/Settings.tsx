@@ -35,6 +35,14 @@ export function settingsScope(hash: string): string {
 export const settingsHash = (scope: string) =>
   scope === "global" ? "#setup/settings" : `#setup/settings/${encodeURIComponent(scope)}`;
 
+const SETTINGS_SECTIONS = {
+  orchestrator: "Orchestrator",
+  tasks: "Tasks",
+  execution: "Execution",
+  review: "Review",
+} as const;
+type SettingsSection = keyof typeof SETTINGS_SECTIONS;
+
 /** Global settings with per-project overrides (docs/specs/settings.spec.md). */
 export function Settings({
   scope: propScope,
@@ -52,6 +60,14 @@ export function Settings({
   const scope = propScope ?? hashScope;
   const project = scope === "global" ? null : scope;
   const { data, error, reload } = useLiveData((signal) => fetchSettings(project, signal), [scope]);
+  const [section, setSection] = useState<SettingsSection>(() =>
+    project === null ? "orchestrator" : "tasks",
+  );
+  const sections = (Object.keys(SETTINGS_SECTIONS) as SettingsSection[]).filter(
+    (id) => id !== "orchestrator" || project === null,
+  );
+  const active: SettingsSection =
+    section === "orchestrator" && project !== null ? "tasks" : section;
 
   const byKey = new Map((data?.settings ?? []).map((s) => [s.key, s]));
   const review = byKey.get("review.independent");
@@ -71,7 +87,7 @@ export function Settings({
       {showHeader && (
         <PageHeader
           title="Settings"
-          lead="Operator choices with per-project overrides. An override replaces the global value for that project; Reset restores inheritance."
+          lead="Operator choices with per-project overrides, grouped by topic. An override replaces the global value for that project; Reset restores inheritance."
         >
           <label>
             Scope{" "}
@@ -97,107 +113,155 @@ export function Settings({
           </button>
         </PageHeader>
       )}
+      <nav className="subtabs" role="tablist" aria-label="Settings sections">
+        {sections.map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            id={`settings-tab-${id}`}
+            aria-selected={active === id}
+            aria-controls={`settings-panel-${id}`}
+            onClick={() => setSection(id)}
+          >
+            {SETTINGS_SECTIONS[id]}
+          </button>
+        ))}
+      </nav>
       {error && <p className="error">{error.message}</p>}
       {!data && !error && <p className="muted">Loading…</p>}
       {data && (
         <>
+          {/* Hidden (not unmounted) so unsaved drafts survive tab switches. */}
           {project === null && (
+            <div
+              className="settings-panel"
+              role="tabpanel"
+              id="settings-panel-orchestrator"
+              aria-labelledby="settings-tab-orchestrator"
+              hidden={active !== "orchestrator"}
+            >
+              <div className="card">
+                <OrchestratorSection
+                  enabled={orchestratorEnabled?.value === true}
+                  runtime={(orchestratorRuntime?.value as Runtime | undefined) ?? "auto"}
+                  onChanged={() => reload()}
+                />
+                <OrchestratorModelPicker
+                  value={orchestratorModel?.value}
+                  onChanged={() => reload()}
+                />
+              </div>
+            </div>
+          )}
+          <div
+            className="settings-panel"
+            role="tabpanel"
+            id="settings-panel-tasks"
+            aria-labelledby="settings-tab-tasks"
+            hidden={active !== "tasks"}
+          >
             <div className="card">
-              <OrchestratorSection
-                enabled={orchestratorEnabled?.value === true}
-                runtime={(orchestratorRuntime?.value as Runtime | undefined) ?? "auto"}
-                onChanged={() => reload()}
-              />
-              <OrchestratorModelPicker
-                value={orchestratorModel?.value}
+              <h3>Task defaults</h3>
+              <TaskDefaultsEditor key={scope} project={project} />
+            </div>
+            <div className="card">
+              <ModelsSection project={project} setting={models} onChanged={() => reload()} />
+            </div>
+            <div className="card">
+              <h3>Git author identity</h3>
+              <p className="muted small">
+                Author and committer for worker commits. A project override replaces the global
+                value for that project's tasks; workers refuse to commit while neither is set.
+              </p>
+              <GitIdentityEditor
+                key={scope}
+                project={project}
+                setting={gitIdentity}
                 onChanged={() => reload()}
               />
             </div>
-          )}
-          <div className="card">
-            <h3>Task defaults</h3>
-            <TaskDefaultsEditor key={scope} project={project} />
           </div>
-          <div className="card">
-            <ModelsSection project={project} setting={models} onChanged={() => reload()} />
-          </div>
-          <ExecutionChains
-            key={scope}
-            project={project}
-            setting={byKey.get("execution.chains")}
-            legacyExecutors={{
-              ...DEFAULT_DIFFICULTY_EXECUTORS,
-              ...((difficultyExecutors?.value ?? {}) as Partial<
-                Record<DifficultyLevel, DifficultyExecutor[]>
-              >),
-            }}
-            legacyNotice={difficultyExecutors?.notice ?? undefined}
-            onChanged={() => reload()}
-          />
-          <div className="card">
-            <h3>Git author identity</h3>
-            <p className="muted small">
-              Author and committer for worker commits. A project override replaces the global value
-              for that project's tasks; workers refuse to commit while neither is set.
-            </p>
-            <GitIdentityEditor
+          <div
+            className="settings-panel"
+            role="tabpanel"
+            id="settings-panel-execution"
+            aria-labelledby="settings-tab-execution"
+            hidden={active !== "execution"}
+          >
+            <ExecutionChains
               key={scope}
               project={project}
-              setting={gitIdentity}
+              setting={byKey.get("execution.chains")}
+              legacyExecutors={{
+                ...DEFAULT_DIFFICULTY_EXECUTORS,
+                ...((difficultyExecutors?.value ?? {}) as Partial<
+                  Record<DifficultyLevel, DifficultyExecutor[]>
+                >),
+              }}
+              legacyNotice={difficultyExecutors?.notice ?? undefined}
               onChanged={() => reload()}
             />
           </div>
-          <div className="card">
-            <ToggleSection
-              title="Auto-merge"
-              settingKey="delivery.auto_merge"
-              project={project}
-              setting={autoMerge}
-              onChanged={() => reload()}
-            >
-              Workers merge their own pull request for tasks whose deliverable is a merged PR, and
-              those tasks succeed only once the forge shows it merged.
-            </ToggleSection>
-          </div>
-          <div className="card">
-            <ToggleSection
-              title="Acceptance"
-              settingKey="review.acceptance"
-              project={project}
-              setting={acceptance}
-              onChanged={() => reload()}
-            >
-              Completed tasks wait in review for acceptance. Off, they succeed directly; a green or
-              merged PR deliverable still needs the forge to confirm it.
-            </ToggleSection>
-          </div>
-          <div className="card">
-            <ToggleSection
-              title="Forge agentic review"
-              settingKey="review.forge_agentic"
-              project={project}
-              setting={forgeAgentic}
-              onChanged={() => reload()}
-            >
-              This repository's forge posts an agentic review on pull requests. On, a worker waits
-              for it and may not call a PR ready or merge without one for the exact head. Off, a
-              missing review is not a blocker; findings and requested changes that exist still are.
-              Separate from the review by a different model below.
-            </ToggleSection>
-          </div>
-          <div className="card" id={REVIEW_GATE_ID}>
-            <IndependentReviewSection
-              project={project}
-              setting={review}
-              onChanged={() => reload()}
-            />
-          </div>
-          <div className="card">
-            <ReviewPolicySection
-              project={project}
-              setting={reviewPolicy}
-              onChanged={() => reload()}
-            />
+          <div
+            className="settings-panel"
+            role="tabpanel"
+            id="settings-panel-review"
+            aria-labelledby="settings-tab-review"
+            hidden={active !== "review"}
+          >
+            <div className="card">
+              <ToggleSection
+                title="Auto-merge"
+                settingKey="delivery.auto_merge"
+                project={project}
+                setting={autoMerge}
+                onChanged={() => reload()}
+              >
+                Workers merge their own pull request for tasks whose deliverable is a merged PR, and
+                those tasks succeed only once the forge shows it merged.
+              </ToggleSection>
+            </div>
+            <div className="card">
+              <ToggleSection
+                title="Acceptance"
+                settingKey="review.acceptance"
+                project={project}
+                setting={acceptance}
+                onChanged={() => reload()}
+              >
+                Completed tasks wait in review for acceptance. Off, they succeed directly; a green
+                or merged PR deliverable still needs the forge to confirm it.
+              </ToggleSection>
+            </div>
+            <div className="card">
+              <ToggleSection
+                title="Forge agentic review"
+                settingKey="review.forge_agentic"
+                project={project}
+                setting={forgeAgentic}
+                onChanged={() => reload()}
+              >
+                This repository's forge posts an agentic review on pull requests. On, a worker waits
+                for it and may not call a PR ready or merge without one for the exact head. Off, a
+                missing review is not a blocker; findings and requested changes that exist still
+                are. Separate from the review by a different model below.
+              </ToggleSection>
+            </div>
+            <div className="card" id={REVIEW_GATE_ID}>
+              <IndependentReviewSection
+                project={project}
+                setting={review}
+                onChanged={() => reload()}
+              />
+            </div>
+            <div className="card">
+              <ReviewPolicySection
+                project={project}
+                setting={reviewPolicy}
+                onChanged={() => reload()}
+              />
+            </div>
           </div>
         </>
       )}
