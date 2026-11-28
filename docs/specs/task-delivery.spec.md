@@ -1,7 +1,7 @@
 ---
 status: implemented
 created: 2026-10-24
-updated: 2026-11-24
+updated: 2026-11-27
 ---
 
 # Task delivery
@@ -105,9 +105,17 @@ For one PR it may issue, in order, bounded GETs:
 
 1. `.../pulls/{n}` — state, `merged` / `merged_at`, head and base (`sha`, `ref`),
    `mergeable` / `mergeable_state` when the forge returns them.
-2. Commit statuses for the **exact head SHA** (Gitea
-   `/commits/{sha}/statuses` or GitHub combined `/commits/{sha}/status` plus
-   statuses). Cap **50** contexts (latest per context).
+2. Commit statuses for the **exact head SHA** (Gitea paginated
+   `/commits/{sha}/statuses`, or GitHub combined `/commits/{sha}/status` plus
+   statuses). Cap **50** contexts (latest per context). Gitea outcome is the
+   `status` field (`pending`, `success`, `error`, `failure`; `warning` and any
+   other value are `unknown`) — never GitHub's `state`. Latest per Gitea context
+   is the row with the greatest `(updated_at or created_at, id)`; list order is
+   not authoritative, so a newest-first history cannot regress success to an
+   older pending. A status row whose `sha` disagrees with the head, a malformed
+   page or row, an unfollowed full last page of history, or more than 50 contexts
+   is fail-closed (`partial` includes `statuses` and/or `truncated_checks`;
+   `checks_combined` is never success from that incomplete Gitea read).
 3. On GitHub only, check runs for that SHA (`/commits/{sha}/check-runs`), cap **50**.
 4. Required status contexts **only when the forge discloses them** without elevating
    privilege: GitHub protected-branch `required_status_checks.contexts` /
@@ -127,9 +135,11 @@ failed part in `partial` (for example `statuses`, `check_runs`, `required_gates`
 
 Check / status states normalize to
 `success | pending | failure | error | skipped | cancelled | unknown`. Skipped is
-not success. Combined over the exact head: `failure`/`error`/`cancelled` win, else
+not success. Outcome distinctions (`failure` vs `error` vs `cancelled`) are kept
+per check. Combined over the exact head: `failure`/`error`/`cancelled` win, else
 `pending`, else `success` when every known item is success or skipped, else
-`unknown` when nothing was read or the statuses read failed.
+`unknown` when nothing was read, the statuses read failed, or a Gitea status
+history was truncated or incomplete.
 
 ## 3.3 Projection (REST / MCP / dashboard)
 

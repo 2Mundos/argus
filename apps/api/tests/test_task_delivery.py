@@ -534,8 +534,8 @@ async def test_exact_head_statuses_and_required_gates_unknown_on_403(conn) -> No
     routes = {
         "/pulls/12": open_pr(),
         f"/commits/{HEAD}/statuses": [
-            {"context": "ci/tests", "state": "success", "description": "ok"},
-            {"context": "ci/lint", "state": "pending"},
+            {"context": "ci/tests", "status": "success", "description": "ok"},
+            {"context": "ci/lint", "status": "pending"},
         ],
         "/branch_protections/main": httpx.Response(403, json={"message": "no"}),
         "/pulls/12/reviews": [],
@@ -638,6 +638,329 @@ async def test_github_pull_url_is_a_reference() -> None:
         ["https://github.com/2Mundos/argus/pull/3"], [], None, {repo}
     )
     assert ref == PrRef(*repo, 3)
+
+
+def _gitea_status(
+    *,
+    context: str,
+    status: str,
+    id: int,
+    updated_at: str,
+    created_at: str | None = None,
+    sha: str | None = None,
+    description: str | None = None,
+    target_url: str | None = None,
+) -> dict:
+    """Authentic Gitea CommitStatus shape (`status`, not GitHub `state`)."""
+    row: dict = {
+        "id": id,
+        "status": status,
+        "context": context,
+        "created_at": created_at or updated_at,
+        "updated_at": updated_at,
+        "description": description,
+        "target_url": target_url,
+    }
+    if sha is not None:
+        row["sha"] = sha
+    return row
+
+
+def _gitea_status_pages(pages: dict[int, list]) -> object:
+    """Serve paginated `/commits/{sha}/statuses?page=N` from authentic page bodies."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/pulls/12"):
+            return httpx.Response(200, json=open_pr())
+        if f"/commits/{HEAD}/statuses" in path:
+            page = int(request.url.params.get("page") or "1")
+            if page not in pages:
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json=pages[page])
+        if path.endswith("/reviews"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={})
+
+    return handler
+
+
+async def test_gitea_reads_status_field_not_state(conn) -> None:
+    """Gitea CommitStatus uses `status`; a GitHub-shaped `state` alone is unknown."""
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": [
+            _gitea_status(
+                context="ci",
+                status="success",
+                id=2,
+                updated_at="2026-11-27T12:00:00Z",
+            ),
+            # A row that only carries GitHub's field must not project success.
+            {
+                "id": 1,
+                "context": "legacy",
+                "state": "success",
+                "updated_at": "2026-11-27T12:00:00Z",
+                "created_at": "2026-11-27T12:00:00Z",
+            },
+        ],
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    names = {c.name: c.state for c in snap.checks}
+    assert names["ci"] is CheckState.SUCCESS
+    assert names["legacy"] is CheckState.UNKNOWN
+    assert snap.checks_combined is CheckState.UNKNOWN
+
+
+async def test_gitea_newest_first_history_keeps_latest_success(conn) -> None:
+    """Newest-first duplicate contexts: timestamps/ids pick success over older pending."""
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": [
+            _gitea_status(
+                context="ci",
+                status="success",
+                id=20,
+                updated_at="2026-11-27T12:02:00Z",
+            ),
+            _gitea_status(
+                context="ci",
+                status="pending",
+                id=10,
+                updated_at="2026-11-27T12:00:00Z",
+            ),
+            _gitea_status(
+                context="lint",
+                status="success",
+                id=21,
+                updated_at="2026-11-27T12:01:00Z",
+            ),
+        ],
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    names = {c.name: c.state for c in snap.checks}
+    assert names == {"ci": CheckState.SUCCESS, "lint": CheckState.SUCCESS}
+    assert snap.checks_combined is CheckState.SUCCESS
+
+
+async def test_gitea_measured_python_static_history_keeps_latest_success(conn) -> None:
+    """Measured live history (success, then two pending rows) resolves to success."""
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": [
+            _gitea_status(
+                context="python-static",
+                status="success",
+                id=17,
+                updated_at="2026-11-27T20:18:58Z",
+                description="Successful in 4m18s",
+            ),
+            _gitea_status(
+                context="python-static",
+                status="pending",
+                id=15,
+                updated_at="2026-11-27T20:14:40Z",
+                description="In progress",
+            ),
+            _gitea_status(
+                context="python-static",
+                status="pending",
+                id=8,
+                updated_at="2026-11-27T20:14:10Z",
+                description="Waiting to run",
+            ),
+        ],
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    check = next(c for c in snap.checks if c.name == "python-static")
+    assert check.state is CheckState.SUCCESS
+    assert check.description == "Successful in 4m18s"
+    assert snap.checks_combined is CheckState.SUCCESS
+    assert "statuses" not in snap.partial
+    assert "truncated_checks" not in snap.partial
+
+
+async def test_gitea_timestamp_tie_breaks_on_id(conn) -> None:
+    same = "2026-11-27T12:00:00Z"
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": [
+            _gitea_status(context="ci", status="pending", id=1, updated_at=same),
+            _gitea_status(context="ci", status="failure", id=3, updated_at=same),
+            _gitea_status(context="ci", status="success", id=2, updated_at=same),
+        ],
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    assert len(snap.checks) == 1
+    assert snap.checks[0].state is CheckState.FAILURE
+    assert snap.checks_combined is CheckState.FAILURE
+
+
+async def test_gitea_mixed_outcomes_retain_distinctions(conn) -> None:
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": [
+            _gitea_status(
+                context="ok",
+                status="success",
+                id=1,
+                updated_at="2026-11-27T12:00:00Z",
+            ),
+            _gitea_status(
+                context="bad",
+                status="error",
+                id=2,
+                updated_at="2026-11-27T12:00:00Z",
+            ),
+            _gitea_status(
+                context="warn",
+                status="warning",
+                id=3,
+                updated_at="2026-11-27T12:00:00Z",
+            ),
+            _gitea_status(
+                context="run",
+                status="pending",
+                id=4,
+                updated_at="2026-11-27T12:00:00Z",
+            ),
+        ],
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    names = {c.name: c.state for c in snap.checks}
+    assert names["ok"] is CheckState.SUCCESS
+    assert names["bad"] is CheckState.ERROR
+    assert names["warn"] is CheckState.UNKNOWN
+    assert names["run"] is CheckState.PENDING
+    assert snap.checks_combined is CheckState.FAILURE  # error wins
+
+
+async def test_gitea_pagination_surfaces_older_page_contexts(conn) -> None:
+    page1 = [
+        _gitea_status(
+            context="ci",
+            status="pending",
+            id=n,
+            updated_at="2026-11-27T12:00:00Z",
+        )
+        for n in range(1, delivery.STATUS_PAGE + 1)
+    ]
+    # Rewrite the last row of page 1 as the older pending for `ci`, and put success
+    # plus a second context on page 2 so pagination cannot hide it.
+    page1[-1] = _gitea_status(
+        context="ci",
+        status="pending",
+        id=1,
+        updated_at="2026-11-27T11:00:00Z",
+    )
+    page2 = [
+        _gitea_status(
+            context="ci",
+            status="success",
+            id=100,
+            updated_at="2026-11-27T12:30:00Z",
+        ),
+        _gitea_status(
+            context="lint",
+            status="success",
+            id=101,
+            updated_at="2026-11-27T12:30:00Z",
+        ),
+    ]
+    snap = await checker(_gitea_status_pages({1: page1, 2: page2})).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    names = {c.name: c.state for c in snap.checks}
+    assert names["ci"] is CheckState.SUCCESS
+    assert names["lint"] is CheckState.SUCCESS
+    assert snap.checks_combined is CheckState.SUCCESS
+    assert "truncated_checks" not in snap.partial
+
+
+async def test_gitea_full_page_budget_is_conservative_partial(conn) -> None:
+    """STATUS_PAGES of full pages: further history may exist — never invent green."""
+    pages = {
+        page: [
+            _gitea_status(
+                context=f"c{page}-{n}",
+                status="success",
+                id=page * 1000 + n,
+                updated_at="2026-11-27T12:00:00Z",
+            )
+            for n in range(delivery.STATUS_PAGE)
+        ]
+        for page in range(1, delivery.STATUS_PAGES + 1)
+    }
+    snap = await checker(_gitea_status_pages(pages)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    assert "truncated_checks" in snap.partial
+    assert snap.checks_combined is CheckState.UNKNOWN
+    assert snap.checks  # evidence retained, but combined fail-closed
+
+
+async def test_gitea_off_head_status_fails_closed(conn) -> None:
+    other = "dddddddddddddddddddddddddddddddddddddddd"
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": [
+            _gitea_status(
+                context="ci",
+                status="success",
+                id=1,
+                updated_at="2026-11-27T12:00:00Z",
+                sha=other,
+            ),
+        ],
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    assert snap.checks == []
+    assert snap.checks_combined is CheckState.UNKNOWN
+    assert "statuses" in snap.partial
+
+
+async def test_gitea_malformed_status_row_fails_closed(conn) -> None:
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": [
+            _gitea_status(
+                context="ci",
+                status="success",
+                id=1,
+                updated_at="2026-11-27T12:00:00Z",
+            ),
+            "not-an-object",
+        ],
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    assert snap.checks == []
+    assert snap.checks_combined is CheckState.UNKNOWN
+    assert "statuses" in snap.partial
+
+
+async def test_gitea_context_cap_truncation_is_unknown_combined(conn) -> None:
+    rows = [
+        _gitea_status(
+            context=f"ctx-{n}",
+            status="success",
+            id=n,
+            updated_at="2026-11-27T12:00:00Z",
+        )
+        for n in range(delivery.CHECK_CAP + 5)
+    ]
+    routes = {
+        "/pulls/12": open_pr(),
+        f"/commits/{HEAD}/statuses": rows,
+        "/pulls/12/reviews": [],
+    }
+    snap = await checker(forge_router(routes)).snapshot(conn, REF)  # ty: ignore[invalid-argument-type]
+    assert len(snap.checks) == delivery.CHECK_CAP
+    assert "truncated_checks" in snap.partial
+    assert snap.checks_combined is CheckState.UNKNOWN
 
 
 @pytest.mark.parametrize("status", [401, 403, 404, 500])
@@ -852,8 +1175,8 @@ def test_rest_exact_head_checks_partial_and_stale(client) -> None:
         full_forge(
             open_pr(),
             statuses=[
-                {"context": "ci", "state": "success"},
-                {"context": "lint", "state": "failure"},
+                {"context": "ci", "status": "success"},
+                {"context": "lint", "status": "failure"},
             ],
             reviews=[{"commit_id": HEAD}],
             protection=httpx.Response(403, json={}),
@@ -881,7 +1204,7 @@ def test_rest_allow_merge_authorization_is_separate_from_green(client) -> None:
     setup_repository(client)
     forge(
         client,
-        full_forge(open_pr(), statuses=[{"context": "ci", "state": "success"}]),
+        full_forge(open_pr(), statuses=[{"context": "ci", "status": "success"}]),
     )
     tid = client.post(
         "/api/tasks",

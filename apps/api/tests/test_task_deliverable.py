@@ -287,8 +287,8 @@ def merged_pr() -> dict:
     return open_pr(merged=True, state="closed", created_at=SOON, merged_at=SOON)
 
 
-CI_OK = [{"context": "ci", "state": "success"}]
-CI_RED = [{"context": "ci", "state": "failure"}]
+CI_OK = [{"context": "ci", "status": "success"}]
+CI_RED = [{"context": "ci", "status": "failure"}]
 CLOSED = {
     "state": "closed",
     "merged": False,

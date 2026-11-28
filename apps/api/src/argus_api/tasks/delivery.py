@@ -60,6 +60,10 @@ CHECK_CAP = 50
 REVIEW_CAP = 20
 LIST_CAP = 50  # PRs per page of the list that finds a task's own (Gitea's default max)
 LIST_PAGES = 10  # pages read at most; a list longer than that is not read in full
+STATUS_PAGE = 50  # Gitea commit-status history page size (matches CHECK_CAP)
+STATUS_PAGES = (
+    10  # pages of status history read at most; a longer history is incomplete
+)
 DESC_CAP = 200
 FILES_PAGE = 100  # changed files per page of the PR files read
 FILES_CAP = 300  # more changed files than this and the list is unknown
@@ -402,7 +406,36 @@ def _normalize_status(state: str | None) -> CheckState:
         "startup_failure",
     ):
         return CheckState.CANCELLED
+    # Gitea `warning` and any other unrecognized value: unknown, never success.
     return CheckState.UNKNOWN
+
+
+def _status_outcome(item: dict[str, Any], *, github: bool) -> str | None:
+    """Provider-correct outcome field: GitHub `state`, Gitea `status` (not `state`)."""
+    raw = item.get("state") if github else item.get("status")
+    return raw if isinstance(raw, str) else None
+
+
+def _status_recency(item: dict[str, Any]) -> tuple[bool, datetime, int]:
+    """Sort key for latest-per-context: `(has_time, updated_at|created_at, id)`.
+
+    Greater is newer. Response order is not authoritative; when times and ids tie,
+    the caller keeps the first retained row.
+    """
+    when = _forge_time(item.get("updated_at")) or _forge_time(item.get("created_at"))
+    raw_id = item.get("id")
+    ident = raw_id if isinstance(raw_id, int) else -1
+    return (when is not None, when or datetime.min.replace(tzinfo=UTC), ident)
+
+
+def _status_sha_ok(item: dict[str, Any], head: str) -> bool:
+    """False when the row names a SHA that is not the exact head (off-head)."""
+    raw = item.get("sha")
+    if raw is None:
+        return True
+    if not isinstance(raw, str) or not raw:
+        return False
+    return raw.lower() == head.lower()
 
 
 def _check_run_state(run: dict[str, Any]) -> CheckState:
@@ -729,8 +762,10 @@ class PrChecker:
                     client, base, headers, basic, ref, head, snap, partial, deadline
                 )
                 snap.partial = partial
-                if not snap.checks and (
-                    "statuses" in partial or "check_runs" in partial
+                # Incomplete Gitea status history (truncated_checks) never projects success.
+                if (ref.provider != "github" and "truncated_checks" in partial) or (
+                    not snap.checks
+                    and ("statuses" in partial or "check_runs" in partial)
                 ):
                     snap.checks_combined = CheckState.UNKNOWN
                 else:
@@ -874,12 +909,34 @@ class PrChecker:
         deadline: float,
     ) -> None:
         github = ref.provider == "github"
-        url = (
-            f"{base}/commits/{head}/status?per_page=100"
-            if github
-            else f"{base}/commits/{head}/statuses?limit=50&page=1"
+        if github:
+            await self._fill_github_statuses(
+                client, base, headers, auth, head, snap, partial, deadline
+            )
+            return
+        await self._fill_gitea_statuses(
+            client, base, headers, auth, head, snap, partial, deadline
         )
-        res = await self._get(client, url, headers, auth, deadline)
+
+    async def _fill_github_statuses(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        headers: dict[str, str] | None,
+        auth: httpx.BasicAuth | None,
+        head: str,
+        snap: ForgeSnapshot,
+        partial: list[str],
+        deadline: float,
+    ) -> None:
+        """GitHub combined status: latest per context already; outcome is `state`."""
+        res = await self._get(
+            client,
+            f"{base}/commits/{head}/status?per_page=100",
+            headers,
+            auth,
+            deadline,
+        )
         if res is None or res.status_code != 200:
             partial.append("statuses")
             return
@@ -888,19 +945,11 @@ class PrChecker:
         except (ValueError, TypeError):
             partial.append("statuses")
             return
-        raw_items: Any
-        if github:
-            raw_items = data.get("statuses") if isinstance(data, dict) else None
-        elif isinstance(data, list):
-            raw_items = data
-        elif isinstance(data, dict):
-            raw_items = data.get("statuses")
-        else:
-            raw_items = None
+        raw_items = data.get("statuses") if isinstance(data, dict) else None
         if not isinstance(raw_items, list):
             partial.append("statuses")
             return
-        # Latest per context.
+        # Latest per context (combined endpoint already collapses; last-wins retained).
         latest: dict[str, dict[str, Any]] = {}
         for item in raw_items:
             if not isinstance(item, dict):
@@ -909,7 +958,87 @@ class PrChecker:
             if not isinstance(ctx, str) or not ctx:
                 continue
             latest[ctx] = item
-        if len(latest) > CHECK_CAP:
+        self._append_status_checks(snap, latest, head, github=True, partial=partial)
+
+    async def _fill_gitea_statuses(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        headers: dict[str, str] | None,
+        auth: httpx.BasicAuth | None,
+        head: str,
+        snap: ForgeSnapshot,
+        partial: list[str],
+        deadline: float,
+    ) -> None:
+        """Gitea status history: paginate, latest per context by time/id, field `status`."""
+        rows: list[dict[str, Any]] = []
+        truncated_pages = False
+        for page in range(1, STATUS_PAGES + 1):
+            res = await self._get(
+                client,
+                f"{base}/commits/{head}/statuses?limit={STATUS_PAGE}&page={page}",
+                headers,
+                auth,
+                deadline,
+            )
+            if res is None or res.status_code != 200:
+                partial.append("statuses")
+                return
+            try:
+                data = res.json()
+            except (ValueError, TypeError):
+                partial.append("statuses")
+                return
+            if isinstance(data, list):
+                batch: Any = data
+            elif isinstance(data, dict):
+                batch = data.get("statuses")
+            else:
+                batch = None
+            if not isinstance(batch, list):
+                partial.append("statuses")
+                return
+            for item in batch:
+                if not isinstance(item, dict):
+                    partial.append("statuses")
+                    return
+                if not _status_sha_ok(item, head):
+                    partial.append("statuses")
+                    return
+                rows.append(item)
+            if len(batch) < STATUS_PAGE:
+                break
+            if page == STATUS_PAGES:
+                # A full final page means further history may exist; do not invent green.
+                truncated_pages = True
+
+        # Latest per context by (updated_at|created_at, id); first retained wins ties.
+        latest: dict[str, dict[str, Any]] = {}
+        for item in rows:
+            ctx = item.get("context") or item.get("name")
+            if not isinstance(ctx, str) or not ctx:
+                # Malformed row without a context: fail closed on the statuses read.
+                partial.append("statuses")
+                return
+            prev = latest.get(ctx)
+            if prev is None or _status_recency(item) > _status_recency(prev):
+                latest[ctx] = item
+
+        if truncated_pages and "truncated_checks" not in partial:
+            partial.append("truncated_checks")
+        self._append_status_checks(snap, latest, head, github=False, partial=partial)
+
+    def _append_status_checks(
+        self,
+        snap: ForgeSnapshot,
+        latest: dict[str, dict[str, Any]],
+        head: str,
+        *,
+        github: bool,
+        partial: list[str],
+    ) -> None:
+        if len(latest) > CHECK_CAP and "truncated_checks" not in partial:
             partial.append("truncated_checks")
         for i, (name, item) in enumerate(latest.items()):
             if i >= CHECK_CAP:
@@ -917,11 +1046,7 @@ class PrChecker:
             snap.checks.append(
                 DeliveryCheck(
                     name=name,
-                    state=_normalize_status(
-                        item.get("state")
-                        if isinstance(item.get("state"), str)
-                        else None
-                    ),
+                    state=_normalize_status(_status_outcome(item, github=github)),
                     kind="status",
                     sha=head,
                     description=_truncate(
