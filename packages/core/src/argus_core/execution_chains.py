@@ -64,6 +64,7 @@ _SELECTOR_SOURCES = {
     ("harness", "claude", "custom"): {"account"},
     ("harness", "codex", "openai"): {"explicit"},
     ("harness", "muse", "muse"): {"explicit"},
+    ("harness", "agy", "google"): {"explicit"},
     ("executor", "claude", "anthropic"): {"explicit"},
     ("executor", "codex", "openai"): {"explicit"},
     ("executor", "agent", "cursor"): {"explicit"},
@@ -136,6 +137,23 @@ _CODEX_RULES = [
         efforts=["low", "medium", "high", "xhigh", "max", "ultra"],
     ),
 ]
+_AGY_RULES = [
+    EffortModelRule(
+        models=["gemini-4-neon", "gemini-4-hydrogen"],
+        efforts=["low", "medium", "high", "xhigh"],
+    ),
+    EffortModelRule(
+        models=[
+            "gemini-4-carbon",
+            "gemini-4-argon",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+        ],
+        efforts=["low", "medium", "high"],
+    ),
+    EffortModelRule(models=["gemini-3.1-pro"], efforts=["low", "high"]),
+]
 _EFFORT = {
     ("harness", "claude", "anthropic"): EffortSupport(
         interface="NanoClaw container config effort -> Agent SDK query({effort})",
@@ -170,23 +188,13 @@ _EFFORT = {
     ("executor", "agy", "google"): EffortSupport(
         interface="agy --effort <level>",
         efforts=["low", "medium", "high", "xhigh", "max"],
-        model_rules=[
-            EffortModelRule(
-                models=["gemini-4-neon", "gemini-4-hydrogen"],
-                efforts=["low", "medium", "high", "xhigh"],
-            ),
-            EffortModelRule(
-                models=[
-                    "gemini-4-carbon",
-                    "gemini-4-argon",
-                    "gemini-3.8-flash",
-                    "gemini-3.7-flash",
-                    "gemini-3.6-flash",
-                ],
-                efforts=["low", "medium", "high"],
-            ),
-            EffortModelRule(models=["gemini-3.1-pro"], efforts=["low", "high"]),
-        ],
+        model_rules=_AGY_RULES,
+        unlisted_models="unverified",
+    ),
+    ("harness", "agy", "google"): EffortSupport(
+        interface="NanoClaw agy provider effort -> ACP session/set_config_option(thought_level)",
+        efforts=["low", "medium", "high", "xhigh", "max"],
+        model_rules=_AGY_RULES,
         unlisted_models="unverified",
     ),
     # `muse exec` documents none|minimal|low|medium|high|xhigh|max|ultra; no

@@ -139,18 +139,21 @@ The initial implementation targets these existing adapter combinations:
 | NanoClaw | `claude` | `local` | target | target |
 | NanoClaw | `claude` | `custom` | target | target |
 | NanoClaw | `codex` | `openai` | target | target |
-| Any | `agent`, `opencode`, `copilot`, `agy`, `dsh` | any | unsupported | not harnesses |
+| NanoClaw | `muse` | `muse` | target | target |
+| NanoClaw | `agy` | `google` | target | target |
+| Any | `agent`, `opencode`, `copilot`, `dsh` | any | unsupported | not harnesses |
 
 The matrix mirrors what the NanoClaw worker runs: harness engines are `claude`
-(anthropic, local, custom) and `codex` (openai); each provider has exactly one
-delegate CLI (`EXECUTOR_BY_PROVIDER` in `integrations/nanoclaw/argus-accounts.ts`).
-Intentionally unsupported, because the worker cannot run them: `codex` on
-local/custom (the Codex harness speaks only OpenAI), `opencode`/`agent`/`copilot`/`agy` as
-harnesses (executor-only CLIs), and an executor adapter on a provider other than
-its own (for example `claude` on `custom`). A local harness with a `claude`, `codex`,
-`copilot` or `agy` executor stays refused: those CLIs would run on the redirected local
-endpoint. Setup shows each adapter/provider as harness-capable or executor-only and
-disables an executor option with its reason.
+(anthropic, local, custom), `codex` (openai), `muse` (muse), and `agy` (google);
+each provider has exactly one delegate CLI (`EXECUTOR_BY_PROVIDER` in
+`integrations/nanoclaw/argus-accounts.ts`). Intentionally unsupported, because
+the worker cannot run them: `codex` on local/custom (the Codex harness speaks
+only OpenAI), `opencode`/`agent`/`copilot`/`dsh` as harnesses (executor-only
+CLIs), and an executor adapter on a provider other than its own (for example
+`claude` on `custom`). A local harness with a `claude`, `codex`, `copilot`,
+`agy` or `muse` executor stays refused: those CLIs would run on the redirected
+local endpoint. Setup shows each adapter/provider as harness-capable or
+executor-only and disables an executor option with its reason.
 | Built-in orchestrator | any | any | unsupported as task worker | unsupported |
 
 “Target” is a required adapter conformance test, **not a claim of shipped chain
@@ -438,6 +441,8 @@ it; Setup renders from it.
 | --- | --- | --- | --- | --- |
 | harness | `claude` / `anthropic` | low, medium, high, xhigh, max | NanoClaw container config `effort` → Agent SDK `query({effort})` | Claude CLI rules; unlisted models supported |
 | harness | `codex` / `openai` | low, medium, high, xhigh | NanoClaw container config `effort` → Codex app-server `model_reasoning_effort` | Codex catalogue; unlisted models unverified |
+| harness | `agy` / `google` | low, medium, high, xhigh, max | NanoClaw agy provider `effort` → ACP `session/set_config_option(thought_level)` | agy 1.5.12 model list; unlisted models unverified |
+| harness | `muse` / `muse` | low, medium, high, xhigh, max | NanoClaw muse provider `effort` | none known; all models unverified |
 | harness | `claude` / `local`, `claude` / `custom` | unsupported | the redirect and bridge do not translate effort | — |
 | executor | `claude` / `anthropic` | low, medium, high, xhigh, max | `claude --effort <level>` | Claude CLI rules; unlisted models supported |
 | executor | `codex` / `openai` | low, medium, high, xhigh, max, ultra | `codex exec -c model_reasoning_effort="<level>"` | Codex catalogue; unlisted models unverified |

@@ -19,7 +19,7 @@ LeaseRole = Literal["engine", "executor"]
 # delegated CLI (never a NanoClaw harness) can run on.
 GITHUB_HOST = "github.com"
 REPOSITORY_PROVIDERS = frozenset({"gitea", "github"})
-EXECUTOR_ONLY = frozenset({"cursor", "copilot", "google"})
+EXECUTOR_ONLY = frozenset({"cursor", "copilot"})
 # The node's own model, served on loopback (local harness spec): harness and/or
 # OpenCode executor, holding no real credential and no quota of its own.
 LOCAL_PROVIDER = "local"
@@ -29,7 +29,7 @@ ENGINE_ONLY: frozenset[str] = frozenset()
 # Account providers a harness (the `engine` role) can run on: what a task may be
 # restricted to. Never a forge provider or the executor-only ones.
 ENGINE_PROVIDERS = frozenset(
-    {"anthropic", "openai", "muse", CUSTOM_PROVIDER, LOCAL_PROVIDER}
+    {"anthropic", "openai", "muse", "google", CUSTOM_PROVIDER, LOCAL_PROVIDER}
 )
 
 

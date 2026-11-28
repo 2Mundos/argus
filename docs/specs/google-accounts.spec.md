@@ -1,24 +1,25 @@
 ---
 status: implemented
 created: 2026-11-19
-updated: 2026-11-21
+updated: 2026-11-27
 ---
 
-# Google (Antigravity) accounts: import, executor lease, delegated CLI
+# Google (Antigravity) accounts: import, harness and executor lease, delegated CLI
 
 Builds on [engines](engines.spec.md), the account pool in
-[worker lifecycle 3.9](worker-lifecycle.spec.md) and the executor pattern of
-[Cursor accounts](cursor-accounts.spec.md) and
+[worker lifecycle 3.9](worker-lifecycle.spec.md) and the harness/executor pattern of
+[Muse accounts](muse-accounts.spec.md), [Cursor accounts](cursor-accounts.spec.md) and
 [Copilot accounts](copilot-accounts.spec.md). Single-node rules apply
-([spec](single-node.spec.md)): no new service; reuse the existing `executor`
-lease role.
+([spec](single-node.spec.md)): no new service; reuse the existing `engine` and `executor`
+lease roles.
 
 # 1. Purpose and Scope
 
 Make a Google Antigravity credential (either a Gemini API key or an imported
 Google OAuth subscription login) a normal Argus **account**, validate its shape
-on create and replace, and deliver it to the **delegated** Antigravity CLI
-(`argus-delegate agy`) without making Antigravity an engine harness:
+on create and replace, and deliver it to both the NanoClaw **harness** (`agy acp`,
+supporting single-layer and paired execution chains) and the **delegated**
+Antigravity CLI (`argus-delegate agy`):
 
 - **Import**: the operator stores either `{"api_key": …}` (`kind: "api_key"`)
   or an imported `agy` OAuth login document (`kind: "subscription"`): either the
@@ -27,19 +28,18 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   or the flat shape `{"access_token", "refresh_token", "expiry"}`. Settings files
   (`settings.json`, `config.json`) without a credential are rejected; errors name
   fields and rules only, never values.
-- **Lease**: the `executor` lease role selects a `google` account next to the
-  engine's account (for example Codex or Claude). Google is never an `engine`
-  lease and never replaces the primary harness.
+- **Lease**: the `engine` lease role may select a `google` account (harness), and
+  the `executor` lease role may select one next to the engine's account.
 - **Delivery**: the NanoClaw channel (trusted host) writes the credential into
   the OneCLI vault using generic path-scoped secrets. The worker holds only a
   **non-secret sentinel**, and the gateway injects the real credential on the
   wire for the hosts and paths `agy` authenticates against (§3, delivery). The
   real key or OAuth token never enters the container, image, checkout or a log.
-- **Executor selection**: the executor lease is the best usable account across
+- **Selection**: both engine and executor leases pick the best usable account across
   all runtime-supported providers by priority
   ([global account selection](account-selection.spec.md)); a Google account is
-  leased as the executor when it ranks first or when an execution chain / task
-  pin selects `agy`/`google`.
+  leased when it ranks first or when an execution chain (single-layer or paired)
+  or task pin selects `agy`/`google`.
 
 # 2. Non-Goals
 
@@ -52,7 +52,6 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   near-expired tokens at apply time (five-minute margin, matching Cursor).
 - A dedicated interactive OAuth login wizard driven by Argus (the Codex and
   Claude pattern). v1 is import only.
-- Making Antigravity an engine harness; NanoClaw has no Antigravity provider.
 - Reading Google/Antigravity quota from an undocumented endpoint: quota stays
   `unknown` with `no_provider_source`, never `0`.
 - Running a paid Google/Antigravity model call in CI; fleet acceptance is a
@@ -98,13 +97,13 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
      this step is safe, since the two accounts are independent.
 - **OAuth token refresh** (`apps/api/src/argus_api/accounts/google_refresh.py`):
   Google OAuth access tokens expire after 1 hour (`expires_in: 3600`). Before
-  `POST /api/accounts/lease` (for an `executor` lease that includes `google`)
-  and before `POST /api/tasks/claim` (pre-reservation and again right before
-  execution-chain `executor_delivery`, since claims send engine-only
-  `runtime_providers` and may long-poll), the control plane inspects usable
-  Google OAuth accounts outside any write transaction and refreshes any
-  credential whose `expiry` is within 10 minutes (or already past) and that
-  carries a `refresh_token`, serialized per account:
+  `POST /api/accounts/lease` (for any `engine` or `executor` lease that includes
+  `google`) and before `POST /api/tasks/claim` (pre-reservation and again right
+  before execution-chain delivery for a `google` harness or executor, since claims
+  may long-poll), the control plane inspects usable Google OAuth accounts outside
+  any write transaction and refreshes any credential whose `expiry` is within
+  10 minutes (or already past) and that carries a `refresh_token`, serialized per
+  account:
   - **Direct HTTP**: when `client_id` and `client_secret` are provided in the
     credential document or via `ARGUS_GOOGLE_OAUTH_CLIENT_ID` /
     `ARGUS_GOOGLE_OAUTH_CLIENT_SECRET`, posts `grant_type=refresh_token` to
@@ -161,10 +160,34 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   is not proven to be this mechanism. Not covered offline: the worker calling
   this endpoint on a 401 and re-applying the credential (separate follow-up), and
   a live Google refresh, which needs separately authorized live verification.
-- **Executor-only provider**: `google` joins `cursor` and `copilot` in
-  `EXECUTOR_ONLY`; the `engine` lease role never returns it, the `executor` role
-  may. The `agy` executor runs on the `google` provider
-  ([task models](task-models.spec.md) 3.1).
+- **Harness and executor provider**: `google` joins `anthropic`, `openai` and `muse`
+  in `ENGINE_PROVIDERS` (never in `EXECUTOR_ONLY`); both the `engine` and `executor`
+  lease roles may return it. The `agy` harness and executor both run on the `google`
+  provider ([task models](task-models.spec.md) 3.1,
+  [execution chains](execution-chains.spec.md) 3.2).
+- **Harness runtime** (`integrations/nanoclaw/overlays/agy-provider.ts`,
+  `integrations/nanoclaw/overlays/agy-host.ts`):
+  - The runner drives `agy acp --dangerously-skip-permissions --disable-telemetry --gemini-dir <dataDir>`
+    over stdio JSON-RPC (ACP v1) with an explicit model (never the CLI's default).
+  - A per-group writable host mount (`v2-sessions/<group>/.agy-shared` →
+    `/home/node/.agy-data`) persists Antigravity session databases across container
+    respawns while leaving `HOME` (`/home/node`) untouched for git, ssh and other tools.
+  - Before spawning `agy acp`, the provider stages auth inside `<dataDir>/antigravity-cli/`
+    from the gateway-supplied sentinel and fails closed if neither mode is present:
+    API key mode (`GEMINI_API_KEY === AGY_SENTINEL_API_KEY`) writes `settings.json`
+    (`{"modelProvider":"gemini"}`) and removes any stale `antigravity-oauth-token`;
+    OAuth mode copies the read-only sentinel stub (`ARGUS_AGY_OAUTH_STUB` or
+    `/home/node/.gemini/antigravity-cli/antigravity-oauth-token`) into
+    `<dataDir>/antigravity-cli/antigravity-oauth-token` (`0600`), clears
+    `modelProvider` in `settings.json`, and scrubs `GEMINI_API_KEY` from the child env.
+  - Model and reasoning effort are applied on the opened session via ACP
+    `session/set_config_option` (`configId: "model"`, then `configId: "thought_level"`
+    when `effort` is set). Stored continuations resume via `session/load`; an unknown
+    session (`-32002`) falls back to `session/new`. Runner instructions and startup
+    memory are appended via `_meta.antigravity.systemPrompt.append` on new sessions.
+  - Default model in `model-policy.defaults.json`: `gemini-4-neon` for `harness` and
+    `implementation`, so a worker switching to `agy` never keeps a previous engine's
+    model.
 - **Delivery** (`integrations/nanoclaw/argus-accounts.ts`,
   `integrations/nanoclaw/argus-agy-stub.ts`): generic OneCLI secrets per agent
   group, distinct per auth mode, with no broad host wildcards:
@@ -237,7 +260,8 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   per-account quota endpoint is polled; a `google` account reads `unknown` with
   reason `no_provider_source`, never `0`.
 - **Engine catalogue** (public API): Antigravity (`id: "antigravity"`,
-  `executor: "agy"`, `account_provider: "google"`) is `role: executor` only,
+  `harness: "nanoclaw provider agy"`, `executor: "agy"`, `account_provider: "google"`)
+  has both layers (`harness` and `executor`, deprecated `role: code_executor`),
   default-on in the agent image via `install-agy.sh` (pinned `1.5.12` tarball,
   SHA-512 verified for both `x64` and `arm64`).
 
@@ -268,17 +292,20 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   pre-lease OAuth refresh; auth-rejection reason in `accounts/service.py`;
   `antigravity` entry in `engines/catalog.py` and `engines/image_tools.py`;
   regenerated OpenAPI client (`make openapi`).
-- `integrations/nanoclaw`: `argus-accounts.ts` (API key + OAuth mappings),
+- `integrations/nanoclaw`: `argus-accounts.ts` (API key + OAuth mappings, `engine: "agy"`),
   `argus-agy-stub.ts` (sentinel env / OAuth stub mount), `install.sh` (`onecli.ts`
-  hook and `CODEX_ENV_ALLOWLIST`), `argus.ts` (`renderTask`),
+  hook and `CODEX_ENV_ALLOWLIST`), `argus.ts` (`PIN_PROVIDERS`, `renderTask`),
+  `overlays/agy-provider.ts`, `overlays/agy-provider.test.ts`, `overlays/agy-host.ts`
+  (ACP harness provider and per-group state mount), `provision.sh`,
   `engines/install-agy.sh` (SHA-512 pinned `1.5.12` installer),
   `engines/patch-engines-dockerfile.py`, `engines/install-engines.sh`,
   `engines/smoke.sh`, `engines/argus-delegate.mjs`, `engines/livelog.mjs`,
-  `engines/usage.mjs`, `engines/model-policy.mjs`, `transcripts-derive.ts`, and
-  recorded stream fixture `engines/fixtures/agy-stream.jsonl`.
+  `engines/usage.mjs`, `engines/model-policy.mjs`, `engines/model-policy.defaults.json`,
+  `transcripts-derive.ts`, and recorded stream fixture `engines/fixtures/agy-stream.jsonl`.
 - Dashboard: `accountProviders.ts` (`GOOGLE_PROVIDER`, `googleCredentialNotice`),
   `providerIcons.tsx` (`google` mark, `agy`/`antigravity`/`google`/`gemini`
-  mapping), `AccountDialogs.tsx` (add and replace dialogs).
+  mapping), `AccountDialogs.tsx` (add and replace dialogs), `AccountPin.tsx`,
+  `GoogleAccount.tsx`.
 - **Acceptance (automated)**: `make check`; channel/stub/delegate/parser/installer
   unit tests with fake credentials and the recorded `agy 1.5.12` fixture (no
   live Google call in CI).
@@ -293,10 +320,12 @@ on create and replace, and deliver it to the **delegated** Antigravity CLI
   - `node --test integrations/nanoclaw/engines/argus-delegate.test.mjs integrations/nanoclaw/engines/usage.test.mjs integrations/nanoclaw/engines/livelog.test.mjs`
   - `pnpm --filter @argus/dashboard exec vitest run src/views/AccountsGoogle.test.tsx src/views/Accounts.test.tsx`
   - `make check`
-- Verified: unit, fake-API, and offline real-binary proxy probe level against
-  `agy 1.5.12` (verified `x-goog-api-key` on `generativelanguage.googleapis.com`,
+- Verified: unit, fake-API, fake-ACP, and offline real-binary proxy/ACP probe level
+  against `agy 1.5.12` (verified `x-goog-api-key` on `generativelanguage.googleapis.com`,
   sentinel `antigravity-oauth-token` on `www.googleapis.com` and
-  `daily-cloudcode-pa.googleapis.com`, and `stream-json` usage/error output).
-- Not verified: a live paid Gemini API or Google OAuth subscription call; an
-  agent Docker image build running `install-agy.sh` and `smoke.sh`; a real
-  OneCLI gateway swap in a live worker container; any production node.
+  `daily-cloudcode-pa.googleapis.com`, `stream-json` usage/error output, and
+  `agy acp --gemini-dir` `initialize`, `session/new`, `session/load` (`-32002` miss),
+  and `session/set_config_option` for `model` and `thought_level`).
+- Not verified: a live paid Gemini API or Google OAuth subscription call or live
+  `agy acp` harness turn; an agent Docker image build running `install-agy.sh` and
+  `smoke.sh`; a real OneCLI gateway swap in a live worker container; any production node.

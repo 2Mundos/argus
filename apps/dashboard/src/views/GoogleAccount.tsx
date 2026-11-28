@@ -3,8 +3,8 @@ import { ActionButton, useAction } from "../ActionButton";
 import { api, call } from "../api";
 
 /** Register a Gemini API key as a native `google` account, the provider the Antigravity
- * (`agy`) executor leases (docs/specs/google-accounts.spec.md). The key is sent once and never
- * shown again. */
+ * (`agy`) harness and executor lease (docs/specs/google-accounts.spec.md). The key is sent once
+ * and never shown again. */
 export function GoogleAccount({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState("Google AI Studio");
   const [key, setKey] = useState("");
@@ -39,9 +39,9 @@ export function GoogleAccount({ onClose, onDone }: { onClose: () => void; onDone
       <div className="dialog" role="dialog" aria-label="Add Google AI Studio account">
         <h2>Add Google AI Studio account</h2>
         <p className="muted small">
-          Stores a Gemini API key as a native Google account for the Antigravity code executor. The
-          key is stored encrypted and is never shown again. It is not used by the NanoClaw harness;
-          for an OpenAI-compatible endpoint choose Custom provider instead.
+          Stores a Gemini API key as a native Google account for the Antigravity harness and code
+          executor. The key is stored encrypted and is never shown again. For an OpenAI-compatible
+          endpoint choose Custom provider instead.
         </p>
         <form onSubmit={submit}>
           <label>

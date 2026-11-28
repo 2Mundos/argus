@@ -7262,6 +7262,71 @@ export interface components {
              *         "same_provider_same_account": false
              *       },
              *       {
+             *         "adapter": "agy",
+             *         "effort_interface": "NanoClaw agy provider effort -> ACP session/set_config_option(thought_level)",
+             *         "effort_model_rules": [
+             *           {
+             *             "efforts": [
+             *               "low",
+             *               "medium",
+             *               "high",
+             *               "xhigh"
+             *             ],
+             *             "models": [
+             *               "gemini-4-neon",
+             *               "gemini-4-hydrogen"
+             *             ],
+             *             "prefixes": []
+             *           },
+             *           {
+             *             "efforts": [
+             *               "low",
+             *               "medium",
+             *               "high"
+             *             ],
+             *             "models": [
+             *               "gemini-4-carbon",
+             *               "gemini-4-argon",
+             *               "gemini-3.8-flash",
+             *               "gemini-3.7-flash",
+             *               "gemini-3.6-flash"
+             *             ],
+             *             "prefixes": []
+             *           },
+             *           {
+             *             "efforts": [
+             *               "low",
+             *               "high"
+             *             ],
+             *             "models": [
+             *               "gemini-3.1-pro"
+             *             ],
+             *             "prefixes": []
+             *           }
+             *         ],
+             *         "effort_unlisted_models": "unverified",
+             *         "efforts": [
+             *           "low",
+             *           "medium",
+             *           "high",
+             *           "xhigh",
+             *           "max"
+             *         ],
+             *         "excluded_harness_providers": [],
+             *         "id": "nanoclaw:harness:agy:google",
+             *         "model_sources": [
+             *           "explicit"
+             *         ],
+             *         "modes": [
+             *           "single",
+             *           "paired"
+             *         ],
+             *         "provider": "google",
+             *         "role": "harness",
+             *         "runtime": "nanoclaw",
+             *         "same_provider_same_account": false
+             *       },
+             *       {
              *         "adapter": "claude",
              *         "effort_interface": "claude --effort <level>",
              *         "effort_model_rules": [
@@ -8331,7 +8396,7 @@ export interface components {
              * Engine
              * @enum {string}
              */
-            engine: "claude" | "codex" | "muse";
+            engine: "claude" | "codex" | "muse" | "agy";
             /** Model */
             model: string;
         };

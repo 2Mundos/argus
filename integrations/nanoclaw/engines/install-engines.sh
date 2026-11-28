@@ -61,6 +61,13 @@ cp "$here/../overlays/muse-host.ts" "$target/src/providers/muse.ts"
 for barrel in src/providers/index.ts container/agent-runner/src/providers/index.ts; do
   grep -q "import './muse.js';" "$target/$barrel" || printf "import './muse.js';\n" >> "$target/$barrel"
 done
+# The Google Antigravity harness over `agy acp` (google accounts spec 3).
+cp "$here/../overlays/agy-provider.ts" "$target/container/agent-runner/src/providers/agy.ts"
+cp "$here/../overlays/agy-provider.test.ts" "$target/container/argus-agy-provider.test.ts"
+cp "$here/../overlays/agy-host.ts" "$target/src/providers/agy.ts"
+for barrel in src/providers/index.ts container/agent-runner/src/providers/index.ts; do
+  grep -q "import './agy.js';" "$target/$barrel" || printf "import './agy.js';\n" >> "$target/$barrel"
+done
 
 # 2. CLI manifest (exact versions; claude-code stays as the checkout pins it)
 node - "$target/container/cli-tools.json" "$CODEX_VERSION" "$OPENCODE_VERSION" <<'JS'

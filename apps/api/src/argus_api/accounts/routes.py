@@ -562,7 +562,7 @@ async def lease_account(
     local_served_models = await local_health.served_models_for_leases(
         db, secrets, _health(request)
     )
-    if body.role == "executor" and google_auth.PROVIDER in body.runtime_providers:
+    if google_auth.PROVIDER in body.runtime_providers:
         await google_refresh.refresher_for(request.app.state).refresh_for_lease(
             db, secrets
         )

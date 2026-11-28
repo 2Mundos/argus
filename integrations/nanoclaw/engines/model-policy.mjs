@@ -103,6 +103,7 @@ export const EFFORTS = {
   "executor:codex:openai": ["low", "medium", "high", "xhigh", "max", "ultra"],
   "executor:copilot:copilot": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
   "executor:agy:google": ["low", "medium", "high", "xhigh", "max"],
+  "harness:agy:google": ["low", "medium", "high", "xhigh", "max"],
   "harness:muse:muse": ["low", "medium", "high", "xhigh", "max"],
   "executor:muse:muse": ["low", "medium", "high", "xhigh", "max", "ultra"],
 };
@@ -118,7 +119,7 @@ export function executionEffort(execution, role) {
   return effort;
 }
 
-const PIN_PROVIDERS = { claude: "anthropic", codex: "openai", muse: "muse" };
+const PIN_PROVIDERS = { claude: "anthropic", codex: "openai", muse: "muse", agy: "google" };
 
 /**
  * The harness model of the attempt. A task pin is fixed while the lease is on the

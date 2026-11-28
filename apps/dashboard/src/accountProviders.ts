@@ -16,7 +16,7 @@ type AccountProviderOption = {
 export const FORGE_PROVIDERS: ReadonlySet<string> = new Set(["gitea", "github"]);
 /** Executor-only subscription account: a token the operator already owns. */
 export const COPILOT_PROVIDER = "copilot";
-/** Executor-only Google Antigravity account: Gemini API key or imported OAuth login. */
+/** Harness and executor Google Antigravity account: Gemini API key or imported OAuth login. */
 export const GOOGLE_PROVIDER = "google";
 /** Harness and executor Muse account: Meta API key or imported muse login. */
 export const MUSE_PROVIDER = "muse";
@@ -97,7 +97,7 @@ export function googleCredentialNotice(): string {
     'A Google (Antigravity) account accepts either a Gemini API key ({"api_key": "…"}) ' +
     "or an imported agy OAuth login file (antigravity-oauth-token JSON with access_token). " +
     "The account kind (api_key or subscription) is derived from the credential. " +
-    "It is used only as an executor (agy), never as an engine, and is write-only."
+    "It runs as a harness and as an executor (agy), and is write-only."
   );
 }
 
